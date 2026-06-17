@@ -28,6 +28,7 @@ class BrowserSession:
         headless: bool | None = None,
         browser: Browser | None = None,
         record_har_path: str | None = None,
+        storage_state: str | None = None,
     ) -> None:
         self.headless = settings.headless if headless is None else headless
         self._pw: Playwright | None = None
@@ -39,6 +40,9 @@ class BrowserSession:
         # context close). This is the trace WebArena-Verified scores against (component:
         # benchmarks/webarena_env.py) — captured via the native record_har_* context options.
         self._record_har_path = record_har_path
+        # Path to a Playwright storage_state JSON (cookies + localStorage) to seed the context —
+        # cookie-based auth for a recurring Flow, so replay starts already logged in.
+        self._storage_state = storage_state
         self.browser: Browser | None = browser
         self.context: BrowserContext | None = None
         self.page: Page | None = None
@@ -51,6 +55,8 @@ class BrowserSession:
         if self._record_har_path:
             context_kwargs["record_har_path"] = self._record_har_path
             context_kwargs["record_har_content"] = "embed"
+        if self._storage_state:
+            context_kwargs["storage_state"] = self._storage_state
         self.context = await self.browser.new_context(**context_kwargs)
         self.context.set_default_timeout(settings.action_timeout_ms)
         self.context.set_default_navigation_timeout(settings.nav_timeout_ms)

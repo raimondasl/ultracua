@@ -84,6 +84,49 @@ Flags: `--mode auto|learn|replay`, `--fresh` (clear the cached flow first),
 flows live under `.ultracua/flows/`. Env: `ULTRACUA_FAST_MODEL` (default `claude-haiku-4-5`),
 `ULTRACUA_MODEL` (strong, default `claude-opus-4-8`), `ULTRACUA_TIER` (default `fast`).
 
+## Recurring flows — the developer API
+
+The product-facing layer (ROADMAP Phase A): define a recurring task once as a **`FlowSpec`**,
+**learn** it (LLM-authored, inspectable), then **replay** it — 0-LLM navigation that **returns
+the extracted data and raises on drift** instead of returning wrong data.
+
+```python
+import asyncio
+from ultracua import FlowSpec, learn_flow, replay_flow, FlowReplayError
+
+spec = FlowSpec(
+    name="daily-orders",
+    start_url="https://portal.example.com/admin",
+    goal="open the orders report",
+    extract="the number of orders placed yesterday",   # → structured data
+    headers={"X-Auth": "…"},                            # or storage_state="state.json"
+)
+
+# Author once and eyeball what was learned:
+res = asyncio.run(learn_flow(spec))      # res.steps, res.data, res.cached
+
+# Then run it cheaply + deterministically (e.g. from cron); raises on drift:
+try:
+    data = asyncio.run(replay_flow(spec))   # 0-LLM navigation, returns the data
+except FlowReplayError as e:
+    ...  # site changed / data missing — alert instead of trusting a wrong value
+```
+
+Or from the CLI (saves the spec under `.ultracua/specs/`):
+
+```bash
+uv run ultracua flow learn  --name daily-orders --url <url> --goal "open the orders report" \
+                            --extract "the number of orders placed yesterday" --header "X-Auth=…"
+uv run ultracua flow replay --name daily-orders      # prints the data as JSON; exits 1 on drift
+uv run ultracua flow inspect --name daily-orders     # spec + learned steps
+uv run ultracua flow list
+```
+
+`auth` is `headers=` or `storage_state=` (a Playwright cookies JSON); `extract` is a
+natural-language instruction (+ optional `extract_schema`). Replay does 0-LLM **navigation**;
+reading the answer is one cheap extraction call (set `extract=None` for navigate-only flows).
+See [ROADMAP.md](ROADMAP.md) for what's next (trust-unattended reliability, lifecycle/ops).
+
 ## Benchmark
 
 A deterministic, key-less learn-vs-replay benchmark on local fixtures:

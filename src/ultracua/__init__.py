@@ -15,9 +15,13 @@ from .parallel import run_many
 from .safety import PacingGovernor, is_mutating
 from .types import Action, Element, Observation, StepResult
 from .verifiers import keyword_completion
+from .extract import Extraction, extract
+from .flows import FlowReplayError, FlowSpec
+from .flows import learn as learn_flow
+from .flows import replay as replay_flow
 from .vision import AnthropicGrounding, MockGrounding
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 
 __all__ = [
     "BrowserSession",
@@ -39,6 +43,12 @@ __all__ = [
     "keyword_completion",
     "AnthropicGrounding",
     "MockGrounding",
+    "FlowSpec",
+    "FlowReplayError",
+    "learn_flow",
+    "replay_flow",
+    "extract",
+    "Extraction",
     "settings",
     "main",
 ]

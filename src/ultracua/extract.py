@@ -1,0 +1,84 @@
+"""Reusable structured extraction: read the final page and return the data a goal asks for.
+
+One LLM call turns the page text into structured data — the read counterpart to the agent loop.
+Lifted to core (from the WebArena benchmark runner) so any Flow can extract, not just the
+benchmark. Multi-provider via the llm Router.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Optional
+
+from .llm.base import Router
+from .llm.types import LLMRequest, Message, TextBlock, ToolDef
+
+_SYSTEM = (
+    "You extract structured data from a web page. Return exactly what the INSTRUCTION asks for "
+    "via the `submit` tool, in the shape it specifies (units, fields, ordering). Put the value in "
+    "`data` as a scalar or a FLAT list — never a nested array. If the data is not present on the "
+    "page, set found=false with a short `error`. Never invent values."
+)
+
+
+@dataclass
+class Extraction:
+    found: bool
+    data: Any = None
+    error: Optional[str] = None
+
+
+def _input_schema(data_schema: Optional[dict]) -> dict:
+    return {
+        "type": "object",
+        "properties": {
+            "found": {"type": "boolean", "description": "true iff the requested data is on the page"},
+            "data": data_schema or {"description": "the requested data; null if not found"},
+            "error": {"type": ["string", "null"]},
+        },
+        "required": ["found"],
+        "additionalProperties": False,
+    }
+
+
+async def extract(
+    router: Router,
+    instruction: str,
+    page_text: str,
+    *,
+    schema: Optional[dict] = None,
+    tier: str = "strong",
+    max_chars: int = 12000,
+) -> Extraction:
+    """Extract the data `instruction` asks for from `page_text` via one LLM call.
+
+    `schema` (optional JSON schema for the `data` field) constrains the output shape. Returns an
+    `Extraction(found, data, error)` — `found=False` when the data isn't on the page.
+    """
+    text = " ".join((page_text or "").split())[:max_chars]
+    if not text:
+        return Extraction(found=False, error="empty page")
+    tool = ToolDef(
+        name="submit",
+        description="Return the data extracted from the page.",
+        input_schema=_input_schema(schema),
+        strict=False,
+    )
+    req = LLMRequest(
+        system=_SYSTEM,
+        tools=[tool],
+        force_tool="submit",
+        messages=[Message("user", [TextBlock(f"INSTRUCTION: {instruction}\n\nPAGE TEXT:\n{text}")])],
+        max_tokens=1500,
+    )
+    resp = await router.complete(req, tier=tier)
+    tu = resp.tool_use("submit")
+    if tu is None:
+        return Extraction(found=False, error="extractor returned no tool call")
+    d = dict(tu.input)
+    data = d.get("data")
+    # Unwrap a spurious extra nesting level ([["x"]] -> ["x"]).
+    if isinstance(data, list) and len(data) == 1 and isinstance(data[0], list):
+        data = data[0]
+    found = bool(d.get("found")) if "found" in d else (data not in (None, [], ""))
+    return Extraction(found=found, data=data, error=d.get("error"))
