@@ -34,6 +34,16 @@ A Computer Use Agent (CUA) that drives a web browser at **5–10× human speed**
 > env `ULTRACUA_DATA_DIR`), kept off the system drive. Live site containers (Docker/WSL2) +
 > NAVIGATE/MUTATE HAR-asserted scoring remain deferred (action batching is the ideal next lever
 > to exercise against these long multi-step tasks).
+>
+> **Live slice (done).** `benchmarks/webarena_run.py` drives ultracua against a live
+> `shopping_admin` container (Docker, header auto-login, HAR recording) and scores it end to
+> end; `run_cached` gained `record_har_path` + pre-nav `extra_headers`. First baseline (Opus):
+> learn **2/5** on grid-lookup RETRIEVE tasks. The live run surfaced the real bottleneck for the
+> replay (5–10×) thesis — **replay fidelity on dynamic content**: (1) replay must wait for async
+> grids to settle before reading (fixed — task 94 replays correct at 0-LLM nav, ~3.4×); (2)
+> replay doesn't yet reproduce grid **filter/sort** state, so some reads land on the wrong row
+> (task 199). **Hardening replay for dynamic retrieval is the current focus** (ahead of action
+> batching, which would worsen the settle problem if added naively).
 
 ---
 

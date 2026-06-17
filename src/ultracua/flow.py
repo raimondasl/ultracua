@@ -90,6 +90,8 @@ async def run_cached(
     browser: Optional[Any] = None,
     verifier: Optional[Verifier] = None,
     grounding: Optional[Any] = None,
+    record_har_path: Optional[str] = None,
+    extra_headers: Optional[dict] = None,
 ) -> FlowReport:
     cache = cache or FlowCache()
     governor = governor or PacingGovernor()
@@ -100,7 +102,7 @@ async def run_cached(
         heal_provider = provider if mode == "auto" else None
         report = await _replay(
             url, key, cached, cache, heal_provider, headless, on_step,
-            prepare, finalize, goal, governor, scope, browser,
+            prepare, finalize, goal, governor, scope, browser, record_har_path, extra_headers,
         )
         if report.success or mode == "replay" or report.mode == "escalate":
             return report
@@ -114,6 +116,7 @@ async def run_cached(
     return await _learn(
         url, goal, key, provider, cache, max_steps, headless, on_step,
         prepare, finalize, governor, scope, browser, verifier, grounding,
+        record_har_path, extra_headers,
     )
 
 
@@ -154,9 +157,13 @@ async def _learn(
     browser: Optional[Any] = None,
     verifier: Optional[Verifier] = None,
     grounding: Optional[Any] = None,
+    record_har_path: Optional[str] = None,
+    extra_headers: Optional[dict] = None,
 ) -> FlowReport:
     max_steps = max_steps or settings.max_steps
-    session = await BrowserSession(headless=headless, browser=browser).start()
+    session = await BrowserSession(
+        headless=headless, browser=browser, record_har_path=record_har_path
+    ).start()
     traces: list[StepTrace] = []
     history: list[str] = []
     steps: list[CachedStep] = []
@@ -164,6 +171,10 @@ async def _learn(
     success = False
     no_progress = 0
     try:
+        # Auth/setup headers must be on the context BEFORE the first navigation (e.g. a
+        # Magento auto-login header on the initial admin request).
+        if extra_headers:
+            await session.set_extra_http_headers(extra_headers)
         nav = StepTrace(index=-1)
         with nav.measure("navigate"):
             await session.goto(url)
@@ -302,8 +313,12 @@ async def _replay(
     governor: PacingGovernor,
     scope: str,
     browser: Optional[Any] = None,
+    record_har_path: Optional[str] = None,
+    extra_headers: Optional[dict] = None,
 ) -> FlowReport:
-    session = await BrowserSession(headless=headless, browser=browser).start()
+    session = await BrowserSession(
+        headless=headless, browser=browser, record_har_path=record_har_path
+    ).start()
     traces: list[StepTrace] = []
     llm = 0
     healed = 0
@@ -311,6 +326,8 @@ async def _replay(
     mode = "replay"
     dirty = False
     try:
+        if extra_headers:
+            await session.set_extra_http_headers(extra_headers)
         nav = StepTrace(index=-1)
         with nav.measure("navigate"):
             await session.goto(url)
