@@ -20,9 +20,11 @@ class Element(BaseModel):
 
     ref: str  # stable-within-snapshot handle, e.g. "e12"
     role: str  # aria role or inferred role (button/link/textbox/...)
-    name: str  # accessible name (label/text/placeholder/value)
+    name: str  # accessible name (label/text/placeholder)
     tag: str
     type: Optional[str] = None  # input type, if any
+    value: Optional[str] = None  # current value of an input/textarea/select (so the agent
+    #                              can tell it already typed) — NOT part of the fingerprint
     bbox: Optional[list[float]] = None  # [x, y, w, h] in CSS px
 
 
@@ -32,7 +34,9 @@ class Observation(BaseModel):
     url: str
     title: str
     elements: list[Element]
-    fingerprint: str  # structural hash for verification + future cache keys
+    text: str = ""  # short snippet of visible page text (so the agent can read content /
+    #                 confirmations / errors and judge completion), not just interactables
+    fingerprint: str = ""  # structural hash for verification + future cache keys
 
 
 class Action(BaseModel):

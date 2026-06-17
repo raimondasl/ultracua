@@ -32,8 +32,10 @@ class Settings:
     model: str = os.getenv("ULTRACUA_MODEL", "claude-opus-4-8")
     # FAST-tier model (routine element selection); escalates to STRONG on low confidence.
     fast_model: str = os.getenv("ULTRACUA_FAST_MODEL", "claude-haiku-4-5")
-    # Default tier the agent uses for routine steps: fast | strong.
-    tier: str = os.getenv("ULTRACUA_TIER", "fast")
+    # Default tier the agent uses. Discovery (learning a novel flow) needs reasoning, so
+    # default to STRONG; cached replay uses no LLM, so a fast routine tier rarely applies.
+    # Set ULTRACUA_TIER=fast to drive routine steps cheaply (escalates to strong on give_up).
+    tier: str = os.getenv("ULTRACUA_TIER", "strong")
     headless: bool = _flag("ULTRACUA_HEADLESS", True)
     max_steps: int = int(os.getenv("ULTRACUA_MAX_STEPS", "8"))
     # Cap on interactable elements sent to the model — keeps the observation compact.

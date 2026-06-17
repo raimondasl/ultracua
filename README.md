@@ -51,6 +51,10 @@ It LEARNS a 4-step demo-shop flow, then REPLAYS it from cache and reports per-st
 the speedup, and replay correctness (reached the goal state, with **0 LLM calls**). The
 scripted teacher has ~0 LLM latency, so a meaningful speedup ratio needs `--provider anthropic`.
 
+**Measured (Opus discovery, 0-LLM replay):** the demo-shop flow replays **66× faster** than
+learning it (243 ms vs 16.2 s; ~57 ms/step, 0 LLM calls) and the MiniWoB++ easy tasks
+(click-test/button/link) replay **46–67×** faster — all reproducing the goal correctly.
+
 ### Public benchmark: MiniWoB++
 
 ultracua also drives the public, seed-deterministic

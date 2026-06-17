@@ -48,10 +48,6 @@ ACTION_TOOL: dict = {
                 "type": "string",
                 "description": "Text to type, key name to press (e.g. 'Enter'), or URL to navigate to.",
             },
-            "reasoning": {
-                "type": "string",
-                "description": "One short sentence of reasoning.",
-            },
         },
         "required": ["action", "intent"],
     },

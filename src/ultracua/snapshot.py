@@ -80,6 +80,7 @@ SNAPSHOT_JS = r"""
       name: nameOf(el),
       tag: el.tagName.toLowerCase(),
       type: el.getAttribute('type'),
+      value: (el.value != null ? String(el.value) : null),
       bbox: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
     });
   }
@@ -105,12 +106,15 @@ SNAPSHOT_JS = r"""
         name: txt.replace(/\s+/g, ' ').slice(0, 120),
         tag: el.tagName.toLowerCase(),
         type: null,
+        value: null,
         bbox: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
       });
     }
   }
 
-  return out;
+  const pageText = (document.body && document.body.innerText ? document.body.innerText : '')
+    .replace(/\s+/g, ' ').trim().slice(0, 1500);
+  return { elements: out, text: pageText };
 }
 """
 
@@ -118,11 +122,12 @@ SNAPSHOT_JS = r"""
 async def capture(page, max_elements: int) -> Observation:
     """Capture a scoped snapshot of the given Playwright page."""
     raw = await page.evaluate(SNAPSHOT_JS, max_elements)
-    elements = [Element(**e) for e in raw]
+    elements = [Element(**e) for e in raw["elements"]]
+    text = raw.get("text", "")
     url = page.url
     title = await page.title()
-    # Fingerprint over structural signal (role/name/tag + url), NOT coordinates — bboxes
-    # drift on reflow but structure is the thing we want to detect change against.
+    # Fingerprint over structural signal (role/name/tag + url), NOT coordinates or page text
+    # — bboxes/text drift but structure is the thing we want to detect change against.
     basis = json.dumps([[e.role, e.name, e.tag] for e in elements], ensure_ascii=False)
     fingerprint = xxhash.xxh64((url + "\n" + basis).encode("utf-8")).hexdigest()
-    return Observation(url=url, title=title, elements=elements, fingerprint=fingerprint)
+    return Observation(url=url, title=title, elements=elements, text=text, fingerprint=fingerprint)

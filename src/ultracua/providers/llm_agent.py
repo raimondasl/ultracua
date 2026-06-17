@@ -21,9 +21,13 @@ SYSTEM = (
     "compact observation of the interactable elements currently visible on the page, "
     "each with a 'ref'. Choose the SINGLE best next action via the `act` tool.\n"
     "- Prefer the element whose role and name best match the goal.\n"
+    "- For 'click' and 'type' you MUST set 'ref' to the target element's ref from the list.\n"
     "- Use 'type' for textboxes (include the text in 'text'); 'click' for buttons/links.\n"
     "- Use 'press' with text='Enter' to submit; 'scroll' to reveal more; 'navigate' with a URL.\n"
     "- Emit 'done' when the goal is achieved, 'give_up' if it is not achievable here.\n"
+    "Use PAGE TEXT and element values to judge progress: do not repeat an action that already "
+    "took effect (e.g. a textbox already shows your text, or PAGE TEXT confirms success) — move "
+    "on, or emit 'done' if the goal is met.\n"
     "Keep 'intent' short and declarative — it is stored to replay this step later without an LLM."
 )
 
@@ -41,10 +45,14 @@ def _render(obs: Observation, goal: str, history: list[str]) -> str:
         lines.append("RECENT STEPS:")
         lines.extend(f"  - {h}" for h in history[-5:])
         lines.append("")
+    if obs.text:
+        lines.append(f"PAGE TEXT: {obs.text}")
+        lines.append("")
     lines.append("INTERACTABLE ELEMENTS:")
     for e in obs.elements:
         t = f" type={e.type}" if e.type else ""
-        lines.append(f"  [{e.ref}] {e.role}{t}: {e.name}"[:200])
+        v = f' value="{e.value}"' if e.value else ""
+        lines.append(f"  [{e.ref}] {e.role}{t}: {e.name}{v}"[:220])
     return "\n".join(lines)
 
 
