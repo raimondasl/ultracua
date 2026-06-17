@@ -9,13 +9,17 @@
 
 This is the 5-10x lever: a replayed step costs actuation only (tens of ms), not an LLM
 round-trip (seconds).
+
+`prepare` (post-navigation) and `finalize` (pre-close) hooks let an environment seed a
+deterministic instance and read an outcome (e.g. a MiniWoB++ reward); the finalize result
+is stored on `FlowReport.extra["finalize"]`.
 """
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from .browser import BrowserSession
 from .cache import CachedFlow, CachedStep, FlowCache, flow_key
@@ -27,6 +31,8 @@ from .types import Action
 from .verify import state_changed
 
 OnStep = Callable[[StepTrace], None]
+Prepare = Callable[[BrowserSession], Awaitable[None]]
+Finalize = Callable[[BrowserSession], Awaitable[Any]]
 
 
 @dataclass
@@ -38,6 +44,7 @@ class FlowReport:
     healed_steps: int = 0
     final_text: str = ""
     note: str = ""
+    extra: dict = field(default_factory=dict)
 
     @property
     def step_traces(self) -> list[StepTrace]:
@@ -63,6 +70,8 @@ async def run_cached(
     headless: Optional[bool] = None,
     scope: str = "default",
     on_step: Optional[OnStep] = None,
+    prepare: Optional[Prepare] = None,
+    finalize: Optional[Finalize] = None,
 ) -> FlowReport:
     cache = cache or FlowCache()
     key = flow_key(goal, url, scope)
@@ -71,7 +80,7 @@ async def run_cached(
     if cached is not None and mode in ("auto", "replay"):
         heal_provider = provider if mode == "auto" else None
         report = await _replay(
-            url, goal, key, cached, cache, heal_provider, headless, on_step
+            url, key, cached, cache, heal_provider, headless, on_step, prepare, finalize, goal
         )
         if report.success or mode == "replay":
             return report
@@ -82,7 +91,9 @@ async def run_cached(
 
     if provider is None:
         return FlowReport(mode="miss", success=False, note="learn requires a provider")
-    return await _learn(url, goal, key, provider, cache, max_steps, headless, on_step)
+    return await _learn(
+        url, goal, key, provider, cache, max_steps, headless, on_step, prepare, finalize
+    )
 
 
 async def _learn(
@@ -94,6 +105,8 @@ async def _learn(
     max_steps: Optional[int],
     headless: Optional[bool],
     on_step: Optional[OnStep],
+    prepare: Optional[Prepare],
+    finalize: Optional[Finalize],
 ) -> FlowReport:
     max_steps = max_steps or settings.max_steps
     session = await BrowserSession(headless=headless).start()
@@ -102,11 +115,12 @@ async def _learn(
     steps: list[CachedStep] = []
     llm = 0
     success = False
-    final_text = ""
     try:
         nav = StepTrace(index=-1)
         with nav.measure("navigate"):
             await session.goto(url)
+            if prepare:
+                await prepare(session)
         traces.append(nav)
 
         for i in range(max_steps):
@@ -133,7 +147,6 @@ async def _learn(
                     on_step(tr)
                 break
 
-            # Capture the resilient locator BEFORE acting, while the element is tagged.
             spec = None
             if action.action in ("click", "type") and action.ref:
                 with tr.measure("describe"):
@@ -165,15 +178,12 @@ async def _learn(
             if on_step:
                 on_step(tr)
 
+        extra = {"finalize": await finalize(session)} if finalize else {}
         final_text = await _body_text(session)
         if success and steps:
             cache.put(
                 CachedFlow(
-                    key=key,
-                    goal=goal,
-                    start_url=url,
-                    steps=steps,
-                    created_ts=time.time(),
+                    key=key, goal=goal, start_url=url, steps=steps, created_ts=time.time()
                 )
             )
         return FlowReport(
@@ -182,6 +192,7 @@ async def _learn(
             traces=traces,
             llm_calls=llm,
             final_text=final_text,
+            extra=extra,
         )
     finally:
         await session.close()
@@ -189,13 +200,15 @@ async def _learn(
 
 async def _replay(
     url: str,
-    goal: str,
     key: str,
     flow: CachedFlow,
     cache: FlowCache,
     provider: Optional[Provider],
     headless: Optional[bool],
     on_step: Optional[OnStep],
+    prepare: Optional[Prepare],
+    finalize: Optional[Finalize],
+    goal: str,
 ) -> FlowReport:
     session = await BrowserSession(headless=headless).start()
     traces: list[StepTrace] = []
@@ -203,12 +216,13 @@ async def _replay(
     healed = 0
     success = True
     mode = "replay"
-    final_text = ""
-    dirty = False  # whether any step was healed (cache needs re-persist)
+    dirty = False
     try:
         nav = StepTrace(index=-1)
         with nav.measure("navigate"):
             await session.goto(url)
+            if prepare:
+                await prepare(session)
         traces.append(nav)
 
         for i, step in enumerate(flow.steps):
@@ -231,9 +245,10 @@ async def _replay(
                 success = False
                 break
 
+        extra = {"finalize": await finalize(session)} if finalize else {}
         final_text = await _body_text(session)
         if dirty and success:
-            cache.put(flow)  # persist healed locators
+            cache.put(flow)
         return FlowReport(
             mode=mode,
             success=success,
@@ -241,6 +256,7 @@ async def _replay(
             llm_calls=llm,
             healed_steps=healed,
             final_text=final_text,
+            extra=extra,
         )
     finally:
         await session.close()
@@ -257,7 +273,6 @@ async def _replay_step(
     page = session.page
     assert page is not None
 
-    # Non-element actions: just execute.
     if step.action in ("press", "scroll", "navigate"):
         with tr.measure("act"):
             try:
@@ -299,7 +314,6 @@ async def _maybe_heal(
 ) -> tuple[bool, str, bool]:
     if provider is None:
         return False, note, False
-    # Heal ONLY this step (not the whole task): one LLM call keyed on the stored intent.
     with tr.measure("heal_snapshot"):
         obs = await session.snapshot()
     hint = f"{goal} — specifically right now: {step.intent}"
@@ -315,7 +329,6 @@ async def _maybe_heal(
             await session.act(action)
         except Exception as exc:  # noqa: BLE001
             return False, f"{note}; heal act failed: {type(exc).__name__}", True
-    # Patch the cached step in place so future replays use the healed locator.
     if spec is not None:
         step.locator = spec
     if action.text is not None:

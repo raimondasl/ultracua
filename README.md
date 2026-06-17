@@ -47,6 +47,22 @@ It LEARNS a 4-step demo-shop flow, then REPLAYS it from cache and reports per-st
 the speedup, and replay correctness (reached the goal state, with **0 LLM calls**). The
 scripted teacher has ~0 LLM latency, so a meaningful speedup ratio needs `--provider anthropic`.
 
+### Public benchmark: MiniWoB++
+
+ultracua also drives the public, seed-deterministic
+[MiniWoB++](https://github.com/Farama-Foundation/miniwob-plusplus) suite (in the `bench`
+dependency group):
+
+```bash
+uv sync --group bench                                               # one-time
+uv run --group bench python -m benchmarks.miniwob_bench             # key-less oracle teacher
+uv run --group bench python -m benchmarks.miniwob_bench --provider anthropic --all
+```
+
+It seeds a deterministic task instance, LEARNS it, then REPLAYS from cache with **0 LLM
+calls**, scored by MiniWoB's own reward. (MiniWoB link tasks use `<span>` + JS listeners,
+invisible to the DOM snapshot; button/input tasks are covered.)
+
 ### Benchmark strategy
 
 Phase 1 ships its own **local deterministic fixture set** (`benchmarks/`) — the one thing no
@@ -56,7 +72,7 @@ speedup + correctness + self-healing signal. The planned public-benchmark adopti
 
 | Layer | Benchmark | When | License |
 |---|---|---|---|
-| Fast inner-loop + drift sandbox | **MiniWoB++** (seed-deterministic, no Docker) | next | MIT |
+| Fast inner-loop + drift sandbox | **MiniWoB++** (seed-deterministic, no Docker) | ✅ wired | MIT |
 | Harness | **BrowserGym + AgentLab** (seed pinning, trace inspector, replay agent) | with MiniWoB++ | Apache-2.0 |
 | Deterministic realism | **WebArena-Verified** (deterministic scoring + HAR replay) | realism phase | Apache-2.0 |
 | Live realism (WebVoyager / Online-Mind2Web) | — | late phase only | — |
@@ -64,7 +80,8 @@ speedup + correctness + self-healing signal. The planned public-benchmark adopti
 ## Develop
 
 ```bash
-uv run pytest        # cache, locator-drift, and end-to-end learn->replay tests (drive real Chromium)
+uv run pytest                    # core tests (drive real Chromium)
+uv run --group bench pytest      # also runs the MiniWoB++ integration test
 ```
 
 ## Layout
