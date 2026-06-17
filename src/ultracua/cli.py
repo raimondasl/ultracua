@@ -97,6 +97,8 @@ async def _flow_learn(args: argparse.Namespace) -> None:
     print("data: " + json.dumps(res.data, ensure_ascii=False))
     if not res.cached:
         print("WARNING: no replayable flow was cached (the agent took no clean steps).")
+    elif not res.approved:
+        print(f"verify the above, then approve it: ultracua flow approve --name {spec.name}")
 
 
 async def _flow_replay(args: argparse.Namespace) -> None:
@@ -104,10 +106,21 @@ async def _flow_replay(args: argparse.Namespace) -> None:
 
     spec = load_spec(args.name)
     try:
-        data = await replay(spec, provider_name=args.provider)
+        data = await replay(
+            spec, provider_name=args.provider,
+            require_approved=args.require_approved, on_drift=args.on_drift,
+        )
     except FlowReplayError as exc:
         raise SystemExit(f"REPLAY FAILED: {exc}")
     print(json.dumps(data, ensure_ascii=False))
+
+
+def _flow_approve(args: argparse.Namespace) -> None:
+    from .flows import approve, load_spec
+
+    spec = load_spec(args.name)
+    approve(spec)
+    print(f"approved {spec.name!r} — `flow replay --name {spec.name} --require-approved` will run it")
 
 
 def _flow_inspect(args: argparse.Namespace) -> None:
@@ -150,6 +163,13 @@ def _flow_main(argv) -> None:
     pr = sub.add_parser("replay", help="Replay a saved flow (0-LLM nav); print the data; fails loud on drift.")
     pr.add_argument("--name", required=True)
     pr.add_argument("--provider", **prov)
+    pr.add_argument("--require-approved", dest="require_approved", action="store_true",
+                    help="refuse to run a flow that hasn't been approved.")
+    pr.add_argument("--on-drift", dest="on_drift", default="raise", choices=["raise", "relearn"],
+                    help="raise = fail loud on drift (default); relearn = re-author the flow instead.")
+
+    pa = sub.add_parser("approve", help="Mark a learned flow trusted (for --require-approved replays).")
+    pa.add_argument("--name", required=True)
 
     pi = sub.add_parser("inspect", help="Print a saved flow's spec + learned steps.")
     pi.add_argument("--name", required=True)
@@ -161,6 +181,8 @@ def _flow_main(argv) -> None:
         asyncio.run(_flow_learn(args))
     elif args.cmd == "replay":
         asyncio.run(_flow_replay(args))
+    elif args.cmd == "approve":
+        _flow_approve(args)
     elif args.cmd == "inspect":
         _flow_inspect(args)
     elif args.cmd == "list":

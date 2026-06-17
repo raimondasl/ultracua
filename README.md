@@ -125,7 +125,13 @@ uv run ultracua flow list
 `auth` is `headers=` or `storage_state=` (a Playwright cookies JSON); `extract` is a
 natural-language instruction (+ optional `extract_schema`). Replay does 0-LLM **navigation**;
 reading the answer is one cheap extraction call (set `extract=None` for navigate-only flows).
-See [ROADMAP.md](ROADMAP.md) for what's next (trust-unattended reliability, lifecycle/ops).
+
+**Trust for unattended runs (ROADMAP Phase B):** `replay(require_approved=True)` refuses any flow
+you haven't `approve_flow(spec)`d; replay also treats a change in the data's *shape* vs the
+learned run as drift; and `on_drift="relearn"` re-authors the flow instead of raising. So a
+scheduled run either returns trustworthy data or fails loudly — point cron at it and alert on a
+non-zero exit. (CLI: `ultracua flow approve --name …`; `flow replay --require-approved
+--on-drift relearn`.) Still on the [ROADMAP](ROADMAP.md): auth refresh + lifecycle/ops.
 
 ## Benchmark
 

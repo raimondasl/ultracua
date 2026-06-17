@@ -53,14 +53,17 @@ Unlocks the core use case.
 
 ### Phase B — "trust it unattended" (reliability)
 
-Unlocks scheduling without babysitting.
+Unlocks scheduling without babysitting. Mostly **done**:
 
-- A **replay-confidence check** after extraction (schema-validate the output; flag low confidence)
-  so a scheduled run distinguishes *replayed-and-trustworthy* from *drifted-needs-relearn*.
-- A clear **auto-relearn-or-alert policy** on replay failure (auto-mode already does part of this),
-  plus a **failure hook** (callback / exception with diagnostics) a scheduler can alert on.
-- **Auth refresh** — the real "recurring" wrinkle: sessions expire, so a replay must detect a
-  dropped session and re-run the login sub-flow.
+- ✅ **Approval gate** — `learn` records a flow as unapproved; `approve()` marks it trusted;
+  `replay(require_approved=True)` refuses to run an unapproved flow (a human verifies first).
+- ✅ **Confidence via shape-consistency** — `learn` records the extracted data's structure; replay
+  treats a change in that shape (vs the learned run) as drift — data-level drift detection on top
+  of the page-fingerprint check.
+- ✅ **Relearn-or-raise policy + fail-loud signal** — `on_drift="raise"` (default) raises a rich
+  `FlowReplayError` a scheduler can alert on; `on_drift="relearn"` re-authors the flow instead.
+- ⏳ **Auth refresh** (remaining) — sessions expire; a replay should detect a dropped session and
+  re-run a login sub-flow. Needs a generic login-sub-flow + credential handling — its own PR.
 
 ### Phase C — "operate many flows" (lifecycle / ops)
 
