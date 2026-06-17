@@ -8,8 +8,11 @@ A Computer Use Agent (CUA) that drives a web browser at **5–10× human speed**
 >
 > **Done:** Phase 0 (walking skeleton) · Phase 1 (flow cache + deterministic replay;
 > MiniWoB++ benchmark) · Phase 2 (mutation gate + idempotency, interstitial escalation,
-> pacing governor, TTL/versioned cache, JS-listener snapshot coverage, self-healing locators).
-> **Next:** Phase 3 (multi-provider abstraction + fast/strong tiering + prompt caching).
+> pacing governor, TTL/versioned cache, JS-listener snapshot coverage, self-healing locators) ·
+> Phase 3 (provider-neutral content-block layer + native Anthropic/OpenAI/Gemini adapters,
+> fast/strong tiering with escalation, prompt-cache breakpoint).
+> **Next:** Phase 4 (bindings/daemon, vision + WebMCP tiers, parallelism, optional Rust kernel).
+> Deferred from Phase 3: action batching; live OpenAI/Gemini paths need their SDKs + keys.
 
 ---
 

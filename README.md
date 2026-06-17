@@ -6,12 +6,12 @@ The headline lever isn't faster clicking — it's removing the LLM from the repe
 by **learning a flow once and replaying it deterministically**. See **[PLAN.md](PLAN.md)**
 for the full architecture, research basis, and roadmap.
 
-> **Status: Phase 2 — resilience & safety.** First run on a (goal, url) LEARNS the flow
-> with an LLM and caches a resilient selector+action program; later runs REPLAY it with
-> **no LLM** at ~50 ms/step. Resilient locators survive DOM drift (incl. JS-listener
-> elements); a per-step LLM self-heal recovers when they don't. Mutating actions are never
-> blind-replayed (page-fingerprint gate + idempotency keys); CAPTCHA/anti-bot interstitials
-> escalate; a pacing governor keeps speed off the wire.
+> **Status: Phase 3 — multi-provider LLM + tiering.** Learn a flow once, REPLAY it with
+> **no LLM** at ~50 ms/step (Phase 1); mutating actions are gated + idempotent, interstitials
+> escalate, locators self-heal (Phase 2). Phase 3 adds a provider-neutral, content-block
+> canonical layer with native **Anthropic / OpenAI / Gemini** adapters (no OpenAI-compat
+> shim, no proxy); a **fast tier** (Haiku) drives routine steps and **escalates** to a
+> **strong tier** (Opus/Sonnet) on low confidence, with prompt caching on the stable prefix.
 
 ## Requirements
 
@@ -34,7 +34,9 @@ uv run ultracua --url https://example.com --goal "open the more information link
 ```
 
 Flags: `--mode auto|learn|replay`, `--fresh` (clear the cached flow first),
-`--provider anthropic|mock`, `--scope <name>`. Learned flows live under `.ultracua/flows/`.
+`--provider anthropic|openai|gemini|mock`, `--tier fast|strong`, `--scope <name>`. Learned
+flows live under `.ultracua/flows/`. Env: `ULTRACUA_FAST_MODEL` (default `claude-haiku-4-5`),
+`ULTRACUA_MODEL` (strong, default `claude-opus-4-8`), `ULTRACUA_TIER` (default `fast`).
 
 ## Benchmark
 
@@ -79,6 +81,27 @@ speedup + correctness + self-healing signal. The planned public-benchmark adopti
 | Deterministic realism | **WebArena-Verified** (deterministic scoring + HAR replay) | realism phase | Apache-2.0 |
 | Live realism (WebVoyager / Online-Mind2Web) | — | late phase only | — |
 
+## Providers & tiering (Phase 3)
+
+LLMs are reached through a provider-neutral, content-block canonical layer with thin
+**native** adapters — Anthropic (Claude), OpenAI, Gemini — **not** an OpenAI-compat shim or a
+network proxy (both drop prompt caching / strict tool args). The adapters normalize the
+three concentrated differences: tool-schema shape (`input_schema` vs `function.parameters`
+vs `functionDeclarations`), how tool calls surface (Claude/Gemini pre-parsed vs OpenAI
+stringified args), and tool-result shape.
+
+A **fast tier** (Haiku 4.5) drives routine element selection and **escalates** to a
+**strong tier** (Opus 4.8 / Sonnet 4.6) when unsure; the stable system+tools prefix is
+prompt-cached with the volatile observation placed after the breakpoint.
+
+```bash
+ULTRACUA_LLM_BACKEND=anthropic ULTRACUA_TIER=fast \
+  uv run ultracua --url https://example.com --goal "..."
+```
+
+For the OpenAI / Gemini backends, install their SDKs (`uv sync --group providers`) and set
+the relevant key (`OPENAI_API_KEY` / `GEMINI_API_KEY`).
+
 ## Safety (Phase 2)
 
 The cached fast-path is built to be the *trusted default*:
@@ -113,7 +136,8 @@ src/ultracua/
   cache.py        flow cache: keyed JSON store of CachedStep programs (component 2)
   flow.py         run_cached — learn-and-record / no-LLM replay / self-heal / mutation gate
   safety.py       mutation classification, idempotency keys, pacing, interstitial detection (component 6)
-  providers/      LLM adapters: anthropic, mock, scripted (component 4)
+  llm/            multi-provider abstraction: canonical types + anthropic/openai/gemini adapters + router (component 4)
+  providers/      agent decision (llm_agent) + heuristic mock + scripted/oracle teachers
   verify.py       post-action state-diff (component 5)
   agent.py        the Phase 0 uncached loop (baseline)
   cli.py          `ultracua` entry point
