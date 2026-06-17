@@ -1,15 +1,19 @@
 """ultracua — a Computer Use Agent that drives a browser at 5-10x human speed.
 
-Phase 0 (walking skeleton) public surface. See PLAN.md for the full roadmap.
+See PLAN.md for the full roadmap. Phase 1 adds the learn-once / replay-fast flow cache.
 """
 
 from __future__ import annotations
 
+from .agent import run_goal
 from .browser import BrowserSession
+from .cache import CachedFlow, CachedStep, FlowCache, flow_key
 from .config import settings
+from .flow import FlowReport, run_cached
+from .locators import LocatorSpec
 from .types import Action, Element, Observation, StepResult
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "BrowserSession",
@@ -17,17 +21,17 @@ __all__ = [
     "Element",
     "Observation",
     "StepResult",
-    "settings",
+    "LocatorSpec",
+    "CachedFlow",
+    "CachedStep",
+    "FlowCache",
+    "flow_key",
+    "FlowReport",
     "run_goal",
+    "run_cached",
+    "settings",
     "main",
 ]
-
-
-def run_goal(*args, **kwargs):
-    """Lazy re-export of the agent loop (keeps Playwright import off `import ultracua`)."""
-    from .agent import run_goal as _run_goal
-
-    return _run_goal(*args, **kwargs)
 
 
 def main() -> None:
