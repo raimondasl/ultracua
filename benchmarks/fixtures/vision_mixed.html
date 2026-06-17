@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ultracua fixture — Mixed (DOM + canvas)</title>
+  </head>
+  <!-- Has a DOM element (so the snapshot is non-empty and auto-vision does NOT fire), plus a
+       canvas target only reachable by pixel grounding — exercises the agent's `need_vision`. -->
+  <body style="margin: 0">
+    <canvas id="c" width="300" height="300" style="position: absolute; left: 0; top: 0"></canvas>
+    <button style="position: absolute; left: 0; top: 320">Unrelated</button>
+    <p id="status" style="position: absolute; left: 0; top: 360">not clicked</p>
+    <script>
+      const c = document.getElementById('c');
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = 'green';
+      ctx.fillRect(60, 60, 80, 80);
+      c.addEventListener('click', (e) => {
+        const r = c.getBoundingClientRect();
+        const x = e.clientX - r.left, y = e.clientY - r.top;
+        if (x >= 60 && x <= 140 && y >= 60 && y <= 140) {
+          document.getElementById('status').textContent = 'Target hit';
+        }
+      });
+    </script>
+  </body>
+</html>

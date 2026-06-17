@@ -34,6 +34,8 @@ ACTION_TOOL: dict = {
                     "navigate",
                     "done",
                     "give_up",
+                    "webmcp_call",
+                    "need_vision",
                 ],
             },
             "intent": {
@@ -47,6 +49,14 @@ ACTION_TOOL: dict = {
             "text": {
                 "type": "string",
                 "description": "Text to type, key name to press (e.g. 'Enter'), or URL to navigate to.",
+            },
+            "tool": {
+                "type": "string",
+                "description": "WebMCP tool name to invoke (only with action='webmcp_call').",
+            },
+            "args": {
+                "type": "string",
+                "description": "JSON object of arguments for the WebMCP tool (only with action='webmcp_call').",
             },
         },
         "required": ["action", "intent"],

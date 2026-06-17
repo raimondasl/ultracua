@@ -18,9 +18,12 @@ A Computer Use Agent (CUA) that drives a web browser at **5–10× human speed**
 > solved-but-not-`done` flows (`keyword_completion` / `llm_completion`); (3) **vision + WebMCP
 > tiers** — `vision.py` (empty DOM -> screenshot -> grounding -> `click_xy`, replayed
 > deterministically; Mock/Anthropic grounding) and `webmcp.py` (detect + call site-exposed
-> tools via the `webmcp_call` action).
-> Remaining Phase 4: optional Rust hot-kernel. Deferred from Phase 3: action batching; live
-> OpenAI/Gemini need their SDKs + keys.
+> tools via the `webmcp_call` action); (4) **LLM-facing tier integration** — the agent's
+> action schema exposes `webmcp_call`/`need_vision`, the observation lists WebMCP tools, and
+> the model **auto-selects** them (validated live: Claude chose a WebMCP tool over DOM
+> scraping).
+> **Phases 0–4 complete.** Rust hot-kernel intentionally skipped (DOM work runs in-browser, so
+> Python is not the bottleneck). Deferred: action batching; live OpenAI/Gemini need their SDKs + keys.
 
 ---
 

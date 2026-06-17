@@ -39,6 +39,7 @@ from .safety import (
 from .timing import StepTrace
 from .types import Action, Observation
 from .verify import state_changed
+from .webmcp import detect as _webmcp_detect
 
 OnStep = Callable[[StepTrace], None]
 Prepare = Callable[[BrowserSession], Awaitable[None]]
@@ -127,6 +128,16 @@ async def _is_interstitial(session: BrowserSession) -> bool:
     return looks_like_interstitial(page.url, title, text)
 
 
+async def _vision_decide(session: BrowserSession, goal: str, grounding: Any, tr: StepTrace):
+    """Take a screenshot and ask the grounding model where to act (vision tier)."""
+    with tr.measure("screenshot"):
+        png = await session.screenshot()
+    assert session.page is not None
+    vp = session.page.viewport_size or {"width": 0, "height": 0}
+    tr.meta["tier"] = "vision"
+    return await grounding.decide(goal, png, vp)
+
+
 async def _learn(
     url: str,
     goal: str,
@@ -169,21 +180,23 @@ async def _learn(
             with tr.measure("snapshot"):
                 obs = await session.snapshot()
 
-            # Pick the action source: the VISION tier when the DOM has nothing to address
-            # (canvas/opaque widgets), else the DOM provider.
+            # Surface any WebMCP tools the page exposes so the agent can call them directly.
+            obs.webmcp_tools = await _webmcp_detect(session.page)
+
+            # Pick the action source: VISION when the DOM has nothing to address, else the
+            # DOM provider — which may itself request vision (need_vision) or a webmcp_call.
+            t0 = time.perf_counter()
             if not obs.elements and grounding is not None:
-                with tr.measure("screenshot"):
-                    png = await session.screenshot()
-                vp = session.page.viewport_size or {"width": 0, "height": 0}
-                tr.meta["tier"] = "vision"
-                t0 = time.perf_counter()
-                action, ttft = await grounding.decide(goal, png, vp)
+                action, ttft = await _vision_decide(session, goal, grounding, tr)
             elif provider is not None:
-                t0 = time.perf_counter()
                 action, ttft = await provider.decide(goal, obs, history)
+                if action.action == "need_vision":
+                    if grounding is not None:
+                        action, ttft = await _vision_decide(session, goal, grounding, tr)
+                    else:
+                        action = Action(action="give_up", intent="vision requested but unavailable")
             else:
                 action, ttft = Action(action="give_up", intent="no target and no provider"), None
-                t0 = time.perf_counter()
             llm += 1
             llm_ms = (time.perf_counter() - t0) * 1000.0
             if ttft is not None:

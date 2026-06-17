@@ -33,6 +33,11 @@ def _cache(params: dict) -> FlowCache:
 
 async def _run(params: dict) -> dict:
     provider = get_provider(params["provider"]) if params.get("provider") else None
+    grounding = None
+    if params.get("grounding") == "anthropic":
+        from ..vision import AnthropicGrounding
+
+        grounding = AnthropicGrounding()
     report = await run_cached(
         params["url"],
         params["goal"],
@@ -42,6 +47,7 @@ async def _run(params: dict) -> dict:
         scope=params.get("scope", "default"),
         headless=params.get("headless", True),
         max_steps=params.get("max_steps"),
+        grounding=grounding,
     )
     return {
         "mode": report.mode,

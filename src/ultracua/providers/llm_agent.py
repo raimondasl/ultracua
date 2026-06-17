@@ -9,6 +9,7 @@ with confidence-based escalation (PLAN.md §5).
 
 from __future__ import annotations
 
+import json
 from typing import Optional
 
 from ..llm.base import Router
@@ -25,6 +26,10 @@ SYSTEM = (
     "- Use 'type' for textboxes (include the text in 'text'); 'click' for buttons/links.\n"
     "- Use 'press' with text='Enter' to submit; 'scroll' to reveal more; 'navigate' with a URL.\n"
     "- Emit 'done' when the goal is achieved, 'give_up' if it is not achievable here.\n"
+    "- If WEBMCP TOOLS are listed, PREFER one: action='webmcp_call', tool=<name>, "
+    "args=<JSON object of arguments> — it performs the task directly, no DOM clicks needed.\n"
+    "- If the target is not among the elements (e.g. a canvas / visual-only area), use "
+    "action='need_vision' and a vision step will locate it by pixel.\n"
     "Use PAGE TEXT and element values to judge progress: do not repeat an action that already "
     "took effect (e.g. a textbox already shows your text, or PAGE TEXT confirms success) — move "
     "on, or emit 'done' if the goal is met.\n"
@@ -48,6 +53,11 @@ def _render(obs: Observation, goal: str, history: list[str]) -> str:
     if obs.text:
         lines.append(f"PAGE TEXT: {obs.text}")
         lines.append("")
+    if obs.webmcp_tools:
+        lines.append("WEBMCP TOOLS (prefer these — they act directly):")
+        for t in obs.webmcp_tools:
+            lines.append(f"  - {t.get('name', '')}: {t.get('description', '')}")
+        lines.append("")
     lines.append("INTERACTABLE ELEMENTS:")
     for e in obs.elements:
         t = f" type={e.type}" if e.type else ""
@@ -60,8 +70,16 @@ def _parse(resp) -> Optional[Action]:
     tu = resp.tool_use("act")
     if tu is None:
         return None
+    data = dict(tu.input)
+    # WebMCP args come back as a JSON string (strict schema) -> parse to a dict.
+    if isinstance(data.get("args"), str):
+        raw = data["args"].strip()
+        try:
+            data["args"] = json.loads(raw) if raw else None
+        except Exception:
+            data["args"] = None
     try:
-        return Action(**tu.input)
+        return Action(**data)
     except Exception:
         return None
 
