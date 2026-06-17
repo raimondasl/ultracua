@@ -13,6 +13,49 @@ for the full architecture, research basis, and roadmap.
 > A **JSON-RPC daemon + Node/JS client**, concurrent `run_many`, completion verifiers, and
 > WebMCP + vision actuation tiers the agent **auto-selects** (Phase 4). See [PLAN.md](PLAN.md).
 
+## What it's for (and what it isn't yet)
+
+ultracua is **LLM-authored, self-healing, deterministic-replay browser automation for _repeated_
+flows**. It sits between two unsatisfying options:
+
+- **Hand-coded scripts** (Playwright / Selenium / UiPath) — deterministic and free to run, but a
+  developer hand-writes every selector and they break on UI changes.
+- **Per-step LLM agents** (browser-use, computer-use) — handle novelty, but run the LLM _every
+  step, every time_: slow, expensive, non-deterministic, hard to audit.
+
+ultracua's contribution: an LLM **authors the flow once** (no hand-scripting), it **self-heals**
+minor UI drift, then **replays with zero LLM** — fast, cheap, deterministic, auditable. The
+mechanism is validated on real authenticated sites (Magento admin + storefront).
+
+**Good fit** — a developer building _repeated_ browser automation: scheduled data pulls from
+authenticated dashboards, internal tooling, portal extractions where the flow is stable and run
+often. Learn a flow once (~10–30 s, a few LLM calls); each later run is ~5 s at **$0 in LLM** and
+reproducible. Example shape: _"every morning, log into the vendor portal and pull yesterday's
+order count / invoice total / latest status."_
+
+**Not a fit (yet)** — a no-code "do anything" agent for end users; one-off complex analysis
+(multi-step aggregation, semantic reasoning — use a per-step agent for those); anything
+high-stakes run unsupervised without human verification of the learned flow.
+
+### Honest maturity
+
+It is a **usable prototype of a real pattern, not a turnkey product.** The core — learn-once /
+replay-fast, resilient locators, safety gates, multi-provider — works and delivers the speedup in
+its niche (validated across two real apps at 0-LLM replay). What's missing for "anyone could use
+this unsupervised" is product / reliability engineering, **not** another research breakthrough:
+
+1. **Replay-reliability hardening** + failure detection, so unattended replays can be trusted
+   (some multi-step flows don't reproduce cleanly today).
+2. **A flow lifecycle layer** — author → verify → store → schedule → monitor learned flows (a
+   thin app over the existing JSON-RPC daemon).
+3. **Breadth** — wire NAVIGATE / MUTATE task types (forms, posts, purchases) end to end, and
+   raise authoring reliability so verification stays light.
+
+The honest workflow today is **LLM drafts a flow → a human verifies it → replay**, not fully
+autonomous. And the agent's capability ceiling — it reliably learns _stable navigate-and-extract_
+flows but stumbles on complex one-off reasoning — roughly _maps_ to the niche: what it can't do
+isn't what you'd cache-and-replay anyway.
+
 ## Requirements
 
 - [`uv`](https://docs.astral.sh/uv/) (manages Python itself — no separate Python install needed)
