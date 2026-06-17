@@ -24,6 +24,9 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [dependency-groups]
+bench = [
+    "miniwob>=1.0",
+]
 dev = [
     "pytest>=9.1.0",
     "pytest-asyncio>=1.4.0",
