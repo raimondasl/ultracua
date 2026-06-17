@@ -142,6 +142,7 @@ async def _learn(
     steps: list[CachedStep] = []
     llm = 0
     success = False
+    no_progress = 0
     try:
         nav = StepTrace(index=-1)
         with nav.measure("navigate"):
@@ -194,7 +195,9 @@ async def _learn(
 
             with tr.measure("verify"):
                 after = await session.snapshot()
-                tr.meta["changed"] = state_changed(obs, after)
+                changed = state_changed(obs, after)
+                tr.meta["changed"] = changed
+            no_progress = 0 if (ok and changed) else no_progress + 1
 
             if ok:
                 name = spec.name if spec else ""
@@ -217,6 +220,10 @@ async def _learn(
             traces.append(tr)
             if on_step:
                 on_step(tr)
+
+            if no_progress >= settings.stuck_limit:
+                tr.meta["stuck"] = no_progress  # bail: agent looping without progress
+                break
 
         extra = {"finalize": await finalize(session)} if finalize else {}
         final_text = await _body_text(session)
