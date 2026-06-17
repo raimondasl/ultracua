@@ -6,12 +6,12 @@ The headline lever isn't faster clicking — it's removing the LLM from the repe
 by **learning a flow once and replaying it deterministically**. See **[PLAN.md](PLAN.md)**
 for the full architecture, research basis, and roadmap.
 
-> **Status: Phase 3 — multi-provider LLM + tiering.** Learn a flow once, REPLAY it with
-> **no LLM** at ~50 ms/step (Phase 1); mutating actions are gated + idempotent, interstitials
-> escalate, locators self-heal (Phase 2). Phase 3 adds a provider-neutral, content-block
-> canonical layer with native **Anthropic / OpenAI / Gemini** adapters (no OpenAI-compat
-> shim, no proxy); a **fast tier** (Haiku) drives routine steps and **escalates** to a
-> **strong tier** (Opus/Sonnet) on low confidence, with prompt caching on the stable prefix.
+> **Status: Phases 0–4 complete.** Learn a flow once, REPLAY it with **no LLM** at ~50 ms/step
+> (measured **66–155× / task** vs learning it) — Phase 1. Mutating actions are gated +
+> idempotent, interstitials escalate, locators self-heal (Phase 2). Provider-neutral
+> **Anthropic / OpenAI / Gemini** adapters with fast/strong tiering + prompt caching (Phase 3).
+> A **JSON-RPC daemon + Node/JS client**, concurrent `run_many`, completion verifiers, and
+> WebMCP + vision actuation tiers the agent **auto-selects** (Phase 4). See [PLAN.md](PLAN.md).
 
 ## Requirements
 
@@ -154,13 +154,15 @@ A target is resolved through a tiered stack — the fastest tier that works wins
 
 1. **WebMCP** ([`webmcp.py`](src/ultracua/webmcp.py)) — if a site exposes structured tools
    (`window.webmcp.listTools()/callTool()`), call them directly (no DOM scraping, ~89% fewer
-   tokens). Near-zero site coverage today; detection + invocation + replay are wired (the
-   `webmcp_call` action).
+   tokens). The **agent auto-selects** these — detected tools are surfaced in the observation
+   and the model emits `webmcp_call` (validated live: Claude chose `add_to_cart` over DOM
+   scraping). Near-zero real-world coverage today.
 2. **Cached selector replay** — the 0-LLM fast path (Phase 1).
 3. **DOM / accessibility** — the default learn path (resilient locators).
 4. **Vision** ([`vision.py`](src/ultracua/vision.py)) — last resort for canvas/WebGL/opaque
-   widgets (empty DOM snapshot): screenshot → grounding model → `click_xy` pixel click,
-   replayed deterministically (brittle to layout shifts). `MockGrounding` for tests;
+   widgets: screenshot → grounding model → `click_xy` pixel click, replayed deterministically
+   (brittle to layout shifts). The agent **requests it via `need_vision`** when the DOM lacks
+   the target (or it auto-fires on an empty snapshot). `MockGrounding` for tests;
    `AnthropicGrounding` uses Claude vision.
 
 ## Scale & verification (Phase 4)

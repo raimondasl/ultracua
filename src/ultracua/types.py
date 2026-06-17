@@ -14,6 +14,7 @@ ActionType = Literal[
     "click", "type", "press", "scroll", "navigate", "done", "give_up",
     "click_xy",      # vision tier: click pixel coordinates (canvas / opaque widgets)
     "webmcp_call",   # WebMCP tier: invoke a site-exposed structured tool
+    "need_vision",   # agent can't find the target in the DOM -> fall to the vision tier
 ]
 
 
@@ -38,6 +39,7 @@ class Observation(BaseModel):
     elements: list[Element]
     text: str = ""  # short snippet of visible page text (so the agent can read content /
     #                 confirmations / errors and judge completion), not just interactables
+    webmcp_tools: Optional[list[dict]] = None  # site-exposed WebMCP tools, if any
     fingerprint: str = ""  # structural hash for verification + future cache keys
 
 
