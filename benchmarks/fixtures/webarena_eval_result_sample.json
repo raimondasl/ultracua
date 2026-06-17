@@ -1,0 +1,21 @@
+{
+  "task_id": 108,
+  "intent_template_id": 270,
+  "sites": ["shopping_admin"],
+  "task_revision": 2,
+  "status": "success",
+  "score": 1.0,
+  "evaluators_results": [
+    {
+      "evaluator_name": "AgentResponseEvaluator",
+      "status": "success",
+      "score": 1.0,
+      "assertions": null,
+      "error_msg": null,
+      "should_not_exist": null
+    }
+  ],
+  "webarena_verified_version": "1.2.3",
+  "webarena_verified_evaluator_checksum": "0000000000000000000000000000000000000000000000000000000000000000",
+  "webarena_verified_data_checksum": "0000000000000000000000000000000000000000000000000000000000000000"
+}

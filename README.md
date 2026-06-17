@@ -76,6 +76,37 @@ It seeds a deterministic task instance, LEARNS it, then REPLAYS from cache with 
 calls**, scored by MiniWoB's own reward. (MiniWoB link tasks use `<span>` + JS listeners,
 invisible to the DOM snapshot; button/input tasks are covered.)
 
+### Public benchmark: WebArena-Verified (offline)
+
+ultracua also drives [WebArena-Verified](https://github.com/ServiceNow/webarena-verified)
+(ServiceNow) — WebArena's audited rebuild with **deterministic** scoring (no LLM judge). The
+**offline evaluator path runs key-less, native on Windows, with zero containers**:
+
+```bash
+uv run python -m benchmarks.webarena_bench --selfcheck   # producer->eval round-trip (default)
+uv run python -m benchmarks.webarena_bench --demo        # re-score bundled demo logs 107/108
+```
+
+`--selfcheck` writes the gold answer for a RETRIEVE task (+ a minimal valid HAR), scores it
+(→ 1.0), then an empty answer (→ 0.0) — proving the whole pipeline. `--demo` re-scores the
+demo logs from a cloned repo (`--src`, or `ULTRACUA_WEBARENA_SRC`) and reproduces 107→0.0 /
+108→1.0.
+
+The adapter ([`benchmarks/webarena_env.py`](benchmarks/webarena_env.py)) **never imports**
+`webarena-verified` — that package hard-pins `pydantic==2.12.0`, which conflicts with ours — so
+it shells out to the pinned CLI in its own ephemeral env via `uv tool run --from
+webarena-verified==…`. ultracua produces each `<task_id>/agent_response.json` + Playwright
+`network.har` run dir (the [`BrowserSession(record_har_path=…)`](src/ultracua/browser.py)
+producer side), then reads back the deterministic 0/1 `score`.
+
+> **Offline reach.** The *evaluator* is fully offline. RETRIEVE tasks (~320 of 812) score from
+> the response alone (but still need a valid HAR present — an empty-`entries` HAR is rejected).
+> NAVIGATE (all 113) and most MUTATE tasks assert against real HTTP requests, so they need a
+> genuine HAR captured against **live site containers** (Docker + WSL2) — deferred. Working/eval
+> data is kept off the system drive under `settings.data_dir` (default `D:\ultracua-data`,
+> `ULTRACUA_DATA_DIR`). A live-run config template is at
+> [`benchmarks/configs/config.example.json`](benchmarks/configs/config.example.json).
+
 ### Benchmark strategy
 
 Phase 1 ships its own **local deterministic fixture set** (`benchmarks/`) — the one thing no
@@ -87,7 +118,7 @@ speedup + correctness + self-healing signal. The planned public-benchmark adopti
 |---|---|---|---|
 | Fast inner-loop + drift sandbox | **MiniWoB++** (seed-deterministic, no Docker) | ✅ wired | MIT |
 | Harness | **BrowserGym + AgentLab** (seed pinning, trace inspector, replay agent) | with MiniWoB++ | Apache-2.0 |
-| Deterministic realism | **WebArena-Verified** (deterministic scoring + HAR replay) | realism phase | Apache-2.0 |
+| Deterministic realism | **WebArena-Verified** (deterministic scoring + HAR replay) | ✅ offline wired; live sites deferred | Apache-2.0 |
 | Live realism (WebVoyager / Online-Mind2Web) | — | late phase only | — |
 
 ## Providers & tiering (Phase 3)

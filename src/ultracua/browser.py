@@ -23,13 +23,22 @@ from .types import Action, Observation
 
 
 class BrowserSession:
-    def __init__(self, headless: bool | None = None, browser: Browser | None = None) -> None:
+    def __init__(
+        self,
+        headless: bool | None = None,
+        browser: Browser | None = None,
+        record_har_path: str | None = None,
+    ) -> None:
         self.headless = settings.headless if headless is None else headless
         self._pw: Playwright | None = None
         # If a browser is provided, run as a fresh CONTEXT inside it (parallelism) and don't
         # own its lifecycle; otherwise launch (and later close) our own browser.
         self._shared_browser = browser
         self._owns_browser = browser is None
+        # When set, record a Playwright HAR of all network activity to this path (flushed on
+        # context close). This is the trace WebArena-Verified scores against (component:
+        # benchmarks/webarena_env.py) — captured via the native record_har_* context options.
+        self._record_har_path = record_har_path
         self.browser: Browser | None = browser
         self.context: BrowserContext | None = None
         self.page: Page | None = None
@@ -38,7 +47,11 @@ class BrowserSession:
         if self._shared_browser is None:
             self._pw = await async_playwright().start()
             self.browser = await self._pw.chromium.launch(headless=self.headless)
-        self.context = await self.browser.new_context()
+        context_kwargs: dict = {}
+        if self._record_har_path:
+            context_kwargs["record_har_path"] = self._record_har_path
+            context_kwargs["record_har_content"] = "embed"
+        self.context = await self.browser.new_context(**context_kwargs)
         self.context.set_default_timeout(settings.action_timeout_ms)
         self.context.set_default_navigation_timeout(settings.nav_timeout_ms)
         self.page = await self.context.new_page()
