@@ -92,6 +92,7 @@ async def run_cached(
     grounding: Optional[Any] = None,
     record_har_path: Optional[str] = None,
     extra_headers: Optional[dict] = None,
+    storage_state: Optional[str] = None,
 ) -> FlowReport:
     cache = cache or FlowCache()
     governor = governor or PacingGovernor()
@@ -103,6 +104,7 @@ async def run_cached(
         report = await _replay(
             url, key, cached, cache, heal_provider, headless, on_step,
             prepare, finalize, goal, governor, scope, browser, record_har_path, extra_headers,
+            storage_state,
         )
         if report.success or mode == "replay" or report.mode == "escalate":
             return report
@@ -116,7 +118,7 @@ async def run_cached(
     return await _learn(
         url, goal, key, provider, cache, max_steps, headless, on_step,
         prepare, finalize, governor, scope, browser, verifier, grounding,
-        record_har_path, extra_headers,
+        record_har_path, extra_headers, storage_state,
     )
 
 
@@ -159,10 +161,12 @@ async def _learn(
     grounding: Optional[Any] = None,
     record_har_path: Optional[str] = None,
     extra_headers: Optional[dict] = None,
+    storage_state: Optional[str] = None,
 ) -> FlowReport:
     max_steps = max_steps or settings.max_steps
     session = await BrowserSession(
-        headless=headless, browser=browser, record_har_path=record_har_path
+        headless=headless, browser=browser, record_har_path=record_har_path,
+        storage_state=storage_state,
     ).start()
     traces: list[StepTrace] = []
     history: list[str] = []
@@ -322,9 +326,11 @@ async def _replay(
     browser: Optional[Any] = None,
     record_har_path: Optional[str] = None,
     extra_headers: Optional[dict] = None,
+    storage_state: Optional[str] = None,
 ) -> FlowReport:
     session = await BrowserSession(
-        headless=headless, browser=browser, record_har_path=record_har_path
+        headless=headless, browser=browser, record_har_path=record_har_path,
+        storage_state=storage_state,
     ).start()
     traces: list[StepTrace] = []
     llm = 0
