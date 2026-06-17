@@ -56,6 +56,9 @@ autonomous. And the agent's capability ceiling — it reliably learns _stable na
 flows but stumbles on complex one-off reasoning — roughly _maps_ to the niche: what it can't do
 isn't what you'd cache-and-replay anyway.
 
+The thinnest path from here to "a developer could actually use this for a recurring task" is
+sketched in **[ROADMAP.md](ROADMAP.md)**.
+
 ## Requirements
 
 - [`uv`](https://docs.astral.sh/uv/) (manages Python itself — no separate Python install needed)
