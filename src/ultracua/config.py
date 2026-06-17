@@ -38,6 +38,10 @@ class Settings:
     tier: str = os.getenv("ULTRACUA_TIER", "strong")
     headless: bool = _flag("ULTRACUA_HEADLESS", True)
     max_steps: int = int(os.getenv("ULTRACUA_MAX_STEPS", "8"))
+    # Stop a discovery run after this many consecutive no-progress steps (anti-loop): when
+    # the agent keeps acting without changing the page, it's stuck (or solved-but-not-aware),
+    # so bail instead of burning the full step budget.
+    stuck_limit: int = int(os.getenv("ULTRACUA_STUCK_LIMIT", "4"))
     # Cap on interactable elements sent to the model — keeps the observation compact.
     max_elements: int = int(os.getenv("ULTRACUA_MAX_ELEMENTS", "80"))
     nav_timeout_ms: int = int(os.getenv("ULTRACUA_NAV_TIMEOUT_MS", "15000"))
