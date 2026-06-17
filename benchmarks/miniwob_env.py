@@ -115,12 +115,14 @@ async def read_instruction(url: str, prepare) -> str:
 
 
 # Oracle-solvable + snapshot-visible (semantic targets identifiable from the instruction).
-EASY_TASKS = ["click-test", "click-button"]
+# click-link is now solvable thanks to the cursor:pointer snapshot pass (Phase 2).
+EASY_TASKS = ["click-test", "click-button", "click-link"]
 
-# Broader set for LLM-driven runs (snapshot-visible button/input/checkbox targets).
+# Broader set for LLM-driven runs (snapshot-visible button/input/checkbox/link targets).
 TASKS = [
     "click-test",
     "click-button",
+    "click-link",
     "click-button-sequence",
     "enter-text",
     "enter-text-dynamic",

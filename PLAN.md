@@ -2,9 +2,14 @@
 
 A Computer Use Agent (CUA) that drives a web browser at **5–10× human speed**.
 
-> Status: planning. Greenfield repo. Python-first, `uv`-managed. Built on Playwright/CDP +
-> a custom speed/agent layer, with a multi-provider LLM abstraction and a learn-once /
-> replay-fast flow cache as the spine.
+> Status: in progress. Python-first, `uv`-managed. Built on Playwright/CDP + a custom
+> speed/agent layer, with a multi-provider LLM abstraction and a learn-once / replay-fast
+> flow cache as the spine.
+>
+> **Done:** Phase 0 (walking skeleton) · Phase 1 (flow cache + deterministic replay;
+> MiniWoB++ benchmark) · Phase 2 (mutation gate + idempotency, interstitial escalation,
+> pacing governor, TTL/versioned cache, JS-listener snapshot coverage, self-healing locators).
+> **Next:** Phase 3 (multi-provider abstraction + fast/strong tiering + prompt caching).
 
 ---
 

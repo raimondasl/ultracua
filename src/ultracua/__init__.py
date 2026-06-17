@@ -11,9 +11,10 @@ from .cache import CachedFlow, CachedStep, FlowCache, flow_key
 from .config import settings
 from .flow import FlowReport, run_cached
 from .locators import LocatorSpec
+from .safety import PacingGovernor, is_mutating
 from .types import Action, Element, Observation, StepResult
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "BrowserSession",
@@ -27,6 +28,8 @@ __all__ = [
     "FlowCache",
     "flow_key",
     "FlowReport",
+    "PacingGovernor",
+    "is_mutating",
     "run_goal",
     "run_cached",
     "settings",

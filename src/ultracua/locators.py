@@ -127,6 +127,9 @@ async def resolve(page: Page, spec: LocatorSpec) -> Optional[Locator]:
     if spec.placeholder:
         candidates.append(page.get_by_placeholder(spec.placeholder, exact=True))
     if spec.text:
+        # exact first — substring text matching also matches ancestor containers, which
+        # would resolve a leaf <span> "link" to its enclosing <div> and miss the handler.
+        candidates.append(page.get_by_text(spec.text, exact=True))
         candidates.append(page.get_by_text(spec.text, exact=False))
     if spec.elem_id:
         candidates.append(page.locator(f'[id="{spec.elem_id}"]'))
