@@ -11,7 +11,9 @@ from typing import Literal, Optional
 from pydantic import BaseModel
 
 ActionType = Literal[
-    "click", "type", "press", "scroll", "navigate", "done", "give_up"
+    "click", "type", "press", "scroll", "navigate", "done", "give_up",
+    "click_xy",      # vision tier: click pixel coordinates (canvas / opaque widgets)
+    "webmcp_call",   # WebMCP tier: invoke a site-exposed structured tool
 ]
 
 
@@ -47,6 +49,9 @@ class Action(BaseModel):
     ref: Optional[str] = None  # target element ref (click/type)
     text: Optional[str] = None  # text to type, key to press, or URL to navigate to
     reasoning: Optional[str] = None
+    coords: Optional[list[int]] = None  # [x, y] pixel coords (click_xy / vision tier)
+    tool: Optional[str] = None  # WebMCP tool name (webmcp_call)
+    args: Optional[dict] = None  # WebMCP tool arguments (webmcp_call)
 
 
 class StepResult(BaseModel):

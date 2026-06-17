@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ultracua fixture — Canvas</title>
+  </head>
+  <!-- A canvas-only page: no DOM-addressable interactables, so the snapshot is empty and
+       the vision tier must ground a click by pixel coordinates. The canvas is positioned
+       at (0,0) so canvas coords == viewport coords, making the target deterministic. -->
+  <body style="margin: 0">
+    <canvas id="c" width="300" height="300" style="position: absolute; left: 0; top: 0"></canvas>
+    <p id="status" style="position: absolute; left: 0; top: 310">not clicked</p>
+    <script>
+      const c = document.getElementById('c');
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = 'green';
+      ctx.fillRect(60, 60, 80, 80); // green target box: (60,60)-(140,140)
+      c.addEventListener('click', (e) => {
+        const r = c.getBoundingClientRect();
+        const x = e.clientX - r.left, y = e.clientY - r.top;
+        if (x >= 60 && x <= 140 && y >= 60 && y <= 140) {
+          document.getElementById('status').textContent = 'Target hit';
+        }
+      });
+    </script>
+  </body>
+</html>

@@ -15,9 +15,12 @@ A Computer Use Agent (CUA) that drives a web browser at **5–10× human speed**
 > stdio (`ultracua-daemon`) + Python `DaemonClient` + Node/JS client (`clients/node/`),
 > cross-language replay at 0 LLM; (2) **parallelism + completion verifier** — `run_many`
 > (concurrent flows as contexts in one browser) and a pluggable `verifier` that caches
-> solved-but-not-`done` flows (`keyword_completion` / `llm_completion`).
-> Remaining Phase 4: vision + WebMCP tiers · optional Rust hot-kernel. Deferred from Phase 3:
-> action batching; live OpenAI/Gemini need their SDKs + keys.
+> solved-but-not-`done` flows (`keyword_completion` / `llm_completion`); (3) **vision + WebMCP
+> tiers** — `vision.py` (empty DOM -> screenshot -> grounding -> `click_xy`, replayed
+> deterministically; Mock/Anthropic grounding) and `webmcp.py` (detect + call site-exposed
+> tools via the `webmcp_call` action).
+> Remaining Phase 4: optional Rust hot-kernel. Deferred from Phase 3: action batching; live
+> OpenAI/Gemini need their SDKs + keys.
 
 ---
 

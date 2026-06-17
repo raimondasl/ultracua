@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ultracua fixture — WebMCP</title>
+  </head>
+  <!-- A page that exposes a WebMCP-style tool interface (window.webmcp) so the agent can
+       call structured tools directly instead of scraping the DOM. -->
+  <body>
+    <h1>WebMCP Shop</h1>
+    <p id="status">idle</p>
+    <script>
+      window.webmcp = {
+        listTools() {
+          return [{ name: 'add_to_cart', description: 'Add a product to the cart by sku' }];
+        },
+        async callTool(name, args) {
+          if (name === 'add_to_cart') {
+            document.getElementById('status').textContent =
+              'Added ' + ((args && args.sku) || '?') + ' to cart';
+            return { ok: true };
+          }
+          throw new Error('unknown tool: ' + name);
+        },
+      };
+    </script>
+  </body>
+</html>
