@@ -74,7 +74,19 @@ class BrowserSession:
 
     async def snapshot(self) -> Observation:
         assert self.page is not None
-        return await capture(self.page, settings.max_elements)
+        try:
+            return await capture(self.page, settings.max_elements)
+        except Exception as exc:  # noqa: BLE001
+            # A snapshot can race a navigation triggered by the previous action — Playwright's
+            # in-page evaluate then fails with "Execution context was destroyed". Wait for the
+            # page to settle and retry once before giving up.
+            if "context was destroyed" not in str(exc) and "navigation" not in str(exc).lower():
+                raise
+            try:
+                await self.page.wait_for_load_state("domcontentloaded", timeout=settings.nav_timeout_ms)
+            except Exception:  # noqa: BLE001
+                pass
+            return await capture(self.page, settings.max_elements)
 
     async def act(self, action: Action) -> None:
         """Execute a canonical action. Playwright's built-in actionability checks

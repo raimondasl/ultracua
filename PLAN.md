@@ -68,6 +68,19 @@ A Computer Use Agent (CUA) that drives a web browser at **5–10× human speed**
 > dynamic-retrieval tasks.** Further gains are capability work (filter-heavy tasks, multi-step
 > fidelity), not the speed mechanism. Action batching remains shelved (replay is 0-LLM; one-time
 > learn is 2–12 cheap calls).
+>
+> **Second site — cross-site evidence.** Added the Magento customer **storefront** (`shopping`,
+> a different app + auth header `X-M2-Customer-Auto-Login: email:password`) to the runner's site
+> registry — no other site-specific code. On single-lookup RETRIEVE tasks the thesis generalizes
+> cleanly: **6/8 learn AND replay at 0-LLM navigation (1.8–6.3×)** (e.g. "order number of my most
+> recent {cancelled,pending,complete} order", "total cost of my latest {…} order", "first
+> purchase date"). Harder aggregation/semantic tasks (price ranges, spend-by-period, review
+> mining) fail at *learn* on the storefront just as they do on the admin — a **consistent
+> capability ceiling, not site-specific**. The new site exposed (and we fixed) two general
+> robustness bugs: a snapshot racing a navigation ("execution context destroyed") now retries
+> after settling, and the batch runner no longer dies when one task throws. **The speed mechanism
+> + pipeline (auth, drive, HAR, deterministic scoring, 0-LLM replay) are site-agnostic, validated
+> across two distinct apps.**
 
 ---
 

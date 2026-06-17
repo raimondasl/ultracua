@@ -123,7 +123,10 @@ answer extractor, `shopping_admin` tasks **94 and 199 both learn and replay corr
 navigation (~2×)** — the replay thesis on real dynamic-retrieval tasks. With agent-exploration
 prompt nudges (explore instead of quitting; prefer direct URLs over hover menus), a 10-task
 `shopping_admin` baseline reaches **learn 8/10, with 6/8 learned flows replaying at 0-LLM
-navigation (2.1–4.6×)** — see PLAN.md. Remaining gaps: reliable caching + filter-heavy capability.
+navigation (2.1–4.6×)**. Cross-site: the same pipeline drives the Magento **storefront**
+(`--site shopping`, a different app + auth header), where single-lookup RETRIEVE tasks
+**learn+replay at 0-LLM (1.8–6.3×)** — the speed mechanism is site-agnostic. See PLAN.md.
+Remaining gaps are agent capability (filter-heavy / aggregation tasks), not the mechanism.
 
 ### Benchmark strategy
 

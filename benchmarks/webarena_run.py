@@ -47,6 +47,15 @@ SITES = {
         # `...-User: admin` form in the package docstring is stale and does NOT authenticate.
         "auth_header": {"X-M2-Admin-Auto-Login": "admin:admin1234"},
     },
+    # Magento customer STOREFRONT — a different app/UI from the admin, with its own header
+    # auto-login (X-M2-Customer-Auto-Login: email:password), per docs/environments/shopping.md.
+    "shopping": {
+        "image": "am1n3e/webarena-verified-shopping",
+        "port": 7770,
+        "env_ctrl_port": 7771,
+        "placeholder": "__SHOPPING__",
+        "auth_header": {"X-M2-Customer-Auto-Login": "emma.lopez@gmail.com:Password.123"},
+    },
 }
 
 _STATUSES = sorted(wa.STATUSES)
@@ -272,13 +281,16 @@ async def run_tasks(site: str, task_ids: list[int], *, provider_name: str, max_s
     for task in tasks:
         cache = FlowCache(root=out_root / "flows")
         row: dict = {"task_id": task["task_id"]}
-        if mode in ("auto", "learn"):
-            row["learn"] = await run_task(site, task, out_root / "learn", mode="learn", cache=cache,
-                                          provider=provider, max_steps=max_steps, headless=headless)
-        do_replay = mode == "replay" or (mode == "auto" and row.get("learn", {}).get("score") == 1.0)
-        if do_replay:
-            row["replay"] = await run_task(site, task, out_root / "replay", mode="replay", cache=cache,
-                                           provider=provider, max_steps=max_steps, headless=headless)
+        try:
+            if mode in ("auto", "learn"):
+                row["learn"] = await run_task(site, task, out_root / "learn", mode="learn", cache=cache,
+                                              provider=provider, max_steps=max_steps, headless=headless)
+            do_replay = mode == "replay" or (mode == "auto" and row.get("learn", {}).get("score") == 1.0)
+            if do_replay:
+                row["replay"] = await run_task(site, task, out_root / "replay", mode="replay", cache=cache,
+                                               provider=provider, max_steps=max_steps, headless=headless)
+        except Exception as exc:  # noqa: BLE001 - one task's failure shouldn't kill the batch
+            row["error"] = f"{type(exc).__name__}: {exc}"
         results.append(row)
     return results
 
@@ -320,6 +332,9 @@ def main(argv=None) -> int:
 
     print("\n==== results ====")
     for row in results:
+        if row.get("error"):
+            print(f" task {row['task_id']}: ERROR {row['error']}")
+            continue
         ln, rp = row.get("learn"), row.get("replay")
         parts = [f"task {row['task_id']}:"]
         if ln:
