@@ -24,10 +24,16 @@ def _flag(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    # Which LLM provider drives discovery. "anthropic" or "mock" in Phase 0.
+    # Which provider drives the agent: anthropic | openai | gemini | mock.
     provider: str = os.getenv("ULTRACUA_PROVIDER", "anthropic")
-    # Discovery (strong-tier) model. Defaults to Anthropic's most capable model.
+    # Native LLM backend used to build the router (when provider is an LLM backend).
+    llm_backend: str = os.getenv("ULTRACUA_LLM_BACKEND", "anthropic")
+    # STRONG-tier model (discovery / escalation). Defaults to Anthropic's most capable.
     model: str = os.getenv("ULTRACUA_MODEL", "claude-opus-4-8")
+    # FAST-tier model (routine element selection); escalates to STRONG on low confidence.
+    fast_model: str = os.getenv("ULTRACUA_FAST_MODEL", "claude-haiku-4-5")
+    # Default tier the agent uses for routine steps: fast | strong.
+    tier: str = os.getenv("ULTRACUA_TIER", "fast")
     headless: bool = _flag("ULTRACUA_HEADLESS", True)
     max_steps: int = int(os.getenv("ULTRACUA_MAX_STEPS", "8"))
     # Cap on interactable elements sent to the model — keeps the observation compact.

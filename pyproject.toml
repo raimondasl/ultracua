@@ -31,3 +31,7 @@ dev = [
     "pytest>=9.1.0",
     "pytest-asyncio>=1.4.0",
 ]
+providers = [
+    "google-genai>=2.8.0",
+    "openai>=2.42.0",
+]

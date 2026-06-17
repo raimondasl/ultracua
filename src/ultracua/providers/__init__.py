@@ -1,24 +1,45 @@
-"""LLM providers. Phase 0 ships an Anthropic adapter and a key-less Mock provider.
+"""Agent providers.
 
-The provider boundary is where PLAN.md's multi-provider abstraction (constraint b) will
-grow: a content-block canonical message type and in-process native adapters. For Phase 0
-the surface is just `Provider.decide(...) -> (Action, ttft_ms)`.
+`get_provider`:
+  - "anthropic" | "openai" | "gemini" -> an LLMAgentProvider over a fast/strong Router on
+    that native backend (multi-provider abstraction, PLAN.md §5);
+  - "mock" -> the key-less heuristic provider.
+
+The scripted/oracle teachers (benchmarks) implement the same `decide` interface directly.
 """
 
 from __future__ import annotations
 
 from .base import ACTION_TOOL, Provider
 
-__all__ = ["Provider", "ACTION_TOOL", "get_provider"]
+__all__ = ["Provider", "ACTION_TOOL", "get_provider", "build_router"]
+
+_LLM_BACKENDS = ("anthropic", "openai", "gemini")
+
+
+def build_router(backend: str):
+    from ..config import settings
+    from ..llm import build_client
+    from ..llm.base import Router, Tier
+
+    client = build_client(backend)
+    return Router(
+        fast=Tier(client, settings.fast_model),
+        strong=Tier(client, settings.model),
+    )
 
 
 def get_provider(name: str) -> Provider:
-    if name == "anthropic":
-        from .anthropic_provider import AnthropicProvider
+    from ..config import settings
 
-        return AnthropicProvider()
     if name == "mock":
         from .mock import MockProvider
 
         return MockProvider()
-    raise ValueError(f"unknown provider: {name!r} (expected 'anthropic' or 'mock')")
+    if name in _LLM_BACKENDS:
+        from .llm_agent import LLMAgentProvider
+
+        return LLMAgentProvider(build_router(name), tier=settings.tier)
+    raise ValueError(
+        f"unknown provider: {name!r} (expected anthropic/openai/gemini or mock)"
+    )

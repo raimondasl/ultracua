@@ -38,8 +38,11 @@ async def _amain(args: argparse.Namespace) -> None:
         if cache.delete(flow_key(args.goal, args.url, args.scope)):
             print("(cleared cached flow)")
     provider = get_provider(args.provider)
+    if hasattr(provider, "tier"):
+        provider.tier = args.tier  # honor --tier on LLM-backed providers
     print(
-        f"ultracua: provider={args.provider} model={settings.model} "
+        f"ultracua: provider={args.provider} tier={args.tier} "
+        f"fast={settings.fast_model} strong={settings.model} "
         f"mode={args.mode} headless={settings.headless}\n"
     )
     report = await run_cached(
@@ -73,8 +76,14 @@ def main() -> None:
     p.add_argument(
         "--provider",
         default=settings.provider,
-        choices=["anthropic", "mock"],
-        help="LLM provider for learn/heal (default from ULTRACUA_PROVIDER).",
+        choices=["anthropic", "openai", "gemini", "mock"],
+        help="Provider for learn/heal (default from ULTRACUA_PROVIDER).",
+    )
+    p.add_argument(
+        "--tier",
+        default=settings.tier,
+        choices=["fast", "strong"],
+        help="Default LLM tier for routine steps (escalates to strong on low confidence).",
     )
     p.add_argument(
         "--mode",
