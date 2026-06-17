@@ -11,10 +11,12 @@ from .cache import CachedFlow, CachedStep, FlowCache, flow_key
 from .config import settings
 from .flow import FlowReport, run_cached
 from .locators import LocatorSpec
+from .parallel import run_many
 from .safety import PacingGovernor, is_mutating
 from .types import Action, Element, Observation, StepResult
+from .verifiers import keyword_completion
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 __all__ = [
     "BrowserSession",
@@ -32,6 +34,8 @@ __all__ = [
     "is_mutating",
     "run_goal",
     "run_cached",
+    "run_many",
+    "keyword_completion",
     "settings",
     "main",
 ]

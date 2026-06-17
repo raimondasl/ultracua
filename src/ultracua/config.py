@@ -46,6 +46,8 @@ class Settings:
     max_elements: int = int(os.getenv("ULTRACUA_MAX_ELEMENTS", "80"))
     nav_timeout_ms: int = int(os.getenv("ULTRACUA_NAV_TIMEOUT_MS", "15000"))
     action_timeout_ms: int = int(os.getenv("ULTRACUA_ACTION_TIMEOUT_MS", "5000"))
+    # Max flows run concurrently by run_many (as separate contexts in one browser).
+    concurrency: int = int(os.getenv("ULTRACUA_CONCURRENCY", "4"))
 
 
 settings = Settings()
