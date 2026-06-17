@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Environments / secrets
+.venv/
+.env
+.env.*
+
+# uv
+# (uv.lock IS committed — it pins the resolved dependency set)
+
+# Claude Code local settings (machine-specific permissions)
+.claude/settings.local.json
