@@ -185,8 +185,12 @@ def _make_finalize(intent: str, out: dict):
             text = ""
         text = " ".join(text.split())[:12000]
         answer = await asyncio.to_thread(_extract_sync, intent, text)
-        out.update(answer)
-        return answer
+        out.update(answer)  # the 4-key agent_response the runner writes
+        # Signal completion to run_cached so a read task that solved via this full-text extraction
+        # caches its flow even though the agent never emitted `done`. (`solved` is read by
+        # _learn; it is NOT written into agent_response.)
+        solved = answer.get("status") == "SUCCESS" and answer.get("retrieved_data") not in (None, [], "")
+        return {"solved": solved, **answer}
 
     return _finalize
 
@@ -221,22 +225,40 @@ async def run_task(
         headless=headless,
         scope=f"webarena:{site}:{task_id}",
         prepare=None,
+        # finalize extracts the answer AND signals `solved`, so a read task that solved via the
+        # final full-text extraction caches its flow even if the agent never emitted `done`.
         finalize=_make_finalize(intent, answer),
         record_har_path=str(wa.har_path(output_root, task_id)),
         extra_headers=spec["auth_header"],
     )
     elapsed = (time.perf_counter() - t0) * 1000.0
 
-    if not answer:  # finalize didn't run (e.g. replay miss) — write a safe failure response
+    # A cache miss (no learned flow) never creates a session/HAR, so there's nothing to score.
+    if report.mode == "miss":
+        return {
+            "task_id": task_id, "mode": "miss", "score": 0.0, "llm_calls": report.llm_calls,
+            "elapsed_ms": round(elapsed, 1), "answer": {},
+            "fail": ["replay: no learned flow (cache miss — learn didn't emit done)"],
+        }
+
+    if not answer:  # finalize didn't run — write a safe failure response
         answer = {"task_type": "RETRIEVE", "status": "UNKNOWN_ERROR",
                   "retrieved_data": None, "error_details": "no answer produced"}
     wa.write_agent_response(output_root, task_id, **answer)
+    # A run that failed early may not have flushed a HAR with entries; the evaluator needs one,
+    # so backfill a placeholder rather than letting it skip the task (which would be unscorable).
+    if not wa.har_path(output_root, task_id).exists():
+        wa.write_placeholder_har(output_root, task_id)
     wa.run_eval(output_root, [task_id])
-    score = wa.get_score(output_root, task_id)
+    try:
+        score = wa.get_score(output_root, task_id)
+        fails = wa.get_failure_reasons(output_root, task_id) if score < 1.0 else []
+    except FileNotFoundError:
+        score, fails = 0.0, ["evaluator skipped the run (invalid submission)"]
     return {
         "task_id": task_id, "mode": report.mode, "score": score,
         "llm_calls": report.llm_calls, "elapsed_ms": round(elapsed, 1),
-        "answer": answer, "fail": wa.get_failure_reasons(output_root, task_id) if score < 1.0 else [],
+        "answer": answer, "fail": fails,
     }
 
 
