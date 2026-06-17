@@ -17,8 +17,8 @@ def test_sites_spec_integrity() -> None:
     spec = wr.SITES["shopping_admin"]
     assert spec["port"] == 7780 and spec["env_ctrl_port"] == 7781
     assert spec["placeholder"] == "__SHOPPING_ADMIN__"
-    # shopping_admin auto-logins via a Magento header, not a UI form.
-    assert spec["auth_header"] == {"X-M2-Admin-Auto-Login-User": "admin"}
+    # shopping_admin auto-logins via the Magento header (name without -User; value user:pass).
+    assert spec["auth_header"] == {"X-M2-Admin-Auto-Login": "admin:admin1234"}
 
 
 def test_write_local_config_points_at_localhost(tmp_path: Path) -> None:

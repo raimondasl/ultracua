@@ -42,7 +42,10 @@ SITES = {
         "port": 7780,
         "env_ctrl_port": 7781,
         "placeholder": "__SHOPPING_ADMIN__",
-        "auth_header": {"X-M2-Admin-Auto-Login-User": "admin"},
+        # Header-based auto-login (bypasses the UI form): name is X-M2-Admin-Auto-Login,
+        # value is "username:password" (per docs/environments/shopping_admin.md). The
+        # `...-User: admin` form in the package docstring is stale and does NOT authenticate.
+        "auth_header": {"X-M2-Admin-Auto-Login": "admin:admin1234"},
     },
 }
 
@@ -139,8 +142,12 @@ def _extract_sync(intent: str, page_text: str) -> dict:
                 "content": (
                     "You are reading the final page an agent reached while doing a web task. "
                     "Return the answer strictly per the WebArena-Verified schema. For a RETRIEVE "
-                    "task, put the requested data in `retrieved_data` exactly as asked (units, "
-                    "fields, order). If the data isn't on the page, set status to NOT_FOUND_ERROR.\n\n"
+                    "task, put the requested data in `retrieved_data` in the EXACT shape the task "
+                    "asks for (units, fields, ordering). Shape rules: a single value -> a scalar or "
+                    "a 1-element list, NEVER a nested array (e.g. \"000000299\", not [[\"000000299\"]]); "
+                    "a list of records -> a FLAT list of {key: value} objects. Follow any explicit "
+                    "format directive in the task verbatim. If the data isn't on the page, set status "
+                    "to NOT_FOUND_ERROR.\n\n"
                     f"TASK: {intent}\n\nFINAL PAGE TEXT:\n{page_text}"
                 ),
             }
@@ -149,10 +156,15 @@ def _extract_sync(intent: str, page_text: str) -> dict:
     for block in msg.content:
         if block.type == "tool_use":
             d = block.input
+            rd = d.get("retrieved_data")
+            # Defensively unwrap one spurious nesting level ([["x"]] -> ["x"]); WebArena
+            # retrieved_data is a flat list of scalars or {key: value} objects, never list-of-list.
+            if isinstance(rd, list) and len(rd) == 1 and isinstance(rd[0], list):
+                rd = rd[0]
             return {
                 "task_type": d.get("task_type", "RETRIEVE"),
                 "status": d.get("status", "SUCCESS"),
-                "retrieved_data": d.get("retrieved_data"),
+                "retrieved_data": rd,
                 "error_details": d.get("error_details"),
             }
     return {"task_type": "RETRIEVE", "status": "UNKNOWN_ERROR", "retrieved_data": None,

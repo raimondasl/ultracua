@@ -37,13 +37,19 @@ A Computer Use Agent (CUA) that drives a web browser at **5–10× human speed**
 >
 > **Live slice (done).** `benchmarks/webarena_run.py` drives ultracua against a live
 > `shopping_admin` container (Docker, header auto-login, HAR recording) and scores it end to
-> end; `run_cached` gained `record_har_path` + pre-nav `extra_headers`. First baseline (Opus):
-> learn **2/5** on grid-lookup RETRIEVE tasks. The live run surfaced the real bottleneck for the
-> replay (5–10×) thesis — **replay fidelity on dynamic content**: (1) replay must wait for async
-> grids to settle before reading (fixed — task 94 replays correct at 0-LLM nav, ~3.4×); (2)
-> replay doesn't yet reproduce grid **filter/sort** state, so some reads land on the wrong row
-> (task 199). **Hardening replay for dynamic retrieval is the current focus** (ahead of action
-> batching, which would worsen the settle problem if added naively).
+> end; `run_cached` gained `record_har_path` + pre-nav `extra_headers`.
+>
+> **Replay fidelity on dynamic retrieval — hardened.** The live run exposed three issues, now
+> fixed: (1) the auto-login header was wrong (`X-M2-Admin-Auto-Login: user:pass`, not the stale
+> `…-User` docstring) — the agent had been logging in by hand, polluting flows and tripping
+> lockouts; (2) replay extracted before async grids settled (`networkidle` wait); (3) the answer
+> extractor over-nested lists (`[["x"]]`) — now flattened. With these, `shopping_admin` tasks **94
+> and 199 both LEARN and REPLAY correctly at 0-LLM navigation (~2×)**, and 199 dropped from 15
+> flailing steps to 3 — the 5–10× replay thesis demonstrated on real dynamic-retrieval tasks. A
+> small core fix stops the LLM agent leaking tool-call markup into cached steps. Remaining misses
+> (give-up-after-1-step exploration; complex multi-filter aggregation) are **agent-capability**
+> work, distinct from replay fidelity. Next levers: agent exploration/quality, a broader live
+> baseline, or **action batching** (now that replay is validated).
 
 ---
 
