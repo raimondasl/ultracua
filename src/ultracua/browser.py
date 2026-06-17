@@ -73,6 +73,12 @@ class BrowserSession:
         assert self.context is not None
         await self.context.set_extra_http_headers(headers)
 
+    async def save_storage_state(self, path: str) -> None:
+        """Persist the context's cookies + localStorage to a Playwright storage_state JSON
+        (the artifact that lets a later session start already authenticated)."""
+        assert self.context is not None
+        await self.context.storage_state(path=path)
+
     async def screenshot(self) -> bytes:
         """Viewport screenshot (PNG bytes) — input for the vision fallback tier."""
         assert self.page is not None

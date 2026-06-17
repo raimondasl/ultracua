@@ -15,16 +15,40 @@ The product-facing layer over the `run_cached` engine — see ROADMAP.md (Phase 
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from .browser import BrowserSession
 from .cache import FlowCache, flow_key
 from .config import settings
 from .extract import extract
 from .flow import run_cached
 from .providers import build_router, get_provider
+
+
+@dataclass
+class LoginSpec:
+    """How to (re)authenticate a flow whose cookie session expires.
+
+    Credentials are read from environment variables **at runtime** (never stored in the spec or
+    the cached flow); only the resulting cookies (storage_state) are persisted. The login form is
+    filled heuristically (first text/email input + the password input, then Enter) unless explicit
+    selectors are given.
+    """
+
+    url: str
+    username_env: str = "ULTRACUA_USERNAME"
+    password_env: str = "ULTRACUA_PASSWORD"
+    username_selector: Optional[str] = None
+    password_selector: Optional[str] = None
+    submit_selector: Optional[str] = None  # None -> press Enter in the password field
+    # success check (so a failed login can't poison a working session). Default: assume success
+    # if we navigated away from `url`. Override for SPA logins that stay on the same URL.
+    success_selector: Optional[str] = None       # an element present only once logged in
+    success_url_contains: Optional[str] = None   # a substring the post-login URL must contain
 
 
 @dataclass
@@ -38,6 +62,7 @@ class FlowSpec:
     extract_schema: Optional[dict] = None  # optional JSON schema for the extracted `data`
     headers: Optional[dict] = None         # auth via extra HTTP headers
     storage_state: Optional[str] = None    # auth via a Playwright storage_state JSON (cookies)
+    login: Optional[Any] = None            # LoginSpec, or an async (page) -> None callable
     max_steps: Optional[int] = None
     headless: Optional[bool] = None
 
@@ -156,6 +181,93 @@ def _make_finalize(spec: FlowSpec, router, out: dict):
     return _finalize
 
 
+# --- auth refresh (re-login when a cookie session expires) ------------------------------------
+def _same_page(a: str, b: str) -> bool:
+    from urllib.parse import urlsplit
+
+    pa, pb = urlsplit(a), urlsplit(b)
+    return (pa.netloc, pa.path.rstrip("/")) == (pb.netloc, pb.path.rstrip("/"))
+
+
+async def _form_login(page, login: LoginSpec) -> None:
+    user = os.environ.get(login.username_env)
+    pw = os.environ.get(login.password_env)
+    if not user or not pw:
+        raise FlowReplayError(
+            f"login credentials not in env (need {login.username_env} and {login.password_env})"
+        )
+    await page.goto(login.url, wait_until="domcontentloaded")
+    try:
+        user_loc = (
+            page.locator(login.username_selector) if login.username_selector
+            else page.locator("input[type=email], input[type=text], input[type=tel]")
+        ).first
+        await user_loc.fill(user)
+        pass_loc = page.locator(login.password_selector or "input[type=password]").first
+        await pass_loc.fill(pw)
+        if login.submit_selector:
+            await page.locator(login.submit_selector).first.click()
+        else:
+            await pass_loc.press("Enter")
+    except Exception as exc:  # noqa: BLE001 - heuristic selectors may not match; guide the user
+        raise FlowReplayError(
+            f"could not auto-fill the login form at {login.url} ({type(exc).__name__}) — pass "
+            f"explicit username_selector/password_selector/submit_selector, or a callable login "
+            f"for multi-step/SSO flows"
+        ) from None
+    try:
+        await page.wait_for_load_state("networkidle", timeout=10000)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _login_succeeded(page, login: LoginSpec) -> bool:
+    if login.success_selector:
+        try:
+            await page.wait_for_selector(login.success_selector, timeout=5000)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+    if login.success_url_contains:
+        return login.success_url_contains in page.url
+    return not _same_page(page.url, login.url)  # default: assume success if we left the login page
+
+
+async def refresh_auth(spec: FlowSpec, *, headless: Optional[bool] = None) -> None:
+    """Re-authenticate `spec.login` and save fresh cookies to `spec.storage_state`.
+
+    Credentials come from the env vars named in the LoginSpec (or are handled by a callable
+    login); they are never logged or written into the cached flow — only the resulting cookies.
+    For a `LoginSpec`, the login is verified before saving (and the save is atomic), so a failed
+    login can't overwrite a working session's cookies.
+    """
+    if spec.login is None:
+        raise FlowReplayError(f"{spec.name!r}: no `login` configured — cannot refresh auth")
+    if not spec.storage_state:
+        raise FlowReplayError(f"{spec.name!r}: set `storage_state` (a path) so refreshed cookies can be saved")
+    session = await BrowserSession(
+        headless=headless if headless is not None else spec.headless
+    ).start()  # a fresh context (no stale cookies) for a clean login
+    try:
+        if callable(spec.login):
+            await spec.login(session.page)
+        else:
+            await _form_login(session.page, spec.login)
+            if not await _login_succeeded(session.page, spec.login):
+                raise FlowReplayError(
+                    f"{spec.name!r}: login did not appear to succeed (still on the login page or "
+                    f"success check unmet) — check credentials/selectors; storage_state left unchanged"
+                )
+        # Atomic save: write a temp file then replace, so a crash mid-write can't corrupt the
+        # working storage_state (and we only get here once login is verified).
+        Path(spec.storage_state).parent.mkdir(parents=True, exist_ok=True)
+        tmp = f"{spec.storage_state}.tmp"
+        await session.save_storage_state(tmp)
+        os.replace(tmp, spec.storage_state)
+    finally:
+        await session.close()
+
+
 # --- learn / approve / replay -----------------------------------------------------------------
 async def learn(
     spec: FlowSpec, *, provider_name: Optional[str] = None, provider=None, router=None,
@@ -233,14 +345,16 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape):
 
 async def replay(
     spec: FlowSpec, *, require_approved: bool = False, on_drift: str = "raise",
-    check_shape: bool = True, provider_name: Optional[str] = None, provider=None, router=None,
-    cache: Optional[FlowCache] = None,
+    check_shape: bool = True, auth_refresh: bool = True, provider_name: Optional[str] = None,
+    provider=None, router=None, cache: Optional[FlowCache] = None,
 ) -> Any:
     """Replay the learned flow at 0-LLM navigation and return the extracted data.
 
     Trust controls for unattended use:
       - `require_approved=True` — refuse to run a flow that hasn't been `approve`d.
       - `check_shape=True` — treat a change in the data's *structure* (vs the learned run) as drift.
+      - `auth_refresh=True` — on drift, if `spec.login` is set, re-login (refresh cookies) and
+        retry once before giving up (handles an expired session).
       - `on_drift="raise"` (default) — raise `FlowReplayError` on any drift (never return wrong
         data); `on_drift="relearn"` — re-author the flow instead and return the fresh data.
     """
@@ -263,6 +377,18 @@ async def replay(
         meta.last_ok_ts = time.time()
         _save_meta(cache, key, meta)
         return data
+    # The session may have expired — re-login (refresh cookies) and retry once.
+    if auth_refresh and spec.login is not None:
+        try:
+            await refresh_auth(spec, headless=spec.headless)
+            ok, data, reason2 = await _attempt_replay(spec, router, cache, key, meta, check_shape)
+            if ok:
+                meta.last_ok_ts = time.time()
+                _save_meta(cache, key, meta)
+                return data
+            reason = f"{reason}; after auth refresh: {reason2}"
+        except Exception as exc:  # noqa: BLE001 - any refresh failure -> fall through to relearn/raise
+            reason = f"{reason}; auth refresh failed: {type(exc).__name__}: {exc}"
     if on_drift == "relearn":
         res = await learn(spec, provider=provider, router=router, cache=cache)
         if res.cached and res.found:
@@ -277,6 +403,8 @@ def _specs_dir() -> Path:
 
 
 def save_spec(spec: FlowSpec) -> Path:
+    if callable(spec.login):
+        raise ValueError("a callable `login` can't be saved — use a LoginSpec, or the library API")
     d = _specs_dir()
     d.mkdir(parents=True, exist_ok=True)
     p = d / f"{spec.name}.json"
@@ -288,7 +416,10 @@ def load_spec(name: str) -> FlowSpec:
     p = _specs_dir() / f"{name}.json"
     if not p.exists():
         raise FileNotFoundError(f"no saved flow {name!r} (looked in {p})")
-    return FlowSpec(**json.loads(p.read_text(encoding="utf-8")))
+    data = json.loads(p.read_text(encoding="utf-8"))
+    if isinstance(data.get("login"), dict):
+        data["login"] = LoginSpec(**data["login"])
+    return FlowSpec(**data)
 
 
 def list_specs() -> list[str]:

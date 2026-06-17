@@ -131,7 +131,14 @@ you haven't `approve_flow(spec)`d; replay also treats a change in the data's *sh
 learned run as drift; and `on_drift="relearn"` re-authors the flow instead of raising. So a
 scheduled run either returns trustworthy data or fails loudly — point cron at it and alert on a
 non-zero exit. (CLI: `ultracua flow approve --name …`; `flow replay --require-approved
---on-drift relearn`.) Still on the [ROADMAP](ROADMAP.md): auth refresh + lifecycle/ops.
+--on-drift relearn`.)
+
+**Auth refresh.** For cookie sessions that expire, add `login=LoginSpec(url=…, username_env=…,
+password_env=…)` (credentials read from the env at runtime, **never persisted** — the login isn't
+cached; only the resulting `storage_state` cookies are saved). On drift, replay re-logs-in and
+retries once, so a long-lived recurring flow survives session expiry. (`login=` may also be an
+`async (page) -> None` callable for non-standard logins.) Still on the [ROADMAP](ROADMAP.md):
+lifecycle/ops (Phase C).
 
 ## Benchmark
 

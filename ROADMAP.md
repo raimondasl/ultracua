@@ -53,7 +53,7 @@ Unlocks the core use case.
 
 ### Phase B — "trust it unattended" (reliability)
 
-Unlocks scheduling without babysitting. Mostly **done**:
+Unlocks scheduling without babysitting. **Done:**
 
 - ✅ **Approval gate** — `learn` records a flow as unapproved; `approve()` marks it trusted;
   `replay(require_approved=True)` refuses to run an unapproved flow (a human verifies first).
@@ -62,8 +62,10 @@ Unlocks scheduling without babysitting. Mostly **done**:
   of the page-fingerprint check.
 - ✅ **Relearn-or-raise policy + fail-loud signal** — `on_drift="raise"` (default) raises a rich
   `FlowReplayError` a scheduler can alert on; `on_drift="relearn"` re-authors the flow instead.
-- ⏳ **Auth refresh** (remaining) — sessions expire; a replay should detect a dropped session and
-  re-run a login sub-flow. Needs a generic login-sub-flow + credential handling — its own PR.
+- ✅ **Auth refresh** — `FlowSpec.login` (a `LoginSpec` with **env-sourced** credentials, or an
+  async callable); on drift, replay re-logs-in to refresh the cookies and retries once.
+  Credentials are read from the env at runtime and **never persisted** — the login isn't cached,
+  and only the resulting `storage_state` cookies are saved.
 
 ### Phase C — "operate many flows" (lifecycle / ops)
 

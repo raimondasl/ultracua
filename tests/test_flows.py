@@ -15,7 +15,15 @@ import pytest
 
 from ultracua.cache import FlowCache
 from ultracua.extract import extract
-from ultracua.flows import FlowReplayError, FlowSpec, approve, learn, replay
+from ultracua.flows import (
+    FlowReplayError,
+    FlowSpec,
+    LoginSpec,
+    approve,
+    learn,
+    refresh_auth,
+    replay,
+)
 from ultracua.llm.base import Router, Tier
 from ultracua.llm.mock import MockClient
 from ultracua.types import Action
@@ -148,6 +156,104 @@ async def test_on_drift_relearn_reauthors(tmp_path: Path) -> None:
         data = await replay(spec, on_drift="relearn", provider=_ClickFirstLink(),
                             router=_extract_router(["x"], ["x"]), cache=cache)
         assert data == ["x"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# --- Phase B: auth refresh --------------------------------------------------------------------
+class _AuthHandler(http.server.BaseHTTPRequestHandler):
+    """A tiny cookie-gated fixture: /home shows the data only with the auth cookie."""
+
+    def log_message(self, *a) -> None:
+        pass
+
+    def _send(self, body: str, code: int = 200, headers=None) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(body.encode())
+
+    def do_GET(self) -> None:  # noqa: N802
+        from urllib.parse import parse_qs, urlparse
+
+        u = urlparse(self.path)
+        authed = "auth=yes" in (self.headers.get("Cookie") or "")
+        if u.path == "/login":
+            self._send("<form action='/dologin' method='get'>"
+                       "<input name='username' type='text'>"
+                       "<input name='password' type='password'>"
+                       "<button type='submit'>Sign in</button></form>")
+        elif u.path == "/dologin":
+            q = parse_qs(u.query)
+            if q.get("password", [""])[0] == "secret":
+                self._send("", 302, {"Location": "/home", "Set-Cookie": "auth=yes; Path=/"})
+            else:
+                self._send("", 302, {"Location": "/login"})  # wrong creds -> back to login, no cookie
+        elif u.path == "/home":
+            self._send("<h1>Home</h1><a href='/answer'>see the answer</a>" if authed else "<p>Please log in</p>")
+        elif u.path == "/answer":
+            self._send("<p>The answer is 42.</p>")
+        else:
+            self._send("not found", 404)
+
+
+def _serve_auth():
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _AuthHandler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_refresh_auth_requires_login_and_storage_state(tmp_path: Path) -> None:
+    with pytest.raises(FlowReplayError):  # no login configured
+        await refresh_auth(FlowSpec(name="a", start_url="http://127.0.0.1:1/", goal="g"))
+    with pytest.raises(FlowReplayError):  # login but nowhere to save cookies
+        await refresh_auth(FlowSpec(name="b", start_url="http://127.0.0.1:1/", goal="g",
+                                    login=LoginSpec(url="http://127.0.0.1:1/login")))
+
+
+async def test_replay_refreshes_expired_session(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("TEST_USER", "alice")
+    monkeypatch.setenv("TEST_PASS", "secret")
+    httpd, base = _serve_auth()
+    ss = tmp_path / "state.json"
+    cache = FlowCache(root=tmp_path / "cache")
+    spec = FlowSpec(
+        name="auth", start_url=f"{base}/home", goal="open the answer page",
+        extract="the answer number", storage_state=str(ss), headless=True,
+        login=LoginSpec(url=f"{base}/login", username_env="TEST_USER", password_env="TEST_PASS"),
+    )
+    try:
+        await refresh_auth(spec)  # log in -> save cookies
+        res = await learn(spec, provider=_ClickFirstLink(), router=_extract_router(42), cache=cache)
+        assert res.cached and res.data == 42
+
+        ss.write_text('{"cookies": [], "origins": []}', encoding="utf-8")  # simulate expiry
+        # replay drifts (logged out) -> auto auth-refresh -> retry succeeds. Two extractions:
+        # the drifting attempt + the post-refresh retry.
+        data = await replay(spec, router=_extract_router(42, 42), cache=cache)
+        assert data == 42
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_failed_login_does_not_poison_storage_state(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("TEST_USER", "alice")
+    monkeypatch.setenv("TEST_PASS", "wrong")  # wrong password -> login fails
+    httpd, base = _serve_auth()
+    ss = tmp_path / "state.json"
+    good = '{"cookies": [{"name": "auth", "value": "yes"}], "origins": []}'
+    ss.write_text(good, encoding="utf-8")  # a pre-existing working session
+    spec = FlowSpec(name="poison", start_url=f"{base}/home", goal="g", storage_state=str(ss),
+                    headless=True, login=LoginSpec(url=f"{base}/login", username_env="TEST_USER",
+                                                   password_env="TEST_PASS"))
+    try:
+        with pytest.raises(FlowReplayError):
+            await refresh_auth(spec)
+        assert ss.read_text(encoding="utf-8") == good  # working cookies NOT overwritten
     finally:
         httpd.shutdown()
         httpd.server_close()
