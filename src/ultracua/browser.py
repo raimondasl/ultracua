@@ -23,16 +23,21 @@ from .types import Action, Observation
 
 
 class BrowserSession:
-    def __init__(self, headless: bool | None = None) -> None:
+    def __init__(self, headless: bool | None = None, browser: Browser | None = None) -> None:
         self.headless = settings.headless if headless is None else headless
         self._pw: Playwright | None = None
-        self.browser: Browser | None = None
+        # If a browser is provided, run as a fresh CONTEXT inside it (parallelism) and don't
+        # own its lifecycle; otherwise launch (and later close) our own browser.
+        self._shared_browser = browser
+        self._owns_browser = browser is None
+        self.browser: Browser | None = browser
         self.context: BrowserContext | None = None
         self.page: Page | None = None
 
     async def start(self) -> "BrowserSession":
-        self._pw = await async_playwright().start()
-        self.browser = await self._pw.chromium.launch(headless=self.headless)
+        if self._shared_browser is None:
+            self._pw = await async_playwright().start()
+            self.browser = await self._pw.chromium.launch(headless=self.headless)
         self.context = await self.browser.new_context()
         self.context.set_default_timeout(settings.action_timeout_ms)
         self.context.set_default_navigation_timeout(settings.nav_timeout_ms)
@@ -81,10 +86,10 @@ class BrowserSession:
         try:
             if self.context is not None:
                 await self.context.close()
-            if self.browser is not None:
+            if self._owns_browser and self.browser is not None:
                 await self.browser.close()
         finally:
-            if self._pw is not None:
+            if self._owns_browser and self._pw is not None:
                 await self._pw.stop()
 
     async def __aenter__(self) -> "BrowserSession":

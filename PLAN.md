@@ -11,11 +11,13 @@ A Computer Use Agent (CUA) that drives a web browser at **5–10× human speed**
 > pacing governor, TTL/versioned cache, JS-listener snapshot coverage, self-healing locators) ·
 > Phase 3 (provider-neutral content-block layer + native Anthropic/OpenAI/Gemini adapters,
 > fast/strong tiering with escalation, prompt-cache breakpoint).
-> **Phase 4 in progress.** Done: **core+bindings daemon** — the Python core exposed over
-> JSON-RPC on stdio (`ultracua-daemon`) with a Python `DaemonClient` and a Node/JS client
-> (`clients/node/`); a Node process replays a learned flow cross-language at 0 LLM.
-> Remaining Phase 4: parallelism + completion verifier · vision + WebMCP tiers · optional
-> Rust hot-kernel. Deferred from Phase 3: action batching; live OpenAI/Gemini need their SDKs + keys.
+> **Phase 4 in progress.** Done: (1) **core+bindings daemon** — Python core over JSON-RPC on
+> stdio (`ultracua-daemon`) + Python `DaemonClient` + Node/JS client (`clients/node/`),
+> cross-language replay at 0 LLM; (2) **parallelism + completion verifier** — `run_many`
+> (concurrent flows as contexts in one browser) and a pluggable `verifier` that caches
+> solved-but-not-`done` flows (`keyword_completion` / `llm_completion`).
+> Remaining Phase 4: vision + WebMCP tiers · optional Rust hot-kernel. Deferred from Phase 3:
+> action batching; live OpenAI/Gemini need their SDKs + keys.
 
 ---
 

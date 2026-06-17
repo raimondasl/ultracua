@@ -148,6 +148,26 @@ Node process replays a learned flow through the Python daemon at **0 LLM calls**
 The protocol is the same for any language — the Python `DaemonClient` and Node client are
 just thin wrappers over it.
 
+## Scale & verification (Phase 4)
+
+- **`run_many`** runs many flows concurrently as separate **contexts in one browser**
+  (far cheaper than many browser instances), capped by `concurrency`
+  (env `ULTRACUA_CONCURRENCY`, default 4). Replay makes a *single* task fast; this makes
+  *many* tasks fast (throughput / fan-out).
+
+  ```python
+  from ultracua import run_many
+  reports = await run_many([
+      {"url": u1, "goal": g1, "provider": p1},     # learn
+      {"url": u2, "goal": g2, "mode": "replay"},   # replay, no LLM
+  ], concurrency=4)
+  ```
+
+- **Completion verifier** — pass `run_cached(..., verifier=...)` to cache a *solved* flow
+  even when the agent didn't cleanly emit `done` (the fast tier's failure mode this testing
+  surfaced). Ships `keyword_completion` (cheap, key-less) and `llm_completion(router)` (a
+  reliable model judge). Conservative by default — accuracy over hit-rate.
+
 ## Develop
 
 ```bash
@@ -169,6 +189,8 @@ src/ultracua/
   llm/            multi-provider abstraction: canonical types + anthropic/openai/gemini adapters + router (component 4)
   providers/      agent decision (llm_agent) + heuristic mock + scripted/oracle teachers
   verify.py       post-action state-diff (component 5)
+  verifiers.py    completion verifiers (keyword heuristic + LLM judge) — cache solved flows
+  parallel.py     run_many — concurrent flows across contexts in one browser (throughput)
   daemon/         JSON-RPC server (stdio) exposing the core + Python client (core+bindings)
   agent.py        the Phase 0 uncached loop (baseline)
   cli.py          `ultracua` entry point

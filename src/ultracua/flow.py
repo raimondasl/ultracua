@@ -37,12 +37,15 @@ from .safety import (
     origin_of,
 )
 from .timing import StepTrace
-from .types import Action
+from .types import Action, Observation
 from .verify import state_changed
 
 OnStep = Callable[[StepTrace], None]
 Prepare = Callable[[BrowserSession], Awaitable[None]]
 Finalize = Callable[[BrowserSession], Awaitable[Any]]
+# Completion verifier: given the goal and the final observation, return True if the goal
+# looks achieved (so a solved-but-not-`done` flow still gets cached); False/None otherwise.
+Verifier = Callable[[str, Observation], Awaitable[Optional[bool]]]
 
 
 @dataclass
@@ -83,6 +86,8 @@ async def run_cached(
     prepare: Optional[Prepare] = None,
     finalize: Optional[Finalize] = None,
     governor: Optional[PacingGovernor] = None,
+    browser: Optional[Any] = None,
+    verifier: Optional[Verifier] = None,
 ) -> FlowReport:
     cache = cache or FlowCache()
     governor = governor or PacingGovernor()
@@ -93,7 +98,7 @@ async def run_cached(
         heal_provider = provider if mode == "auto" else None
         report = await _replay(
             url, key, cached, cache, heal_provider, headless, on_step,
-            prepare, finalize, goal, governor, scope,
+            prepare, finalize, goal, governor, scope, browser,
         )
         if report.success or mode == "replay" or report.mode == "escalate":
             return report
@@ -106,7 +111,7 @@ async def run_cached(
         return FlowReport(mode="miss", success=False, note="learn requires a provider")
     return await _learn(
         url, goal, key, provider, cache, max_steps, headless, on_step,
-        prepare, finalize, governor, scope,
+        prepare, finalize, governor, scope, browser, verifier,
     )
 
 
@@ -134,9 +139,11 @@ async def _learn(
     finalize: Optional[Finalize],
     governor: PacingGovernor,
     scope: str,
+    browser: Optional[Any] = None,
+    verifier: Optional[Verifier] = None,
 ) -> FlowReport:
     max_steps = max_steps or settings.max_steps
-    session = await BrowserSession(headless=headless).start()
+    session = await BrowserSession(headless=headless, browser=browser).start()
     traces: list[StepTrace] = []
     history: list[str] = []
     steps: list[CachedStep] = []
@@ -225,6 +232,15 @@ async def _learn(
                 tr.meta["stuck"] = no_progress  # bail: agent looping without progress
                 break
 
+        # The agent didn't cleanly emit `done` but took real steps — ask the verifier whether
+        # the goal is actually met (e.g. fast tier solved it but didn't recognize completion).
+        if not success and steps and verifier is not None:
+            try:
+                if await verifier(goal, await session.snapshot()):
+                    success = True
+            except Exception:  # noqa: BLE001
+                pass
+
         extra = {"finalize": await finalize(session)} if finalize else {}
         final_text = await _body_text(session)
         if success and steps:
@@ -254,8 +270,9 @@ async def _replay(
     goal: str,
     governor: PacingGovernor,
     scope: str,
+    browser: Optional[Any] = None,
 ) -> FlowReport:
-    session = await BrowserSession(headless=headless).start()
+    session = await BrowserSession(headless=headless, browser=browser).start()
     traces: list[StepTrace] = []
     llm = 0
     healed = 0
