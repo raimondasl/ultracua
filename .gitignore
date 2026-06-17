@@ -16,6 +16,10 @@ dist/
 # ultracua flow cache (learned flows are local artifacts)
 .ultracua/
 
+# Scratch / working data (benchmark eval runs, downloads — kept off-repo, see settings.data_dir)
+.scratch/
+.ultracua-data/
+
 # Node client deps (if installed)
 node_modules/
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -20,6 +21,21 @@ def _flag(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() not in ("0", "false", "no", "off", "")
+
+
+def _default_data_dir() -> str:
+    """Where ultracua stows large/working data: benchmark downloads, the isolated
+    evaluator's package cache, scratch eval dirs. Kept OFF the system drive by default.
+
+    Resolution order: ULTRACUA_DATA_DIR -> a roomy D:\\ data drive (Windows) -> ~/.ultracua/data.
+    Always overridable via the env var so the location stays configurable per machine.
+    """
+    env = os.getenv("ULTRACUA_DATA_DIR")
+    if env:
+        return env
+    if os.name == "nt" and os.path.isdir("D:\\"):
+        return r"D:\ultracua-data"
+    return str(Path.home() / ".ultracua" / "data")
 
 
 @dataclass(frozen=True)
@@ -48,6 +64,9 @@ class Settings:
     action_timeout_ms: int = int(os.getenv("ULTRACUA_ACTION_TIMEOUT_MS", "5000"))
     # Max flows run concurrently by run_many (as separate contexts in one browser).
     concurrency: int = int(os.getenv("ULTRACUA_CONCURRENCY", "4"))
+    # Root for large/working data kept off the system drive (benchmark downloads, the
+    # isolated evaluator's uv cache, scratch eval dirs). Configurable via ULTRACUA_DATA_DIR.
+    data_dir: str = _default_data_dir()
 
 
 settings = Settings()

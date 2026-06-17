@@ -24,6 +24,16 @@ A Computer Use Agent (CUA) that drives a web browser at **5–10× human speed**
 > scraping).
 > **Phases 0–4 complete.** Rust hot-kernel intentionally skipped (DOM work runs in-browser, so
 > Python is not the bottleneck). Deferred: action batching; live OpenAI/Gemini need their SDKs + keys.
+>
+> **Realism layer (in progress).** WebArena-Verified **offline** path wired
+> (`benchmarks/webarena_env.py`): the deterministic evaluator is driven via an isolated
+> `uv tool run` subprocess (it hard-pins `pydantic==2.12.0`, so it is never imported), ultracua
+> produces the `agent_response.json` + Playwright `network.har` run dir, and scores are read
+> back — validated key-less with zero containers (demo logs 107→0.0 / 108→1.0, and a producer→eval
+> round-trip → 1.0). Working/eval data lives under `settings.data_dir` (default `D:\ultracua-data`,
+> env `ULTRACUA_DATA_DIR`), kept off the system drive. Live site containers (Docker/WSL2) +
+> NAVIGATE/MUTATE HAR-asserted scoring remain deferred (action batching is the ideal next lever
+> to exercise against these long multi-step tasks).
 
 ---
 
