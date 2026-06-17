@@ -15,15 +15,15 @@ import pytest
 
 from ultracua.cache import FlowCache
 from ultracua.extract import extract
-from ultracua.flows import FlowReplayError, FlowSpec, learn, replay
+from ultracua.flows import FlowReplayError, FlowSpec, approve, learn, replay
 from ultracua.llm.base import Router, Tier
 from ultracua.llm.mock import MockClient
 from ultracua.types import Action
 
 
-def _extract_router(data) -> Router:
-    """A Router whose extraction call returns {found: True, data: <data>}."""
-    mc = MockClient(actions=[{"found": True, "data": data}], tool_name="submit")
+def _extract_router(*datas) -> Router:
+    """A Router whose successive extraction calls return {found: True, data: <each>}."""
+    mc = MockClient(actions=[{"found": True, "data": d} for d in datas], tool_name="submit")
     return Router(fast=Tier(mc, "m"), strong=Tier(mc, "m"))
 
 
@@ -102,3 +102,52 @@ async def test_replay_without_learned_flow_raises(tmp_path: Path) -> None:
     spec = FlowSpec(name="missing", start_url="http://127.0.0.1:1/x", goal="g", extract="d", headless=True)
     with pytest.raises(FlowReplayError):
         await replay(spec, router=_extract_router(1), cache=FlowCache(root=tmp_path / "empty"))
+
+
+# --- Phase B: trust unattended ----------------------------------------------------------------
+def _fixture_spec(tmp_path: Path, name: str):
+    _write_fixture(tmp_path)
+    httpd, base = _serve(tmp_path)
+    cache = FlowCache(root=tmp_path / "cache")
+    spec = FlowSpec(name=name, start_url=f"{base}/page1.html",
+                    goal="open the answer page", extract="the answer", headless=True)
+    return httpd, cache, spec
+
+
+async def test_require_approved_gate(tmp_path: Path) -> None:
+    httpd, cache, spec = _fixture_spec(tmp_path, "gate")
+    try:
+        res = await learn(spec, provider=_ClickFirstLink(), router=_extract_router(42), cache=cache)
+        assert res.cached and not res.approved              # learned but unapproved
+        with pytest.raises(FlowReplayError):                 # gate blocks an unapproved flow
+            await replay(spec, require_approved=True, router=_extract_router(42), cache=cache)
+        approve(spec, cache=cache)
+        assert await replay(spec, require_approved=True, router=_extract_router(42), cache=cache) == 42
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_shape_change_is_flagged_as_drift(tmp_path: Path) -> None:
+    httpd, cache, spec = _fixture_spec(tmp_path, "shape")
+    try:
+        await learn(spec, provider=_ClickFirstLink(), router=_extract_router(42), cache=cache)  # shape: number
+        with pytest.raises(FlowReplayError):  # replay now extracts a list -> structure changed
+            await replay(spec, router=_extract_router(["a", "b"]), cache=cache)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_on_drift_relearn_reauthors(tmp_path: Path) -> None:
+    httpd, cache, spec = _fixture_spec(tmp_path, "relearn")
+    try:
+        await learn(spec, provider=_ClickFirstLink(), router=_extract_router(42), cache=cache)
+        # replay extracts a differently-shaped value (drift); on_drift=relearn re-authors and
+        # returns the fresh data. Router needs two responses: the drifting attempt + the relearn.
+        data = await replay(spec, on_drift="relearn", provider=_ClickFirstLink(),
+                            router=_extract_router(["x"], ["x"]), cache=cache)
+        assert data == ["x"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
