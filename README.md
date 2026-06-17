@@ -148,6 +148,21 @@ Node process replays a learned flow through the Python daemon at **0 LLM calls**
 The protocol is the same for any language — the Python `DaemonClient` and Node client are
 just thin wrappers over it.
 
+## Actuation tiers (Phase 4)
+
+A target is resolved through a tiered stack — the fastest tier that works wins:
+
+1. **WebMCP** ([`webmcp.py`](src/ultracua/webmcp.py)) — if a site exposes structured tools
+   (`window.webmcp.listTools()/callTool()`), call them directly (no DOM scraping, ~89% fewer
+   tokens). Near-zero site coverage today; detection + invocation + replay are wired (the
+   `webmcp_call` action).
+2. **Cached selector replay** — the 0-LLM fast path (Phase 1).
+3. **DOM / accessibility** — the default learn path (resilient locators).
+4. **Vision** ([`vision.py`](src/ultracua/vision.py)) — last resort for canvas/WebGL/opaque
+   widgets (empty DOM snapshot): screenshot → grounding model → `click_xy` pixel click,
+   replayed deterministically (brittle to layout shifts). `MockGrounding` for tests;
+   `AnthropicGrounding` uses Claude vision.
+
 ## Scale & verification (Phase 4)
 
 - **`run_many`** runs many flows concurrently as separate **contexts in one browser**
@@ -191,6 +206,8 @@ src/ultracua/
   verify.py       post-action state-diff (component 5)
   verifiers.py    completion verifiers (keyword heuristic + LLM judge) — cache solved flows
   parallel.py     run_many — concurrent flows across contexts in one browser (throughput)
+  vision.py       vision fallback tier: screenshot -> grounding model -> click_xy
+  webmcp.py       WebMCP tier: detect + call site-exposed structured tools
   daemon/         JSON-RPC server (stdio) exposing the core + Python client (core+bindings)
   agent.py        the Phase 0 uncached loop (baseline)
   cli.py          `ultracua` entry point

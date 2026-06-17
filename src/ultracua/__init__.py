@@ -15,8 +15,9 @@ from .parallel import run_many
 from .safety import PacingGovernor, is_mutating
 from .types import Action, Element, Observation, StepResult
 from .verifiers import keyword_completion
+from .vision import AnthropicGrounding, MockGrounding
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 __all__ = [
     "BrowserSession",
@@ -36,6 +37,8 @@ __all__ = [
     "run_cached",
     "run_many",
     "keyword_completion",
+    "AnthropicGrounding",
+    "MockGrounding",
     "settings",
     "main",
 ]

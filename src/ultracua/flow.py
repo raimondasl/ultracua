@@ -88,6 +88,7 @@ async def run_cached(
     governor: Optional[PacingGovernor] = None,
     browser: Optional[Any] = None,
     verifier: Optional[Verifier] = None,
+    grounding: Optional[Any] = None,
 ) -> FlowReport:
     cache = cache or FlowCache()
     governor = governor or PacingGovernor()
@@ -107,11 +108,11 @@ async def run_cached(
     if mode == "replay":
         return FlowReport(mode="miss", success=False, note="no cached flow for key")
 
-    if provider is None:
-        return FlowReport(mode="miss", success=False, note="learn requires a provider")
+    if provider is None and grounding is None:
+        return FlowReport(mode="miss", success=False, note="learn requires a provider or grounding")
     return await _learn(
         url, goal, key, provider, cache, max_steps, headless, on_step,
-        prepare, finalize, governor, scope, browser, verifier,
+        prepare, finalize, governor, scope, browser, verifier, grounding,
     )
 
 
@@ -141,6 +142,7 @@ async def _learn(
     scope: str,
     browser: Optional[Any] = None,
     verifier: Optional[Verifier] = None,
+    grounding: Optional[Any] = None,
 ) -> FlowReport:
     max_steps = max_steps or settings.max_steps
     session = await BrowserSession(headless=headless, browser=browser).start()
@@ -167,8 +169,21 @@ async def _learn(
             with tr.measure("snapshot"):
                 obs = await session.snapshot()
 
-            t0 = time.perf_counter()
-            action, ttft = await provider.decide(goal, obs, history)
+            # Pick the action source: the VISION tier when the DOM has nothing to address
+            # (canvas/opaque widgets), else the DOM provider.
+            if not obs.elements and grounding is not None:
+                with tr.measure("screenshot"):
+                    png = await session.screenshot()
+                vp = session.page.viewport_size or {"width": 0, "height": 0}
+                tr.meta["tier"] = "vision"
+                t0 = time.perf_counter()
+                action, ttft = await grounding.decide(goal, png, vp)
+            elif provider is not None:
+                t0 = time.perf_counter()
+                action, ttft = await provider.decide(goal, obs, history)
+            else:
+                action, ttft = Action(action="give_up", intent="no target and no provider"), None
+                t0 = time.perf_counter()
             llm += 1
             llm_ms = (time.perf_counter() - t0) * 1000.0
             if ttft is not None:
@@ -214,6 +229,9 @@ async def _learn(
                         action=action.action,
                         locator=spec,
                         text=action.text,
+                        coords=action.coords,
+                        tool=action.tool,
+                        args=action.args,
                         precond_fingerprint=obs.fingerprint,
                         mutating=is_mutating(action.action, action.intent, name),
                     )
@@ -356,13 +374,16 @@ async def _replay_step(
         await session.set_extra_http_headers({"Idempotency-Key": key})
 
     try:
-        if step.action in ("press", "scroll", "navigate"):
+        if step.action in ("press", "scroll", "navigate", "click_xy", "webmcp_call"):
             note = ""
             async with governor.gate(origin):
                 with tr.measure("act"):
                     try:
                         await session.act(
-                            Action(action=step.action, intent=step.intent, text=step.text)
+                            Action(
+                                action=step.action, intent=step.intent, text=step.text,
+                                coords=step.coords, tool=step.tool, args=step.args,
+                            )
                         )
                         return True, "", False
                     except Exception as exc:  # noqa: BLE001

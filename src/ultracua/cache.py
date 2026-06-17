@@ -30,8 +30,11 @@ SCHEMA_VERSION = 2
 class CachedStep(BaseModel):
     intent: str
     action: ActionType
-    locator: Optional[LocatorSpec] = None  # None for press/scroll/navigate
+    locator: Optional[LocatorSpec] = None  # None for press/scroll/navigate/click_xy/webmcp_call
     text: Optional[str] = None
+    coords: Optional[list[int]] = None  # [x, y] for click_xy (vision tier)
+    tool: Optional[str] = None  # WebMCP tool name (webmcp_call)
+    args: Optional[dict] = None  # WebMCP tool args (webmcp_call)
     precond_fingerprint: str = ""
     mutating: bool = False  # irreversible side effect -> never blind-replay
 

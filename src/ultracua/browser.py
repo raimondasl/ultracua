@@ -54,6 +54,11 @@ class BrowserSession:
         assert self.context is not None
         await self.context.set_extra_http_headers(headers)
 
+    async def screenshot(self) -> bytes:
+        """Viewport screenshot (PNG bytes) — input for the vision fallback tier."""
+        assert self.page is not None
+        return await self.page.screenshot()
+
     async def snapshot(self) -> Observation:
         assert self.page is not None
         return await capture(self.page, settings.max_elements)
@@ -74,6 +79,13 @@ class BrowserSession:
             await page.mouse.wheel(0, 600)
         elif a == "navigate":
             await self.goto(action.text or "about:blank")
+        elif a == "click_xy":  # vision tier: click pixel coordinates
+            x, y = (action.coords or [0, 0])[:2]
+            await page.mouse.click(x, y)
+        elif a == "webmcp_call":  # WebMCP tier: invoke a site-exposed tool
+            from .webmcp import call as webmcp_call
+
+            await webmcp_call(page, action.tool or "", action.args or {})
         # done / give_up are terminal no-ops handled by the agent loop.
 
     @staticmethod
