@@ -13,6 +13,9 @@ dist/
 .env
 .env.*
 
+# ultracua flow cache (learned flows are local artifacts)
+.ultracua/
+
 # uv
 # (uv.lock IS committed — it pins the resolved dependency set)
 
