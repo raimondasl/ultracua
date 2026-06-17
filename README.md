@@ -107,6 +107,20 @@ producer side), then reads back the deterministic 0/1 `score`.
 > `ULTRACUA_DATA_DIR`). A live-run config template is at
 > [`benchmarks/configs/config.example.json`](benchmarks/configs/config.example.json).
 
+**Live (containers).** [`benchmarks/webarena_run.py`](benchmarks/webarena_run.py) drives
+ultracua against a real site container end to end — start the container, render the task at
+`localhost`, drive the agent (auto-login header + HAR recording) through the learn/replay
+cache, extract the structured answer, and score it:
+
+```bash
+# needs Docker + ANTHROPIC_API_KEY; pulls am1n3e/webarena-verified-shopping_admin (~1.2GB)
+uv run python -m benchmarks.webarena_run --site shopping_admin --task-ids 94,199
+```
+
+`run_cached` gained `record_har_path` + pre-nav `extra_headers` for this. Replaying a learned
+retrieval flow needs a network-settle before the read (async grids) and is sensitive to grid
+filter/sort state — see PLAN.md for the live baseline + the open replay-fidelity work.
+
 ### Benchmark strategy
 
 Phase 1 ships its own **local deterministic fixture set** (`benchmarks/`) — the one thing no
