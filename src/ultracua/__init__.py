@@ -14,7 +14,7 @@ from .locators import LocatorSpec
 from .safety import PacingGovernor, is_mutating
 from .types import Action, Element, Observation, StepResult
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 __all__ = [
     "BrowserSession",

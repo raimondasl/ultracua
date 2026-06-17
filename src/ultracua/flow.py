@@ -208,7 +208,12 @@ async def _learn(
                         mutating=is_mutating(action.action, action.intent, name),
                     )
                 )
-            history.append(f"{action.action} -> {'ok' if ok else 'FAIL ' + note}")
+            desc = action.action
+            if action.ref:
+                desc += f" {action.ref}"
+            if action.text:
+                desc += f" {action.text!r}"
+            history.append(f"{desc} -> {'ok' if ok else 'FAIL ' + note}")
             traces.append(tr)
             if on_step:
                 on_step(tr)

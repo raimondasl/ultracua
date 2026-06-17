@@ -51,6 +51,15 @@ It LEARNS a 4-step demo-shop flow, then REPLAYS it from cache and reports per-st
 the speedup, and replay correctness (reached the goal state, with **0 LLM calls**). The
 scripted teacher has ~0 LLM latency, so a meaningful speedup ratio needs `--provider anthropic`.
 
+**Measured (Opus discovery, 0-LLM replay).** The demo-shop flow replays **66× faster** than
+learning it (243 ms vs 16.2 s; ~57 ms/step, 0 LLM calls). On MiniWoB++ `--all`, **8/10**
+tasks learn-then-replay correctly at **0 LLM**, with **49–280×** total speedup (text-entry
+up to 280×, `click-link` 157×, multi-step `click-button-sequence` 49×); **replay is 0-LLM on
+10/10**. The 2 misses (`click-checkboxes`, `click-option`) are *discovery* failures — the LLM
+can't reliably select a specific garbled-string label — not replay failures. The fast tier
+(Haiku) also replays the demo-shop at **129×**, but is less reliable at clean termination, so
+**strong is the default discovery tier**.
+
 ### Public benchmark: MiniWoB++
 
 ultracua also drives the public, seed-deterministic
