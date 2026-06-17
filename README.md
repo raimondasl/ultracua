@@ -128,11 +128,32 @@ The cached fast-path is built to be the *trusted default*:
   to `run_cached(..., governor=...)` for live sites. Speed comes from removing LLM latency,
   not from hammering origins.
 
+## Bindings — drive it from any language (Phase 4)
+
+The Python core is exposed over newline-delimited **JSON-RPC on stdio**
+(`ultracua-daemon`, or `python -m ultracua.daemon`), so any language can drive it. A
+**Node/JS client** lives in [`clients/node/`](clients/node/):
+
+```js
+const { UltracuaClient } = require('@ultracua/client');
+const client = new UltracuaClient().start();        // spawns: uv run python -m ultracua.daemon
+await client.call('health');                         // { status: 'ok', version: '…' }
+await client.call('run', { url, goal, mode: 'auto', provider: 'anthropic' });
+client.close();
+```
+
+Methods: `health`, `run` (learn / replay / auto → FlowReport summary), `cache.delete`. The
+daemon process stays warm across calls (provider + cache reused). Verified end-to-end: a
+Node process replays a learned flow through the Python daemon at **0 LLM calls** (~200 ms).
+The protocol is the same for any language — the Python `DaemonClient` and Node client are
+just thin wrappers over it.
+
 ## Develop
 
 ```bash
 uv run pytest                    # core tests (drive real Chromium)
 uv run --group bench pytest      # also runs the MiniWoB++ integration test
+node clients/node/smoke.js .     # cross-language smoke (needs Node; health check)
 ```
 
 ## Layout
@@ -148,7 +169,9 @@ src/ultracua/
   llm/            multi-provider abstraction: canonical types + anthropic/openai/gemini adapters + router (component 4)
   providers/      agent decision (llm_agent) + heuristic mock + scripted/oracle teachers
   verify.py       post-action state-diff (component 5)
+  daemon/         JSON-RPC server (stdio) exposing the core + Python client (core+bindings)
   agent.py        the Phase 0 uncached loop (baseline)
   cli.py          `ultracua` entry point
+clients/node/     Node/JS client (@ultracua/client) for the daemon
 benchmarks/       deterministic fixtures + learn-vs-replay runner (local + MiniWoB++)
 ```
