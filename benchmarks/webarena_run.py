@@ -185,8 +185,12 @@ def _make_finalize(intent: str, out: dict):
             text = ""
         text = " ".join(text.split())[:12000]
         answer = await asyncio.to_thread(_extract_sync, intent, text)
-        out.update(answer)
-        return answer
+        out.update(answer)  # the 4-key agent_response the runner writes
+        # Signal completion to run_cached so a read task that solved via this full-text extraction
+        # caches its flow even though the agent never emitted `done`. (`solved` is read by
+        # _learn; it is NOT written into agent_response.)
+        solved = answer.get("status") == "SUCCESS" and answer.get("retrieved_data") not in (None, [], "")
+        return {"solved": solved, **answer}
 
     return _finalize
 
@@ -221,6 +225,8 @@ async def run_task(
         headless=headless,
         scope=f"webarena:{site}:{task_id}",
         prepare=None,
+        # finalize extracts the answer AND signals `solved`, so a read task that solved via the
+        # final full-text extraction caches its flow even if the agent never emitted `done`.
         finalize=_make_finalize(intent, answer),
         record_har_path=str(wa.har_path(output_root, task_id)),
         extra_headers=spec["auth_header"],

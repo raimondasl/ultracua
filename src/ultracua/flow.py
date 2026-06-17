@@ -283,7 +283,14 @@ async def _learn(
             except Exception:  # noqa: BLE001
                 pass
 
-        extra = {"finalize": await finalize(session)} if finalize else {}
+        fin = await finalize(session) if finalize else None
+        # A finalize hook may itself signal completion (e.g. a data-read task that "solved" via
+        # final full-text extraction without the agent ever emitting `done`) — cache the flow so
+        # it can replay. The agent's observation is a short snippet, so this full-text signal is
+        # more reliable than an observation-based verifier for retrieval tasks.
+        if not success and steps and isinstance(fin, dict) and fin.get("solved"):
+            success = True
+        extra = {"finalize": fin} if finalize else {}
         final_text = await _body_text(session)
         if success and steps:
             cache.put(

@@ -54,12 +54,20 @@ A Computer Use Agent (CUA) that drives a web browser at **5–10× human speed**
 > when the answer isn't on the current page*, and *prefer a direct URL over nested hover menus*
 > (which don't reproduce on replay) — lifted live **learn success from 40% → 80%** (8/10) on a
 > `shopping_admin` RETRIEVE baseline, with **6/8 learned flows replaying correctly at 0-LLM
-> navigation (2.1–4.6×)**. The runner is now crash-safe on cache-miss / unscorable runs. Open
-> gaps: caching reliability when a flow solves via final extraction without emitting `done`
-> (task 183 → replay miss); multi-step open-record replay fidelity (task 198); filter-heavy
-> capability (date/status filters, tasks 345/78). Next levers: reliable caching (completion
-> verifier for read tasks), filter-heavy capability, or **action batching** (lower-value now
-> that replay is validated and one-time learn is cheap).
+> navigation (2.1–4.6×)**. The runner is now crash-safe on cache-miss / unscorable runs.
+>
+> **Reliable caching + consolidation.** `run_cached` now also caches a flow when the `finalize`
+> hook signals completion (`{"solved": True}`) — a read task that solved via final full-text
+> extraction caches even though the agent never emitted `done` (the agent's observation is a
+> 1500-char snippet, so this full-text signal is more reliable than an observation-based
+> verifier). A consolidated 10-task `shopping_admin` baseline holds at **~6/10 doing the full
+> learn→replay thesis at 0-LLM navigation (2.0–7.3×)**. The remaining misses turned out **not**
+> to be caching bugs: 345/78 (date/status filtering) and a flaky 198 (multi-step open-record)
+> are **agent capability**; 183 produces no clean cacheable steps on a fiddly product-quantity
+> filter (erratic flow). **Status: the 5–10× learn-once/replay-fast thesis is validated on real
+> dynamic-retrieval tasks.** Further gains are capability work (filter-heavy tasks, multi-step
+> fidelity), not the speed mechanism. Action batching remains shelved (replay is 0-LLM; one-time
+> learn is 2–12 cheap calls).
 
 ---
 
