@@ -14,11 +14,17 @@ from benchmarks import webarena_run as wr
 
 
 def test_sites_spec_integrity() -> None:
-    spec = wr.SITES["shopping_admin"]
-    assert spec["port"] == 7780 and spec["env_ctrl_port"] == 7781
-    assert spec["placeholder"] == "__SHOPPING_ADMIN__"
+    # every wired site carries the full container + auth spec
+    for spec in wr.SITES.values():
+        assert {"image", "port", "env_ctrl_port", "placeholder", "auth_header"} <= set(spec)
+        assert isinstance(spec["auth_header"], dict) and spec["auth_header"]
+    admin = wr.SITES["shopping_admin"]
+    assert admin["port"] == 7780 and admin["placeholder"] == "__SHOPPING_ADMIN__"
     # shopping_admin auto-logins via the Magento header (name without -User; value user:pass).
-    assert spec["auth_header"] == {"X-M2-Admin-Auto-Login": "admin:admin1234"}
+    assert admin["auth_header"] == {"X-M2-Admin-Auto-Login": "admin:admin1234"}
+    shop = wr.SITES["shopping"]
+    assert shop["port"] == 7770 and shop["placeholder"] == "__SHOPPING__"
+    assert shop["auth_header"] == {"X-M2-Customer-Auto-Login": "emma.lopez@gmail.com:Password.123"}
 
 
 def test_write_local_config_points_at_localhost(tmp_path: Path) -> None:
