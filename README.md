@@ -120,8 +120,10 @@ uv run python -m benchmarks.webarena_run --site shopping_admin --task-ids 94,199
 `run_cached` gained `record_har_path` + pre-nav `extra_headers` for this. With header auto-login
 (`X-M2-Admin-Auto-Login: user:pass`), a `networkidle` settle before the read, and a flattened
 answer extractor, `shopping_admin` tasks **94 and 199 both learn and replay correctly at 0-LLM
-navigation (~2×)** — the replay thesis on real dynamic-retrieval tasks. See PLAN.md for the live
-baseline; remaining misses are agent-capability (exploration / complex aggregation), not replay.
+navigation (~2×)** — the replay thesis on real dynamic-retrieval tasks. With agent-exploration
+prompt nudges (explore instead of quitting; prefer direct URLs over hover menus), a 10-task
+`shopping_admin` baseline reaches **learn 8/10, with 6/8 learned flows replaying at 0-LLM
+navigation (2.1–4.6×)** — see PLAN.md. Remaining gaps: reliable caching + filter-heavy capability.
 
 ### Benchmark strategy
 

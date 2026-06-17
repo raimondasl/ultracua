@@ -227,16 +227,32 @@ async def run_task(
     )
     elapsed = (time.perf_counter() - t0) * 1000.0
 
-    if not answer:  # finalize didn't run (e.g. replay miss) — write a safe failure response
+    # A cache miss (no learned flow) never creates a session/HAR, so there's nothing to score.
+    if report.mode == "miss":
+        return {
+            "task_id": task_id, "mode": "miss", "score": 0.0, "llm_calls": report.llm_calls,
+            "elapsed_ms": round(elapsed, 1), "answer": {},
+            "fail": ["replay: no learned flow (cache miss — learn didn't emit done)"],
+        }
+
+    if not answer:  # finalize didn't run — write a safe failure response
         answer = {"task_type": "RETRIEVE", "status": "UNKNOWN_ERROR",
                   "retrieved_data": None, "error_details": "no answer produced"}
     wa.write_agent_response(output_root, task_id, **answer)
+    # A run that failed early may not have flushed a HAR with entries; the evaluator needs one,
+    # so backfill a placeholder rather than letting it skip the task (which would be unscorable).
+    if not wa.har_path(output_root, task_id).exists():
+        wa.write_placeholder_har(output_root, task_id)
     wa.run_eval(output_root, [task_id])
-    score = wa.get_score(output_root, task_id)
+    try:
+        score = wa.get_score(output_root, task_id)
+        fails = wa.get_failure_reasons(output_root, task_id) if score < 1.0 else []
+    except FileNotFoundError:
+        score, fails = 0.0, ["evaluator skipped the run (invalid submission)"]
     return {
         "task_id": task_id, "mode": report.mode, "score": score,
         "llm_calls": report.llm_calls, "elapsed_ms": round(elapsed, 1),
-        "answer": answer, "fail": wa.get_failure_reasons(output_root, task_id) if score < 1.0 else [],
+        "answer": answer, "fail": fails,
     }
 
 

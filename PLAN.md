@@ -48,8 +48,18 @@ A Computer Use Agent (CUA) that drives a web browser at **5–10× human speed**
 > flailing steps to 3 — the 5–10× replay thesis demonstrated on real dynamic-retrieval tasks. A
 > small core fix stops the LLM agent leaking tool-call markup into cached steps. Remaining misses
 > (give-up-after-1-step exploration; complex multi-filter aggregation) are **agent-capability**
-> work, distinct from replay fidelity. Next levers: agent exploration/quality, a broader live
-> baseline, or **action batching** (now that replay is validated).
+> work, distinct from replay fidelity.
+>
+> **Agent exploration + baseline.** Two prompt nudges — *explore/navigate instead of quitting
+> when the answer isn't on the current page*, and *prefer a direct URL over nested hover menus*
+> (which don't reproduce on replay) — lifted live **learn success from 40% → 80%** (8/10) on a
+> `shopping_admin` RETRIEVE baseline, with **6/8 learned flows replaying correctly at 0-LLM
+> navigation (2.1–4.6×)**. The runner is now crash-safe on cache-miss / unscorable runs. Open
+> gaps: caching reliability when a flow solves via final extraction without emitting `done`
+> (task 183 → replay miss); multi-step open-record replay fidelity (task 198); filter-heavy
+> capability (date/status filters, tasks 345/78). Next levers: reliable caching (completion
+> verifier for read tasks), filter-heavy capability, or **action batching** (lower-value now
+> that replay is validated and one-time learn is cheap).
 
 ---
 
