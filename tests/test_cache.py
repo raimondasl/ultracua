@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ultracua.cache import CachedFlow, CachedStep, FlowCache, flow_key
+import time
+
+from ultracua.cache import SCHEMA_VERSION, CachedFlow, CachedStep, FlowCache, flow_key
 from ultracua.locators import LocatorSpec
 
 
@@ -41,3 +43,31 @@ def test_cache_round_trip(tmp_path: Path) -> None:
 
     assert cache.delete(key) is True
     assert cache.get(key) is None
+
+
+def _flow(key: str, **kw) -> CachedFlow:
+    base = dict(
+        key=key,
+        goal="g",
+        start_url="https://e.com",
+        created_ts=time.time(),
+        steps=[CachedStep(intent="i", action="click")],
+    )
+    base.update(kw)
+    return CachedFlow(**base)
+
+
+def test_expired_entry_is_a_miss(tmp_path) -> None:
+    cache = FlowCache(root=tmp_path, ttl_seconds=0.0)
+    key = flow_key("g", "https://e.com")
+    cache.put(_flow(key, created_ts=time.time() - 10))
+    assert cache.get(key) is None  # aged past ttl=0 -> miss
+
+
+def test_incompatible_schema_is_a_miss(tmp_path) -> None:
+    cache = FlowCache(root=tmp_path)
+    key = flow_key("g", "https://e.com")
+    cache.put(_flow(key, schema_version=SCHEMA_VERSION - 1))
+    assert cache.get(key) is None
+    cache.put(_flow(key))  # current schema
+    assert cache.get(key) is not None

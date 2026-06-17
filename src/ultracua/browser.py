@@ -43,6 +43,12 @@ class BrowserSession:
         assert self.page is not None
         await self.page.goto(url, wait_until="domcontentloaded")
 
+    async def set_extra_http_headers(self, headers: dict[str, str]) -> None:
+        """Set (or clear, with {}) extra HTTP headers on the context — used to inject an
+        Idempotency-Key around mutating actions so a retry can't duplicate a side effect."""
+        assert self.context is not None
+        await self.context.set_extra_http_headers(headers)
+
     async def snapshot(self) -> Observation:
         assert self.page is not None
         return await capture(self.page, settings.max_elements)

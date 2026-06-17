@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ultracua fixture — Checkout</title>
+  </head>
+  <body>
+    <h1>Checkout</h1>
+    <!-- A form POST so clicking the submit button triggers a real (route-intercepted)
+         request whose headers we can inspect — used to test idempotency-key injection. -->
+    <form id="order-form" action="https://api.example.test/order" method="post">
+      <button type="submit">Place order</button>
+    </form>
+    <p id="s">cart not submitted</p>
+  </body>
+</html>

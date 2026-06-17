@@ -83,6 +83,33 @@ SNAPSHOT_JS = r"""
       bbox: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
     });
   }
+
+  // Second pass: leaf elements clickable only via JS listeners / cursor:pointer
+  // (e.g. <span> "links" with no onclick attribute, as MiniWoB++ uses). Skip already-
+  // collected nodes; the leaf + short-text guards keep this cheap and avoid huge containers.
+  if (out.length < MAX) {
+    for (const el of document.querySelectorAll('*')) {
+      if (out.length >= MAX) break;
+      if (el.hasAttribute('data-ultracua-ref')) continue;
+      if (el.children.length > 0) continue;
+      const txt = (el.innerText || el.textContent || '').trim();
+      if (!txt || txt.length > 60) continue;
+      if (!isVisible(el)) continue;
+      if (window.getComputedStyle(el).cursor !== 'pointer') continue;
+      const ref = 'e' + i++;
+      el.setAttribute('data-ultracua-ref', ref);
+      const r = el.getBoundingClientRect();
+      out.push({
+        ref,
+        role: 'link',
+        name: txt.replace(/\s+/g, ' ').slice(0, 120),
+        tag: el.tagName.toLowerCase(),
+        type: null,
+        bbox: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
+      });
+    }
+  }
+
   return out;
 }
 """

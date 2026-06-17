@@ -6,10 +6,12 @@ The headline lever isn't faster clicking — it's removing the LLM from the repe
 by **learning a flow once and replaying it deterministically**. See **[PLAN.md](PLAN.md)**
 for the full architecture, research basis, and roadmap.
 
-> **Status: Phase 1 — flow cache + deterministic replay.** First run on a (goal, url)
-> LEARNS the flow with an LLM and caches a resilient selector+action program; later runs
-> REPLAY it with **no LLM** at ~50 ms/step. Resilient locators survive DOM drift; a
-> per-step LLM self-heal recovers when they don't.
+> **Status: Phase 2 — resilience & safety.** First run on a (goal, url) LEARNS the flow
+> with an LLM and caches a resilient selector+action program; later runs REPLAY it with
+> **no LLM** at ~50 ms/step. Resilient locators survive DOM drift (incl. JS-listener
+> elements); a per-step LLM self-heal recovers when they don't. Mutating actions are never
+> blind-replayed (page-fingerprint gate + idempotency keys); CAPTCHA/anti-bot interstitials
+> escalate; a pacing governor keeps speed off the wire.
 
 ## Requirements
 
@@ -77,6 +79,23 @@ speedup + correctness + self-healing signal. The planned public-benchmark adopti
 | Deterministic realism | **WebArena-Verified** (deterministic scoring + HAR replay) | realism phase | Apache-2.0 |
 | Live realism (WebVoyager / Online-Mind2Web) | — | late phase only | — |
 
+## Safety (Phase 2)
+
+The cached fast-path is built to be the *trusted default*:
+
+- **Mutation gate** — steps classified as irreversible (submit/pay/send/delete/…) are never
+  blind-replayed. Before such a step, the page fingerprint must match the one recorded at
+  learn time; on drift it self-heals via one LLM call or fails closed rather than firing a
+  wrong action.
+- **Idempotency keys** — mutating replays carry an `Idempotency-Key` header so a retry can't
+  duplicate a side effect.
+- **Interstitial detection** — CAPTCHA / anti-bot pages are detected and the run escalates
+  (`mode="escalate"`) instead of burning retries.
+- **Pacing governor** — per-origin concurrency caps + optional human-plausible jitter +
+  Retry-After backoff. A no-op by default (fast/local); pass a configured `PacingGovernor`
+  to `run_cached(..., governor=...)` for live sites. Speed comes from removing LLM latency,
+  not from hammering origins.
+
 ## Develop
 
 ```bash
@@ -92,10 +111,11 @@ src/ultracua/
   snapshot.py     scoped DOM/AX snapshot via injected JS (component 3)
   locators.py     cross-run-stable resilient locators: describe() + resolve()
   cache.py        flow cache: keyed JSON store of CachedStep programs (component 2)
-  flow.py         run_cached — learn-and-record / no-LLM replay / per-step self-heal
+  flow.py         run_cached — learn-and-record / no-LLM replay / self-heal / mutation gate
+  safety.py       mutation classification, idempotency keys, pacing, interstitial detection (component 6)
   providers/      LLM adapters: anthropic, mock, scripted (component 4)
   verify.py       post-action state-diff (component 5)
   agent.py        the Phase 0 uncached loop (baseline)
   cli.py          `ultracua` entry point
-benchmarks/       deterministic fixtures + learn-vs-replay runner
+benchmarks/       deterministic fixtures + learn-vs-replay runner (local + MiniWoB++)
 ```

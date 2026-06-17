@@ -1,18 +1,21 @@
-"""Cached-flow orchestration: learn-once, replay-fast (PLAN.md Phase 1).
+"""Cached-flow orchestration: learn-once, replay-fast (PLAN.md Phase 1) made safe (Phase 2).
 
 `run_cached` is the entry point:
-  - cache MISS  -> LEARN: drive the Phase-0 loop with a provider, recording a resilient
-    locator + intent per successful step, then persist the flow.
+  - cache MISS  -> LEARN: drive the loop with a provider, recording a resilient locator +
+    intent (+ a `mutating` flag) per step, then persist the flow.
   - cache HIT   -> REPLAY: re-resolve each stored locator and actuate via Playwright with
-    NO LLM, gated by locator resolution (the passive precondition). On drift, optionally
-    SELF-HEAL the single broken step via one LLM call and re-cache (mode="auto").
+    NO LLM. On drift, SELF-HEAL the single broken step via one intent-keyed LLM call.
 
-This is the 5-10x lever: a replayed step costs actuation only (tens of ms), not an LLM
-round-trip (seconds).
+Phase 2 safety:
+  - MUTATION GATE: irreversible steps (submit/pay/...) are never blind-replayed — they
+    require a page-fingerprint match and carry an Idempotency-Key, so a stale cache or a
+    retry can't fire a wrong/duplicate side effect.
+  - INTERSTITIAL detection (CAPTCHA / anti-bot) escalates instead of burning retries.
+  - PACING governor (per-origin concurrency + optional jitter) keeps speed off the wire.
 
-`prepare` (post-navigation) and `finalize` (pre-close) hooks let an environment seed a
-deterministic instance and read an outcome (e.g. a MiniWoB++ reward); the finalize result
-is stored on `FlowReport.extra["finalize"]`.
+`prepare` (post-nav) and `finalize` (pre-close) hooks let an environment seed a
+deterministic instance and read an outcome; the finalize result lands in
+`FlowReport.extra["finalize"]`.
 """
 
 from __future__ import annotations
@@ -26,6 +29,13 @@ from .cache import CachedFlow, CachedStep, FlowCache, flow_key
 from .config import settings
 from .locators import describe, resolve
 from .providers.base import Provider
+from .safety import (
+    PacingGovernor,
+    idempotency_key,
+    is_mutating,
+    looks_like_interstitial,
+    origin_of,
+)
 from .timing import StepTrace
 from .types import Action
 from .verify import state_changed
@@ -37,7 +47,7 @@ Finalize = Callable[[BrowserSession], Awaitable[Any]]
 
 @dataclass
 class FlowReport:
-    mode: str  # "learn" | "replay" | "replay+heal" | "miss"
+    mode: str  # "learn" | "replay" | "replay+heal" | "miss" | "escalate"
     success: bool
     traces: list[StepTrace] = field(default_factory=list)
     llm_calls: int = 0
@@ -72,17 +82,20 @@ async def run_cached(
     on_step: Optional[OnStep] = None,
     prepare: Optional[Prepare] = None,
     finalize: Optional[Finalize] = None,
+    governor: Optional[PacingGovernor] = None,
 ) -> FlowReport:
     cache = cache or FlowCache()
+    governor = governor or PacingGovernor()
     key = flow_key(goal, url, scope)
     cached = cache.get(key)
 
     if cached is not None and mode in ("auto", "replay"):
         heal_provider = provider if mode == "auto" else None
         report = await _replay(
-            url, key, cached, cache, heal_provider, headless, on_step, prepare, finalize, goal
+            url, key, cached, cache, heal_provider, headless, on_step,
+            prepare, finalize, goal, governor, scope,
         )
-        if report.success or mode == "replay":
+        if report.success or mode == "replay" or report.mode == "escalate":
             return report
         # auto-mode replay failed irrecoverably -> fall through to a fresh learn run.
 
@@ -92,8 +105,20 @@ async def run_cached(
     if provider is None:
         return FlowReport(mode="miss", success=False, note="learn requires a provider")
     return await _learn(
-        url, goal, key, provider, cache, max_steps, headless, on_step, prepare, finalize
+        url, goal, key, provider, cache, max_steps, headless, on_step,
+        prepare, finalize, governor, scope,
     )
+
+
+async def _is_interstitial(session: BrowserSession) -> bool:
+    page = session.page
+    assert page is not None
+    try:
+        title = await page.title()
+        text = await page.inner_text("body")
+    except Exception:
+        return False
+    return looks_like_interstitial(page.url, title, text)
 
 
 async def _learn(
@@ -107,6 +132,8 @@ async def _learn(
     on_step: Optional[OnStep],
     prepare: Optional[Prepare],
     finalize: Optional[Finalize],
+    governor: PacingGovernor,
+    scope: str,
 ) -> FlowReport:
     max_steps = max_steps or settings.max_steps
     session = await BrowserSession(headless=headless).start()
@@ -122,6 +149,10 @@ async def _learn(
             if prepare:
                 await prepare(session)
         traces.append(nav)
+
+        if await _is_interstitial(session):
+            return FlowReport(mode="escalate", success=False, traces=traces,
+                              note="interstitial/CAPTCHA detected", extra={"escalate": True})
 
         for i in range(max_steps):
             tr = StepTrace(index=i)
@@ -153,9 +184,11 @@ async def _learn(
                     spec = await describe(session.page, action.ref)
 
             ok, note = True, ""
+            origin = origin_of(session.page.url)
             with tr.measure("act"):
                 try:
-                    await session.act(action)
+                    async with governor.gate(origin):
+                        await session.act(action)
                 except Exception as exc:  # noqa: BLE001
                     ok, note = False, f"{type(exc).__name__}: {exc}"
 
@@ -164,6 +197,7 @@ async def _learn(
                 tr.meta["changed"] = state_changed(obs, after)
 
             if ok:
+                name = spec.name if spec else ""
                 steps.append(
                     CachedStep(
                         intent=action.intent,
@@ -171,6 +205,7 @@ async def _learn(
                         locator=spec,
                         text=action.text,
                         precond_fingerprint=obs.fingerprint,
+                        mutating=is_mutating(action.action, action.intent, name),
                     )
                 )
             history.append(f"{action.action} -> {'ok' if ok else 'FAIL ' + note}")
@@ -187,12 +222,8 @@ async def _learn(
                 )
             )
         return FlowReport(
-            mode="learn",
-            success=success,
-            traces=traces,
-            llm_calls=llm,
-            final_text=final_text,
-            extra=extra,
+            mode="learn", success=success, traces=traces, llm_calls=llm,
+            final_text=final_text, extra=extra,
         )
     finally:
         await session.close()
@@ -209,6 +240,8 @@ async def _replay(
     prepare: Optional[Prepare],
     finalize: Optional[Finalize],
     goal: str,
+    governor: PacingGovernor,
+    scope: str,
 ) -> FlowReport:
     session = await BrowserSession(headless=headless).start()
     traces: list[StepTrace] = []
@@ -225,11 +258,19 @@ async def _replay(
                 await prepare(session)
         traces.append(nav)
 
+        if await _is_interstitial(session):
+            return FlowReport(mode="escalate", success=False, traces=traces,
+                              note="interstitial/CAPTCHA detected", extra={"escalate": True})
+
         for i, step in enumerate(flow.steps):
             tr = StepTrace(index=i)
             tr.meta["intent"] = step.intent
             tr.meta["action"] = step.action
-            ok, note, did_heal = await _replay_step(session, step, provider, tr, goal)
+            if step.mutating:
+                tr.meta["mutating"] = True
+            ok, note, did_heal = await _replay_step(
+                session, step, provider, tr, goal, governor, scope, i
+            )
             if did_heal:
                 healed += 1
                 llm += 1
@@ -250,13 +291,8 @@ async def _replay(
         if dirty and success:
             cache.put(flow)
         return FlowReport(
-            mode=mode,
-            success=success,
-            traces=traces,
-            llm_calls=llm,
-            healed_steps=healed,
-            final_text=final_text,
-            extra=extra,
+            mode=mode, success=success, traces=traces, llm_calls=llm,
+            healed_steps=healed, final_text=final_text, extra=extra,
         )
     finally:
         await session.close()
@@ -268,40 +304,66 @@ async def _replay_step(
     provider: Optional[Provider],
     tr: StepTrace,
     goal: str,
+    governor: PacingGovernor,
+    scope: str,
+    idx: int,
 ) -> tuple[bool, str, bool]:
     """Replay one cached step. Returns (ok, note, did_heal)."""
     page = session.page
     assert page is not None
+    origin = origin_of(page.url)
 
-    if step.action in ("press", "scroll", "navigate"):
-        with tr.measure("act"):
-            try:
-                await session.act(
-                    Action(action=step.action, intent=step.intent, text=step.text)
+    # MUTATION GATE — never blind-replay an irreversible action under page drift.
+    if step.mutating:
+        with tr.measure("gate"):
+            obs = await session.snapshot()
+        if step.precond_fingerprint and obs.fingerprint != step.precond_fingerprint:
+            tr.meta["gate"] = "drift"
+            return await _maybe_heal(
+                session, step, provider, tr, goal, "mutation gate: page drift"
+            )
+        key = idempotency_key(scope, idx, step.intent)
+        tr.meta["idempotency_key"] = key
+        await session.set_extra_http_headers({"Idempotency-Key": key})
+
+    try:
+        if step.action in ("press", "scroll", "navigate"):
+            note = ""
+            async with governor.gate(origin):
+                with tr.measure("act"):
+                    try:
+                        await session.act(
+                            Action(action=step.action, intent=step.intent, text=step.text)
+                        )
+                        return True, "", False
+                    except Exception as exc:  # noqa: BLE001
+                        note = f"{type(exc).__name__}"
+            return await _maybe_heal(session, step, provider, tr, goal, note)
+
+        if step.action in ("click", "type") and step.locator is not None:
+            with tr.measure("resolve"):
+                loc = await resolve(page, step.locator)
+            if loc is None:
+                return await _maybe_heal(
+                    session, step, provider, tr, goal, "locator unresolved (drift)"
                 )
-                return True, "", False
-            except Exception as exc:  # noqa: BLE001
-                note = f"{type(exc).__name__}"
-        return await _maybe_heal(session, step, provider, tr, goal, note)
+            note = ""
+            async with governor.gate(origin):
+                with tr.measure("act"):
+                    try:
+                        if step.action == "click":
+                            await loc.click(timeout=settings.action_timeout_ms)
+                        else:
+                            await loc.fill(step.text or "", timeout=settings.action_timeout_ms)
+                        return True, "", False
+                    except Exception as exc:  # noqa: BLE001
+                        note = f"act failed: {type(exc).__name__}"
+            return await _maybe_heal(session, step, provider, tr, goal, note)
 
-    if step.action in ("click", "type") and step.locator is not None:
-        with tr.measure("resolve"):
-            loc = await resolve(page, step.locator)
-        if loc is not None:
-            with tr.measure("act"):
-                try:
-                    if step.action == "click":
-                        await loc.click(timeout=settings.action_timeout_ms)
-                    else:
-                        await loc.fill(step.text or "", timeout=settings.action_timeout_ms)
-                    return True, "", False
-                except Exception as exc:  # noqa: BLE001
-                    note = f"act failed: {type(exc).__name__}"
-        else:
-            note = "locator unresolved (drift)"
-        return await _maybe_heal(session, step, provider, tr, goal, note)
-
-    return False, "unreplayable step", False
+        return False, "unreplayable step", False
+    finally:
+        if step.mutating:
+            await session.set_extra_http_headers({})  # clear the idempotency header
 
 
 async def _maybe_heal(
