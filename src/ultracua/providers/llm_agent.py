@@ -71,6 +71,11 @@ def _parse(resp) -> Optional[Action]:
     if tu is None:
         return None
     data = dict(tu.input)
+    # tool/args only apply to webmcp_call. On other actions the model occasionally leaks
+    # raw tool-call markup into `tool`; drop it so it can't pollute the cached step.
+    if data.get("action") != "webmcp_call":
+        data.pop("tool", None)
+        data.pop("args", None)
     # WebMCP args come back as a JSON string (strict schema) -> parse to a dict.
     if isinstance(data.get("args"), str):
         raw = data["args"].strip()

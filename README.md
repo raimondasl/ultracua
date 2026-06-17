@@ -117,9 +117,11 @@ cache, extract the structured answer, and score it:
 uv run python -m benchmarks.webarena_run --site shopping_admin --task-ids 94,199
 ```
 
-`run_cached` gained `record_har_path` + pre-nav `extra_headers` for this. Replaying a learned
-retrieval flow needs a network-settle before the read (async grids) and is sensitive to grid
-filter/sort state — see PLAN.md for the live baseline + the open replay-fidelity work.
+`run_cached` gained `record_har_path` + pre-nav `extra_headers` for this. With header auto-login
+(`X-M2-Admin-Auto-Login: user:pass`), a `networkidle` settle before the read, and a flattened
+answer extractor, `shopping_admin` tasks **94 and 199 both learn and replay correctly at 0-LLM
+navigation (~2×)** — the replay thesis on real dynamic-retrieval tasks. See PLAN.md for the live
+baseline; remaining misses are agent-capability (exploration / complex aggregation), not replay.
 
 ### Benchmark strategy
 
