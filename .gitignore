@@ -16,6 +16,9 @@ dist/
 # ultracua flow cache (learned flows are local artifacts)
 .ultracua/
 
+# Node client deps (if installed)
+node_modules/
+
 # uv
 # (uv.lock IS committed — it pins the resolved dependency set)
 
