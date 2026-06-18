@@ -67,6 +67,13 @@ class Settings:
     # Root for large/working data kept off the system drive (benchmark downloads, the
     # isolated evaluator's uv cache, scratch eval dirs). Configurable via ULTRACUA_DATA_DIR.
     data_dir: str = _default_data_dir()
+    # Observability: log level for the `ultracua` logger (WARNING keeps library imports quiet;
+    # the CLI bumps this to INFO so a scheduled job's run is traceable).
+    log_level: str = os.getenv("ULTRACUA_LOG_LEVEL", "WARNING")
+    # LLM-call resilience: retry a transient failure (rate limit / timeout / 5xx) with capped
+    # exponential backoff, and bound each call so a hung request can't stall a run forever.
+    llm_max_retries: int = int(os.getenv("ULTRACUA_LLM_MAX_RETRIES", "3"))
+    llm_timeout_s: float = float(os.getenv("ULTRACUA_LLM_TIMEOUT_S", "60"))
 
 
 settings = Settings()
