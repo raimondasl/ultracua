@@ -161,6 +161,34 @@ def _flow_list() -> None:
     print("\n".join(names) if names else "(no saved flows)")
 
 
+def _ago(ts: float) -> str:
+    if not ts:
+        return "never"
+    import time as _t
+
+    d = max(0.0, _t.time() - ts)
+    for unit, sec in (("d", 86400), ("h", 3600), ("m", 60)):
+        if d >= sec:
+            return f"{int(d / sec)}{unit} ago"
+    return f"{int(d)}s ago"
+
+
+def _flow_status(args: argparse.Namespace) -> None:
+    from .flows import health, list_specs, load_spec
+
+    names = [args.name] if args.name else list_specs()
+    if not names:
+        print("(no saved flows)")
+        return
+    for name in names:
+        h = health(load_spec(name))
+        print(f"{h.name}: {h.status}  approved={h.approved}  "
+              f"runs={h.runs} ok={h.successes} fails={h.consecutive_failures}  "
+              f"last_ok={_ago(h.last_ok_ts)}")
+        if h.last_error and h.status == "failing":
+            print(f"    last error: {h.last_error}")
+
+
 def _flow_main(argv) -> None:
     p = argparse.ArgumentParser(prog="ultracua flow", description="Define + run recurring browser flows.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -208,6 +236,9 @@ def _flow_main(argv) -> None:
     pi = sub.add_parser("inspect", help="Print a saved flow's spec + learned steps.")
     pi.add_argument("--name", required=True)
 
+    pst = sub.add_parser("status", help="Show health (runs / last success / drift) for saved flows.")
+    pst.add_argument("--name", help="a single flow (default: all).")
+
     sub.add_parser("list", help="List saved flows.")
 
     args = p.parse_args(argv)
@@ -221,6 +252,8 @@ def _flow_main(argv) -> None:
         asyncio.run(_flow_login(args))
     elif args.cmd == "inspect":
         _flow_inspect(args)
+    elif args.cmd == "status":
+        _flow_status(args)
     elif args.cmd == "list":
         _flow_list()
 
