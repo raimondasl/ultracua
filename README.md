@@ -143,6 +143,29 @@ off the login page"), and `timeout_ms=` to bound the form actions. (`login=` may
 flow with `ultracua flow set-login --name … --login-url … --storage-state …`, then refresh cookies
 now with `ultracua flow login --name …` (it verifies the login and reports success/failure).
 
+**Write flows (submit / post / purchase, ROADMAP Phase D).** Set `mutate=MutateSpec(…)` to make a
+flow a *write* flow. Because a click that doesn't throw isn't proof a write landed, a write flow
+**must declare how it's confirmed** — `confirm_selector` / `confirm_text_contains` /
+`confirm_url_contains` (mirrors `LoginSpec`'s success check). After replay runs, that condition must
+hold or it **fails loud** (`FlowReplayError`); on success `replay` returns
+`{"status": "confirmed", "data": …}`. Write flows are **approval-gated by default**, refuse
+`on_drift="relearn"` (re-authoring would re-perform the write), and a mutating step under page drift
+fails loud rather than letting an LLM re-drive it. Every write replay returns a uniform
+`{"status": confirmed|already-done, "data": <None unless extract is set>}`. For one-shot writes, add
+`precheck_*` (a cheap read-only pre-pass): if the end-state already holds, the write is **skipped**
+(`{"status": "already-done", "data": None}`) — don't purchase twice. Leave `precheck_*` unset for
+*recurring* writes (placing today's order daily) so a legitimately-recurring state isn't skipped. CLI:
+`ultracua flow learn --confirm-text-contains "Order placed" …`, or `flow set-mutate --name … --confirm-*`.
+
+```python
+from ultracua import FlowSpec, MutateSpec, learn_flow, approve_flow, replay_flow
+spec = FlowSpec(name="daily-order", start_url=…, goal="place the standing order",
+                mutate=MutateSpec(confirm_text_contains="Order placed"))
+asyncio.run(learn_flow(spec))   # perform it once, inspect the steps
+approve_flow(spec)              # a human verifies before unattended runs (writes are approval-gated)
+res = asyncio.run(replay_flow(spec))   # {"status": "confirmed", "data": None}, or raises if unconfirmed
+```
+
 **Fleet health + scheduling.** Every `replay` records its outcome, so you can monitor a fleet:
 `flow_health(spec)` (CLI `ultracua flow status`) reports each flow as `healthy` / `failing` /
 `stale` / `never-run` with run counts and the last error (`flow status --stale-after <hours>` flags

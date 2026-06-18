@@ -71,3 +71,36 @@ async def test_mutation_gate_blocks_blind_replay_on_drift(tmp_path: Path) -> Non
     )
     assert replay.success is False  # gate refused to blind-replay the mutation under drift
     assert caps == []               # ...and the order POST was never sent
+
+
+async def test_mutating_step_under_drift_is_never_healed(tmp_path: Path) -> None:
+    """Phase D safety: a mutating step under page drift FAILS LOUD and an LLM is never consulted to
+    re-drive the write (no heal), even when a heal provider is available."""
+    from ultracua.browser import BrowserSession
+    from ultracua.cache import CachedStep
+    from ultracua.flow import _replay_step
+    from ultracua.safety import PacingGovernor
+    from ultracua.timing import StepTrace
+    from ultracua.types import Action
+
+    heal_calls: list = []
+
+    class _SpyProvider:
+        async def decide(self, goal, obs, history):
+            heal_calls.append(goal)  # if this fires, an LLM re-drove the write — the bug
+            ref = obs.elements[0].ref if obs.elements else None
+            return Action(action="click", intent="place order", ref=ref), None
+
+    session = await BrowserSession(headless=True).start()
+    try:
+        await session.goto(URL)
+        step = CachedStep(intent="place the order", action="click", mutating=True,
+                          precond_fingerprint="DELIBERATELY-WRONG")  # force a drift mismatch
+        ok, note, did_heal = await _replay_step(
+            session, step, _SpyProvider(), StepTrace(index=0), GOAL, PacingGovernor(), "scope", 0
+        )
+        assert ok is False and did_heal is False  # failed loud, not healed
+        assert heal_calls == []                    # the heal provider was NEVER consulted
+        assert "drift" in note
+    finally:
+        await session.close()

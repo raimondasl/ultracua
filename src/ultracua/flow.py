@@ -403,15 +403,15 @@ async def _replay_step(
     assert page is not None
     origin = origin_of(page.url)
 
-    # MUTATION GATE — never blind-replay an irreversible action under page drift.
+    # MUTATION GATE — never blind-replay an irreversible action under page drift, and never let
+    # an LLM re-drive a write under uncertainty: on drift a mutating step FAILS LOUD (it is not
+    # healed). A failed write is the caller's to re-learn + re-approve, never to guess at.
     if step.mutating:
         with tr.measure("gate"):
             obs = await session.snapshot()
         if step.precond_fingerprint and obs.fingerprint != step.precond_fingerprint:
             tr.meta["gate"] = "drift"
-            return await _maybe_heal(
-                session, step, provider, tr, goal, "mutation gate: page drift"
-            )
+            return False, "mutation gate: page drift — refusing to re-drive a write", False
         key = idempotency_key(scope, idx, step.intent)
         tr.meta["idempotency_key"] = key
         await session.set_extra_http_headers({"Idempotency-Key": key})

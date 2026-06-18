@@ -91,14 +91,32 @@ def _login_from_args(args: argparse.Namespace):
     )
 
 
+def _mutate_from_args(args: argparse.Namespace):
+    """Build a MutateSpec from the shared --confirm-*/--precheck-* flags (added by _add_mutate_args)."""
+    from .flows import MutateSpec
+
+    return MutateSpec(
+        confirm_selector=args.confirm_selector, confirm_text_contains=args.confirm_text_contains,
+        confirm_url_contains=args.confirm_url_contains, timeout_ms=args.mutate_timeout_ms,
+        precheck_url=args.precheck_url, precheck_selector=args.precheck_selector,
+        precheck_text_contains=args.precheck_text_contains,
+        precheck_url_contains=args.precheck_url_contains,
+    )
+
+
+def _has_confirm_args(args: argparse.Namespace) -> bool:
+    return bool(args.confirm_selector or args.confirm_text_contains or args.confirm_url_contains)
+
+
 async def _flow_learn(args: argparse.Namespace) -> None:
     from .flows import FlowSpec, learn, save_spec
 
     login = _login_from_args(args) if args.login_url else None
+    mutate = _mutate_from_args(args) if _has_confirm_args(args) else None
     spec = FlowSpec(
         name=args.name, start_url=args.url, goal=args.goal, extract=args.extract,
         headers=_parse_headers(args.header) or None, storage_state=args.storage_state,
-        login=login, headless=(False if args.headed else None),
+        login=login, mutate=mutate, headless=(False if args.headed else None),
     )
     if args.fresh:
         FlowCache().delete(flow_key(spec.goal, spec.start_url, spec.scope))
@@ -161,6 +179,20 @@ def _flow_set_login(args: argparse.Namespace) -> None:
     print(f"set login on {spec.name!r} (url={args.login_url}; creds from env "
           f"{args.username_env}/{args.password_env}). Refresh now: "
           f"ultracua flow login --name {spec.name}")
+
+
+def _flow_set_mutate(args: argparse.Namespace) -> None:
+    from .flows import load_spec, save_spec
+
+    spec = load_spec(args.name)
+    if not _has_confirm_args(args):
+        raise SystemExit("a write flow needs a confirm check — set at least one of "
+                         "--confirm-selector / --confirm-text-contains / --confirm-url-contains")
+    spec.mutate = _mutate_from_args(args)
+    save_spec(spec)
+    print(f"set write/mutate on {spec.name!r} — replay will verify the write landed and is now "
+          f"approval-gated by default. Re-learn it (performs the write once) then approve: "
+          f"ultracua flow learn --name {spec.name} ...; ultracua flow approve --name {spec.name}")
 
 
 def _flow_inspect(args: argparse.Namespace) -> None:
@@ -235,6 +267,27 @@ def _add_login_args(parser, *, url_required: bool) -> None:
                         help="per-step timeout (ms) for the login form actions.")
 
 
+def _add_mutate_args(parser) -> None:
+    """Shared --confirm-*/--precheck-* flags marking a WRITE flow (Phase D). Setting any
+    --confirm-* turns the flow into a write flow whose replay verifies the write landed."""
+    parser.add_argument("--confirm-selector", dest="confirm_selector",
+                        help="element present only once the write committed (action-completion check).")
+    parser.add_argument("--confirm-text-contains", dest="confirm_text_contains",
+                        help="substring the post-write page text must contain (action-completion check).")
+    parser.add_argument("--confirm-url-contains", dest="confirm_url_contains",
+                        help="substring the post-write URL must contain (action-completion check).")
+    parser.add_argument("--mutate-timeout-ms", dest="mutate_timeout_ms", type=int,
+                        help="how long (ms) to wait for the confirmation to appear.")
+    parser.add_argument("--precheck-url", dest="precheck_url",
+                        help="idempotency precheck URL (default: the flow's start url).")
+    parser.add_argument("--precheck-selector", dest="precheck_selector",
+                        help="if present, the write was already done -> skip it (one-shot writes).")
+    parser.add_argument("--precheck-text-contains", dest="precheck_text_contains",
+                        help="if this text is present, the write was already done -> skip it.")
+    parser.add_argument("--precheck-url-contains", dest="precheck_url_contains",
+                        help="if the precheck URL contains this, the write was already done -> skip it.")
+
+
 def _flow_main(argv) -> None:
     p = argparse.ArgumentParser(prog="ultracua flow", description="Define + run recurring browser flows.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -248,6 +301,7 @@ def _flow_main(argv) -> None:
     pl.add_argument("--header", action="append", help="auth header K=V (repeatable).")
     pl.add_argument("--storage-state", dest="storage_state", help="Playwright storage_state JSON path (cookie auth).")
     _add_login_args(pl, url_required=False)
+    _add_mutate_args(pl)  # set any --confirm-* to make this a WRITE flow (Phase D)
     pl.add_argument("--provider", **prov)
     pl.add_argument("--headed", action="store_true")
     pl.add_argument("--fresh", action="store_true", help="clear any cached flow first.")
@@ -274,6 +328,10 @@ def _flow_main(argv) -> None:
                      help="where to save refreshed cookies (required if the flow has none yet).")
     _add_login_args(psl, url_required=True)
 
+    psm = sub.add_parser("set-mutate", help="Mark a saved flow a WRITE flow + how to confirm it (Phase D).")
+    psm.add_argument("--name", required=True)
+    _add_mutate_args(psm)
+
     pi = sub.add_parser("inspect", help="Print a saved flow's spec + learned steps.")
     pi.add_argument("--name", required=True)
 
@@ -295,6 +353,8 @@ def _flow_main(argv) -> None:
         asyncio.run(_flow_login(args))
     elif args.cmd == "set-login":
         _flow_set_login(args)
+    elif args.cmd == "set-mutate":
+        _flow_set_mutate(args)
     elif args.cmd == "inspect":
         _flow_inspect(args)
     elif args.cmd == "status":
