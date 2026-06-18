@@ -43,7 +43,11 @@ def _spec(headed: bool) -> FlowSpec:
     )
 
 
-async def main(headed: bool, fresh: bool) -> None:
+async def main(headed: bool, fresh: bool, verbose: bool) -> None:
+    if verbose:  # surface the run_id + per-run token/$ cost logging (nice for a demo)
+        from ultracua.obs import configure_logging
+
+        configure_logging("INFO")
     spec = _spec(headed)
     if fresh:
         FlowCache().delete(flow_key(spec.goal, spec.start_url, spec.scope))
@@ -69,5 +73,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(prog="examples/hn_digest.py")
     ap.add_argument("--headed", action="store_true", help="show the browser window.")
     ap.add_argument("--fresh", action="store_true", help="forget the learned flow and re-learn.")
+    ap.add_argument("--verbose", "-v", action="store_true",
+                    help="log each run (run_id, steps, token usage + $ cost).")
     args = ap.parse_args()
-    asyncio.run(main(args.headed, args.fresh))
+    asyncio.run(main(args.headed, args.fresh, args.verbose))
