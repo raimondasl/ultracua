@@ -37,6 +37,7 @@ from .safety import (
     origin_of,
 )
 from .obs import UsageTotals, get_logger, new_run_id
+from .snapshot import scope_fingerprint
 from .timing import StepTrace
 from .types import Action, Observation
 from .verify import state_changed
@@ -237,9 +238,16 @@ async def _learn(
                 break
 
             spec = None
+            precond_scope = ""
             if action.action in ("click", "type") and action.ref:
                 with tr.measure("describe"):
                     spec = await describe(session.page, action.ref)
+                # For a mutating step, record the PRECISE precondition (the target's form/section)
+                # now, while the element is still present — the gate checks this at replay.
+                if is_mutating(action.action, action.intent, spec.name if spec else ""):
+                    precond_scope = await scope_fingerprint(
+                        session.page.locator(f'[data-ultracua-ref="{action.ref}"]').first
+                    )
 
             ok, note = True, ""
             origin = origin_of(session.page.url)
@@ -268,6 +276,7 @@ async def _learn(
                         tool=action.tool,
                         args=action.args,
                         precond_fingerprint=obs.fingerprint,
+                        precond_scope=precond_scope,
                         mutating=is_mutating(action.action, action.intent, name),
                     )
                 )
@@ -427,11 +436,26 @@ async def _replay_step(
     # an LLM re-drive a write under uncertainty: on drift a mutating step FAILS LOUD (it is not
     # healed). A failed write is the caller's to re-learn + re-approve, never to guess at.
     if step.mutating:
+        drifted, reason = False, ""
         with tr.measure("gate"):
-            obs = await session.snapshot()
-        if step.precond_fingerprint and obs.fingerprint != step.precond_fingerprint:
+            if step.precond_scope and step.locator is not None:
+                # PRECISE gate: did the target's enclosing form/section change? (ignores unrelated
+                # page churn — banners, badges — that the whole-page fingerprint over-flags as drift)
+                target = await resolve(page, step.locator)
+                if target is None:
+                    drifted, reason = True, "mutation gate: target missing — refusing to re-drive a write"
+                else:
+                    current = await scope_fingerprint(target)
+                    if current and current != step.precond_scope:
+                        drifted, reason = True, "mutation gate: form/section drift — refusing to re-drive a write"
+            else:
+                # fallback (old flow, or a press/navigate submit with no recorded scope)
+                obs = await session.snapshot()
+                if step.precond_fingerprint and obs.fingerprint != step.precond_fingerprint:
+                    drifted, reason = True, "mutation gate: page drift — refusing to re-drive a write"
+        if drifted:
             tr.meta["gate"] = "drift"
-            return False, "mutation gate: page drift — refusing to re-drive a write", False
+            return False, reason, False
         key = idempotency_key(scope, idx, step.intent)
         tr.meta["idempotency_key"] = key
         await session.set_extra_http_headers({"Idempotency-Key": key})
@@ -504,6 +528,13 @@ async def _maybe_heal(
             await session.act(action)
         except Exception as exc:  # noqa: BLE001
             return False, f"{note}; heal act failed: {type(exc).__name__}", True
+    # Re-validate: a click that produced no observable state change likely bound the WRONG
+    # element — do NOT persist a possibly-corrupt locator into the cache (a `type` legitimately
+    # leaves url/fingerprint unchanged, so it's exempt from this check).
+    if action.action == "click":
+        after = await session.snapshot()
+        if not state_changed(obs, after):
+            return False, f"{note}; heal had no effect — not persisted", True
     if spec is not None:
         step.locator = spec
     if action.text is not None:

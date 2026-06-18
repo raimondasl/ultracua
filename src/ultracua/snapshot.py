@@ -119,6 +119,59 @@ SNAPSHOT_JS = r"""
 """
 
 
+# Runs in the page on ONE element: fingerprints the interactable controls in the target's
+# enclosing form/section. The mutation gate compares this (not the whole page) so unrelated
+# churn — a banner, a cart badge, an A/B nav item — doesn't false-flag a valid write as drift.
+SCOPE_JS = r"""
+(el) => {
+  const roleOf = (e) => {
+    const ar = e.getAttribute('role');
+    if (ar) return ar;
+    const t = e.tagName.toLowerCase();
+    if (t === 'a') return 'link';
+    if (t === 'button') return 'button';
+    if (t === 'select') return 'combobox';
+    if (t === 'textarea') return 'textbox';
+    if (t === 'input') {
+      const ty = (e.getAttribute('type') || 'text').toLowerCase();
+      if (['button', 'submit', 'reset', 'image'].includes(ty)) return 'button';
+      if (ty === 'checkbox') return 'checkbox';
+      if (ty === 'radio') return 'radio';
+      return 'textbox';
+    }
+    return t;
+  };
+  const nameOf = (e) => {
+    const cand =
+      e.getAttribute('aria-label') || e.getAttribute('placeholder') || e.getAttribute('title') ||
+      e.getAttribute('alt') || e.innerText || e.textContent || '';
+    return cand.replace(/\s+/g, ' ').trim().slice(0, 120);
+  };
+  const sel = [
+    'a[href]', 'button', 'input', 'select', 'textarea',
+    '[role=button]', '[role=link]', '[role=tab]', '[role=menuitem]',
+    '[role=checkbox]', '[role=radio]', '[role=combobox]', '[role=switch]',
+  ].join(',');
+  const scope = el.closest('form, dialog, [role=dialog], fieldset, [role=form], section, main, [role=main], article') || document.body;
+  const out = [];
+  for (const e of scope.querySelectorAll(sel)) out.push([roleOf(e), nameOf(e), e.tagName.toLowerCase()]);
+  return out;
+}
+"""
+
+
+async def scope_fingerprint(locator) -> str:
+    """Fingerprint the interactables in the target locator's enclosing form/section (the precise
+    mutation-gate precondition). Returns "" if it can't be computed (caller falls back)."""
+    try:
+        out = await locator.evaluate(SCOPE_JS)
+    except Exception:  # noqa: BLE001 - target gone / detached -> caller treats as no scope
+        return ""
+    if not out:
+        return ""
+    return xxhash.xxh64(json.dumps(out, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
 async def capture(page, max_elements: int) -> Observation:
     """Capture a scoped snapshot of the given Playwright page."""
     raw = await page.evaluate(SNAPSHOT_JS, max_elements)
