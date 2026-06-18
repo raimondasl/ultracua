@@ -44,8 +44,8 @@ not noise (see below).
   (excludes process/browser startup).
 - **"Replay 0-LLM" means 0-LLM *navigation*.** Data-retrieval replays still make **one uncounted
   LLM extraction call** in `finalize`; `llm_calls` only counts self-heal.
-- **Live replay is not perfectly faithful** (2/8 shopping regressions) — real evidence behind the
-  README's "some multi-step flows don't reproduce cleanly."
+- **Live replay is not perfectly faithful** (2/8 shopping regressions) — real evidence that some
+  multi-step flows don't reproduce cleanly today.
 
 ## The core finding: discovery is the bottleneck, not replay
 

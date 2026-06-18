@@ -4,8 +4,8 @@ The core thesis — **learn a browser flow once, replay it deterministically at 
 — is validated on real authenticated sites across two distinct apps (see
 [PLAN.md](PLAN.md)). What's left to make ultracua *usable by a developer for a real recurring
 task* is product / reliability engineering, **not** another research breakthrough. This file
-sketches the thinnest path there. See the README's *"What it's for (and what it isn't yet)"*
-section for the honest maturity framing this roadmap acts on.
+sketches the thinnest path there. See [STATUS.md](STATUS.md) for the honest maturity framing and
+measured numbers this roadmap acts on.
 
 ## The target
 

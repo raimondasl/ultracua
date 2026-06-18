@@ -1,0 +1,170 @@
+# Developer guide
+
+How to *use* ultracua — the Flow API and the `ultracua` CLI in depth. For a runnable real-site
+walkthrough start with [EXAMPLES.md](EXAMPLES.md); for how it works inside see
+[ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Contents
+
+- [The one-shot agent](#the-one-shot-agent)
+- [Recurring flows — the Flow API](#recurring-flows--the-flow-api)
+- [Discovery reliability](#discovery-reliability)
+- [Trust for unattended runs](#trust-for-unattended-runs)
+- [Auth refresh](#auth-refresh)
+- [Write flows (submit / post / purchase)](#write-flows-submit--post--purchase)
+- [Fleet health + scheduling](#fleet-health--scheduling)
+- [Providers & tiering](#providers--tiering)
+
+## The one-shot agent
+
+The lowest-level entry point runs a single goal through the flow cache: the **first** run on a
+`(goal, url)` LEARNS and caches the flow; **subsequent** runs REPLAY it with no LLM.
+
+```bash
+# First run LEARNS + caches (needs ANTHROPIC_API_KEY); second run REPLAYS with no LLM.
+# PowerShell: $env:ANTHROPIC_API_KEY = "sk-ant-..."
+uv run ultracua --url https://example.com --goal "open the more information link"
+uv run ultracua --url https://example.com --goal "open the more information link"   # replays
+```
+
+Flags: `--mode auto|learn|replay`, `--fresh` (clear the cached flow first),
+`--provider anthropic|openai|gemini|mock`, `--tier fast|strong`, `--scope <name>`. Learned flows
+live under `.ultracua/flows/`. Env: `ULTRACUA_FAST_MODEL` (default `claude-haiku-4-5`),
+`ULTRACUA_MODEL` (strong, default `claude-opus-4-8`), `ULTRACUA_TIER` (default `fast`).
+
+For *recurring* tasks, use the Flow API below — it adds named specs, structured extraction,
+approval, drift handling, and health.
+
+## Recurring flows — the Flow API
+
+Define a recurring task once as a **`FlowSpec`**, **learn** it (LLM-authored, inspectable), then
+**replay** it — 0-LLM navigation that **returns the extracted data and raises on drift** instead of
+returning wrong data.
+
+```python
+import asyncio
+from ultracua import FlowSpec, learn_flow, replay_flow, FlowReplayError
+
+spec = FlowSpec(
+    name="daily-orders",
+    start_url="https://portal.example.com/admin",
+    goal="open the orders report",
+    extract="the number of orders placed yesterday",   # → structured data
+    headers={"X-Auth": "…"},                            # or storage_state="state.json"
+)
+
+# Author once and eyeball what was learned:
+res = asyncio.run(learn_flow(spec))      # res.steps, res.data, res.cached
+
+# Then run it cheaply + deterministically (e.g. from cron); raises on drift:
+try:
+    data = asyncio.run(replay_flow(spec))   # 0-LLM navigation, returns the data
+except FlowReplayError as e:
+    ...  # site changed / data missing — alert instead of trusting a wrong value
+```
+
+Or from the CLI (saves the spec under `.ultracua/specs/`):
+
+```bash
+uv run ultracua flow learn  --name daily-orders --url <url> --goal "open the orders report" \
+                            --extract "the number of orders placed yesterday" --header "X-Auth=…"
+uv run ultracua flow replay --name daily-orders      # prints the data as JSON; exits 1 on drift
+uv run ultracua flow inspect --name daily-orders     # spec + learned steps
+uv run ultracua flow list
+```
+
+`auth` is `headers=` or `storage_state=` (a Playwright cookies JSON); `extract` is a natural-language
+instruction (+ optional `extract_schema` for validated structure). Replay does 0-LLM **navigation**;
+reading the answer is one cheap extraction call (set `extract=None` for navigate-only flows).
+
+## Discovery reliability
+
+Discovery (the learn run) is the reliability bottleneck — the LLM sometimes fails to author a working
+flow on a flaky/ambiguous page. `learn(spec, samples=N)` (CLI `flow learn --samples N`) re-authors up
+to N times and keeps the first attempt the verifier confirms, trading LLM cost for a higher first-try
+success rate.
+
+## Trust for unattended runs
+
+`replay(require_approved=True)` refuses any flow you haven't `approve_flow(spec)`d; replay also treats
+a change in the data's *shape* vs the learned run as drift; and `on_drift="relearn"` re-authors the
+flow instead of raising. So a scheduled run either returns trustworthy data or fails loudly — point
+cron at it and alert on a non-zero exit. (CLI: `ultracua flow approve --name …`; `flow replay
+--require-approved --on-drift relearn`.)
+
+## Auth refresh
+
+For cookie sessions that expire, add `login=LoginSpec(url=…, username_env=…, password_env=…)` —
+credentials are read from the env at runtime and **never persisted** (the login isn't cached; only the
+resulting `storage_state` cookies are saved). On drift, replay re-logs-in and retries once, so a
+long-lived recurring flow survives session expiry.
+
+- `success_selector=` / `success_url_contains=` — for SPA logins that stay on the same URL (the
+  default check is "navigated off the login page").
+- `timeout_ms=` — bound the login form actions.
+- `login=` may also be an `async (page) -> None` callable for non-standard / SSO logins.
+
+From the CLI, attach a login to a saved flow with `ultracua flow set-login --name … --login-url …
+--storage-state …`, then refresh cookies now with `ultracua flow login --name …` (it verifies the
+login and reports success/failure).
+
+## Write flows (submit / post / purchase)
+
+Set `mutate=MutateSpec(…)` to make a flow a *write* flow. Because a click that doesn't throw isn't
+proof a write landed, a write flow **must declare how it's confirmed** — `confirm_selector` /
+`confirm_text_contains` / `confirm_url_contains` (mirrors `LoginSpec`'s success check). After replay
+runs, that condition must hold or it **fails loud** (`FlowReplayError`).
+
+```python
+from ultracua import FlowSpec, MutateSpec, learn_flow, approve_flow, replay_flow
+
+spec = FlowSpec(name="daily-order", start_url=…, goal="place the standing order",
+                mutate=MutateSpec(confirm_text_contains="Order placed"))
+asyncio.run(learn_flow(spec))   # performs the write once; inspect the steps
+approve_flow(spec)              # a human verifies before unattended runs (writes are approval-gated)
+res = asyncio.run(replay_flow(spec))   # {"status": "confirmed", "data": None}, or raises if unconfirmed
+```
+
+Write semantics:
+
+- Every write replay returns a uniform `{"status": "confirmed" | "already-done", "data": <None unless
+  extract is set>}`.
+- Write flows are **approval-gated by default**, refuse `on_drift="relearn"` (re-authoring would
+  re-perform the write), and a mutating step under page drift fails loud rather than letting an LLM
+  re-drive it.
+- **Idempotency (one-shot writes):** add `precheck_*` (a cheap read-only pre-pass) — if the end-state
+  already holds, the write is **skipped** (`{"status": "already-done"}`); don't purchase twice. Leave
+  `precheck_*` unset for *recurring* writes (placing today's order daily) so a legitimately-recurring
+  state isn't skipped.
+
+CLI: `ultracua flow learn --confirm-text-contains "Order placed" …`, or `flow set-mutate --name …
+--confirm-*`.
+
+## Fleet health + scheduling
+
+Every `replay` records its outcome, so you can monitor a fleet: `flow_health(spec)` (CLI `ultracua
+flow status`) reports each flow as `healthy` / `failing` / `stale` / `never-run` with run counts and
+the last error (`flow status --stale-after <hours>` flags a flow whose last success is too old).
+
+Scheduling stays yours — point cron / Task Scheduler at `ultracua flow replay --name …
+--require-approved` (it exits non-zero on drift, so alert on failure) and poll `flow status` for
+health. No scheduler is built in, by design.
+
+Add `--verbose` to `flow learn` / `flow replay` (and the example script) to log each run with a
+`run_id` and its token usage + `$` cost.
+
+## Providers & tiering
+
+The agent reaches LLMs through a provider-neutral layer with native Anthropic / OpenAI / Gemini
+adapters. A **fast tier** (Haiku 4.5) drives routine element selection and **escalates** to a
+**strong tier** (Opus 4.8 / Sonnet 4.6) when unsure.
+
+```bash
+ULTRACUA_LLM_BACKEND=anthropic ULTRACUA_TIER=fast \
+  uv run ultracua --url https://example.com --goal "..."
+```
+
+For the OpenAI / Gemini backends, install their SDKs (`uv sync --group providers`) and set the
+relevant key (`OPENAI_API_KEY` / `GEMINI_API_KEY`). Resilience knobs: `ULTRACUA_LLM_MAX_RETRIES`
+(default 3), `ULTRACUA_LLM_TIMEOUT_S` (default 60). The design of this layer is in
+[ARCHITECTURE.md](ARCHITECTURE.md#multi-provider-llm-layer).
