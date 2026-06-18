@@ -168,7 +168,16 @@ uv run --group bench python -m benchmarks.miniwob_bench --provider anthropic --a
 # WebArena-Verified, offline evaluator (deterministic scoring, key-less, no containers).
 uv run python -m benchmarks.webarena_bench --selfcheck   # producer->eval round-trip
 uv run python -m benchmarks.webarena_bench --demo        # re-score bundled demo logs
+
+# Variance harness: run a benchmark N times, report mean +/- spread + $ cost (real LLM; manual/local).
+uv run python -m benchmarks.variance --bench demo --reps 5
+uv run --group bench python -m benchmarks.variance --bench miniwob --reps 5 --all
 ```
+
+Discovery (the learn run) is LLM-nondeterministic, so single benchmark runs are noisy. The **variance
+harness** (`benchmarks/variance.py`) reps a benchmark and reports `mean ± stdev` of speedup /
+success-rate plus the total `$` cost (read from `FlowReport.extra["usage"]`). It uses a real LLM
+(key from `.env`) and is **manual/local — never wired into CI**.
 
 **WebArena-Verified** (ServiceNow) is WebArena's audited rebuild with **deterministic** scoring (no
 LLM judge). The adapter ([`benchmarks/webarena_env.py`](benchmarks/webarena_env.py)) **never imports**
@@ -231,5 +240,15 @@ a mock extraction router), so it's deterministic and reproducible. The version i
 `pyproject.toml` (read at runtime via `importlib.metadata`).
 
 **CI** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the full suite on every push to
-`main` and every PR, on **Linux and Windows** — no secrets, since the suite is key-less.
+`main` and every PR, on **Linux and Windows** — no secrets, since the suite is key-less. Two parts of
+the suite are worth calling out:
+
+- **Cassette test** (`tests/test_llm_cassette.py`) — replays a *recorded* Anthropic streaming response
+  through the real SDK + adapter, so the live `.complete()` path (request build → stream →
+  `get_final_message()` → parse) is covered with no network or key. Re-record when the SDK/API changes:
+  `uv run python tests/test_llm_cassette.py --record` (needs a key; the cassette stores response-only,
+  no secret).
+- **Regression gate** (`tests/test_regression_gate.py`) — a `$0`, deterministic guard (scripted teacher
+  over the demo-shop flow) that fails CI on a **cost or fidelity regression**: replay must stay 0-LLM,
+  the learned flow's structure must not balloon, and replay must still reach the goal.
 
