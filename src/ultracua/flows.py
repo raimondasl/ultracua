@@ -14,6 +14,7 @@ The product-facing layer over the `run_cached` engine — see ROADMAP.md (Phase 
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import os
@@ -60,6 +61,41 @@ class LoginSpec:
 
 
 @dataclass
+class MutateSpec:
+    """Marks a FlowSpec as a WRITE flow (submit/post/purchase) and declares how to know the
+    write landed — Phase D's action-completion verification (ROADMAP Phase D).
+
+    A write that can't be confirmed is fire-and-hope, so a mutate flow MUST declare at least one
+    `confirm_*` check: after the flow runs, that condition must hold or replay fails loud
+    (`FlowReplayError`) — the write is never silently reported as success because a click didn't
+    throw. The check mirrors `LoginSpec`'s success-check shape.
+
+    Optional `precheck_*` gives opt-in idempotency for ONE-SHOT writes (don't purchase twice): a
+    cheap separate pre-pass visits `precheck_url` (default: the flow's start_url) and, if the
+    end-state is already present, the write is skipped and replay reports `already-done`. Leave it
+    unset for RECURRING writes (e.g. placing today's order daily) — a state that legitimately
+    recurs would otherwise be skipped. There is deliberately NO durable "already committed" ledger.
+    """
+
+    # action-completion verification — at least one is required; ANY that holds = confirmed.
+    confirm_selector: Optional[str] = None        # element present only once the write committed
+    confirm_text_contains: Optional[str] = None   # substring the post-write page text must contain
+    confirm_url_contains: Optional[str] = None     # substring the post-write URL must contain
+    timeout_ms: Optional[int] = None              # how long to wait for the confirmation to appear
+    # opt-in idempotency precheck (one-shot writes only) — see the class docstring.
+    precheck_url: Optional[str] = None            # where to look (default: the flow's start_url)
+    precheck_selector: Optional[str] = None
+    precheck_text_contains: Optional[str] = None
+    precheck_url_contains: Optional[str] = None    # already-done state distinguishable only by URL
+
+    def has_confirm(self) -> bool:
+        return any((self.confirm_selector, self.confirm_text_contains, self.confirm_url_contains))
+
+    def has_precheck(self) -> bool:
+        return any((self.precheck_selector, self.precheck_text_contains, self.precheck_url_contains))
+
+
+@dataclass
 class FlowSpec:
     """A named, reusable recurring task."""
 
@@ -71,6 +107,7 @@ class FlowSpec:
     headers: Optional[dict] = None         # auth via extra HTTP headers
     storage_state: Optional[str] = None    # auth via a Playwright storage_state JSON (cookies)
     login: Optional[Union[LoginSpec, LoginCallable]] = None  # how to (re)authenticate on expiry
+    mutate: Optional[MutateSpec] = None    # set -> this is a WRITE flow (Phase D)
     max_steps: Optional[int] = None
     headless: Optional[bool] = None
 
@@ -210,8 +247,64 @@ def _router(provider_name: str):
     return provider, getattr(provider, "router", None) or build_router(provider_name)
 
 
+async def _condition_present(
+    page, *, selector=None, text_contains=None, url_contains=None, timeout_ms=None
+) -> bool:
+    """ANY-of presence check (shared by the mutate confirm + precheck): True if any set condition
+    holds. Polls up to `timeout_ms` (default 5000) so a confirmation that renders a beat late isn't
+    missed; pass `timeout_ms=0` for a single immediate check (the precheck wants a fast decision)."""
+    budget = 5000 if timeout_ms is None else timeout_ms
+    interval = 200
+    waited = 0
+    while True:
+        if url_contains and url_contains in page.url:
+            return True
+        if text_contains:
+            try:
+                body = await page.inner_text("body")
+            except Exception:  # noqa: BLE001
+                body = ""
+            if text_contains.lower() in body.lower():
+                return True
+        if selector:
+            try:
+                await page.wait_for_selector(selector, timeout=interval)  # this consumes ~interval
+                return True
+            except Exception:  # noqa: BLE001
+                pass
+        waited += interval
+        if waited >= budget:
+            return False
+        if not selector:  # selector branch already waited; otherwise pace the poll
+            await asyncio.sleep(interval / 1000.0)
+
+
 def _make_finalize(spec: FlowSpec, router, out: dict):
     async def _finalize(session):
+        if spec.mutate is not None:
+            # WRITE flow: success is action-completion — the declared confirm check must hold,
+            # else the write didn't land and replay fails loud (Phase D).
+            m = spec.mutate
+            try:
+                await session.page.wait_for_load_state("networkidle", timeout=8000)
+            except Exception:  # noqa: BLE001
+                pass
+            confirmed = await _condition_present(
+                session.page, selector=m.confirm_selector,
+                text_contains=m.confirm_text_contains, url_contains=m.confirm_url_contains,
+                timeout_ms=m.timeout_ms,
+            )
+            data = None
+            if spec.extract is not None:  # optionally also pull a confirmation number, etc.
+                try:
+                    text = await session.page.inner_text("body")
+                except Exception:  # noqa: BLE001
+                    text = ""
+                ex = await extract(router, spec.extract, text, schema=spec.extract_schema)
+                data = ex.data
+            out["data"], out["found"] = data, confirmed
+            out["error"] = None if confirmed else "write not confirmed (no completion signal on the page)"
+            return {"solved": confirmed, "data": data}
         if spec.extract is None:
             out["found"] = True  # navigate-only flow: reaching the end IS success
             return {"solved": True}
@@ -281,6 +374,35 @@ async def _login_succeeded(page, login: LoginSpec) -> bool:
     if login.success_url_contains:
         return login.success_url_contains in page.url
     return not _same_page(page.url, login.url)  # default: assume success if we left the login page
+
+
+async def _already_committed(spec: FlowSpec) -> bool:
+    """Idempotency precheck: open a fresh page at `mutate.precheck_url` (default the start_url) and
+    report whether the desired end-state is ALREADY present — so a one-shot write isn't re-fired.
+
+    A separate, read-only pre-pass (not a `prepare` hook): it must not run the cached steps, and it
+    sidesteps the per-step mutation gate entirely. Reads the live page each call, so a legitimately
+    recurring write (whose end-state isn't present on a fresh visit) is never wrongly skipped.
+    """
+    m = spec.mutate
+    session = await BrowserSession(
+        headless=spec.headless, storage_state=spec.storage_state
+    ).start()
+    try:
+        if spec.headers:
+            await session.set_extra_http_headers(spec.headers)
+        await session.goto(m.precheck_url or spec.start_url)
+        return await _condition_present(
+            session.page, selector=m.precheck_selector, text_contains=m.precheck_text_contains,
+            url_contains=m.precheck_url_contains, timeout_ms=0,  # a fast skip decision, not a wait
+        )
+    finally:
+        await session.close()
+
+
+async def _precheck_done(spec: FlowSpec) -> bool:
+    """True if this is a write flow with an idempotency precheck whose end-state already holds."""
+    return spec.mutate is not None and spec.mutate.has_precheck() and await _already_committed(spec)
 
 
 async def refresh_auth(spec: FlowSpec, *, headless: Optional[bool] = None) -> None:
@@ -411,8 +533,9 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape):
         return False, None, "no learned flow — run learn first"
     if not report.success:
         return False, None, f"replay failed (page drift?): {report.note or report.mode}"
-    if spec.extract is not None and not out.get("found"):
-        return False, None, f"data not found on replay (page changed?): {out.get('error')}"
+    if (spec.extract is not None or spec.mutate is not None) and not out.get("found"):
+        # a write flow gates `found` on the confirm check, so an unconfirmed write fails here
+        return False, None, f"data not found / write not confirmed on replay: {out.get('error')}"
     data = out.get("data")
     if check_shape and meta.shape is not None and not _shape_matches(meta.shape, _shape_of(data)):
         return False, None, f"data shape changed vs the learned flow (expected {meta.shape})"
@@ -433,12 +556,35 @@ async def replay(
         retry once before giving up (handles an expired session).
       - `on_drift="raise"` (default) — raise `FlowReplayError` on any drift (never return wrong
         data); `on_drift="relearn"` — re-author the flow instead and return the fresh data.
+
+    WRITE flows (`spec.mutate` set, Phase D) behave differently: they default to approval-gated
+    (a write is human-verified before unattended runs), refuse `on_drift="relearn"` (re-authoring
+    a write would re-perform it), verify the write landed (fail loud if not), and return a dict
+    `{"status": "confirmed" | "already-done", "data": <optional extracted data>}`.
     """
     cache = cache or _default_cache()
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     meta = _load_meta(cache, key)
-    if require_approved and not meta.approved:
+    is_mutate = spec.mutate is not None
+    if is_mutate:
+        if not spec.mutate.has_confirm():
+            raise FlowReplayError(
+                f"{spec.name!r}: a write flow needs a confirm check — set "
+                f"mutate.confirm_selector / confirm_text_contains / confirm_url_contains"
+            )
+        if on_drift == "relearn":
+            raise FlowReplayError(
+                f"{spec.name!r}: on_drift='relearn' is refused for a write flow (re-authoring would "
+                f"re-perform the write) — re-learn manually and re-approve instead"
+            )
+    # A write defaults to approval-gated even without require_approved (stronger trust for writes).
+    if (require_approved or is_mutate) and not meta.approved:
         raise FlowReplayError(f"{spec.name!r}: flow not approved — learn it, verify it, then approve")
+
+    # Idempotency precheck (opt-in, one-shot writes): if the end-state already holds, skip the write.
+    if await _precheck_done(spec):
+        _record_run(cache, key, ok=True)
+        return {"status": "already-done", "data": None}
 
     if on_drift == "relearn":
         # relearn re-authors the flow, so it needs both an agent provider and an extraction router
@@ -447,31 +593,44 @@ async def replay(
             provider = provider if provider is not None else dp
             router = router if router is not None else dr
     elif router is None and spec.extract is not None:
-        # extraction only: build just the router (no throwaway agent provider). Navigate-only
-        # flows (extract is None) never call the LLM, so they need no router at all.
+        # extraction only (incl. a write that also extracts a confirmation number): build just the
+        # router, no agent provider. Flows that don't extract (navigate-only reads, or writes whose
+        # confirm check is selector/url/text based) never call the LLM -> no router needed.
         router = build_router(provider_name or settings.provider)
+
+    def _ok(data):
+        _record_run(cache, key, ok=True)
+        return {"status": "confirmed", "data": data} if is_mutate else data
 
     try:
         ok, data, reason = await _attempt_replay(spec, router, cache, key, meta, check_shape)
         if ok:
-            _record_run(cache, key, ok=True)
-            return data
-        # The session may have expired — re-login (refresh cookies) and retry once.
-        if auth_refresh and spec.login is not None:
+            return _ok(data)
+        # The session may have expired — re-login (refresh cookies) and retry once. A WRITE flow is
+        # NOT retried unless it has an idempotency precheck: a first attempt may have committed the
+        # write before failing its confirm check, and a blind retry would double-submit. With a
+        # precheck we re-check first and skip if the write already landed.
+        retry_ok = auth_refresh and spec.login is not None and (not is_mutate or spec.mutate.has_precheck())
+        if retry_ok:
             try:
                 await refresh_auth(spec, headless=spec.headless)
+                if await _precheck_done(spec):  # the first attempt's write may have landed
+                    _record_run(cache, key, ok=True)
+                    return {"status": "already-done", "data": None}
                 ok, data, reason2 = await _attempt_replay(spec, router, cache, key, meta, check_shape)
                 if ok:
-                    _record_run(cache, key, ok=True)
-                    return data
+                    return _ok(data)
                 reason = f"{reason}; after auth refresh: {reason2}"
             except Exception as exc:  # noqa: BLE001 - any refresh failure -> fall through to relearn/raise
                 reason = f"{reason}; auth refresh failed: {type(exc).__name__}: {exc}"
-        if on_drift == "relearn":
+        elif is_mutate and auth_refresh and spec.login is not None:
+            reason = (f"{reason}; not retrying a write after auth refresh without an idempotency "
+                      f"precheck (would risk a double-submit) — add mutate.precheck_* or run "
+                      f"`flow login` then replay")
+        if on_drift == "relearn":  # (refused above for write flows)
             res = await learn(spec, provider=provider, router=router, cache=cache)
             if res.cached and res.found:
-                _record_run(cache, key, ok=True)
-                return res.data
+                return _ok(res.data)
             reason = f"replay drifted ({reason}) and re-learn failed ({res.note})"
         _record_run(cache, key, ok=False, error=reason)
         raise FlowReplayError(f"{spec.name!r}: {reason}")
@@ -515,6 +674,8 @@ def load_spec(name: str) -> FlowSpec:
     data = _only_known(json.loads(p.read_text(encoding="utf-8")), FlowSpec)
     if isinstance(data.get("login"), dict):
         data["login"] = LoginSpec(**_only_known(data["login"], LoginSpec))
+    if isinstance(data.get("mutate"), dict):
+        data["mutate"] = MutateSpec(**_only_known(data["mutate"], MutateSpec))
     return FlowSpec(**data)
 
 

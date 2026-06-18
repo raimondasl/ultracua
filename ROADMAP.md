@@ -80,11 +80,30 @@ Unlocks running a fleet of recurring jobs. **Done:**
   No scheduler built (by design).
 - A thin web UI over `health()` is possible later but intentionally out of scope.
 
-### Phase D — "breadth" (later, separate)
+### Phase D — "breadth": NAVIGATE / MUTATE flows
 
-NAVIGATE / MUTATE flows (submit forms, post, purchase) — the mutation gate + idempotency already
-exist; wire action-completion verification. Bigger, and only if the use case needs write-actions,
-not just data pulls.
+Write-actions (submit forms, post, purchase). The mutation gate + idempotency-key + pacing +
+interstitial detection already existed; this phase wired the missing **action-completion
+verification**. **Done (thin slice):**
+
+- ✅ **Write flows** — `FlowSpec.mutate` (a `MutateSpec`) marks a flow as a write and declares how
+  to know it landed.
+- ✅ **Action-completion verification** — after a write flow runs, a declarative `confirm_*` check
+  (selector / page-text / URL, mirroring `LoginSpec`'s success check) must hold, or replay **fails
+  loud** (`FlowReplayError`). A write is never reported as success just because a click didn't throw.
+- ✅ **Never LLM-heal a write under drift** — a mutating step whose page fingerprint drifted now
+  fails loud instead of diverting to the self-heal path (an LLM must never re-drive a write).
+- ✅ **Opt-in idempotency precheck** — `MutateSpec.precheck_*` runs a cheap read-only pre-pass; if
+  the end-state is already present, the write is **skipped** (`status="already-done"`). For one-shot
+  writes (don't purchase twice); recurring writes leave it unset. No durable "committed" ledger (it
+  would wrongly skip legitimate repeat writes).
+- ✅ **Approval-gated by default** — a write flow refuses to replay until `approve`d, and refuses
+  `on_drift="relearn"` (re-authoring would re-perform the write).
+
+**Out of scope (documented):** per-step verification for multi-write flows; auto-recorded
+postconditions; forcing the mutation gate on writes that `is_mutating`'s keyword heuristic misses
+(type+Enter, navigate-to-POST, icon-only submit) — the whole-flow confirm check still catches those;
+a HAR-asserted MUTATE benchmark (needs live containers).
 
 ## The MVP line
 

@@ -19,6 +19,7 @@ from ultracua.flows import (
     FlowReplayError,
     FlowSpec,
     LoginSpec,
+    MutateSpec,
     _load_meta,
     _save_meta,
     approve,
@@ -491,3 +492,234 @@ async def test_extract_handles_missing_tool_call() -> None:
     router = Router(fast=Tier(_NoTool(), "m"), strong=Tier(_NoTool(), "m"))
     ex = await extract(router, "anything", "some page text")
     assert not ex.found and "no tool call" in (ex.error or "")
+
+
+# --- Phase D: write (MUTATE) flows ------------------------------------------------------------
+def _serve_mutate(counter: dict, drift: bool = False):
+    """A tiny checkout fixture: /checkout -> click 'place the order' -> /order (the write, counted)
+    -> a confirmation page. /done is a standalone 'already ordered' page for the idempotency precheck.
+    With drift=True, the SECOND /checkout GET (i.e. replay) grows an extra element so its structural
+    fingerprint diverges from the learned one — exercising the mutation gate."""
+
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def _send(self, body: str, code: int = 200) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def do_GET(self) -> None:  # noqa: N802
+            from urllib.parse import urlparse
+
+            path = urlparse(self.path).path
+            if path == "/checkout":
+                counter["checkouts"] = counter.get("checkouts", 0) + 1
+                extra = "<button>extra drift</button>" if (drift and counter["checkouts"] > 1) else ""
+                self._send(f"<h1>Checkout</h1><p>cart not submitted</p>{extra}"
+                           "<a href='/order'>place the order</a>")
+            elif path == "/order":
+                counter["orders"] = counter.get("orders", 0) + 1  # the irreversible side effect
+                self._send("<h1>Order placed</h1><p>Confirmation #12345</p>")
+            elif path == "/done":
+                self._send("<h1>Order placed</h1><p>Confirmation #12345</p>")  # already-ordered state
+            else:
+                self._send("not found", 404)
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_mutate_flow_confirms_write(tmp_path: Path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_mutate(counter)
+    cache = FlowCache(root=tmp_path / "cache")
+    spec = FlowSpec(name="order", start_url=f"{base}/checkout", goal="place the order",
+                    mutate=MutateSpec(confirm_text_contains="Order placed"), headless=True)
+    try:
+        res = await learn(spec, provider=_ClickFirstLink(), router=_extract_router(), cache=cache)
+        assert res.cached and res.found              # learned + the write was confirmed at learn time
+        approve(spec, cache=cache)                    # writes are approval-gated
+        result = await replay(spec, cache=cache)
+        assert result == {"status": "confirmed", "data": None}
+        assert health(spec, cache=cache).status == "healthy"
+        assert counter["orders"] == 2                 # exactly one write at learn + one at replay
+        assert any(getattr(s, "mutating", False) for s in res.steps)  # the write step is gated
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_mutate_flow_fails_loud_when_unconfirmed(tmp_path: Path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_mutate(counter)
+    cache = FlowCache(root=tmp_path / "cache")
+    # the confirm signal never appears on the page -> the write can't be verified
+    spec = FlowSpec(name="badconfirm", start_url=f"{base}/checkout", goal="place the order",
+                    mutate=MutateSpec(confirm_text_contains="Payment received"), headless=True)
+    try:
+        res = await learn(spec, provider=_ClickFirstLink(), router=_extract_router(), cache=cache)
+        assert res.cached and not res.found           # cached, but the write was NOT confirmed
+        approve(spec, cache=cache)
+        with pytest.raises(FlowReplayError):           # no completion signal -> fail loud
+            await replay(spec, cache=cache)
+        assert health(spec, cache=cache).status == "failing"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_mutate_flow_requires_a_confirm_check(tmp_path: Path) -> None:
+    spec = FlowSpec(name="noconfirm", start_url="http://127.0.0.1:1/x", goal="g",
+                    mutate=MutateSpec(), headless=True)  # mutate set but no confirm_* declared
+    with pytest.raises(FlowReplayError):
+        await replay(spec, cache=FlowCache(root=tmp_path / "empty"))
+
+
+async def test_mutate_flow_is_approval_gated_by_default(tmp_path: Path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_mutate(counter)
+    cache = FlowCache(root=tmp_path / "cache")
+    spec = FlowSpec(name="approval", start_url=f"{base}/checkout", goal="place the order",
+                    mutate=MutateSpec(confirm_text_contains="Order placed"), headless=True)
+    try:
+        await learn(spec, provider=_ClickFirstLink(), router=_extract_router(), cache=cache)
+        with pytest.raises(FlowReplayError):  # unapproved write refused even without require_approved
+            await replay(spec, cache=cache)
+        approve(spec, cache=cache)
+        assert (await replay(spec, cache=cache))["status"] == "confirmed"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_mutate_flow_refuses_relearn(tmp_path: Path) -> None:
+    # re-authoring a write would re-perform it, so on_drift='relearn' is refused for write flows
+    spec = FlowSpec(name="norelearn", start_url="http://127.0.0.1:1/x", goal="g",
+                    mutate=MutateSpec(confirm_text_contains="ok"), headless=True)
+    with pytest.raises(FlowReplayError):
+        await replay(spec, on_drift="relearn", cache=FlowCache(root=tmp_path / "e"))
+
+
+async def test_mutate_precheck_skips_when_already_done(tmp_path: Path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_mutate(counter)
+    cache = FlowCache(root=tmp_path / "cache")
+    spec = FlowSpec(
+        name="idem", start_url=f"{base}/checkout", goal="place the order",
+        mutate=MutateSpec(confirm_text_contains="Order placed",
+                          precheck_url=f"{base}/done", precheck_text_contains="Order placed"),
+        headless=True,
+    )
+    try:
+        await learn(spec, provider=_ClickFirstLink(), router=_extract_router(), cache=cache)
+        approve(spec, cache=cache)
+        before = counter.get("orders", 0)
+        result = await replay(spec, cache=cache)  # /done already shows the confirmation -> skip the write
+        assert result == {"status": "already-done", "data": None}
+        assert counter.get("orders", 0) == before  # the write (/order) was NOT re-fired
+        assert health(spec, cache=cache).status == "healthy"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_mutate_spec_roundtrips(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    spec = FlowSpec(name="m", start_url="http://x/", goal="g",
+                    mutate=MutateSpec(confirm_text_contains="Order placed",
+                                      precheck_text_contains="Order placed", timeout_ms=2000))
+    save_spec(spec)
+    got = load_spec("m")
+    assert isinstance(got.mutate, MutateSpec)  # rehydrates as a dataclass, not a dict
+    assert got.mutate.confirm_text_contains == "Order placed"
+    assert got.mutate.has_confirm() and got.mutate.has_precheck() and got.mutate.timeout_ms == 2000
+
+
+async def test_mutate_flow_does_not_retry_write_after_auth_refresh(tmp_path: Path, monkeypatch) -> None:
+    """A write that didn't confirm must NOT be re-driven by the auth-refresh retry (double-submit):
+    without an idempotency precheck the retry is refused and the write fires at most once."""
+    counter: dict = {}
+    httpd, base = _serve_mutate(counter)
+    cache = FlowCache(root=tmp_path / "cache")
+    spec = FlowSpec(
+        name="nodouble", start_url=f"{base}/checkout", goal="place the order",
+        mutate=MutateSpec(confirm_text_contains="this signal never appears"),  # confirm always fails
+        login=LoginSpec(url=f"{base}/login"), headless=True,                     # login set -> retry path
+    )
+    refresh_calls: list = []
+
+    async def _spy_refresh(s, **k):
+        refresh_calls.append(s.name)  # must NOT be called for a write without a precheck
+
+    monkeypatch.setattr("ultracua.flows.refresh_auth", _spy_refresh)
+    try:
+        await learn(spec, provider=_ClickFirstLink(), router=_extract_router(), cache=cache)
+        approve(spec, cache=cache)
+        before = counter.get("orders", 0)
+        with pytest.raises(FlowReplayError) as ei:
+            await replay(spec, cache=cache)
+        assert counter.get("orders", 0) - before == 1  # the write fired ONCE; no retry double-fire
+        assert refresh_calls == []                      # the auth-refresh retry was refused
+        assert "double-submit" in str(ei.value)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_mutate_replay_fails_loud_on_drift_without_refiring(tmp_path: Path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_mutate(counter, drift=True)  # replay's checkout page drifts
+    cache = FlowCache(root=tmp_path / "cache")
+    spec = FlowSpec(name="drift", start_url=f"{base}/checkout", goal="place the order",
+                    mutate=MutateSpec(confirm_text_contains="Order placed"), headless=True)
+    try:
+        await learn(spec, provider=_ClickFirstLink(), router=_extract_router(), cache=cache)
+        approve(spec, cache=cache)
+        before = counter.get("orders", 0)
+        with pytest.raises(FlowReplayError):       # mutation gate fails loud on page drift
+            await replay(spec, cache=cache)
+        assert counter.get("orders", 0) == before  # the write was NEVER re-fired under drift
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_mutate_flow_with_extract_returns_confirmation_data(tmp_path: Path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_mutate(counter)
+    cache = FlowCache(root=tmp_path / "cache")
+    spec = FlowSpec(name="orderx", start_url=f"{base}/checkout", goal="place the order",
+                    extract="the confirmation number",
+                    mutate=MutateSpec(confirm_text_contains="Order placed"), headless=True)
+    try:
+        res = await learn(spec, provider=_ClickFirstLink(), router=_extract_router("12345"), cache=cache)
+        assert res.cached and res.found
+        approve(spec, cache=cache)
+        result = await replay(spec, router=_extract_router("12345"), cache=cache)
+        assert result == {"status": "confirmed", "data": "12345"}  # found tracks confirm, data = extract
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_mutate_confirms_via_selector_and_url(tmp_path: Path) -> None:
+    for name, mutate in (
+        ("sel", MutateSpec(confirm_selector="h1")),           # <h1>Order placed</h1> on /order
+        ("url", MutateSpec(confirm_url_contains="/order")),    # the post-write URL ends in /order
+    ):
+        counter: dict = {}
+        httpd, base = _serve_mutate(counter)
+        cache = FlowCache(root=tmp_path / f"cache-{name}")
+        spec = FlowSpec(name=name, start_url=f"{base}/checkout", goal="place the order",
+                        mutate=mutate, headless=True)
+        try:
+            await learn(spec, provider=_ClickFirstLink(), router=_extract_router(), cache=cache)
+            approve(spec, cache=cache)
+            assert (await replay(spec, cache=cache))["status"] == "confirmed"
+        finally:
+            httpd.shutdown()
+            httpd.server_close()

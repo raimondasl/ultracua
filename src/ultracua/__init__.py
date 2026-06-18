@@ -16,7 +16,7 @@ from .safety import PacingGovernor, is_mutating
 from .types import Action, Element, Observation, StepResult
 from .verifiers import keyword_completion
 from .extract import Extraction, extract
-from .flows import FlowHealth, FlowReplayError, FlowSpec, LoginSpec, refresh_auth
+from .flows import FlowHealth, FlowReplayError, FlowSpec, LoginSpec, MutateSpec, refresh_auth
 from .flows import approve as approve_flow
 from .flows import health as flow_health
 from .flows import learn as learn_flow
@@ -24,7 +24,7 @@ from .flows import replay as replay_flow
 from .flows import unapprove as unapprove_flow
 from .vision import AnthropicGrounding, MockGrounding
 
-__version__ = "0.14.0"
+__version__ = "0.15.0"
 
 __all__ = [
     "BrowserSession",
@@ -48,6 +48,7 @@ __all__ = [
     "MockGrounding",
     "FlowSpec",
     "LoginSpec",
+    "MutateSpec",
     "FlowHealth",
     "FlowReplayError",
     "learn_flow",
