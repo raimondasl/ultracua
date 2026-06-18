@@ -121,7 +121,7 @@ async def _flow_learn(args: argparse.Namespace) -> None:
     if args.fresh:
         FlowCache().delete(flow_key(spec.goal, spec.start_url, spec.scope))
     save_spec(spec)
-    res = await learn(spec, provider_name=args.provider)
+    res = await learn(spec, provider_name=args.provider, samples=args.samples)
     print(f"flow {spec.name!r}: cached={res.cached} found={res.found} ({len(res.steps)} step(s))")
     for i, s in enumerate(res.steps):
         print(f"  {i}: {s.action} {s.intent!r}")
@@ -305,6 +305,9 @@ def _flow_main(argv) -> None:
     pl.add_argument("--provider", **prov)
     pl.add_argument("--headed", action="store_true")
     pl.add_argument("--fresh", action="store_true", help="clear any cached flow first.")
+    pl.add_argument("--samples", type=int, default=1,
+                    help="re-author up to N times and keep the first verified flow (costs N learns; "
+                         "raises discovery success on flaky pages). Default 1.")
     pl.add_argument("--verbose", "-v", action="store_true", help="log learn/heal events (INFO).")
 
     pr = sub.add_parser("replay", help="Replay a saved flow (0-LLM nav); print the data; fails loud on drift.")

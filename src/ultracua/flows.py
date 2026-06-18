@@ -456,18 +456,44 @@ async def refresh_auth(spec: FlowSpec, *, headless: Optional[bool] = None) -> No
 
 # --- learn / approve / replay -----------------------------------------------------------------
 async def learn(
-    spec: FlowSpec, *, provider_name: Optional[str] = None, provider=None, router=None,
-    cache: Optional[FlowCache] = None,
+    spec: FlowSpec, *, samples: int = 1, provider_name: Optional[str] = None, provider=None,
+    router=None, cache: Optional[FlowCache] = None,
 ) -> LearnResult:
-    """LLM-author the flow once; cache it; record its output shape; return it to inspect.
+    """LLM-author the flow, cache it, record its output shape, and return it to inspect.
 
-    A re-learn preserves any existing `approved` flag (you opted into trusting re-learns).
+    Discovery (the learn run) is the reliability bottleneck — the LLM sometimes fails to author a
+    working flow. `samples > 1` re-authors up to N times and keeps the FIRST attempt the verifier
+    confirms (`found` — data extracted / write confirmed / navigate-only solved), trading LLM cost
+    for a higher first-try success rate on flaky/ambiguous pages. Each attempt gets a fresh
+    provider+router (so the LLM resamples); passing an explicit `provider` AND `router` forces a
+    single attempt (a stateful teacher can't be replayed). A re-learn preserves any `approved` flag.
     """
-    if provider is None or router is None:
-        dp, dr = _router(provider_name or settings.provider)
-        provider = provider if provider is not None else dp
-        router = router if router is not None else dr
     cache = cache or _default_cache()
+    fixed = provider is not None and router is not None  # a caller-supplied teacher -> one attempt
+    attempts = 1 if fixed else max(1, samples)
+    best: Optional[LearnResult] = None
+    for i in range(attempts):
+        if fixed:
+            p, r = provider, router
+        else:
+            dp, dr = _router(provider_name or settings.provider)  # fresh each attempt -> LLM resamples
+            p = provider if provider is not None else dp
+            r = router if router is not None else dr
+        res = await _learn_once(spec, provider=p, router=r, cache=cache)
+        if res.cached and res.found:
+            if i:
+                _log.info("flow %r: discovery verified on attempt %d/%d", spec.name, i + 1, attempts)
+            return res  # the cache now holds this verified flow
+        best = res
+    if attempts > 1:
+        _log.warning("flow %r: discovery unverified after %d samples", spec.name, attempts)
+    return best
+
+
+async def _learn_once(
+    spec: FlowSpec, *, provider, router, cache: FlowCache,
+) -> LearnResult:
+    """One discovery attempt: LLM-author the flow, cache it, record its output shape."""
     out: dict = {}
     report = await run_cached(
         url=spec.start_url, goal=spec.goal, provider=provider, cache=cache, mode="learn",

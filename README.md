@@ -126,6 +126,11 @@ uv run ultracua flow list
 natural-language instruction (+ optional `extract_schema`). Replay does 0-LLM **navigation**;
 reading the answer is one cheap extraction call (set `extract=None` for navigate-only flows).
 
+Discovery (the learn run) is the reliability bottleneck — the LLM sometimes fails to author a
+working flow on a flaky/ambiguous page. `learn(spec, samples=N)` (CLI `flow learn --samples N`)
+re-authors up to N times and keeps the first attempt the verifier confirms, trading LLM cost for a
+higher first-try success rate.
+
 **Trust for unattended runs (ROADMAP Phase B):** `replay(require_approved=True)` refuses any flow
 you haven't `approve_flow(spec)`d; replay also treats a change in the data's *shape* vs the
 learned run as drift; and `on_drift="relearn"` re-authors the flow instead of raising. So a
@@ -185,6 +190,17 @@ uv run python -m benchmarks.bench --provider anthropic # real LLM learn run -> t
 It LEARNS a 4-step demo-shop flow, then REPLAYS it from cache and reports per-step latency,
 the speedup, and replay correctness (reached the goal state, with **0 LLM calls**). The
 scripted teacher has ~0 LLM latency, so a meaningful speedup ratio needs `--provider anthropic`.
+
+A separate **write/auth flow benchmark** covers the Phase D + auth lifecycle the timing benchmarks
+don't — three scenarios against a local cookie-gated fixture: a write flow whose replay is
+**action-completion-confirmed** at 0-LLM nav, a one-shot write whose re-run is **skipped**
+(idempotency precheck, no double-submit), and an authenticated read flow that **recovers from
+session expiry** via auth refresh:
+
+```bash
+uv run python -m benchmarks.write_flow_bench                 # key-less (scripted teacher)
+uv run python -m benchmarks.write_flow_bench --provider anthropic
+```
 
 **Measured (Opus discovery, 0-LLM replay).** The demo-shop flow replays **66× faster** than
 learning it (243 ms vs 16.2 s; ~57 ms/step, 0 LLM calls). On MiniWoB++ `--all`, **8/10**
