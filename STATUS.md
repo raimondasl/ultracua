@@ -78,22 +78,26 @@ multi-step/auth pages, and (3) operability — *not* in making replay faster (it
 8. **OpenAI/Gemini are live-untested** — translation is unit-tested; the real network path of every
    adapter is exercised only via `MockClient`. OpenAI's `max_tokens` likely breaks newer models.
 
-## Near-term priorities (next PRs)
+## Near-term priorities
 
-1. **Correctness/packaging nits (cheap, high-trust):** single-source the version; make
-   `_save_meta` / `_record_run` / cache writes atomic + locked (temp-file + `os.replace`, the pattern
-   already used for `storage_state`). *Handles fragilities 4, 7.*
-2. **Observability:** stdlib `logging` across learn/replay/heal/auth with a `run_id`; surface token
-   usage + $ cost; a JSON run-record per replay. *Handles 1, 6.*
-3. **LLM-call resilience:** retry/backoff/timeout around `.complete()`. *Handles 5.*
-4. **Precision-aware mutation gate:** fingerprint the step's relevant subtree, not the whole page.
-   *Handles 2 — directly de-risks Phase D writes.*
-5. **Heal hardening:** re-validate (`state_changed`) after a heal; disambiguate locators by
-   index/ancestry when role+name is non-unique. *Handles 3.*
-6. **Discovery reliability:** optional multi-sample discovery (author N times, keep the one the
-   verifier confirms) for high-value flows; stricter learn-time self-check before caching.
-7. **A write/auth benchmark:** Phase D and auth-refresh have zero benchmark evidence — add a local
-   HAR-asserted MUTATE fixture + a session-expiry longitudinal test.
+**Update (2026-06-19): all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7). The suite
+grew from 105 → 122 tests (key-less); version 0.18.0. Original list with the PR that landed each:
+
+1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`
+   atomic (temp + `os.replace`). *Handled fragilities 4, 7.*
+2. ✅ **Observability** (#27) — stdlib `logging` across learn/replay/heal/auth with a `run_id`;
+   token usage + $ cost surfaced (`FlowReport.extra["usage"]`); daemon logs to stderr. *Handled 1, 6.*
+3. ✅ **LLM-call resilience** (#27) — retry/backoff/timeout around `Router.complete`. *Handled 5.*
+4. ✅ **Precision-aware mutation gate** (#28) — the gate fingerprints the target's enclosing
+   form/section, not the whole page, so unrelated churn no longer false-flags a write. *Handled 2.*
+5. ✅ **Heal hardening** (#28) — re-validate (`state_changed`) after a healed click (no-effect heals
+   aren't persisted); `resolve()` prefers a unique candidate over an ambiguous first-match. *Handled 3.*
+6. ✅ **Discovery reliability** (#29) — `learn(samples=N)` re-authors and keeps the first verified
+   attempt (CLI `flow learn --samples N`).
+7. ✅ **Write/auth benchmark** (#29) — `benchmarks/write_flow_bench.py`: write action-completion,
+   one-shot idempotency, and auth-refresh recovery from session expiry, against a local fixture.
+
+The remaining work is the longer-term phases below — none of the near-term fragilities are open.
 
 See [ROADMAP.md → *Beyond Phase D*](ROADMAP.md) for the longer-term phases (E–J) with the concrete
 use cases each unlocks and the gap each closes.

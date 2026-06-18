@@ -126,6 +126,10 @@ uv run ultracua flow list
 natural-language instruction (+ optional `extract_schema`). Replay does 0-LLM **navigation**;
 reading the answer is one cheap extraction call (set `extract=None` for navigate-only flows).
 
+> **Worked example on a real site:** [EXAMPLES.md](EXAMPLES.md) walks through a read-only recurring
+> data-pull on Hacker News end-to-end (define → learn → approve → replay), with measured timings and
+> demo-recording tips. Runnable: `uv run python examples/hn_digest.py --headed`.
+
 Discovery (the learn run) is the reliability bottleneck — the LLM sometimes fails to author a
 working flow on a flaky/ambiguous page. `learn(spec, samples=N)` (CLI `flow learn --samples N`)
 re-authors up to N times and keeps the first attempt the verifier confirms, trading LLM cost for a
