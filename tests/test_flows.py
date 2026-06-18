@@ -130,6 +130,34 @@ async def test_replay_without_learned_flow_raises(tmp_path: Path) -> None:
         await replay(spec, router=_extract_router(1), cache=FlowCache(root=tmp_path / "empty"))
 
 
+class _NoSteps:
+    """An unverifiable discovery attempt: emits `done` immediately, authoring nothing."""
+
+    async def decide(self, goal, obs, history):
+        return Action(action="done", intent="give up"), None
+
+
+async def test_multi_sample_discovery_keeps_verified_attempt(tmp_path: Path, monkeypatch) -> None:
+    import ultracua.flows as flows_mod
+
+    _write_fixture(tmp_path)
+    httpd, base = _serve(tmp_path)
+    cache = FlowCache(root=tmp_path / "cache")
+    spec = FlowSpec(name="ms", start_url=f"{base}/page1.html",
+                    goal="open the answer page", extract="the answer number", headless=True)
+    # attempt 1 authors nothing (unverified); attempt 2 is a good teacher. learn(samples=2) builds a
+    # fresh (provider, router) per attempt via _router -> it must keep the verified second attempt.
+    pairs = iter([(_NoSteps(), _extract_router()), (_ClickFirstLink(), _extract_router(42))])
+    monkeypatch.setattr(flows_mod, "_router", lambda name: next(pairs))
+    try:
+        res = await learn(spec, samples=2, cache=cache)
+        assert res.cached and res.found and res.data == 42  # kept the verified 2nd sample
+        assert (await replay(spec, router=_extract_router(42), cache=cache)) == 42  # and it replays
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
 # --- Phase B: trust unattended ----------------------------------------------------------------
 def _fixture_spec(tmp_path: Path, name: str):
     _write_fixture(tmp_path)
