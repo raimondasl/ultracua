@@ -105,6 +105,76 @@ postconditions; forcing the mutation gate on writes that `is_mutating`'s keyword
 (type+Enter, navigate-to-POST, icon-only submit) — the whole-flow confirm check still catches those;
 a HAR-asserted MUTATE benchmark (needs live containers).
 
+## Beyond Phase D — longer-term directions
+
+Phases A–D made ultracua *usable for a single recurring data-pull or write*. The benchmark evidence
+(see [STATUS.md](STATUS.md)) says the next gains are **not** in making replay faster — replay is
+already 0-LLM and 37–94× faster — but in **discovery reliability, replay fidelity on real pages, and
+operability**. These phases are sketched, not committed; each lists the concrete use case it unlocks
+and the gap it closes.
+
+### Phase E — Operability & trust at scale ("run a fleet unattended")
+
+A thin supervisor that runs saved flows on a schedule with structured logging + a `run_id`,
+fail-loud alerting, an auto-relearn policy for reads, and a health view over `flow_health`;
+pluggable secret resolution (Vault / 1Password / cloud) so credentials never touch disk even as
+paths; SQLite cache + atomic/locked storage for many flows.
+
+- *Enables:* "a team runs 50 recurring authenticated data-pulls and is paged only when one breaks."
+- *Closes:* no observability, no scheduler, non-atomic storage, fleet view limited to a CLI.
+
+### Phase F — Replay fidelity & adaptive resilience ("survive a real redesign")
+
+Relevant-subtree preconditions (not the whole-page fingerprint); **suffix re-planning heal** — when
+single-step heal fails, re-learn only the *remaining tail* from the current page and keep the working
+prefix, instead of a full re-learn; a **drift-sandbox benchmark** (mutate fixtures, measure heal
+success/cost); optional embedding/visual anchor as an extra locator rank for renamed-but-same-purpose
+elements.
+
+- *Enables:* "a vendor portal redesigns its checkout and the flow heals the changed step."
+- *Closes:* fingerprint over-sensitivity, single-step-local heal, accessible-name brittleness, the
+  live-replay regressions, no drift benchmark.
+
+### Phase G — Action breadth & multi-step writes ("real transactions, not just reads")
+
+Per-step action-completion verification + checkpointing/compensation for **multi-write** flows (Phase
+D's MVP was single-outcome); file upload/download, multi-tab, iframes, date pickers, autocomplete;
+mutation classification from the form method / declared `MutateSpec`, not just keywords.
+
+- *Enables:* "submit a multi-page application, place a multi-item order, file a ticket with an attachment."
+- *Closes:* single-outcome-write limit, keyword-heuristic gaps, missing action verbs.
+
+### Phase H — Cost & latency floor ("cheap and fast at scale")
+
+A local/open fast tier (Qwen / Llama-8B + constrained decoding) for discovery and extraction; a
+**pinned-selector deterministic read** so recurring data-pulls are *literally* 0-LLM (design fork #1
+below); per-flow cost budgets.
+
+- *Enables:* "1000 recurring data-pulls/day at near-zero marginal cost and sub-second latency."
+- *Closes:* the uncounted per-run extraction cost, no cost accounting, hard cloud-LLM dependency.
+
+### Phase I — Distribution & product surface ("usable by non-builders")
+
+A **recorder** (learn from a human demonstration — directly attacks the discovery-failure
+bottleneck); a web UI over `flow_health` + a flow inspector/editor; a real service daemon (auth,
+multiple browser contexts, streaming traces, OpenAPI); flow import/export + a registry.
+
+- *Enables:* "a non-engineer records a flow by demoing it once; an ops team manages flows in a UI."
+- *Closes:* CLI-only surface, single-flight unauthenticated daemon, "discovery failed → needs an engineer."
+
+### Phase J — Evaluation & confidence ("prove it keeps working")
+
+CI (none today); a standing benchmark harness with **variance / error bars** (today's runs are
+single-shot — the 6/10-vs-8/10 swing is why this matters); recorded-cassette tests for the untested
+live LLM path; a regression gate on replay-fidelity + cost.
+
+- *Enables:* "every change is gated on replay-fidelity and cost regressions across a benchmark matrix."
+- *Closes:* no CI, single-run benchmarks, untested live LLM path, SDK-upgrade breakage risk.
+
+**Suggested sequencing:** the near-term fixes in [STATUS.md](STATUS.md) → **E** and **F** first (they
+turn "validated prototype" into "trustworthy unattended tool") → **H** and **I** as the scale/adoption
+multipliers → **G** and **J** alongside as breadth and confidence demand.
+
 ## The MVP line
 
 **Phase A + the fail-loud part of Phase B** = the minimum a developer could actually use:
