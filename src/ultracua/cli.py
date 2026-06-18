@@ -79,17 +79,22 @@ def _parse_headers(items) -> dict:
     return headers
 
 
-async def _flow_learn(args: argparse.Namespace) -> None:
-    from .flows import FlowSpec, LoginSpec, learn, save_spec
+def _login_from_args(args: argparse.Namespace):
+    """Build a LoginSpec from the shared --login-* flags (added by _add_login_args)."""
+    from .flows import LoginSpec
 
-    login = None
-    if args.login_url:
-        login = LoginSpec(
-            url=args.login_url, username_env=args.username_env, password_env=args.password_env,
-            username_selector=args.username_selector, password_selector=args.password_selector,
-            submit_selector=args.submit_selector, success_selector=args.success_selector,
-            success_url_contains=args.success_url_contains,
-        )
+    return LoginSpec(
+        url=args.login_url, username_env=args.username_env, password_env=args.password_env,
+        username_selector=args.username_selector, password_selector=args.password_selector,
+        submit_selector=args.submit_selector, success_selector=args.success_selector,
+        success_url_contains=args.success_url_contains, timeout_ms=args.timeout_ms,
+    )
+
+
+async def _flow_learn(args: argparse.Namespace) -> None:
+    from .flows import FlowSpec, learn, save_spec
+
+    login = _login_from_args(args) if args.login_url else None
     spec = FlowSpec(
         name=args.name, start_url=args.url, goal=args.goal, extract=args.extract,
         headers=_parse_headers(args.header) or None, storage_state=args.storage_state,
@@ -133,11 +138,29 @@ def _flow_approve(args: argparse.Namespace) -> None:
 
 
 async def _flow_login(args: argparse.Namespace) -> None:
-    from .flows import load_spec, refresh_auth
+    from .flows import FlowReplayError, load_spec, refresh_auth
 
     spec = load_spec(args.name)
-    await refresh_auth(spec)
-    print(f"refreshed auth for {spec.name!r} -> {spec.storage_state}")
+    try:
+        await refresh_auth(spec)  # verifies the login before saving cookies; raises on failure
+    except FlowReplayError as exc:
+        raise SystemExit(f"LOGIN FAILED: {exc}")
+    print(f"login OK — refreshed auth for {spec.name!r} -> {spec.storage_state}")
+
+
+def _flow_set_login(args: argparse.Namespace) -> None:
+    from .flows import load_spec, save_spec
+
+    spec = load_spec(args.name)
+    spec.login = _login_from_args(args)
+    if args.storage_state:
+        spec.storage_state = args.storage_state
+    if not spec.storage_state:
+        raise SystemExit("set --storage-state (a path) too, so refreshed cookies have somewhere to go")
+    save_spec(spec)
+    print(f"set login on {spec.name!r} (url={args.login_url}; creds from env "
+          f"{args.username_env}/{args.password_env}). Refresh now: "
+          f"ultracua flow login --name {spec.name}")
 
 
 def _flow_inspect(args: argparse.Namespace) -> None:
@@ -180,13 +203,36 @@ def _flow_status(args: argparse.Namespace) -> None:
     if not names:
         print("(no saved flows)")
         return
+    stale_after = args.stale_after * 3600 if args.stale_after else None  # hours -> seconds
     for name in names:
-        h = health(load_spec(name))
+        h = health(load_spec(name), stale_after=stale_after)
         print(f"{h.name}: {h.status}  approved={h.approved}  "
               f"runs={h.runs} ok={h.successes} fails={h.consecutive_failures}  "
               f"last_ok={_ago(h.last_ok_ts)}")
-        if h.last_error and h.status == "failing":
+        if h.last_error and h.status not in ("healthy", "never-run", "not-learned"):
             print(f"    last error: {h.last_error}")
+
+
+def _add_login_args(parser, *, url_required: bool) -> None:
+    """Shared --login-* flags for `learn` (login optional) and `set-login` (login required)."""
+    parser.add_argument("--login-url", dest="login_url", required=url_required,
+                        help="login page URL — enables auth refresh on drift.")
+    parser.add_argument("--username-env", dest="username_env", default="ULTRACUA_USERNAME",
+                        help="env var holding the login username (default ULTRACUA_USERNAME).")
+    parser.add_argument("--password-env", dest="password_env", default="ULTRACUA_PASSWORD",
+                        help="env var holding the login password (default ULTRACUA_PASSWORD).")
+    parser.add_argument("--username-selector", dest="username_selector")
+    parser.add_argument("--password-selector", dest="password_selector")
+    parser.add_argument("--submit-selector", dest="submit_selector",
+                        help="click target to submit (omit to press Enter in the password field).")
+    parser.add_argument("--success-selector", dest="success_selector",
+                        help="element present only once logged in. If neither this nor "
+                             "--success-url-contains is set, success = navigated off the login URL "
+                             "(override for SPA logins that stay on the same URL).")
+    parser.add_argument("--success-url-contains", dest="success_url_contains",
+                        help="substring the post-login URL must contain (login success check).")
+    parser.add_argument("--timeout-ms", dest="timeout_ms", type=int,
+                        help="per-step timeout (ms) for the login form actions.")
 
 
 def _flow_main(argv) -> None:
@@ -201,18 +247,7 @@ def _flow_main(argv) -> None:
     pl.add_argument("--extract", help="instruction for what data to pull (omit for navigate-only).")
     pl.add_argument("--header", action="append", help="auth header K=V (repeatable).")
     pl.add_argument("--storage-state", dest="storage_state", help="Playwright storage_state JSON path (cookie auth).")
-    pl.add_argument("--login-url", dest="login_url", help="login page URL — enables auth refresh on drift.")
-    pl.add_argument("--username-env", dest="username_env", default="ULTRACUA_USERNAME",
-                    help="env var holding the login username (default ULTRACUA_USERNAME).")
-    pl.add_argument("--password-env", dest="password_env", default="ULTRACUA_PASSWORD",
-                    help="env var holding the login password (default ULTRACUA_PASSWORD).")
-    pl.add_argument("--username-selector", dest="username_selector")
-    pl.add_argument("--password-selector", dest="password_selector")
-    pl.add_argument("--submit-selector", dest="submit_selector")
-    pl.add_argument("--success-selector", dest="success_selector",
-                    help="element present only once logged in (login success check).")
-    pl.add_argument("--success-url-contains", dest="success_url_contains",
-                    help="substring the post-login URL must contain (login success check).")
+    _add_login_args(pl, url_required=False)
     pl.add_argument("--provider", **prov)
     pl.add_argument("--headed", action="store_true")
     pl.add_argument("--fresh", action="store_true", help="clear any cached flow first.")
@@ -233,11 +268,19 @@ def _flow_main(argv) -> None:
     plg = sub.add_parser("login", help="Re-authenticate a flow now (refresh its storage_state cookies).")
     plg.add_argument("--name", required=True)
 
+    psl = sub.add_parser("set-login", help="Attach/replace login + auth refresh on a saved flow.")
+    psl.add_argument("--name", required=True)
+    psl.add_argument("--storage-state", dest="storage_state",
+                     help="where to save refreshed cookies (required if the flow has none yet).")
+    _add_login_args(psl, url_required=True)
+
     pi = sub.add_parser("inspect", help="Print a saved flow's spec + learned steps.")
     pi.add_argument("--name", required=True)
 
     pst = sub.add_parser("status", help="Show health (runs / last success / drift) for saved flows.")
     pst.add_argument("--name", help="a single flow (default: all).")
+    pst.add_argument("--stale-after", dest="stale_after", type=float,
+                     help="hours since last success after which a healthy flow counts as 'stale'.")
 
     sub.add_parser("list", help="List saved flows.")
 
@@ -250,6 +293,8 @@ def _flow_main(argv) -> None:
         _flow_approve(args)
     elif args.cmd == "login":
         asyncio.run(_flow_login(args))
+    elif args.cmd == "set-login":
+        _flow_set_login(args)
     elif args.cmd == "inspect":
         _flow_inspect(args)
     elif args.cmd == "status":

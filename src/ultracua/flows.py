@@ -14,12 +14,13 @@ The product-facing layer over the `run_cached` engine — see ROADMAP.md (Phase 
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Union
 
 from .browser import BrowserSession
 from .cache import FlowCache, flow_key
@@ -27,6 +28,12 @@ from .config import settings
 from .extract import extract
 from .flow import run_cached
 from .providers import build_router, get_provider
+
+if TYPE_CHECKING:
+    from playwright.async_api import Page
+
+# login is either a declarative LoginSpec or an async callable that authenticates a page.
+LoginCallable = Callable[["Page"], Awaitable[None]]
 
 
 @dataclass
@@ -49,6 +56,7 @@ class LoginSpec:
     # if we navigated away from `url`. Override for SPA logins that stay on the same URL.
     success_selector: Optional[str] = None       # an element present only once logged in
     success_url_contains: Optional[str] = None   # a substring the post-login URL must contain
+    timeout_ms: Optional[int] = None             # per-step timeout for the login form actions
 
 
 @dataclass
@@ -62,7 +70,7 @@ class FlowSpec:
     extract_schema: Optional[dict] = None  # optional JSON schema for the extracted `data`
     headers: Optional[dict] = None         # auth via extra HTTP headers
     storage_state: Optional[str] = None    # auth via a Playwright storage_state JSON (cookies)
-    login: Optional[Any] = None            # LoginSpec, or an async (page) -> None callable
+    login: Optional[Union[LoginSpec, LoginCallable]] = None  # how to (re)authenticate on expiry
     max_steps: Optional[int] = None
     headless: Optional[bool] = None
 
@@ -237,19 +245,20 @@ async def _form_login(page, login: LoginSpec) -> None:
         raise FlowReplayError(
             f"login credentials not in env (need {login.username_env} and {login.password_env})"
         )
-    await page.goto(login.url, wait_until="domcontentloaded")
+    to = {"timeout": login.timeout_ms} if login.timeout_ms else {}  # per-step ceiling, if set
+    await page.goto(login.url, wait_until="domcontentloaded", **to)
     try:
         user_loc = (
             page.locator(login.username_selector) if login.username_selector
             else page.locator("input[type=email], input[type=text], input[type=tel]")
         ).first
-        await user_loc.fill(user)
+        await user_loc.fill(user, **to)
         pass_loc = page.locator(login.password_selector or "input[type=password]").first
-        await pass_loc.fill(pw)
+        await pass_loc.fill(pw, **to)
         if login.submit_selector:
-            await page.locator(login.submit_selector).first.click()
+            await page.locator(login.submit_selector).first.click(**to)
         else:
-            await pass_loc.press("Enter")
+            await pass_loc.press("Enter", **to)
     except Exception as exc:  # noqa: BLE001 - heuristic selectors may not match; guide the user
         raise FlowReplayError(
             f"could not auto-fill the login form at {login.url} ({type(exc).__name__}) — pass "
@@ -265,7 +274,7 @@ async def _form_login(page, login: LoginSpec) -> None:
 async def _login_succeeded(page, login: LoginSpec) -> bool:
     if login.success_selector:
         try:
-            await page.wait_for_selector(login.success_selector, timeout=5000)
+            await page.wait_for_selector(login.success_selector, timeout=login.timeout_ms or 5000)
             return True
         except Exception:  # noqa: BLE001
             return False
@@ -432,36 +441,45 @@ async def replay(
         raise FlowReplayError(f"{spec.name!r}: flow not approved — learn it, verify it, then approve")
 
     if on_drift == "relearn":
+        # relearn re-authors the flow, so it needs both an agent provider and an extraction router
         if provider is None or router is None:
             dp, dr = _router(provider_name or settings.provider)
             provider = provider if provider is not None else dp
             router = router if router is not None else dr
-    elif router is None:
-        _, router = _router(provider_name or settings.provider)
+    elif router is None and spec.extract is not None:
+        # extraction only: build just the router (no throwaway agent provider). Navigate-only
+        # flows (extract is None) never call the LLM, so they need no router at all.
+        router = build_router(provider_name or settings.provider)
 
-    ok, data, reason = await _attempt_replay(spec, router, cache, key, meta, check_shape)
-    if ok:
-        _record_run(cache, key, ok=True)
-        return data
-    # The session may have expired — re-login (refresh cookies) and retry once.
-    if auth_refresh and spec.login is not None:
-        try:
-            await refresh_auth(spec, headless=spec.headless)
-            ok, data, reason2 = await _attempt_replay(spec, router, cache, key, meta, check_shape)
-            if ok:
-                _record_run(cache, key, ok=True)
-                return data
-            reason = f"{reason}; after auth refresh: {reason2}"
-        except Exception as exc:  # noqa: BLE001 - any refresh failure -> fall through to relearn/raise
-            reason = f"{reason}; auth refresh failed: {type(exc).__name__}: {exc}"
-    if on_drift == "relearn":
-        res = await learn(spec, provider=provider, router=router, cache=cache)
-        if res.cached and res.found:
+    try:
+        ok, data, reason = await _attempt_replay(spec, router, cache, key, meta, check_shape)
+        if ok:
             _record_run(cache, key, ok=True)
-            return res.data
-        reason = f"replay drifted ({reason}) and re-learn failed ({res.note})"
-    _record_run(cache, key, ok=False, error=reason)
-    raise FlowReplayError(f"{spec.name!r}: {reason}")
+            return data
+        # The session may have expired — re-login (refresh cookies) and retry once.
+        if auth_refresh and spec.login is not None:
+            try:
+                await refresh_auth(spec, headless=spec.headless)
+                ok, data, reason2 = await _attempt_replay(spec, router, cache, key, meta, check_shape)
+                if ok:
+                    _record_run(cache, key, ok=True)
+                    return data
+                reason = f"{reason}; after auth refresh: {reason2}"
+            except Exception as exc:  # noqa: BLE001 - any refresh failure -> fall through to relearn/raise
+                reason = f"{reason}; auth refresh failed: {type(exc).__name__}: {exc}"
+        if on_drift == "relearn":
+            res = await learn(spec, provider=provider, router=router, cache=cache)
+            if res.cached and res.found:
+                _record_run(cache, key, ok=True)
+                return res.data
+            reason = f"replay drifted ({reason}) and re-learn failed ({res.note})"
+        _record_run(cache, key, ok=False, error=reason)
+        raise FlowReplayError(f"{spec.name!r}: {reason}")
+    except FlowReplayError:
+        raise  # the failure above is already recorded in health
+    except Exception as exc:  # noqa: BLE001 - an unexpected crash (browser/extract) is still a failed run
+        _record_run(cache, key, ok=False, error=f"{type(exc).__name__}: {exc}")
+        raise
 
 
 # --- spec persistence (for the `ultracua flow` CLI) -------------------------------------------
@@ -469,7 +487,18 @@ def _specs_dir() -> Path:
     return Path(".ultracua") / "specs"
 
 
+def _only_known(data: dict, cls) -> dict:
+    """Drop keys that aren't fields of `cls` — so a spec written by another version still loads."""
+    fields = {f.name for f in dataclasses.fields(cls)}
+    return {k: v for k, v in data.items() if k in fields}
+
+
 def save_spec(spec: FlowSpec) -> Path:
+    """Persist a flow spec as JSON under `.ultracua/specs/` (relative to cwd).
+
+    Note: the spec records `storage_state` (a *path* to a cookies file), never credentials. The
+    cookies file it points at is a live session — keep it out of version control (it's secret).
+    """
     if callable(spec.login):
         raise ValueError("a callable `login` can't be saved — use a LoginSpec, or the library API")
     d = _specs_dir()
@@ -483,9 +512,9 @@ def load_spec(name: str) -> FlowSpec:
     p = _specs_dir() / f"{name}.json"
     if not p.exists():
         raise FileNotFoundError(f"no saved flow {name!r} (looked in {p})")
-    data = json.loads(p.read_text(encoding="utf-8"))
+    data = _only_known(json.loads(p.read_text(encoding="utf-8")), FlowSpec)
     if isinstance(data.get("login"), dict):
-        data["login"] = LoginSpec(**data["login"])
+        data["login"] = LoginSpec(**_only_known(data["login"], LoginSpec))
     return FlowSpec(**data)
 
 
