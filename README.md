@@ -1,5 +1,7 @@
 # ultracua
 
+[![CI](https://github.com/raimondasl/ultracua/actions/workflows/ci.yml/badge.svg)](https://github.com/raimondasl/ultracua/actions/workflows/ci.yml)
+
 A Computer Use Agent (CUA) that drives a web browser at **5–10× human speed** — by **learning a
 flow once with an LLM and replaying it deterministically at 0-LLM**, not by clicking faster.
 

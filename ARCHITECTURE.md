@@ -229,3 +229,7 @@ node clients/node/smoke.js .     # cross-language smoke (needs Node; health chec
 The suite is key-less and offline (real headless Chromium + local HTTP fixtures + scripted providers +
 a mock extraction router), so it's deterministic and reproducible. The version is single-sourced from
 `pyproject.toml` (read at runtime via `importlib.metadata`).
+
+**CI** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the full suite on every push to
+`main` and every PR, on **Linux and Windows** — no secrets, since the suite is key-less.
+
