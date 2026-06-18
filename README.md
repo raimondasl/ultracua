@@ -136,14 +136,19 @@ non-zero exit. (CLI: `ultracua flow approve --name …`; `flow replay --require-
 **Auth refresh.** For cookie sessions that expire, add `login=LoginSpec(url=…, username_env=…,
 password_env=…)` (credentials read from the env at runtime, **never persisted** — the login isn't
 cached; only the resulting `storage_state` cookies are saved). On drift, replay re-logs-in and
-retries once, so a long-lived recurring flow survives session expiry. (`login=` may also be an
-`async (page) -> None` callable for non-standard logins.)
+retries once, so a long-lived recurring flow survives session expiry. Add `success_selector=` /
+`success_url_contains=` for SPA logins that stay on the same URL (the default check is "navigated
+off the login page"), and `timeout_ms=` to bound the form actions. (`login=` may also be an
+`async (page) -> None` callable for non-standard logins.) From the CLI, attach a login to a saved
+flow with `ultracua flow set-login --name … --login-url … --storage-state …`, then refresh cookies
+now with `ultracua flow login --name …` (it verifies the login and reports success/failure).
 
 **Fleet health + scheduling.** Every `replay` records its outcome, so you can monitor a fleet:
 `flow_health(spec)` (CLI `ultracua flow status`) reports each flow as `healthy` / `failing` /
-`stale` / `never-run` with run counts and the last error. Scheduling stays yours — point cron /
-Task Scheduler at `ultracua flow replay --name … --require-approved` (it exits non-zero on drift,
-so alert on failure) and poll `flow status` for health. No scheduler is built in, by design.
+`stale` / `never-run` with run counts and the last error (`flow status --stale-after <hours>` flags
+a flow whose last success is too old). Scheduling stays yours — point cron / Task Scheduler at
+`ultracua flow replay --name … --require-approved` (it exits non-zero on drift, so alert on
+failure) and poll `flow status` for health. No scheduler is built in, by design.
 
 ## Benchmark
 

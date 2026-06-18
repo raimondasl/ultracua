@@ -21,9 +21,10 @@ from .flows import approve as approve_flow
 from .flows import health as flow_health
 from .flows import learn as learn_flow
 from .flows import replay as replay_flow
+from .flows import unapprove as unapprove_flow
 from .vision import AnthropicGrounding, MockGrounding
 
-__version__ = "0.13.0"
+__version__ = "0.14.0"
 
 __all__ = [
     "BrowserSession",
@@ -52,6 +53,7 @@ __all__ = [
     "learn_flow",
     "replay_flow",
     "approve_flow",
+    "unapprove_flow",
     "refresh_auth",
     "flow_health",
     "extract",
