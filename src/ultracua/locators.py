@@ -139,13 +139,22 @@ async def resolve(page: Page, spec: LocatorSpec) -> Optional[Locator]:
         except Exception:
             pass
 
+    # Prefer a candidate that resolves UNIQUELY (count == 1) over an ambiguous role+name match:
+    # a unique test-id / id / css path disambiguates two "Submit" buttons that role+name can't.
+    # Fall back to the first ambiguous visible match only if nothing resolves uniquely.
+    ambiguous: Optional[Locator] = None
     for loc in candidates:
         try:
-            if await loc.count() == 0:
+            n = await loc.count()
+            if n == 0:
                 continue
             first = loc.first
-            if await first.is_visible():
+            if not await first.is_visible():
+                continue
+            if n == 1:
                 return first
+            if ambiguous is None:
+                ambiguous = first
         except Exception:
             continue
-    return None
+    return ambiguous

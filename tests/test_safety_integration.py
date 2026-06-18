@@ -18,7 +18,10 @@ STEPS = [
 ]
 
 
-def _recorder(captured: list, drift: bool = False):
+def _recorder(captured: list, drift: str = ""):
+    """`drift`: "" none; "outside" adds a button OUTSIDE the order form (unrelated churn);
+    "inside" adds an input INTO the order form (changes the write's actual context)."""
+
     async def prepare(session) -> None:
         async def handler(route) -> None:
             captured.append(dict(route.request.headers))
@@ -28,10 +31,15 @@ def _recorder(captured: list, drift: bool = False):
             )
 
         await session.page.route("**/order", handler)
-        if drift:
+        if drift == "outside":
             await session.page.evaluate(
                 "() => { const b = document.createElement('button'); "
                 "b.textContent = 'Extra Drift'; document.body.appendChild(b); }"
+            )
+        elif drift == "inside":
+            await session.page.evaluate(
+                "() => { const i = document.createElement('input'); i.name = 'coupon'; "
+                "document.getElementById('order-form').appendChild(i); }"
             )
 
     return prepare
@@ -57,7 +65,8 @@ async def test_idempotency_key_injected_on_mutating_replay(tmp_path: Path) -> No
     assert replay_caps and replay_caps[0].get("idempotency-key", "").startswith("uca-")
 
 
-async def test_mutation_gate_blocks_blind_replay_on_drift(tmp_path: Path) -> None:
+async def test_mutation_gate_blocks_relevant_drift(tmp_path: Path) -> None:
+    """A change INSIDE the order form (the write's actual context) must block the blind replay."""
     cache = FlowCache(root=tmp_path)
     learn = await run_cached(
         URL, GOAL, ScriptedProvider(list(STEPS)), cache, mode="learn",
@@ -67,10 +76,28 @@ async def test_mutation_gate_blocks_blind_replay_on_drift(tmp_path: Path) -> Non
 
     caps: list = []
     replay = await run_cached(
-        URL, GOAL, None, cache, mode="replay", prepare=_recorder(caps, drift=True), headless=True
+        URL, GOAL, None, cache, mode="replay", prepare=_recorder(caps, drift="inside"), headless=True
     )
-    assert replay.success is False  # gate refused to blind-replay the mutation under drift
+    assert replay.success is False  # the gate refused to blind-replay the mutation under form drift
     assert caps == []               # ...and the order POST was never sent
+
+
+async def test_mutation_gate_ignores_unrelated_drift(tmp_path: Path) -> None:
+    """Precise gate: an unrelated element added OUTSIDE the form must NOT block a valid write
+    (the whole-page fingerprint used to false-flag this)."""
+    cache = FlowCache(root=tmp_path)
+    learn = await run_cached(
+        URL, GOAL, ScriptedProvider(list(STEPS)), cache, mode="learn",
+        prepare=_recorder([]), headless=True,
+    )
+    assert learn.success
+
+    caps: list = []
+    replay = await run_cached(
+        URL, GOAL, None, cache, mode="replay", prepare=_recorder(caps, drift="outside"), headless=True
+    )
+    assert replay.success is True   # unrelated churn outside the form does not trip the gate
+    assert caps and caps[0].get("idempotency-key", "").startswith("uca-")  # the write fired, gated
 
 
 async def test_mutating_step_under_drift_is_never_healed(tmp_path: Path) -> None:

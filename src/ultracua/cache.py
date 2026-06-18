@@ -37,6 +37,11 @@ class CachedStep(BaseModel):
     tool: Optional[str] = None  # WebMCP tool name (webmcp_call)
     args: Optional[dict] = None  # WebMCP tool args (webmcp_call)
     precond_fingerprint: str = ""
+    # Precise mutation-gate precondition: a fingerprint of the interactables in the target's
+    # enclosing form/section (set only for mutating click/type steps). Lets the gate ignore
+    # unrelated page churn (banners, badges) that the whole-page precond_fingerprint over-flags.
+    # Empty on older flows / non-mutating steps -> the gate falls back to precond_fingerprint.
+    precond_scope: str = ""
     mutating: bool = False  # irreversible side effect -> never blind-replay
 
 
