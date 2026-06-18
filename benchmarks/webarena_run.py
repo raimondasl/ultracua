@@ -30,8 +30,10 @@ from pathlib import Path
 
 from ultracua.cache import FlowCache
 from ultracua.config import settings
+from ultracua.extract import tool_extract
 from ultracua.flow import run_cached
-from ultracua.providers import get_provider
+from ultracua.llm.types import ToolDef
+from ultracua.providers import build_router, get_provider
 
 from benchmarks import webarena_env as wa
 
@@ -117,10 +119,12 @@ def write_local_config(site: str, path: Path | None = None) -> Path:
 
 
 # --- answer extraction (final structured read) ------------------------------------------------
-_EXTRACT_TOOL = {
-    "name": "submit_answer",
-    "description": "Return the WebArena-Verified agent response for this task.",
-    "input_schema": {
+# Uses the shared core extractor (ultracua.extract.tool_extract) over the multi-provider Router,
+# with WebArena's own output schema (agent_response: task_type/status/retrieved_data/error_details).
+_SUBMIT_TOOL = ToolDef(
+    name="submit_answer",
+    description="Return the WebArena-Verified agent response for this task.",
+    input_schema={
         "type": "object",
         "properties": {
             "task_type": {"type": "string", "enum": sorted(wa.TASK_TYPES)},
@@ -133,54 +137,46 @@ _EXTRACT_TOOL = {
         },
         "required": ["task_type", "status"],
     },
-}
+    strict=False,
+)
+
+_WA_SYSTEM = "You read the final page an agent reached and return the task's answer ONLY via the submit_answer tool."
+
+_WA_INSTRUCTIONS = (
+    "You are reading the final page an agent reached while doing a web task. "
+    "Return the answer strictly per the WebArena-Verified schema. For a RETRIEVE "
+    "task, put the requested data in `retrieved_data` in the EXACT shape the task "
+    "asks for (units, fields, ordering). Shape rules: a single value -> a scalar or "
+    "a 1-element list, NEVER a nested array (e.g. \"000000299\", not [[\"000000299\"]]); "
+    "a list of records -> a FLAT list of {key: value} objects. Follow any explicit "
+    "format directive in the task verbatim. If the data isn't on the page, set status "
+    "to NOT_FOUND_ERROR."
+)
 
 
-def _extract_sync(intent: str, page_text: str) -> dict:
-    import anthropic
-
-    client = anthropic.Anthropic()
-    msg = client.messages.create(
-        model=settings.model,
-        max_tokens=1500,
-        tools=[_EXTRACT_TOOL],
-        tool_choice={"type": "tool", "name": "submit_answer"},
-        messages=[
-            {
-                "role": "user",
-                "content": (
-                    "You are reading the final page an agent reached while doing a web task. "
-                    "Return the answer strictly per the WebArena-Verified schema. For a RETRIEVE "
-                    "task, put the requested data in `retrieved_data` in the EXACT shape the task "
-                    "asks for (units, fields, ordering). Shape rules: a single value -> a scalar or "
-                    "a 1-element list, NEVER a nested array (e.g. \"000000299\", not [[\"000000299\"]]); "
-                    "a list of records -> a FLAT list of {key: value} objects. Follow any explicit "
-                    "format directive in the task verbatim. If the data isn't on the page, set status "
-                    "to NOT_FOUND_ERROR.\n\n"
-                    f"TASK: {intent}\n\nFINAL PAGE TEXT:\n{page_text}"
-                ),
-            }
-        ],
+async def _extract_answer(router, intent: str, page_text: str) -> dict:
+    text = " ".join((page_text or "").split())[:12000]
+    d = await tool_extract(
+        router, system=_WA_SYSTEM, tool=_SUBMIT_TOOL,
+        user_text=f"{_WA_INSTRUCTIONS}\n\nTASK: {intent}\n\nFINAL PAGE TEXT:\n{text}",
     )
-    for block in msg.content:
-        if block.type == "tool_use":
-            d = block.input
-            rd = d.get("retrieved_data")
-            # Defensively unwrap one spurious nesting level ([["x"]] -> ["x"]); WebArena
-            # retrieved_data is a flat list of scalars or {key: value} objects, never list-of-list.
-            if isinstance(rd, list) and len(rd) == 1 and isinstance(rd[0], list):
-                rd = rd[0]
-            return {
-                "task_type": d.get("task_type", "RETRIEVE"),
-                "status": d.get("status", "SUCCESS"),
-                "retrieved_data": rd,
-                "error_details": d.get("error_details"),
-            }
-    return {"task_type": "RETRIEVE", "status": "UNKNOWN_ERROR", "retrieved_data": None,
-            "error_details": "extractor returned no tool call"}
+    if d is None:
+        return {"task_type": "RETRIEVE", "status": "UNKNOWN_ERROR", "retrieved_data": None,
+                "error_details": "extractor returned no tool call"}
+    rd = d.get("retrieved_data")
+    # Defensively unwrap one spurious nesting level ([["x"]] -> ["x"]); WebArena retrieved_data
+    # is a flat list of scalars or {key: value} objects, never list-of-list.
+    if isinstance(rd, list) and len(rd) == 1 and isinstance(rd[0], list):
+        rd = rd[0]
+    return {
+        "task_type": d.get("task_type", "RETRIEVE"),
+        "status": d.get("status", "SUCCESS"),
+        "retrieved_data": rd,
+        "error_details": d.get("error_details"),
+    }
 
 
-def _make_finalize(intent: str, out: dict):
+def _make_finalize(intent: str, out: dict, router):
     async def _finalize(session):
         # Let async grid/AJAX content settle before reading — replay fires cached clicks far
         # faster than the LLM-paced learn run, so without this it can extract a still-loading page.
@@ -192,8 +188,7 @@ def _make_finalize(intent: str, out: dict):
             text = await session.page.inner_text("body")
         except Exception:  # noqa: BLE001
             text = ""
-        text = " ".join(text.split())[:12000]
-        answer = await asyncio.to_thread(_extract_sync, intent, text)
+        answer = await _extract_answer(router, intent, text)
         out.update(answer)  # the 4-key agent_response the runner writes
         # Signal completion to run_cached so a read task that solved via this full-text extraction
         # caches its flow even though the agent never emitted `done`. (`solved` is read by
@@ -213,6 +208,7 @@ async def run_task(
     mode: str,
     cache: FlowCache,
     provider,
+    router,
     max_steps: int,
     headless: bool,
 ) -> dict:
@@ -236,7 +232,7 @@ async def run_task(
         prepare=None,
         # finalize extracts the answer AND signals `solved`, so a read task that solved via the
         # final full-text extraction caches its flow even if the agent never emitted `done`.
-        finalize=_make_finalize(intent, answer),
+        finalize=_make_finalize(intent, answer, router),
         record_har_path=str(wa.har_path(output_root, task_id)),
         extra_headers=spec["auth_header"],
     )
@@ -276,6 +272,7 @@ async def run_tasks(site: str, task_ids: list[int], *, provider_name: str, max_s
     config = write_local_config(site)
     tasks = wa.get_agent_input(task_ids, config_path=config)
     provider = get_provider(provider_name)
+    router = getattr(provider, "router", None) or build_router(provider_name)  # for answer extraction
     out_root = Path(settings.data_dir) / "webarena" / "live" / site
     results = []
     for task in tasks:
@@ -284,11 +281,11 @@ async def run_tasks(site: str, task_ids: list[int], *, provider_name: str, max_s
         try:
             if mode in ("auto", "learn"):
                 row["learn"] = await run_task(site, task, out_root / "learn", mode="learn", cache=cache,
-                                              provider=provider, max_steps=max_steps, headless=headless)
+                                              provider=provider, router=router, max_steps=max_steps, headless=headless)
             do_replay = mode == "replay" or (mode == "auto" and row.get("learn", {}).get("score") == 1.0)
             if do_replay:
                 row["replay"] = await run_task(site, task, out_root / "replay", mode="replay", cache=cache,
-                                               provider=provider, max_steps=max_steps, headless=headless)
+                                               provider=provider, router=router, max_steps=max_steps, headless=headless)
         except Exception as exc:  # noqa: BLE001 - one task's failure shouldn't kill the batch
             row["error"] = f"{type(exc).__name__}: {exc}"
         results.append(row)

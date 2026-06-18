@@ -22,7 +22,7 @@ from .flows import learn as learn_flow
 from .flows import replay as replay_flow
 from .vision import AnthropicGrounding, MockGrounding
 
-__version__ = "0.12.0"
+__version__ = "0.12.1"
 
 __all__ = [
     "BrowserSession",
