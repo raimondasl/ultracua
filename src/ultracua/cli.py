@@ -80,12 +80,20 @@ def _parse_headers(items) -> dict:
 
 
 async def _flow_learn(args: argparse.Namespace) -> None:
-    from .flows import FlowSpec, learn, save_spec
+    from .flows import FlowSpec, LoginSpec, learn, save_spec
 
+    login = None
+    if args.login_url:
+        login = LoginSpec(
+            url=args.login_url, username_env=args.username_env, password_env=args.password_env,
+            username_selector=args.username_selector, password_selector=args.password_selector,
+            submit_selector=args.submit_selector, success_selector=args.success_selector,
+            success_url_contains=args.success_url_contains,
+        )
     spec = FlowSpec(
         name=args.name, start_url=args.url, goal=args.goal, extract=args.extract,
         headers=_parse_headers(args.header) or None, storage_state=args.storage_state,
-        headless=(False if args.headed else None),
+        login=login, headless=(False if args.headed else None),
     )
     if args.fresh:
         FlowCache().delete(flow_key(spec.goal, spec.start_url, spec.scope))
@@ -109,6 +117,7 @@ async def _flow_replay(args: argparse.Namespace) -> None:
         data = await replay(
             spec, provider_name=args.provider,
             require_approved=args.require_approved, on_drift=args.on_drift,
+            auth_refresh=args.auth_refresh,
         )
     except FlowReplayError as exc:
         raise SystemExit(f"REPLAY FAILED: {exc}")
@@ -121,6 +130,14 @@ def _flow_approve(args: argparse.Namespace) -> None:
     spec = load_spec(args.name)
     approve(spec)
     print(f"approved {spec.name!r} — `flow replay --name {spec.name} --require-approved` will run it")
+
+
+async def _flow_login(args: argparse.Namespace) -> None:
+    from .flows import load_spec, refresh_auth
+
+    spec = load_spec(args.name)
+    await refresh_auth(spec)
+    print(f"refreshed auth for {spec.name!r} -> {spec.storage_state}")
 
 
 def _flow_inspect(args: argparse.Namespace) -> None:
@@ -155,7 +172,19 @@ def _flow_main(argv) -> None:
     pl.add_argument("--goal", required=True)
     pl.add_argument("--extract", help="instruction for what data to pull (omit for navigate-only).")
     pl.add_argument("--header", action="append", help="auth header K=V (repeatable).")
-    pl.add_argument("--storage-state", dest="storage_state", help="Playwright storage_state JSON path.")
+    pl.add_argument("--storage-state", dest="storage_state", help="Playwright storage_state JSON path (cookie auth).")
+    pl.add_argument("--login-url", dest="login_url", help="login page URL — enables auth refresh on drift.")
+    pl.add_argument("--username-env", dest="username_env", default="ULTRACUA_USERNAME",
+                    help="env var holding the login username (default ULTRACUA_USERNAME).")
+    pl.add_argument("--password-env", dest="password_env", default="ULTRACUA_PASSWORD",
+                    help="env var holding the login password (default ULTRACUA_PASSWORD).")
+    pl.add_argument("--username-selector", dest="username_selector")
+    pl.add_argument("--password-selector", dest="password_selector")
+    pl.add_argument("--submit-selector", dest="submit_selector")
+    pl.add_argument("--success-selector", dest="success_selector",
+                    help="element present only once logged in (login success check).")
+    pl.add_argument("--success-url-contains", dest="success_url_contains",
+                    help="substring the post-login URL must contain (login success check).")
     pl.add_argument("--provider", **prov)
     pl.add_argument("--headed", action="store_true")
     pl.add_argument("--fresh", action="store_true", help="clear any cached flow first.")
@@ -167,9 +196,14 @@ def _flow_main(argv) -> None:
                     help="refuse to run a flow that hasn't been approved.")
     pr.add_argument("--on-drift", dest="on_drift", default="raise", choices=["raise", "relearn"],
                     help="raise = fail loud on drift (default); relearn = re-author the flow instead.")
+    pr.add_argument("--no-auth-refresh", dest="auth_refresh", action="store_false",
+                    help="don't re-login on drift (default: refresh an expired session and retry).")
 
     pa = sub.add_parser("approve", help="Mark a learned flow trusted (for --require-approved replays).")
     pa.add_argument("--name", required=True)
+
+    plg = sub.add_parser("login", help="Re-authenticate a flow now (refresh its storage_state cookies).")
+    plg.add_argument("--name", required=True)
 
     pi = sub.add_parser("inspect", help="Print a saved flow's spec + learned steps.")
     pi.add_argument("--name", required=True)
@@ -183,6 +217,8 @@ def _flow_main(argv) -> None:
         asyncio.run(_flow_replay(args))
     elif args.cmd == "approve":
         _flow_approve(args)
+    elif args.cmd == "login":
+        asyncio.run(_flow_login(args))
     elif args.cmd == "inspect":
         _flow_inspect(args)
     elif args.cmd == "list":
