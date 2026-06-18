@@ -85,12 +85,35 @@ class LearnResult:
 
 @dataclass
 class FlowMeta:
-    """Trust metadata for a learned flow (sidecar next to the cached flow)."""
+    """Trust + run-history metadata for a learned flow (sidecar next to the cached flow)."""
 
     approved: bool = False
     shape: Any = None
     learned_ts: float = 0.0
     last_ok_ts: float = 0.0
+    # run history (for the fleet health view)
+    last_run_ts: float = 0.0
+    last_error: Optional[str] = None
+    last_error_ts: float = 0.0
+    runs: int = 0
+    successes: int = 0
+    consecutive_failures: int = 0
+
+
+@dataclass
+class FlowHealth:
+    """A flow's status for the fleet view."""
+
+    name: str
+    status: str  # not-learned | never-run | healthy | failing | stale
+    cached: bool
+    approved: bool
+    runs: int
+    successes: int
+    consecutive_failures: int
+    last_run_ts: float
+    last_ok_ts: float
+    last_error: Optional[str]
 
 
 class FlowReplayError(RuntimeError):
@@ -150,6 +173,24 @@ def _load_meta(cache: FlowCache, key: str) -> FlowMeta:
 def _save_meta(cache: FlowCache, key: str, meta: FlowMeta) -> None:
     Path(cache.root).mkdir(parents=True, exist_ok=True)
     _meta_path(cache, key).write_text(json.dumps(asdict(meta), indent=2), encoding="utf-8")
+
+
+def _record_run(cache: FlowCache, key: str, *, ok: bool, error: Optional[str] = None) -> None:
+    """Record a replay outcome into the flow's run history (for the fleet health view)."""
+    meta = _load_meta(cache, key)  # reload so we don't clobber a concurrent shape/approval update
+    now = time.time()
+    meta.last_run_ts = now
+    meta.runs += 1
+    if ok:
+        meta.last_ok_ts = now
+        meta.successes += 1
+        meta.consecutive_failures = 0
+        meta.last_error = None
+    else:
+        meta.consecutive_failures += 1
+        meta.last_error = error
+        meta.last_error_ts = now
+    _save_meta(cache, key, meta)
 
 
 def _default_cache() -> FlowCache:
@@ -322,6 +363,32 @@ def unapprove(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> None:
     _save_meta(cache, key, meta)
 
 
+def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Optional[float] = None) -> FlowHealth:
+    """A flow's status for the fleet view: not-learned / never-run / healthy / failing / stale.
+
+    `stale_after` (seconds): a flow whose last success is older than this counts as `stale`.
+    """
+    cache = cache or _default_cache()
+    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    cached = cache.get(key) is not None
+    meta = _load_meta(cache, key)
+    if not cached:
+        status = "not-learned"
+    elif meta.runs == 0:
+        status = "never-run"
+    elif meta.consecutive_failures > 0:
+        status = "failing"
+    elif stale_after is not None and meta.last_ok_ts and (time.time() - meta.last_ok_ts) > stale_after:
+        status = "stale"
+    else:
+        status = "healthy"
+    return FlowHealth(
+        name=spec.name, status=status, cached=cached, approved=meta.approved,
+        runs=meta.runs, successes=meta.successes, consecutive_failures=meta.consecutive_failures,
+        last_run_ts=meta.last_run_ts, last_ok_ts=meta.last_ok_ts, last_error=meta.last_error,
+    )
+
+
 async def _attempt_replay(spec, router, cache, key, meta, check_shape):
     """One pure 0-LLM replay attempt. Returns (ok, data, reason)."""
     out: dict = {}
@@ -374,8 +441,7 @@ async def replay(
 
     ok, data, reason = await _attempt_replay(spec, router, cache, key, meta, check_shape)
     if ok:
-        meta.last_ok_ts = time.time()
-        _save_meta(cache, key, meta)
+        _record_run(cache, key, ok=True)
         return data
     # The session may have expired — re-login (refresh cookies) and retry once.
     if auth_refresh and spec.login is not None:
@@ -383,8 +449,7 @@ async def replay(
             await refresh_auth(spec, headless=spec.headless)
             ok, data, reason2 = await _attempt_replay(spec, router, cache, key, meta, check_shape)
             if ok:
-                meta.last_ok_ts = time.time()
-                _save_meta(cache, key, meta)
+                _record_run(cache, key, ok=True)
                 return data
             reason = f"{reason}; after auth refresh: {reason2}"
         except Exception as exc:  # noqa: BLE001 - any refresh failure -> fall through to relearn/raise
@@ -392,8 +457,10 @@ async def replay(
     if on_drift == "relearn":
         res = await learn(spec, provider=provider, router=router, cache=cache)
         if res.cached and res.found:
+            _record_run(cache, key, ok=True)
             return res.data
-        raise FlowReplayError(f"{spec.name!r}: replay drifted ({reason}) and re-learn failed ({res.note})")
+        reason = f"replay drifted ({reason}) and re-learn failed ({res.note})"
+    _record_run(cache, key, ok=False, error=reason)
     raise FlowReplayError(f"{spec.name!r}: {reason}")
 
 

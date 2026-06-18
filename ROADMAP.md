@@ -69,12 +69,16 @@ Unlocks scheduling without babysitting. **Done:**
 
 ### Phase C — "operate many flows" (lifecycle / ops)
 
-Unlocks running a fleet of recurring jobs.
+Unlocks running a fleet of recurring jobs. **Done:**
 
-- A flow **registry with metadata** (last run, last success, drift history) and a simple
-  **status / health** view (CLI + structured logs; a thin web UI later).
-- **Scheduling stays the developer's job** initially — documented pattern: cron / Task Scheduler →
-  `ultracua flow replay`. Don't build a scheduler yet.
+- ✅ **Per-flow run history + health** — every `replay` records its outcome into the flow's meta
+  sidecar (last run, last success, last error, run/success counts, consecutive failures).
+  `health(spec)` (CLI `flow status`) summarizes each flow as `not-learned` / `never-run` /
+  `healthy` / `failing` / `stale`.
+- ✅ **Scheduling stays the developer's job** — documented pattern: cron / Task Scheduler →
+  `ultracua flow replay` (exits non-zero on drift, so alert on failure; poll `flow status`).
+  No scheduler built (by design).
+- A thin web UI over `health()` is possible later but intentionally out of scope.
 
 ### Phase D — "breadth" (later, separate)
 

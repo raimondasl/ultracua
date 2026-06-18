@@ -137,8 +137,13 @@ non-zero exit. (CLI: `ultracua flow approve --name …`; `flow replay --require-
 password_env=…)` (credentials read from the env at runtime, **never persisted** — the login isn't
 cached; only the resulting `storage_state` cookies are saved). On drift, replay re-logs-in and
 retries once, so a long-lived recurring flow survives session expiry. (`login=` may also be an
-`async (page) -> None` callable for non-standard logins.) Still on the [ROADMAP](ROADMAP.md):
-lifecycle/ops (Phase C).
+`async (page) -> None` callable for non-standard logins.)
+
+**Fleet health + scheduling.** Every `replay` records its outcome, so you can monitor a fleet:
+`flow_health(spec)` (CLI `ultracua flow status`) reports each flow as `healthy` / `failing` /
+`stale` / `never-run` with run counts and the last error. Scheduling stays yours — point cron /
+Task Scheduler at `ultracua flow replay --name … --require-approved` (it exits non-zero on drift,
+so alert on failure) and poll `flow status` for health. No scheduler is built in, by design.
 
 ## Benchmark
 

@@ -20,6 +20,7 @@ from ultracua.flows import (
     FlowSpec,
     LoginSpec,
     approve,
+    health,
     learn,
     refresh_auth,
     replay,
@@ -152,6 +153,25 @@ async def test_shape_change_is_flagged_as_drift(tmp_path: Path) -> None:
         await learn(spec, provider=_ClickFirstLink(), router=_extract_router(42), cache=cache)  # shape: number
         with pytest.raises(FlowReplayError):  # replay now extracts a list -> structure changed
             await replay(spec, router=_extract_router(["a", "b"]), cache=cache)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_health_tracks_runs(tmp_path: Path) -> None:
+    httpd, cache, spec = _fixture_spec(tmp_path, "health")
+    try:
+        await learn(spec, provider=_ClickFirstLink(), router=_extract_router(42), cache=cache)
+        assert health(spec, cache=cache).status == "never-run"      # learned, not yet run
+
+        await replay(spec, router=_extract_router(42), cache=cache)  # a good run
+        h = health(spec, cache=cache)
+        assert h.status == "healthy" and h.runs == 1 and h.successes == 1
+
+        with pytest.raises(FlowReplayError):                          # shape drift -> failure
+            await replay(spec, router=_extract_router(["a"]), cache=cache)
+        h = health(spec, cache=cache)
+        assert h.status == "failing" and h.consecutive_failures == 1 and h.runs == 2 and h.last_error
     finally:
         httpd.shutdown()
         httpd.server_close()
