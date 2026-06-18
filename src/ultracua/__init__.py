@@ -24,7 +24,14 @@ from .flows import replay as replay_flow
 from .flows import unapprove as unapprove_flow
 from .vision import AnthropicGrounding, MockGrounding
 
-__version__ = "0.15.0"
+# Single-source the version from the installed package metadata (pyproject.toml is the source of
+# truth). Falls back for an uninstalled source checkout.
+try:
+    from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
+    __version__ = _pkg_version("ultracua")
+except (PackageNotFoundError, ImportError):  # pragma: no cover - source-tree fallback
+    __version__ = "0.0.0+dev"
 
 __all__ = [
     "BrowserSession",

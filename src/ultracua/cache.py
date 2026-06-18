@@ -13,6 +13,7 @@ blind-replay irreversible actions.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import time
 from pathlib import Path
@@ -99,9 +100,11 @@ class FlowCache:
 
     def put(self, flow: CachedFlow) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
-        self._path(flow.key).write_text(
-            flow.model_dump_json(indent=2), encoding="utf-8"
-        )
+        # Atomic write (temp + os.replace) so a concurrent reader never sees a half-written flow.
+        p = self._path(flow.key)
+        tmp = p.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(flow.model_dump_json(indent=2), encoding="utf-8")
+        os.replace(tmp, p)
 
     def delete(self, key: str) -> bool:
         p = self._path(key)

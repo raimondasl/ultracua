@@ -305,6 +305,7 @@ def _flow_main(argv) -> None:
     pl.add_argument("--provider", **prov)
     pl.add_argument("--headed", action="store_true")
     pl.add_argument("--fresh", action="store_true", help="clear any cached flow first.")
+    pl.add_argument("--verbose", "-v", action="store_true", help="log learn/heal events (INFO).")
 
     pr = sub.add_parser("replay", help="Replay a saved flow (0-LLM nav); print the data; fails loud on drift.")
     pr.add_argument("--name", required=True)
@@ -315,6 +316,7 @@ def _flow_main(argv) -> None:
                     help="raise = fail loud on drift (default); relearn = re-author the flow instead.")
     pr.add_argument("--no-auth-refresh", dest="auth_refresh", action="store_false",
                     help="don't re-login on drift (default: refresh an expired session and retry).")
+    pr.add_argument("--verbose", "-v", action="store_true", help="log replay/heal/drift events (INFO).")
 
     pa = sub.add_parser("approve", help="Mark a learned flow trusted (for --require-approved replays).")
     pa.add_argument("--name", required=True)
@@ -343,6 +345,8 @@ def _flow_main(argv) -> None:
     sub.add_parser("list", help="List saved flows.")
 
     args = p.parse_args(argv)
+    from .obs import configure_logging
+    configure_logging("INFO" if getattr(args, "verbose", False) else settings.log_level)
     if args.cmd == "learn":
         asyncio.run(_flow_learn(args))
     elif args.cmd == "replay":
@@ -398,7 +402,10 @@ def main() -> None:
     p.add_argument(
         "--fresh", action="store_true", help="Delete the cached flow before running."
     )
+    p.add_argument("--verbose", "-v", action="store_true", help="log learn/replay/heal events (INFO).")
     args = p.parse_args()
+    from .obs import configure_logging
+    configure_logging("INFO" if args.verbose else settings.log_level)
     asyncio.run(_amain(args))
 
 

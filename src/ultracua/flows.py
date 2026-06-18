@@ -28,10 +28,13 @@ from .cache import FlowCache, flow_key
 from .config import settings
 from .extract import extract
 from .flow import run_cached
+from .obs import get_logger
 from .providers import build_router, get_provider
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
+
+_log = get_logger("flows")
 
 # login is either a declarative LoginSpec or an async callable that authenticates a page.
 LoginCallable = Callable[["Page"], Awaitable[None]]
@@ -217,11 +220,20 @@ def _load_meta(cache: FlowCache, key: str) -> FlowMeta:
 
 def _save_meta(cache: FlowCache, key: str, meta: FlowMeta) -> None:
     Path(cache.root).mkdir(parents=True, exist_ok=True)
-    _meta_path(cache, key).write_text(json.dumps(asdict(meta), indent=2), encoding="utf-8")
+    # Atomic write (temp + os.replace) so a crash or a concurrent reader never sees a torn file.
+    p = _meta_path(cache, key)
+    tmp = f"{p}.{os.getpid()}.tmp"
+    Path(tmp).write_text(json.dumps(asdict(meta), indent=2), encoding="utf-8")
+    os.replace(tmp, p)
 
 
 def _record_run(cache: FlowCache, key: str, *, ok: bool, error: Optional[str] = None) -> None:
-    """Record a replay outcome into the flow's run history (for the fleet health view)."""
+    """Record a replay outcome into the flow's run history (for the fleet health view).
+
+    The read-modify-write is atomic within a process (no `await` between the reload and the atomic
+    `_save_meta`, so the single-threaded event loop can't interleave two records). The temp+replace
+    write also keeps the file valid for a concurrent reader in another process.
+    """
     meta = _load_meta(cache, key)  # reload so we don't clobber a concurrent shape/approval update
     now = time.time()
     meta.last_run_ts = now
@@ -417,6 +429,7 @@ async def refresh_auth(spec: FlowSpec, *, headless: Optional[bool] = None) -> No
         raise FlowReplayError(f"{spec.name!r}: no `login` configured — cannot refresh auth")
     if not spec.storage_state:
         raise FlowReplayError(f"{spec.name!r}: set `storage_state` (a path) so refreshed cookies can be saved")
+    _log.info("flow %r: refreshing auth (re-login -> %s)", spec.name, spec.storage_state)
     session = await BrowserSession(
         headless=headless if headless is not None else spec.headless
     ).start()  # a fresh context (no stale cookies) for a clean login
@@ -436,6 +449,7 @@ async def refresh_auth(spec: FlowSpec, *, headless: Optional[bool] = None) -> No
         tmp = f"{spec.storage_state}.tmp"
         await session.save_storage_state(tmp)
         os.replace(tmp, spec.storage_state)
+        _log.info("flow %r: auth refreshed OK", spec.name)
     finally:
         await session.close()
 
@@ -584,6 +598,7 @@ async def replay(
     # Idempotency precheck (opt-in, one-shot writes): if the end-state already holds, skip the write.
     if await _precheck_done(spec):
         _record_run(cache, key, ok=True)
+        _log.info("flow %r: write already done (idempotency precheck) — skipped", spec.name)
         return {"status": "already-done", "data": None}
 
     if on_drift == "relearn":
@@ -600,6 +615,7 @@ async def replay(
 
     def _ok(data):
         _record_run(cache, key, ok=True)
+        _log.info("flow %r: replay ok%s", spec.name, " (write confirmed)" if is_mutate else "")
         return {"status": "confirmed", "data": data} if is_mutate else data
 
     try:
@@ -633,11 +649,13 @@ async def replay(
                 return _ok(res.data)
             reason = f"replay drifted ({reason}) and re-learn failed ({res.note})"
         _record_run(cache, key, ok=False, error=reason)
+        _log.warning("flow %r: replay FAILED — %s", spec.name, reason)
         raise FlowReplayError(f"{spec.name!r}: {reason}")
     except FlowReplayError:
         raise  # the failure above is already recorded in health
     except Exception as exc:  # noqa: BLE001 - an unexpected crash (browser/extract) is still a failed run
         _record_run(cache, key, ok=False, error=f"{type(exc).__name__}: {exc}")
+        _log.warning("flow %r: replay crashed — %s: %s", spec.name, type(exc).__name__, exc)
         raise
 
 

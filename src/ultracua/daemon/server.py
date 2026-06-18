@@ -23,7 +23,10 @@ from typing import Any
 from .. import __version__
 from ..cache import FlowCache, flow_key
 from ..flow import run_cached
+from ..obs import get_logger
 from ..providers import get_provider
+
+_log = get_logger("daemon")
 
 
 def _cache(params: dict) -> FlowCache:
@@ -88,10 +91,16 @@ async def serve() -> None:
             result = await _dispatch(req["method"], req.get("params") or {})
             resp = {"jsonrpc": "2.0", "id": rid, "result": result}
         except Exception as exc:  # noqa: BLE001 - report any failure as a JSON-RPC error
+            _log.warning("request id=%s failed: %s: %s", rid, type(exc).__name__, exc)
             resp = {"jsonrpc": "2.0", "id": rid, "error": {"code": -32000, "message": str(exc)}}
         sys.stdout.write(json.dumps(resp) + "\n")
         sys.stdout.flush()
 
 
 def main() -> None:
+    from ..config import settings
+    from ..obs import configure_logging
+
+    # Logs go to stderr (stdout carries the JSON-RPC protocol), so the daemon stays observable.
+    configure_logging(settings.log_level, stream=sys.stderr)
     asyncio.run(serve())

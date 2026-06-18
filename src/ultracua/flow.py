@@ -36,10 +36,13 @@ from .safety import (
     looks_like_interstitial,
     origin_of,
 )
+from .obs import UsageTotals, get_logger, new_run_id
 from .timing import StepTrace
 from .types import Action, Observation
 from .verify import state_changed
 from .webmcp import detect as _webmcp_detect
+
+_log = get_logger("flow")
 
 OnStep = Callable[[StepTrace], None]
 Prepare = Callable[[BrowserSession], Awaitable[None]]
@@ -98,6 +101,8 @@ async def run_cached(
     governor = governor or PacingGovernor()
     key = flow_key(goal, url, scope)
     cached = cache.get(key)
+    new_run_id()
+    _log.info("run start: mode=%s cached=%s url=%s goal=%r", mode, cached is not None, url, goal)
 
     if cached is not None and mode in ("auto", "replay"):
         heal_provider = provider if mode == "auto" else None
@@ -164,6 +169,8 @@ async def _learn(
     storage_state: Optional[str] = None,
 ) -> FlowReport:
     max_steps = max_steps or settings.max_steps
+    _router = getattr(provider, "router", None)  # for per-run token/cost accounting, if available
+    _usnap = _router.totals.snapshot() if _router is not None else None
     session = await BrowserSession(
         headless=headless, browser=browser, record_har_path=record_har_path,
         storage_state=storage_state,
@@ -302,6 +309,14 @@ async def _learn(
                     key=key, goal=goal, start_url=url, steps=steps, created_ts=time.time()
                 )
             )
+        used = _router.totals.since(_usnap) if _router is not None else None
+        if used is not None:
+            extra["usage"] = used.as_dict(settings.model)
+        _log.info(
+            "learn done: success=%s steps=%d llm_calls=%d cached=%s%s",
+            success, len(steps), llm, success and bool(steps),
+            f" usage=[{used.summary(settings.model)}]" if used is not None else "",
+        )
         return FlowReport(
             mode="learn", success=success, traces=traces, llm_calls=llm,
             final_text=final_text, extra=extra,
@@ -349,6 +364,7 @@ async def _replay(
         traces.append(nav)
 
         if await _is_interstitial(session):
+            _log.warning("replay: interstitial/CAPTCHA detected — escalating instead of retrying")
             return FlowReport(mode="escalate", success=False, traces=traces,
                               note="interstitial/CAPTCHA detected", extra={"escalate": True})
 
@@ -366,6 +382,7 @@ async def _replay(
                 llm += 1
                 mode = "replay+heal"
                 dirty = True
+                _log.info("replay: step %d %r self-healed (%s)", i, step.intent, note)
             tr.meta["ok"] = ok
             if note:
                 tr.meta["note"] = note
@@ -374,12 +391,15 @@ async def _replay(
                 on_step(tr)
             if not ok:
                 success = False
+                _log.warning("replay: step %d %r failed: %s", i, step.intent, note)
                 break
 
         extra = {"finalize": await finalize(session)} if finalize else {}
         final_text = await _body_text(session)
         if dirty and success:
             cache.put(flow)
+        _log.info("replay done: mode=%s success=%s healed=%d steps=%d",
+                  mode, success, healed, len(flow.steps))
         return FlowReport(
             mode=mode, success=success, traces=traces, llm_calls=llm,
             healed_steps=healed, final_text=final_text, extra=extra,
