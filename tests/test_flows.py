@@ -78,6 +78,16 @@ async def test_extract_empty_page_is_not_found() -> None:
     assert not ex.found and ex.error
 
 
+async def test_tool_extract_returns_forced_tool_input() -> None:
+    from ultracua.extract import tool_extract
+    from ultracua.llm.types import ToolDef
+
+    mc = MockClient(actions=[{"x": 1, "y": "z"}], tool_name="grab")
+    router = Router(fast=Tier(mc, "m"), strong=Tier(mc, "m"))
+    tool = ToolDef(name="grab", description="d", input_schema={"type": "object"}, strict=False)
+    assert await tool_extract(router, system="s", tool=tool, user_text="u") == {"x": 1, "y": "z"}
+
+
 # --- flow learn -> replay (browser + scripted provider) ---------------------------------------
 def _write_fixture(d: Path) -> None:
     (d / "page1.html").write_text(

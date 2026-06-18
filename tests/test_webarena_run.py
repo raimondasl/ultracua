@@ -35,6 +35,6 @@ def test_write_local_config_points_at_localhost(tmp_path: Path) -> None:
 
 def test_extract_tool_schema_matches_response_contract() -> None:
     # The extractor's structured-output enums must match the evaluator's agent_response schema.
-    props = wr._EXTRACT_TOOL["input_schema"]["properties"]
+    props = wr._SUBMIT_TOOL.input_schema["properties"]
     assert set(props["task_type"]["enum"]) == set(wa.TASK_TYPES)
     assert set(props["status"]["enum"]) == set(wa.STATUSES)

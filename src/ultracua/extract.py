@@ -41,6 +41,22 @@ def _input_schema(data_schema: Optional[dict]) -> dict:
     }
 
 
+async def tool_extract(
+    router: Router, *, system: str, tool: ToolDef, user_text: str,
+    tier: str = "strong", max_tokens: int = 1500,
+) -> Optional[dict]:
+    """Shared extraction mechanism: one LLM call that FORCES `tool` and returns its input dict
+    (or None if the model returned no tool call). The building block for both the generic
+    `extract` below and any task-specific extractor (e.g. the WebArena runner)."""
+    req = LLMRequest(
+        system=system, tools=[tool], force_tool=tool.name,
+        messages=[Message("user", [TextBlock(user_text)])], max_tokens=max_tokens,
+    )
+    resp = await router.complete(req, tier=tier)
+    tu = resp.tool_use(tool.name)
+    return dict(tu.input) if tu is not None else None
+
+
 async def extract(
     router: Router,
     instruction: str,
@@ -64,18 +80,12 @@ async def extract(
         input_schema=_input_schema(schema),
         strict=False,
     )
-    req = LLMRequest(
-        system=_SYSTEM,
-        tools=[tool],
-        force_tool="submit",
-        messages=[Message("user", [TextBlock(f"INSTRUCTION: {instruction}\n\nPAGE TEXT:\n{text}")])],
-        max_tokens=1500,
+    d = await tool_extract(
+        router, system=_SYSTEM, tool=tool,
+        user_text=f"INSTRUCTION: {instruction}\n\nPAGE TEXT:\n{text}", tier=tier,
     )
-    resp = await router.complete(req, tier=tier)
-    tu = resp.tool_use("submit")
-    if tu is None:
+    if d is None:
         return Extraction(found=False, error="extractor returned no tool call")
-    d = dict(tu.input)
     data = d.get("data")
     # Unwrap a spurious extra nesting level ([["x"]] -> ["x"]).
     if isinstance(data, list) and len(data) == 1 and isinstance(data[0], list):
