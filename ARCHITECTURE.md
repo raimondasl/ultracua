@@ -104,7 +104,7 @@ A **fast tier** (Haiku 4.5) drives routine element selection and **escalates** t
 (Opus 4.8 / Sonnet 4.6) when unsure; the stable system+tools prefix is prompt-cached with the volatile
 observation placed after the breakpoint. The `Router` (`llm/base.py`) also retries transient failures
 (rate-limit / overload / 5xx / timeout) with capped backoff and accumulates token usage for cost
-reporting. (OpenAI / Gemini are translation-tested but not yet exercised live — see STATUS.md.)
+reporting. (All three adapters' `.complete()` glue is now covered by key-less live-path tests — see STATUS.md.)
 
 ## Actuation tiers
 
