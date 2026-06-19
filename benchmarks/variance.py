@@ -28,6 +28,7 @@ import json
 import statistics
 import sys
 import tempfile
+from math import comb
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -61,10 +62,68 @@ def aggregate(xs) -> dict:
     }
 
 
+def wilson_ci(c: int, n: int, z: float = 1.96) -> "tuple[float, float]":
+    """Wilson score interval for a success rate c/n — honest error bars at small n (and at 0/n)."""
+    if n == 0:
+        return (0.0, 0.0)
+    p = c / n
+    z2 = z * z
+    denom = 1.0 + z2 / n
+    centre = (p + z2 / (2 * n)) / denom
+    half = z * (((p * (1 - p) + z2 / (4 * n)) / n) ** 0.5) / denom
+    return (max(0.0, centre - half), min(1.0, centre + half))
+
+
+def pass_hat_k(c: int, n: int, k: int) -> float:
+    """pass^k: the probability that k reps drawn from the n run reps are ALL successes (c succeeded).
+
+    This is the reliability metric production cares about — a 70%-per-run agent is ~34% at pass^3, not
+    70%. Reporting only the mean rate hides that. Unbiased over the n reps: C(c,k)/C(n,k).
+    """
+    if k <= 0 or k > n or c < k:
+        return 0.0
+    return comb(c, k) / comb(n, k)
+
+
+def pass_k_curve(successes, kmax: "Optional[int]" = None) -> dict:
+    """{k: pass^k} for k=1..kmax over a per-rep boolean success list."""
+    succ = [bool(s) for s in successes]
+    n, c = len(succ), sum(succ)
+    kmax = n if kmax is None else min(kmax, n)
+    return {str(k): pass_hat_k(c, n, k) for k in range(1, max(1, kmax) + 1)}
+
+
+def first_failure_index(step_oks) -> "Optional[int]":
+    """Index of the first step whose ok flag is False; None if every step passed."""
+    for i, ok in enumerate(step_oks):
+        if not ok:
+            return i
+    return None
+
+
+def hazard_curve(first_fail_indices) -> dict:
+    """Histogram of WHERE flows first fail: {step_index: count}. `None` entries (no failure) skipped.
+
+    Aggregated over reps, this points at exactly which step the author/replay is unreliable on — the
+    precise signal suffix-replan and the authoring fixes need.
+    """
+    out: dict = {}
+    for idx in first_fail_indices:
+        if idx is not None:
+            out[str(idx)] = out.get(str(idx), 0) + 1
+    return out
+
+
 def build_record(bench: str, provider: str, reps: int, timestamp: str,
-                 per_rep: dict, cost_usd: float) -> dict:
-    """Build a machine-readable run record. `per_rep` maps a metric name -> its per-rep values."""
-    return {
+                 per_rep: dict, cost_usd: float, *, success_key: str = "replay_success_rate",
+                 first_fail: "Optional[list]" = None) -> dict:
+    """Build a machine-readable run record. `per_rep` maps a metric name -> its per-rep values.
+
+    Adds reliability views over `per_rep[success_key]` (treated as per-rep 0/1 or fraction==1.0): a
+    pass^k curve, a Wilson CI on the fully-passed rate, and (if `first_fail` step indices are given)
+    a per-step hazard histogram.
+    """
+    rec = {
         "bench": bench,
         "provider": provider,
         "reps": reps,
@@ -72,6 +131,14 @@ def build_record(bench: str, provider: str, reps: int, timestamp: str,
         "cost_usd": round(float(cost_usd), 6),
         "metrics": {name: aggregate(vals) for name, vals in per_rep.items()},
     }
+    rates = per_rep.get(success_key, [])
+    passed = [float(x) >= 1.0 for x in rates]  # a rep "passes" iff it fully succeeded
+    rec["pass_k"] = pass_k_curve(passed)
+    lo, hi = wilson_ci(sum(passed), len(passed))
+    rec["pass_rate_wilson95"] = {"lo": lo, "hi": hi, "passes": sum(passed), "n": len(passed)}
+    if first_fail is not None:
+        rec["hazard"] = hazard_curve(first_fail)
+    return rec
 
 
 def compare_records(baseline: dict, current: dict, *, rate_floor: float = 0.05,
@@ -124,8 +191,9 @@ async def _demo_rep(provider_name: str, root: Path) -> dict:
     replay = await run_cached(url, GOAL, None, cache, mode="replay", headless=True)
     ok = bool(replay.success and replay.llm_calls == 0 and SUCCESS_TEXT.lower() in replay.final_text.lower())
     speedup = learn.total_ms / replay.total_ms if replay.total_ms else 0.0
+    first_fail = first_failure_index([t.meta.get("ok", True) for t in replay.step_traces])
     return {"ok": ok, "speedup": speedup, "cost": _cost(learn),
-            "learn_ms": learn.total_ms, "replay_ms": replay.total_ms}
+            "learn_ms": learn.total_ms, "replay_ms": replay.total_ms, "first_fail": first_fail}
 
 
 async def run_demo(provider_name: str, reps: int) -> dict:
@@ -142,12 +210,14 @@ async def run_demo(provider_name: str, reps: int) -> dict:
         {"replay_success_rate": [1.0 if r["ok"] else 0.0 for r in results],
          "speedup": [r["speedup"] for r in results if r["ok"]]},
         cost_usd=sum(r["cost"] for r in results),
+        first_fail=[r["first_fail"] for r in results],
     )
     sr, sp = record["metrics"]["replay_success_rate"], record["metrics"]["speedup"]
     print(f"\n== demo-shop, {reps} reps ==")
     print(f"replay success:  {int(sr['mean'] * reps + 0.5)}/{reps}  (rate {sr['mean']:.2f})")
     print(f"speedup:         mean {sp['mean']:.1f}x +/- {sp['std']:.1f}  (min {sp['min']:.1f}x, max {sp['max']:.1f}x)")
     print(f"total LLM cost:  ~${record['cost_usd']:.4f}")
+    _print_reliability(record)
     return record
 
 
@@ -185,7 +255,22 @@ async def run_miniwob(provider_name: str, reps: int, all_tasks: bool, seed: int)
     print(f"replay success rate: mean {sr['mean'] * 100:.0f}% +/- {sr['std'] * 100:.0f}%  "
           f"(min {sr['min'] * 100:.0f}%, max {sr['max'] * 100:.0f}%)")
     print(f"total LLM cost:      ~${record['cost_usd']:.4f}")
+    _print_reliability(record)
     return record
+
+
+def _print_reliability(record: dict) -> None:
+    """pass^k (all-k-succeed) + Wilson CI on the fully-passed rate + where flows first fail."""
+    pk = record.get("pass_k") or {}
+    w = record.get("pass_rate_wilson95") or {}
+    if pk:
+        print("pass^k:          " + "  ".join(f"k={k}:{v:.2f}" for k, v in pk.items()))
+    if w:
+        print(f"fully-passed:    {w.get('passes')}/{w.get('n')}  "
+              f"(95% CI {w.get('lo', 0):.2f}-{w.get('hi', 0):.2f})")
+    if record.get("hazard"):
+        haz = ", ".join(f"step{k}:{v}" for k, v in sorted(record["hazard"].items(), key=lambda kv: int(kv[0])))
+        print(f"first-fail step: {haz}")
 
 
 # --- output / gate ----------------------------------------------------------------------------

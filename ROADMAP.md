@@ -113,6 +113,42 @@ already 0-LLM and 37–94× faster — but in **discovery reliability, replay fi
 operability**. These phases are sketched, not committed; each lists the concrete use case it unlocks
 and the gap it closes.
 
+### Discovery-reliability push (research-backed — recommended *next*, before G/I)
+
+A 2026 literature + web sweep (browser-agent SOTA, programming-by-demonstration, self-healing locators,
+eval rigor) converged on what our own benchmarks already showed: **discovery — the LLM authoring a
+working flow — is the bottleneck, and it's attackable with cheap, 0-LLM-preserving, learn-time-only
+changes.** This push is recommended before Phases G/I: it's days of work, it hits the proven
+bottleneck, and it de-risks both (write-safety hardens G; pass^k measurement lets us *prove* a recorder
+helps for I). Techniques below are directional — mapped to our code, not leaning on any one paper's
+exact numbers.
+
+**Tier 1 — do now (one cohesive push):**
+- **Verify-by-replay before cache** + **oracle calibration** — after `_learn` authors a flow, replay it
+  0-LLM on a fresh session and only `cache.put` if it reproduces; calibrate the gate's false-accept /
+  false-reject on injected known-good / known-broken flows. Fail-loud made concrete. (Skips write flows —
+  re-replaying a write would double-submit.) [`flow.py:_learn`]
+- **pass^k + per-step hazard metrics** — report all-k-succeed (not just the mean rate) and which step
+  index first fails, so discovery gains are provable. [`benchmarks/variance.py`, `FlowReport.step_traces`]
+- **Write-safety classification** — replace the `is_mutating` keyword heuristic with a learn-time
+  per-step risk classification persisted on `CachedStep` (closes a confirmed double-submit gap: icon-only
+  submits / type+Enter slip the gate today). [`safety.py`, `flow.py:_author_steps`]
+- **Grounding hygiene** — spatial (reading-order) snapshot sort; real accessible-name
+  (`aria-labelledby` / `<label for>`); neighbor-anchor capture. Cheap LEARN-side wins that also sturdy the
+  cached locators. [`snapshot.py`, `locators.py`]
+
+**Tier 2 — next:** best-of-N authoring (adaptive N + a learn-cost ceiling, read-only-by-default);
+reflexion retry on stalls; a Similo-style 0-LLM heal tier; a 0-LLM structured / list extractor (+ a
+JSON-LD tier) with a fail-loud row-count invariant; type-aware comparators + a scripted-oracle control
+arm in the variance gate; a **flow-staleness canary** (flag drift before a scheduled run fails at 6am).
+
+**Tier 3 — later:** parameterized typed slots; skill / workflow memory as a discovery prior (scales with
+flow volume); Phase G proper (barrier-commit multi-write + deterministic action primitives:
+upload / iframe / date); a local fast tier under constrained decoding (spike); the WebMCP spec fix.
+
+**Skip / spike-only:** plan-then-execute (rebuild risk + reduces best-of-N sample diversity → spike);
+Set-of-Marks on the vision tier (it's our no-DOM last resort, and SoM's marks come *from* the DOM → skip).
+
 ### Phase E — Operability & trust at scale ("run a fleet unattended")
 
 A thin supervisor that runs saved flows on a schedule with structured logging + a `run_id`,

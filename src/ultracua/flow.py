@@ -97,6 +97,7 @@ async def run_cached(
     record_har_path: Optional[str] = None,
     extra_headers: Optional[dict] = None,
     storage_state: Optional[str] = None,
+    verify_replay: bool = False,
 ) -> FlowReport:
     cache = cache or FlowCache()
     governor = governor or PacingGovernor()
@@ -126,7 +127,7 @@ async def run_cached(
     return await _learn(
         url, goal, key, provider, cache, max_steps, headless, on_step,
         prepare, finalize, governor, scope, browser, verifier, grounding,
-        record_har_path, extra_headers, storage_state,
+        record_har_path, extra_headers, storage_state, verify_replay,
     )
 
 
@@ -276,6 +277,25 @@ async def _author_steps(
     return steps, success, llm, traces
 
 
+async def _verify_by_replay(
+    url: str, key: str, candidate: CachedFlow, cache: FlowCache, headless: Optional[bool],
+    prepare: Optional[Prepare], governor: PacingGovernor, scope: str, browser: Optional[Any],
+    extra_headers: Optional[dict], storage_state: Optional[str],
+) -> bool:
+    """Re-run a freshly-authored flow 0-LLM on a FRESH session; True iff every step reproduces.
+
+    Navigation-fidelity only — provider=None (no heal/replan, no LLM) and finalize=None (no extraction,
+    so it's cheap and adds no paid call). Catches the dominant discovery failure: an authored flow that
+    looked solved in-session but whose cached locators don't survive a fresh load. The caller skips this
+    for write flows (re-firing a mutating step would double-submit).
+    """
+    report = await _replay(
+        url, key, candidate, cache, None, headless, None, prepare, None, candidate.goal,
+        governor, scope, browser, None, extra_headers, storage_state,
+    )
+    return report.success
+
+
 async def _learn(
     url: str,
     goal: str,
@@ -295,6 +315,7 @@ async def _learn(
     record_har_path: Optional[str] = None,
     extra_headers: Optional[dict] = None,
     storage_state: Optional[str] = None,
+    verify_replay: bool = False,
 ) -> FlowReport:
     max_steps = max_steps or settings.max_steps
     _router = getattr(provider, "router", None)  # for per-run token/cost accounting, if available
@@ -344,11 +365,23 @@ async def _learn(
         extra = {"finalize": fin} if finalize else {}
         final_text = await _body_text(session)
         if success and steps:
-            cache.put(
-                CachedFlow(
-                    key=key, goal=goal, start_url=url, steps=steps, created_ts=time.time()
-                )
-            )
+            candidate = CachedFlow(key=key, goal=goal, start_url=url, steps=steps, created_ts=time.time())
+            # VERIFY-BY-REPLAY: a flow can look "solved" in-session yet not reproduce — its cached
+            # locators may have leaned on learn-time state. Before caching, replay it 0-LLM on a FRESH
+            # session and cache ONLY if every step reproduces; otherwise fail loud (don't cache a flow
+            # that won't replay). Write flows are exempt — re-replaying a mutating step would
+            # double-submit; they cache on the Phase-D confirm check and are approval-gated.
+            if verify_replay and not any(s.mutating for s in steps):
+                if await _verify_by_replay(url, key, candidate, cache, headless, prepare, governor,
+                                           scope, browser, extra_headers, storage_state):
+                    cache.put(candidate)
+                    extra["verify"] = "passed"
+                else:
+                    success = False
+                    extra["verify"] = "failed"
+                    _log.warning("learn: authored flow did NOT survive verify-by-replay — not cached")
+            else:
+                cache.put(candidate)
         used = _router.totals.since(_usnap) if _router is not None else None
         if used is not None:
             extra["usage"] = used.as_dict(settings.model)

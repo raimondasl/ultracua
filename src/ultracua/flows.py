@@ -471,7 +471,7 @@ async def refresh_auth(spec: FlowSpec, *, headless: Optional[bool] = None) -> No
 # --- learn / approve / replay -----------------------------------------------------------------
 async def learn(
     spec: FlowSpec, *, samples: int = 1, provider_name: Optional[str] = None, provider=None,
-    router=None, cache: Optional[FlowCache] = None,
+    router=None, cache: Optional[FlowCache] = None, verify_replay: bool = True,
 ) -> LearnResult:
     """LLM-author the flow, cache it, record its output shape, and return it to inspect.
 
@@ -493,7 +493,7 @@ async def learn(
             dp, dr = _router(provider_name or settings.provider)  # fresh each attempt -> LLM resamples
             p = provider if provider is not None else dp
             r = router if router is not None else dr
-        res = await _learn_once(spec, provider=p, router=r, cache=cache)
+        res = await _learn_once(spec, provider=p, router=r, cache=cache, verify_replay=verify_replay)
         if res.cached and res.found:
             if i:
                 _log.info("flow %r: discovery verified on attempt %d/%d", spec.name, i + 1, attempts)
@@ -505,15 +505,20 @@ async def learn(
 
 
 async def _learn_once(
-    spec: FlowSpec, *, provider, router, cache: FlowCache,
+    spec: FlowSpec, *, provider, router, cache: FlowCache, verify_replay: bool = True,
 ) -> LearnResult:
-    """One discovery attempt: LLM-author the flow, cache it, record its output shape."""
+    """One discovery attempt: LLM-author the flow, cache it, record its output shape.
+
+    `verify_replay=True` (default): only cache the authored flow if it reproduces on a 0-LLM replay
+    from a fresh session, so a flow that looked solved in-session but won't replay is never cached
+    (it surfaces as `cached=False`). Write flows are exempt inside the engine (no double-submit).
+    """
     out: dict = {}
     report = await run_cached(
         url=spec.start_url, goal=spec.goal, provider=provider, cache=cache, mode="learn",
         max_steps=spec.max_steps, headless=spec.headless, scope=spec.scope,
         extra_headers=spec.headers, storage_state=spec.storage_state,
-        finalize=_make_finalize(spec, router, out),
+        finalize=_make_finalize(spec, router, out), verify_replay=verify_replay,
     )
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     cached = cache.get(key)
