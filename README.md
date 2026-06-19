@@ -82,3 +82,7 @@ Hacker News (read-only) and is built to record: `uv run python examples/hn_diges
 | **[STATUS.md](STATUS.md)** | honest status, measured benchmarks, known fragilities |
 | **[ROADMAP.md](ROADMAP.md)** | what's next |
 | **[PLAN.md](PLAN.md)** | the original design + research basis |
+
+## License
+
+[MIT](LICENSE) © Raimondas Lencevicius
