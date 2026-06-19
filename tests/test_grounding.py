@@ -113,3 +113,34 @@ async def test_fingerprint_is_stable_across_captures() -> None:
         assert a.fingerprint == b.fingerprint and a.fingerprint
     finally:
         await session.close()
+
+
+# More visible buttons than MAX. The "Winner" (visually FIRST, top:0) is deliberately LAST in source
+# order; every "Filler" is DOM-earlier but positioned lower. Building the page in Python keeps it key-less.
+_DENSE_MAX = 5
+_DENSE_HTML = (
+    "<!doctype html><html><body>"
+    + "".join(
+        f'<button style="position:absolute;left:10px;top:{30 + i * 30}px">Filler{i}</button>'
+        for i in range(12)
+    )
+    + '<button style="position:absolute;left:10px;top:0px">Winner</button>'
+    + "</body></html>"
+)
+
+
+async def test_over_dense_page_truncates_visually_last_not_dom_last() -> None:
+    # F4 regression: candidates are collected up to a ceiling, sorted into reading order, and ONLY THEN
+    # truncated to MAX — so an over-dense page sheds its visually-LAST elements, not whichever fell late
+    # in the DOM walk. "Winner" is visually first but DOM-last; capping before the sort (the old bug)
+    # would have evicted it during the pass-1 walk. It must survive — and lead the reading order.
+    session = await BrowserSession(headless=True).start()
+    try:
+        await session.page.set_content(_DENSE_HTML)
+        obs = await capture(session.page, _DENSE_MAX)
+        names = [e.name for e in obs.elements]
+        assert len(obs.elements) == _DENSE_MAX   # 13 visible buttons, truncated to the cap
+        assert "Winner" in names                 # ...but the visually-first (DOM-last) one survived
+        assert names[0] == "Winner"              # and it leads reading order (top:0)
+    finally:
+        await session.close()
