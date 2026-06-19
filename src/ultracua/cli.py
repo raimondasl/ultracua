@@ -249,6 +249,53 @@ def _flow_status(args: argparse.Namespace) -> None:
             print(f"    last error: {h.last_error}")
 
 
+def _post_alert(url: str, failed: list) -> None:
+    import urllib.request
+
+    lines = "\n".join(f"- {r.name}: {r.error}" for r in failed)
+    payload = {"text": f"ultracua: {len(failed)} flow(s) failed\n{lines}",
+               "failed": [{"name": r.name, "error": r.error} for r in failed]}
+    try:
+        req = urllib.request.Request(
+            url, data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        urllib.request.urlopen(req, timeout=10)  # noqa: S310 - user-supplied alert endpoint
+        print("alert webhook posted")
+    except Exception as exc:  # noqa: BLE001 - alerting is best-effort; never fail the run on it
+        print(f"(alert webhook failed: {type(exc).__name__}: {exc})")
+
+
+def _flow_run_all(args: argparse.Namespace) -> None:
+    from pathlib import Path
+
+    from .flows import run_all
+
+    results = asyncio.run(run_all(
+        approved_only=not args.include_unapproved, include_writes=args.include_writes,
+        concurrency=args.concurrency, on_drift=args.on_drift, provider_name=args.provider,
+    ))
+    rank = {"failed": 0, "ok": 1, "skipped": 2}
+    for r in sorted(results, key=lambda r: (rank.get(r.status, 3), r.name)):
+        mark = {"ok": "OK", "failed": "FAIL", "skipped": "SKIP"}.get(r.status, r.status.upper())
+        detail = f"{r.ms:.0f}ms " if r.ms else ""
+        detail += json.dumps(r.data, ensure_ascii=False) if r.status == "ok" else (r.error or "")
+        print(f"  [{mark:<4}] {r.name:<24} {detail}")
+    ok = sum(1 for r in results if r.status == "ok")
+    failed = [r for r in results if r.status == "failed"]
+    skipped = sum(1 for r in results if r.status == "skipped")
+    print(f"\n== {ok} ok, {len(failed)} failed, {skipped} skipped (of {len(results)}) ==")
+    if args.json:
+        record = {"ok": ok, "failed": len(failed), "skipped": skipped, "total": len(results),
+                  "flows": [{"name": r.name, "status": r.status, "ms": round(r.ms), "error": r.error}
+                            for r in results]}
+        Path(args.json).write_text(json.dumps(record, indent=2), encoding="utf-8")
+        print(f"wrote {args.json}")
+    if failed and args.alert_webhook:
+        _post_alert(args.alert_webhook, failed)
+    raise SystemExit(1 if failed else 0)  # cron alerts on a non-zero exit
+
+
 def _add_login_args(parser, *, url_required: bool) -> None:
     """Shared --login-* flags for `learn` (login optional) and `set-login` (login required)."""
     parser.add_argument("--login-url", dest="login_url", required=url_required,
@@ -351,6 +398,21 @@ def _flow_main(argv) -> None:
     pst.add_argument("--stale-after", dest="stale_after", type=float,
                      help="hours since last success after which a healthy flow counts as 'stale'.")
 
+    pra = sub.add_parser("run-all", help="Replay every saved flow (read + approved by default); "
+                                         "report + alert; exits non-zero if any fails. Point cron at this.")
+    pra.add_argument("--provider", **prov)
+    pra.add_argument("--include-unapproved", dest="include_unapproved", action="store_true",
+                     help="also run flows that aren't approved.")
+    pra.add_argument("--include-writes", dest="include_writes", action="store_true",
+                     help="also run write/mutate flows (PERFORMS the writes).")
+    pra.add_argument("--concurrency", type=int, default=None,
+                     help="max flows run at once (default ULTRACUA_CONCURRENCY).")
+    pra.add_argument("--on-drift", dest="on_drift", default="raise", choices=["raise", "relearn"])
+    pra.add_argument("--json", dest="json", help="write a machine-readable run record to this path.")
+    pra.add_argument("--alert-webhook", dest="alert_webhook",
+                     help="POST a JSON alert here if any flow fails (Slack/Discord/etc. incoming webhook).")
+    pra.add_argument("--verbose", "-v", action="store_true", help="log each replay (INFO).")
+
     sub.add_parser("list", help="List saved flows.")
 
     args = p.parse_args(argv)
@@ -372,6 +434,8 @@ def _flow_main(argv) -> None:
         _flow_inspect(args)
     elif args.cmd == "status":
         _flow_status(args)
+    elif args.cmd == "run-all":
+        _flow_run_all(args)
     elif args.cmd == "list":
         _flow_list()
 

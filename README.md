@@ -68,7 +68,7 @@ Hacker News (read-only) and is built to record: `uv run python examples/hn_diges
 - **Trust controls** — approval gate, data-shape drift detection, **fail-loud** `FlowReplayError`.
 - **Auth refresh** — re-login on session expiry; credentials are env-sourced and **never persisted**.
 - **Write flows** — submit / post / purchase with **action-completion verification** + idempotency.
-- **Fleet health** — per-flow run history (`flow status`); point cron at `flow replay`.
+- **Fleet supervisor** — `flow run-all` replays every saved flow, reports pass/fail, alerts, exits non-zero for cron; `flow status` for history.
 - **Multi-provider** — Anthropic / OpenAI / Gemini, fast/strong tiering, prompt caching.
 - **Drive from any language** — JSON-RPC daemon + a Node/JS client.
 
