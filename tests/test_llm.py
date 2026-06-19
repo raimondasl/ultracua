@@ -114,6 +114,16 @@ def test_gemini_to_native_shapes() -> None:
     assert b["contents"][0] == {"role": "user", "parts": [{"text": "hello"}]}
 
 
+def test_temperature_threaded_into_all_adapters() -> None:
+    # best-of-N relies on resampling; temperature must reach the request body (not the provider default).
+    req = LLMRequest(model="m", messages=[Message("user", [TextBlock("hi")])], temperature=0.7)
+    assert anthropic.to_native(req)["temperature"] == 0.7
+    assert openai.to_native(req)["temperature"] == 0.7
+    assert gemini.to_native(req)["temperature"] == 0.7
+    # ...and is omitted (provider default) when unset.
+    assert "temperature" not in anthropic.to_native(LLMRequest(model="m"))
+
+
 def test_gemini_from_native() -> None:
     raw = {
         "modelVersion": "gemini-x",

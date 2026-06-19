@@ -43,7 +43,8 @@ def _raw(r: FlowReport) -> float:
     return float((r.extra.get("finalize") or {}).get("raw") or 0.0)
 
 
-async def _run_task(base: str, cache: FlowCache, task: str, provider_name: str, seed: int):
+async def _run_task(base: str, cache: FlowCache, task: str, provider_name: str, seed: int,
+                    samples: int = 1):
     url = task_url(base, task)
     prep, fin = make_prepare(seed), make_finalize()
     instr = await read_instruction(url, prep)
@@ -51,6 +52,7 @@ async def _run_task(base: str, cache: FlowCache, task: str, provider_name: str, 
     learn = await run_cached(
         url, instr, _teacher(provider_name), cache, mode="learn",
         prepare=prep, finalize=fin, headless=True, max_steps=12,
+        samples=samples, verify_replay=samples > 1,  # best-of-N needs the verify-by-replay oracle
     )
     replay = await run_cached(
         url, instr, None, cache, mode="replay", prepare=prep, finalize=fin, headless=True

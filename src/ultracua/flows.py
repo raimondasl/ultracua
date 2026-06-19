@@ -131,6 +131,7 @@ class LearnResult:
     approved: bool = False
     shape: Any = None  # signature of the extracted data's structure (for replay drift checks)
     pinned: bool = False  # did a deterministic 0-LLM read get pinned (pin_read flows)?
+    performed_write: bool = False  # did discovery actuate a mutating step? (best-of-N must not retry)
     note: str = ""
 
 
@@ -484,6 +485,9 @@ async def learn(
     """
     cache = cache or _default_cache()
     fixed = provider is not None and router is not None  # a caller-supplied teacher -> one attempt
+    # NEVER multi-sample a declared write flow: each attempt re-performs the write (double-submit).
+    if spec.mutate is not None:
+        samples = 1
     attempts = 1 if fixed else max(1, samples)
     best: Optional[LearnResult] = None
     for i in range(attempts):
@@ -498,6 +502,9 @@ async def learn(
             if i:
                 _log.info("flow %r: discovery verified on attempt %d/%d", spec.name, i + 1, attempts)
             return res  # the cache now holds this verified flow
+        if res.performed_write:  # an undeclared write was actuated -> stop, never re-author it
+            _log.warning("flow %r: a write was performed during discovery — not re-sampling", spec.name)
+            return res
         best = res
     if attempts > 1:
         _log.warning("flow %r: discovery unverified after %d samples", spec.name, attempts)
@@ -535,7 +542,8 @@ async def _learn_once(
     return LearnResult(
         spec=spec, cached=cached is not None, steps=list(cached.steps) if cached else [],
         data=data, found=found, approved=meta.approved, shape=_shape_of(data),
-        pinned=pinned, note=report.note or report.mode,
+        pinned=pinned, performed_write=bool(report.extra.get("performed_write")),
+        note=report.note or report.mode,
     )
 
 

@@ -67,6 +67,7 @@ class LLMRequest:
     messages: list[Message] = field(default_factory=list)
     force_tool: Optional[str] = None  # force the model to call this tool
     max_tokens: int = 512
+    temperature: Optional[float] = None  # None -> provider default; set >0 so best-of-N resamples
     cache: bool = True  # enable prompt caching on the stable prefix (provider-permitting)
     thinking: bool = False
 

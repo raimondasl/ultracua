@@ -36,6 +36,8 @@ def to_native(req: LLMRequest) -> dict:
         for m in req.messages
     ]
     body: dict = {"contents": contents}
+    if req.temperature is not None:  # passed through into the SDK `config` by complete()
+        body["temperature"] = req.temperature
     if req.system:
         body["system_instruction"] = {"parts": [{"text": req.system}]}
     if req.tools:

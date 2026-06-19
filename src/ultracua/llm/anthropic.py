@@ -60,6 +60,8 @@ def to_native(req: LLMRequest) -> dict:
     ]
 
     body: dict = {"model": req.model, "max_tokens": req.max_tokens, "messages": messages}
+    if req.temperature is not None:
+        body["temperature"] = req.temperature
     if system:
         body["system"] = system
     if tools:

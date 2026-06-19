@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 
+from ..config import settings
 from ..llm.base import Router
 from ..llm.types import LLMRequest, Message, TextBlock, ToolDef
 from ..types import Action, Observation
@@ -109,6 +110,7 @@ class LLMAgentProvider:
             force_tool="act",
             messages=[Message(role="user", content=[TextBlock(text=_render(obs, goal, history))])],
             max_tokens=512,
+            temperature=settings.authoring_temperature,  # >0 so best-of-N draws diverse samples
         )
         resp = await self.router.complete(req, tier=self.tier)
         action = _parse(resp)
