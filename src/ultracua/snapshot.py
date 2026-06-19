@@ -99,9 +99,13 @@ SNAPSHOT_JS = r"""
     '[contenteditable=""]', '[contenteditable="true"]', '[onclick]',
   ].join(',');
 
-  // Collect first (no refs yet), then sort into reading order, THEN assign e0..eN — so refs and the
-  // structural fingerprint follow visual order, not DOM order (a visually-early span-link no longer
-  // lands last after the cursor:pointer pass). `seen` dedups across the two passes.
+  // Collect ALL visible candidates up to a hard CEILING (not MAX), sort into reading order, THEN
+  // truncate to MAX and assign e0..eN — so refs and the structural fingerprint follow visual order,
+  // not DOM order, and the elements dropped on an over-dense page are the visually-LAST, not the
+  // DOM-last. (Capping at MAX *before* the sort let a DOM-early/visually-low element evict a
+  // DOM-late/visually-top one, and a full pass-1 dropped every cursor:pointer leaf regardless of
+  // where it sat.) The 3×MAX ceiling bounds work on huge DOMs. `seen` dedups across the two passes.
+  const CEILING = MAX * 3;
   const seen = new Set();
   const cands = [];
   const add = (el, role, name) => {
@@ -115,7 +119,7 @@ SNAPSHOT_JS = r"""
   };
 
   for (const el of document.querySelectorAll(sel)) {
-    if (cands.length >= MAX) break;
+    if (cands.length >= CEILING) break;
     if (el.disabled) continue;
     if (!isVisible(el)) continue;
     add(el, roleOf(el), nameOf(el));
@@ -123,9 +127,9 @@ SNAPSHOT_JS = r"""
 
   // Second pass: leaf elements clickable only via JS listeners / cursor:pointer (e.g. <span> "links"
   // with no onclick attribute, as MiniWoB++ uses). The leaf + short-text guards keep this cheap.
-  if (cands.length < MAX) {
+  if (cands.length < CEILING) {
     for (const el of document.querySelectorAll('*')) {
-      if (cands.length >= MAX) break;
+      if (cands.length >= CEILING) break;
       if (seen.has(el)) continue;
       if (el.children.length > 0) continue;
       const txt = (el.innerText || el.textContent || '').trim();
@@ -147,9 +151,12 @@ SNAPSHOT_JS = r"""
     return a._i - b._i;
   });
 
+  // Truncate AFTER the sort, so an over-dense page sheds its visually-LAST elements (bottom of the
+  // page) rather than whichever happened to fall late in the DOM. Refs are assigned only to survivors.
+  const kept = cands.slice(0, MAX);
   const out = [];
   let i = 0;
-  for (const c of cands) {
+  for (const c of kept) {
     const ref = 'e' + (i++);
     c.el.setAttribute('data-ultracua-ref', ref);
     out.push({ ref, role: c.role, name: c.name, tag: c.tag, type: c.type, value: c.value, bbox: c.bbox });
