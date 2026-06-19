@@ -65,6 +65,11 @@ class Settings:
     max_elements: int = int(os.getenv("ULTRACUA_MAX_ELEMENTS", "80"))
     nav_timeout_ms: int = int(os.getenv("ULTRACUA_NAV_TIMEOUT_MS", "15000"))
     action_timeout_ms: int = int(os.getenv("ULTRACUA_ACTION_TIMEOUT_MS", "5000"))
+    # Write-detection act window: how long AFTER a step's verify snapshot a non-idempotent network
+    # request is still attributed to THAT action (a write's POST can race a post-act navigation and
+    # land just after verify returns). Generous on purpose — a missed write means a double-submit on
+    # re-author, far worse than a wasted best-of-N re-sample. See `flow._author_steps`.
+    write_window_ms: int = int(os.getenv("ULTRACUA_WRITE_WINDOW_MS", "2000"))
     # Max flows run concurrently by run_many (as separate contexts in one browser).
     concurrency: int = int(os.getenv("ULTRACUA_CONCURRENCY", "4"))
     # Root for large/working data kept off the system drive (benchmark downloads, the

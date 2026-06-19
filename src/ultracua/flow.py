@@ -33,6 +33,7 @@ from .safety import (
     PacingGovernor,
     classify_mutation,
     idempotency_key,
+    is_write_request,
     looks_like_interstitial,
     origin_of,
 )
@@ -172,8 +173,19 @@ async def _author_steps(
 
     `performed_write` answers "did a write fire ON THE WIRE this pass?" — NOT just "is a mutating step in
     the recipe". Best-of-N / verify-by-replay must never re-run after a write (double-submit), and the
-    recipe's `mutating` flags miss Enter-submits and formless JS POSTs, so it also watches for same-origin
-    non-idempotent (POST/PUT/PATCH/DELETE) network requests, the precise signal.
+    recipe's `mutating` flags miss Enter-submits and formless JS POSTs, so it also watches the network for
+    a write signature. That watcher counts a non-idempotent (POST/PUT/PATCH/DELETE) request when BOTH:
+      - it is NOT to a known telemetry/analytics host (`safety.is_write_request`) — so a click that also
+        fires a GA/Segment/Sentry beacon isn't mistaken for a write; and
+      - it fired inside the ACT WINDOW (from just before `session.act` through the verify snapshot, plus a
+        short grace) — so a background/1st-party beacon on a timer, firing during the LLM `decide()` gap,
+        doesn't count even when it isn't on a known vendor host.
+    This is ORIGIN-INDEPENDENT (it dropped the old same-origin requirement): a cross-origin write to a
+    3rd-party payment/API host now counts, closing the gap where best-of-N could re-author and double-
+    submit it; and it no longer hinges on `origin_of(page.url)`, which a mid-navigation blank URL could
+    skew into missing a genuine same-origin write. Residual bound (the safe direction): a click-triggered
+    non-telemetry read-POST — a same/cross-origin GraphQL/RPC query — is over-counted as a write, which
+    only costs a re-sample, never a double-submit.
 
     `block_mutations=True` (used by the replan path) refuses to EXECUTE any mutating action: a
     replay-triggered re-author must never perform a NEW write — it isn't approved and could
@@ -187,11 +199,18 @@ async def _author_steps(
     success = False
     no_progress = 0
     wrote = {"hit": False}  # did a write fire on the wire? (set by the request watcher + pre-act, below)
+    # Act window: a request is attributed to a user action only while this is open (just before
+    # `session.act` through the verify snapshot) or within `write_window_ms` after it closes. Outside
+    # the window — during the initial snapshot / LLM `decide()` — requests are background noise and ignored.
+    act_window = {"open": False, "until": 0.0}
     page = session.page
 
-    def _watch_request(req):  # same-origin non-idempotent request = a write fired (precise, classifier-free)
+    def _in_act_window() -> bool:
+        return act_window["open"] or time.monotonic() <= act_window["until"]
+
+    def _watch_request(req):  # a non-idempotent, non-telemetry request fired in causal response = a write
         try:
-            if req.method in ("POST", "PUT", "PATCH", "DELETE") and origin_of(req.url) == origin_of(page.url):
+            if _in_act_window() and is_write_request(req.method, req.url):
                 wrote["hit"] = True
         except Exception:  # noqa: BLE001
             pass
@@ -264,6 +283,7 @@ async def _author_steps(
         origin = origin_of(session.page.url)
         if mutating:  # flag BEFORE acting: a click that commits the write then times out still counts
             wrote["hit"] = True
+        act_window["open"] = True  # OPEN: from here through verify, a wire write is attributed to this act
         with tr.measure("act"):
             try:
                 async with governor.gate(origin):
@@ -278,6 +298,10 @@ async def _author_steps(
             except Exception:  # noqa: BLE001 - a post-action navigation can race the snapshot; don't
                 changed = True  #               lose the attempt (and the write flag) to a transient throw
             tr.meta["changed"] = changed
+        # CLOSE with a grace tail: a write's POST can race the post-act navigation and land just after the
+        # verify snapshot returns; the grace keeps it attributed to THIS action, not silently dropped.
+        act_window["open"] = False
+        act_window["until"] = time.monotonic() + settings.write_window_ms / 1000.0
         no_progress = 0 if (ok and changed) else no_progress + 1
 
         if ok:
@@ -568,8 +592,10 @@ async def _replay(
                     )
                     llm += replan_llm
                     traces.extend(replan_traces)
-                    # If the repair fired a write on the wire (a formless POST block_mutations can't see),
-                    # do NOT cache/keep it — re-replaying would re-submit. Fail loud instead.
+                    # If the repair fired a write on the wire (a formless or cross-origin POST that
+                    # block_mutations, being classifier-based, can't see), do NOT cache/keep it —
+                    # re-replaying would re-submit. Fail loud instead. (Correct here too: the repair is
+                    # not human-approved, so even an accidental write must never become a cached step.)
                     if _replan_wrote:
                         _log.warning("replay: suffix-replan fired a write — refusing to cache the repair")
                     elif new_steps or authored_ok:

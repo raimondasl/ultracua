@@ -31,6 +31,42 @@ MUTATING_KEYWORDS = (
 # HTTP methods that are NOT safe/idempotent — a form using one of these is a write.
 NONIDEMPOTENT_METHODS = ("post", "put", "delete", "patch")
 
+# Known analytics / telemetry / RUM / error-reporting vendor hosts. A non-idempotent request to one of
+# these is a BEACON, not a state-changing write, so write-detection ignores it — otherwise every click on
+# an instrumented site would look like a write and best-of-N could never re-sample. Matched as a netloc
+# SUFFIX so subdomains (region1.google-analytics.com, o123.ingest.sentry.io) are covered.
+#
+# Curated for HIGH CONFIDENCE on purpose: each entry is a pure-beacon endpoint that NEVER receives a
+# user-initiated write. Hosts that also take real writes (facebook.com posts, an Intercom message send)
+# are deliberately LEFT OUT — a missing entry only costs a wasted re-sample (safe), but a wrong entry
+# could hide a genuine write and cause a double-submit (unsafe). For the same reason we never denylist by
+# PATH (`/events`, `/track`) — those collide with real write endpoints (creating a calendar event POSTs
+# to `/events`).
+TELEMETRY_HOSTS = (
+    "google-analytics.com", "analytics.google.com", "googletagmanager.com",
+    "g.doubleclick.net", "stats.g.doubleclick.net",
+    "segment.io", "segmentapis.com",
+    "amplitude.com",
+    "mixpanel.com",
+    "sentry.io",
+    "bugsnag.com",
+    "nr-data.net", "newrelic.com",                                  # New Relic browser agent (bam.nr-data.net)
+    "browser-intake-datadoghq.com", "browser-intake-datadoghq.eu",  # Datadog RUM intake
+    "fullstory.com",
+    "hotjar.com", "hotjar.io",
+    "heap.io", "heapanalytics.com",
+    "clarity.ms",                                                   # Microsoft Clarity
+    "posthog.com",
+    "plausible.io",
+    "scorecardresearch.com", "quantserve.com",
+    "logrocket.com", "logrocket.io", "lr-ingest.io", "lr-in.com",
+    "mouseflow.com",
+    "snowplowanalytics.com",
+    "cloudflareinsights.com",                                       # Cloudflare Web Analytics beacon
+    "bat.bing.com",                                                 # Microsoft UET tag
+    "px.ads.linkedin.com",                                          # LinkedIn Insight tag
+)
+
 
 def _keyword_mutating(intent: str, name: str) -> bool:
     blob = f"{intent} {name}".lower()
@@ -72,6 +108,27 @@ def idempotency_key(scope: str, step_index: int, intent: str) -> str:
 def origin_of(url: str) -> str:
     p = urlsplit(url)
     return f"{p.scheme}://{p.netloc}".lower()
+
+
+def is_telemetry_host(url: str) -> bool:
+    """Is this URL's host a known analytics/telemetry/RUM beacon endpoint (see `TELEMETRY_HOSTS`)?
+
+    Suffix-matched on the bare hostname with a dot boundary, so `region1.google-analytics.com` matches
+    but `notgoogle-analytics.com` does not."""
+    host = (urlsplit(url).hostname or "").lower()
+    return any(host == h or host.endswith("." + h) for h in TELEMETRY_HOSTS)
+
+
+def is_write_request(method: str, url: str) -> bool:
+    """The network signature of a state-changing write: a non-idempotent request to a non-telemetry host.
+
+    ORIGIN-INDEPENDENT by design — a same-origin form POST and a cross-origin POST to a 3rd-party
+    payment/API host are both writes (the latter is the gap a same-origin-only check misses, letting
+    best-of-N re-author and double-submit). Beacon-aware so the breadth doesn't false-fire on analytics.
+    The CALLER additionally gates on the act window (see `flow._author_steps`) so a background/1st-party
+    beacon that isn't on a known vendor host — and so slips past the denylist — still doesn't count unless
+    it fired in causal response to an actuated action."""
+    return method.upper() in ("POST", "PUT", "PATCH", "DELETE") and not is_telemetry_host(url)
 
 
 # CAPTCHA / anti-bot interstitial signals (substring match on url + title + text).

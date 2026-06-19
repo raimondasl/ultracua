@@ -7,6 +7,8 @@ from ultracua.safety import (
     backoff_delay,
     idempotency_key,
     is_mutating,
+    is_telemetry_host,
+    is_write_request,
     looks_like_interstitial,
     origin_of,
 )
@@ -30,6 +32,32 @@ def test_idempotency_key_stable_and_scoped() -> None:
 
 def test_origin_of() -> None:
     assert origin_of("https://Example.com/a/b?x=1#f") == "https://example.com"
+
+
+def test_is_telemetry_host() -> None:
+    # Known beacon vendors (and their subdomains) are telemetry...
+    assert is_telemetry_host("https://www.google-analytics.com/g/collect?v=2")
+    assert is_telemetry_host("https://region1.google-analytics.com/g/collect")
+    assert is_telemetry_host("https://api.segment.io/v1/batch")
+    assert is_telemetry_host("https://o123.ingest.sentry.io/api/456/envelope/")
+    assert is_telemetry_host("https://bam.nr-data.net/events")
+    assert is_telemetry_host("https://stats.g.doubleclick.net/j/collect")
+    # ...real (write-capable) hosts are NOT, and the suffix match is dot-boundaried.
+    assert not is_telemetry_host("https://api.stripe.com/v1/charges")
+    assert not is_telemetry_host("https://shop.example.com/cart/add")
+    assert not is_telemetry_host("https://notgoogle-analytics.com/collect")  # not a real subdomain
+
+
+def test_is_write_request() -> None:
+    # Non-idempotent method to a non-telemetry host (any origin) = a write...
+    assert is_write_request("POST", "https://shop.example.com/checkout")
+    assert is_write_request("POST", "https://api.stripe.com/v1/charges")   # cross-origin write counts
+    assert is_write_request("delete", "https://api.example.com/orders/7")  # method case-insensitive
+    assert is_write_request("POST", "https://shop.example.com/collect")    # PATH is never denylisted
+    # ...but idempotent reads and beacons are not.
+    assert not is_write_request("GET", "https://shop.example.com/products")
+    assert not is_write_request("POST", "https://www.google-analytics.com/g/collect")
+    assert not is_write_request("POST", "https://api.segment.io/v1/batch")
 
 
 def test_interstitial_detection() -> None:
