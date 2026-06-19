@@ -60,7 +60,9 @@ def to_native(req: LLMRequest) -> dict:
 
     body: dict = {
         "model": req.model,
-        "max_tokens": req.max_tokens,
+        # Newer OpenAI models (o-series, GPT-4.1+/5, …) reject `max_tokens` and require
+        # `max_completion_tokens`; it's accepted by all current chat models, so send it.
+        "max_completion_tokens": req.max_tokens,
         "messages": _messages_to_native(req),
     }
     if tools:

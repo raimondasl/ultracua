@@ -171,12 +171,19 @@ multiple browser contexts, streaming traces, OpenAPI); flow import/export + a re
 
 ### Phase J — Evaluation & confidence ("prove it keeps working")
 
-CI (none today); a standing benchmark harness with **variance / error bars** (today's runs are
-single-shot — the 6/10-vs-8/10 swing is why this matters); recorded-cassette tests for the untested
-live LLM path; a regression gate on replay-fidelity + cost.
+**Done:** CI (GitHub Actions, Linux + Windows, key-less); a $0 regression gate on replay-fidelity +
+cost ([tests/test_regression_gate.py](tests/test_regression_gate.py)); and recorded/synthetic
+live-path tests for all three adapters' `.complete()` glue (Anthropic cassette + OpenAI MockTransport
++ Gemini SDK-object) — which surfaced and fixed two real bugs the never-run-live path had hidden
+(OpenAI `max_tokens` rejection; Gemini response-parsing casing).
+
+**Still open:** a *standing* benchmark harness with **variance / error bars** run on a schedule
+(today's real-LLM runs are single-shot — the 6/10-vs-8/10 swing is why this matters); providers
+exercised against a real API (the live-path tests are key-less, so they replay synthetic responses).
 
 - *Enables:* "every change is gated on replay-fidelity and cost regressions across a benchmark matrix."
-- *Closes:* no CI, single-run benchmarks, untested live LLM path, SDK-upgrade breakage risk.
+- *Closes:* no CI, untested live LLM path, SDK-upgrade breakage risk. Still open: single-run
+  benchmarks (no error bars).
 
 **Suggested sequencing:** the near-term fixes in [STATUS.md](STATUS.md) → **E** and **F** first (they
 turn "validated prototype" into "trustworthy unattended tool") → **H** and **I** as the scale/adoption

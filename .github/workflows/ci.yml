@@ -40,4 +40,6 @@ jobs:
         run: uv run --group bench playwright install chromium
 
       - name: Run the test suite
-        run: uv run --group bench pytest -q
+        # `--group providers` installs the OpenAI / Gemini SDKs so the provider live-path tests
+        # actually run here (they `importorskip` and would otherwise silently skip). Still key-less.
+        run: uv run --group bench --group providers pytest -q
