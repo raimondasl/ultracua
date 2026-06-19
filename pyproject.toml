@@ -3,6 +3,8 @@ name = "ultracua"
 version = "0.22.0"
 description = "A Computer Use Agent that drives a web browser at 5-10x human speed."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=0.109.2",
