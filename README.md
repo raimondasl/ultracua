@@ -85,4 +85,4 @@ Hacker News (read-only) and is built to record: `uv run python examples/hn_diges
 
 ## License
 
-[MIT](LICENSE) © raimondasl
+[MIT](LICENSE) © Raimondas Lencevicius
