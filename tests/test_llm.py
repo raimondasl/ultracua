@@ -66,6 +66,8 @@ def test_openai_to_native_shapes() -> None:
     assert b["tool_choice"] == {"type": "function", "function": {"name": "act"}}
     assert b["messages"][0] == {"role": "system", "content": "S"}
     assert b["messages"][1] == {"role": "user", "content": "hello"}
+    # Newer OpenAI models reject `max_tokens`; we must send `max_completion_tokens`.
+    assert "max_completion_tokens" in b and "max_tokens" not in b
 
 
 def test_openai_tool_roundtrip_messages() -> None:

@@ -58,7 +58,11 @@ def to_native(req: LLMRequest) -> dict:
 
 
 def from_native(raw: Any) -> LLMResponse:
-    data = raw if isinstance(raw, dict) else raw.model_dump()
+    # A live SDK response object's `model_dump()` is snake_case (`function_call`, `usage_metadata`, …),
+    # but the keys read below — and our raw-dict test fixtures — are the REST API's camelCase. `by_alias`
+    # normalizes the SDK object to camelCase so both the live `.complete()` path and dict inputs parse
+    # identically. (Without it, a real Gemini call returns an empty response with zero usage.)
+    data = raw if isinstance(raw, dict) else raw.model_dump(by_alias=True)
     cands = data.get("candidates") or [{}]
     parts = ((cands[0].get("content") or {}).get("parts")) or []
     blocks: list = []
