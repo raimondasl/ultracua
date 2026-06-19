@@ -133,9 +133,12 @@ exact numbers.
   classifier (form **method**: GET=read, POST/PUT/DELETE/PATCH=write) with a keyword fallback. Catches
   icon-only / bland-intent submits the keywords missed and stops false-firing on reads like "submit the
   search". [`safety.py`, `snapshot.mutation_context`, `flow.py:_author_steps`]
-- **Grounding hygiene** *(remaining)* — spatial (reading-order) snapshot sort; real accessible-name
-  (`aria-labelledby` / `<label for>`); neighbor-anchor capture. Cheap LEARN-side wins that also sturdy the
-  cached locators. [`snapshot.py`, `locators.py`]
+- ✅ **Grounding hygiene** (#45) — reading-order snapshot sort (refs + agent view follow visual order;
+  the fingerprint is order-invariant so a layout nudge isn't false drift); real accessible-name
+  (`aria-labelledby` / `<label for>` / wrapping `<label>`), which makes the captured name match
+  `get_by_role`; and the role/AccName JS unified into one shared source across the three blocks.
+  Neighbor-anchor *capture* is deferred to pair with the Tier-2 Similo 0-LLM heal tier, where it's used.
+  [`snapshot.py`, `locators.py`]
 
 **Tier 2 — next:** best-of-N authoring (adaptive N + a learn-cost ceiling, read-only-by-default);
 reflexion retry on stalls; a Similo-style 0-LLM heal tier; a 0-LLM structured / list extractor (+ a

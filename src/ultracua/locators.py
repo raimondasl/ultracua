@@ -15,6 +15,8 @@ from typing import Optional
 from playwright.async_api import Locator, Page
 from pydantic import BaseModel
 
+from .snapshot import _ACCNAME_JS, _ROLEOF_JS
+
 # Roles Playwright's get_by_role understands and that our snapshot emits.
 KNOWN_ROLES = {
     "button",
@@ -43,41 +45,13 @@ class LocatorSpec(BaseModel):
     css: Optional[str] = None
 
 
-# Runs in the page. Mirrors snapshot.py's role/name derivation (kept in sync by hand —
-# the two must agree for replay to find what learning saw) and adds a short css path.
+# Runs in the page. Reuses snapshot.py's SHARED role/accessible-name derivation (so the captured name
+# matches what learning saw and what get_by_role resolves) and adds a short css path.
 DESCRIBE_JS = r"""
 (ref) => {
   const el = document.querySelector('[data-ultracua-ref="' + ref + '"]');
   if (!el) return null;
-  const roleOf = (e) => {
-    const ar = e.getAttribute('role');
-    if (ar) return ar;
-    const t = e.tagName.toLowerCase();
-    if (t === 'a') return 'link';
-    if (t === 'button') return 'button';
-    if (t === 'select') return 'combobox';
-    if (t === 'textarea') return 'textbox';
-    if (t === 'input') {
-      const ty = (e.getAttribute('type') || 'text').toLowerCase();
-      if (['button', 'submit', 'reset', 'image'].includes(ty)) return 'button';
-      if (ty === 'checkbox') return 'checkbox';
-      if (ty === 'radio') return 'radio';
-      return 'textbox';
-    }
-    return t;
-  };
-  const nameOf = (e) => {
-    const cand =
-      e.getAttribute('aria-label') ||
-      e.getAttribute('placeholder') ||
-      e.getAttribute('title') ||
-      e.getAttribute('alt') ||
-      (e.value ? String(e.value) : '') ||
-      e.innerText ||
-      e.textContent ||
-      '';
-    return cand.replace(/\s+/g, ' ').trim().slice(0, 120);
-  };
+""" + _ROLEOF_JS + _ACCNAME_JS + r"""
   const cssPath = (e) => {
     const parts = [];
     while (e && e.nodeType === 1 && parts.length < 5) {

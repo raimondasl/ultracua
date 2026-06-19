@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from .locators import LocatorSpec
 from .types import ActionType
 
-SCHEMA_VERSION = 3  # v3: per-step `mutating` now uses the DOM-structural write classifier (form method)
+SCHEMA_VERSION = 4  # v4: reading-order snapshot (changes ref order + fingerprint basis) + AccName names
 
 
 class CachedStep(BaseModel):
