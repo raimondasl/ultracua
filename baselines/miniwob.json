@@ -1,0 +1,29 @@
+{
+  "bench": "miniwob",
+  "provider": "anthropic",
+  "reps": 5,
+  "timestamp": "2026-06-19T18:42:24+00:00",
+  "cost_usd": 4.240085,
+  "metrics": {
+    "replay_success_rate": {
+      "mean": 0.52,
+      "std": 0.13038404810405294,
+      "min": 0.4,
+      "max": 0.7,
+      "n": 5
+    }
+  },
+  "pass_k": {
+    "1": 0.0,
+    "2": 0.0,
+    "3": 0.0,
+    "4": 0.0,
+    "5": 0.0
+  },
+  "pass_rate_wilson95": {
+    "lo": 0.0,
+    "hi": 0.43449149475208104,
+    "passes": 0,
+    "n": 5
+  }
+}
