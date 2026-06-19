@@ -186,12 +186,24 @@ uv run python -m benchmarks.webarena_bench --demo        # re-score bundled demo
 # Variance harness: run a benchmark N times, report mean +/- spread + $ cost (real LLM; manual/local).
 uv run python -m benchmarks.variance --bench demo --reps 5
 uv run --group bench python -m benchmarks.variance --bench miniwob --reps 5 --all
+
+# Standing baseline + regression gate: record a baseline once, then gate later runs against it
+# (exit 1 if replay-success or cost regressed BEYOND the error bars; a drop within them is noise).
+uv run python -m benchmarks.variance --bench demo --reps 5 --json baselines/demo.json   # record
+uv run python -m benchmarks.variance --bench demo --reps 5 --baseline baselines/demo.json  # gate
 ```
 
 Discovery (the learn run) is LLM-nondeterministic, so single benchmark runs are noisy. The **variance
 harness** (`benchmarks/variance.py`) reps a benchmark and reports `mean ± stdev` of speedup /
 success-rate plus the total `$` cost (read from `FlowReport.extra["usage"]`). It uses a real LLM
 (key from `.env`) and is **manual/local — never wired into CI**.
+
+To make it **standing**, `--json PATH` writes a machine-readable run record and `--baseline PATH`
+gates a run against a saved one: it **exits non-zero only if `replay_success_rate` dropped below the
+baseline mean by more than its error bars** (`max(0.05, baseline stdev)`) or cost rose >25% — a drop
+*within* the spread is treated as noise, not a regression. `speedup` is reported but never gated (it's
+a machine-dependent in-process micro-timing). The record/compare logic is pure and unit-tested
+key-lessly in [`tests/test_variance.py`](tests/test_variance.py); only the actual run needs a key.
 
 **WebArena-Verified** (ServiceNow) is WebArena's audited rebuild with **deterministic** scoring (no
 LLM judge). The adapter ([`benchmarks/webarena_env.py`](benchmarks/webarena_env.py)) **never imports**
