@@ -101,6 +101,7 @@ class _PostHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:  # accept the fetch POST (it's caught by the request listener regardless)
         self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")  # let a cross-origin fetch resolve cleanly
         self.send_header("Content-Length", "0")
         self.end_headers()
 
@@ -130,11 +131,39 @@ async def test_best_of_n_stops_on_a_formless_post_the_classifier_misses(tmp_path
         ])
         report = await run_cached(url, "click go", provider, cache, mode="learn", headless=True,
                                   samples=3, verify_replay=True)
-        assert report.extra.get("performed_write") is True   # caught by the same-origin POST listener
+        assert report.extra.get("performed_write") is True   # caught by the act-window POST listener
         assert report.extra.get("samples_used") == 1         # NOT re-authored -> no double-submit
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+async def test_best_of_n_flags_a_cross_origin_write(tmp_path: Path) -> None:
+    # The cross-origin gap: a button that fires a fetch('POST') to a DIFFERENT origin (an SPA checkout
+    # that POSTs to a 3rd-party payment/API host). A same-origin-only watcher misses it, so best-of-N
+    # could re-author and DOUBLE-SUBMIT to that API. The origin-independent, beacon-aware watcher catches
+    # it: a non-idempotent request to a non-telemetry host, fired in the act window, is a write.
+    api_httpd, api_base = _serve(tmp_path)           # the "3rd-party API" origin (different port => diff origin)
+    (tmp_path / "page.html").write_text(
+        "<!doctype html><html><body>"
+        f"<button id=\"pay\" onclick=\"fetch('{api_base}/api', {{method:'POST'}})\">Pay</button>"
+        "</body></html>", encoding="utf-8")
+    page_httpd, page_base = _serve(tmp_path)
+    try:
+        cache = FlowCache(root=tmp_path / "cache")
+        url = f"{page_base}/page.html"
+        provider = ScriptedProvider([
+            {"action": "click", "role": "button", "name": "pay", "intent": "click the pay button"},
+            {"action": "done", "intent": "done"},
+        ])
+        report = await run_cached(url, "pay", provider, cache, mode="learn", headless=True,
+                                  samples=3, verify_replay=True)
+        assert report.extra.get("performed_write") is True   # caught despite firing to a DIFFERENT origin
+        assert report.extra.get("samples_used") == 1         # NOT re-authored -> no double-submit
+    finally:
+        for h in (page_httpd, api_httpd):
+            h.shutdown()
+            h.server_close()
 
 
 # --- Flow API write-safety (no double-submit) -------------------------------------------------
