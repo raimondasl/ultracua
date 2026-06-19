@@ -9,6 +9,7 @@ for the current honest status + measured numbers see [STATUS.md](STATUS.md).
 - [How replay works](#how-replay-works)
 - [Resilient locators](#resilient-locators)
 - [Snapshot & fingerprint](#snapshot--fingerprint)
+- [Pinned 0-LLM reads](#pinned-0-llm-reads)
 - [Safety](#safety)
 - [Multi-provider LLM layer](#multi-provider-llm-layer)
 - [Actuation tiers](#actuation-tiers)
@@ -59,6 +60,19 @@ The **structural fingerprint** hashes `[role, name, tag]` of the snapshotted ele
 coordinates or page text — so cosmetic drift doesn't trip it. The **mutation gate** uses a tighter,
 per-step `scope_fingerprint`: the interactable controls in the *target's enclosing form/section*, so
 unrelated page churn (a banner, a cart badge) doesn't false-flag a write as drift.
+
+## Pinned 0-LLM reads
+
+By default a data flow's replay reads the answer with one LLM extraction call. With `pin_read=True`,
+`pin.py` instead locates — at learn time — the **unique deepest element** whose text equals the
+extracted scalar value, records a locator anchored on that element's **`id` or `data-test-id`** (never
+the value, and never a purely positional path — that could resolve to the wrong element after a layout
+shift), and verifies it round-trips. On replay, `read_pin` resolves that locator **uniquely**
+(`resolve(unique=True)` — an ambiguous match fails rather than guessing `.first`) and **strictly**
+parses its live text to the value's type — **no model call, no API key**. Opt-in and best-effort:
+anything without a stable, unambiguous, cleanly-parseable scalar isn't pinned (the flow keeps using the
+extractor), and a pin that no longer resolves or parses fails loud rather than returning a wrong value.
+See [GUIDE.md](GUIDE.md#pinned-0-llm-reads).
 
 ## Safety
 

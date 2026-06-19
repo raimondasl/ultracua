@@ -130,6 +130,106 @@ async def test_replay_without_learned_flow_raises(tmp_path: Path) -> None:
         await replay(spec, router=_extract_router(1), cache=FlowCache(root=tmp_path / "empty"))
 
 
+# --- Phase H: pinned 0-LLM reads --------------------------------------------------------------
+def _serve_pin(state: dict):
+    """/page1 -> link -> /v which shows the value in <p id='ans'> (or no element when state['gone'])."""
+
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def _send(self, body: str) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def do_GET(self) -> None:  # noqa: N802
+            from urllib.parse import urlparse
+
+            path = urlparse(self.path).path
+            if path == "/page1":
+                self._send("<html><body><h1>Home</h1><a href='/v'>see the value</a></body></html>")
+            elif path == "/v":
+                inner = "<p>no data</p>" if state.get("gone") else f"<p id='ans'>{state['value']}</p>"
+                self._send(f"<html><body><h1>Value</h1>{inner}</body></html>")
+            else:
+                self._send("not found")
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_pinned_read_replays_at_zero_llm_with_fresh_data(tmp_path: Path) -> None:
+    state = {"value": "42"}
+    httpd, base = _serve_pin(state)
+    cache = FlowCache(root=tmp_path / "cache")
+    spec = FlowSpec(name="pin", start_url=f"{base}/page1", goal="open the value page",
+                    extract="the value number", pin_read=True, headless=True)
+    try:
+        res = await learn(spec, provider=_ClickFirstLink(), router=_extract_router(42), cache=cache)
+        assert res.cached and res.found and res.pinned          # auto-pinned a deterministic read
+        state["value"] = "99"                                    # the live value changes
+        data = await replay(spec, cache=cache)                   # NO router/provider passed -> 0 LLM
+        assert data == 99                                        # read today's value via the pin
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_pinned_read_fails_loud_when_the_pin_breaks(tmp_path: Path) -> None:
+    state = {"value": "42"}
+    httpd, base = _serve_pin(state)
+    cache = FlowCache(root=tmp_path / "cache")
+    spec = FlowSpec(name="pinbreak", start_url=f"{base}/page1", goal="open the value page",
+                    extract="the value number", pin_read=True, headless=True)
+    try:
+        assert (await learn(spec, provider=_ClickFirstLink(), router=_extract_router(42), cache=cache)).pinned
+        state["gone"] = True                                     # the pinned element disappears
+        with pytest.raises(FlowReplayError):                     # can't resolve -> fail loud (no wrong value)
+            await replay(spec, cache=cache)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_pin_read_falls_back_to_llm_when_unpinnable(tmp_path: Path) -> None:
+    # the value is buried in prose ("The answer is 42."), not a unique element -> no pin -> LLM replay
+    _write_fixture(tmp_path)
+    httpd, base = _serve(tmp_path)
+    cache = FlowCache(root=tmp_path / "cache")
+    spec = FlowSpec(name="nopin", start_url=f"{base}/page1.html", goal="open the answer page",
+                    extract="the answer number", pin_read=True, headless=True)
+    try:
+        res = await learn(spec, provider=_ClickFirstLink(), router=_extract_router(42), cache=cache)
+        assert res.cached and res.found and not res.pinned       # couldn't pin
+        data = await replay(spec, router=_extract_router(42), cache=cache)  # falls back to the extractor
+        assert data == 42
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_pin_cleared_on_relearn_without_pin_read(tmp_path: Path) -> None:
+    state = {"value": "42"}
+    httpd, base = _serve_pin(state)
+    cache = FlowCache(root=tmp_path / "cache")
+    key = flow_key("open the value page", f"{base}/page1", "flow:p")
+    on = FlowSpec(name="p", start_url=f"{base}/page1", goal="open the value page",
+                  extract="the value number", pin_read=True, headless=True)
+    off = FlowSpec(name="p", start_url=f"{base}/page1", goal="open the value page",
+                   extract="the value number", pin_read=False, headless=True)
+    try:
+        assert (await learn(on, provider=_ClickFirstLink(), router=_extract_router(42), cache=cache)).pinned
+        assert _load_meta(cache, key).read_pin is not None
+        await learn(off, provider=_ClickFirstLink(), router=_extract_router(42), cache=cache)
+        assert _load_meta(cache, key).read_pin is None           # a pin_read=False re-learn clears the stale pin
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
 class _NoSteps:
     """An unverifiable discovery attempt: emits `done` immediately, authoring nothing."""
 

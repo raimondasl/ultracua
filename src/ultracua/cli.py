@@ -116,7 +116,7 @@ async def _flow_learn(args: argparse.Namespace) -> None:
     spec = FlowSpec(
         name=args.name, start_url=args.url, goal=args.goal, extract=args.extract,
         headers=_parse_headers(args.header) or None, storage_state=args.storage_state,
-        login=login, mutate=mutate, headless=(False if args.headed else None),
+        login=login, mutate=mutate, pin_read=args.pin_read, headless=(False if args.headed else None),
     )
     if args.fresh:
         FlowCache().delete(flow_key(spec.goal, spec.start_url, spec.scope))
@@ -126,6 +126,10 @@ async def _flow_learn(args: argparse.Namespace) -> None:
     for i, s in enumerate(res.steps):
         print(f"  {i}: {s.action} {s.intent!r}")
     print("data: " + json.dumps(res.data, ensure_ascii=False))
+    if args.pin_read:
+        print("pinned a deterministic 0-LLM read — replay needs no LLM or API key."
+              if res.pinned else
+              "could NOT pin a 0-LLM read (answer isn't a unique scalar) — replay uses the LLM extractor.")
     if not res.cached:
         print("WARNING: no replayable flow was cached (the agent took no clean steps).")
     elif not res.approved:
@@ -298,6 +302,8 @@ def _flow_main(argv) -> None:
     pl.add_argument("--url", required=True)
     pl.add_argument("--goal", required=True)
     pl.add_argument("--extract", help="instruction for what data to pull (omit for navigate-only).")
+    pl.add_argument("--pin-read", dest="pin_read", action="store_true",
+                    help="pin a deterministic 0-LLM read of a scalar answer (replay needs no LLM/key).")
     pl.add_argument("--header", action="append", help="auth header K=V (repeatable).")
     pl.add_argument("--storage-state", dest="storage_state", help="Playwright storage_state JSON path (cookie auth).")
     _add_login_args(pl, url_required=False)

@@ -8,6 +8,7 @@ walkthrough start with [EXAMPLES.md](EXAMPLES.md); for how it works inside see
 
 - [The one-shot agent](#the-one-shot-agent)
 - [Recurring flows — the Flow API](#recurring-flows--the-flow-api)
+- [Pinned 0-LLM reads](#pinned-0-llm-reads)
 - [Discovery reliability](#discovery-reliability)
 - [Trust for unattended runs](#trust-for-unattended-runs)
 - [Auth refresh](#auth-refresh)
@@ -76,6 +77,39 @@ uv run ultracua flow list
 `auth` is `headers=` or `storage_state=` (a Playwright cookies JSON); `extract` is a natural-language
 instruction (+ optional `extract_schema` for validated structure). Replay does 0-LLM **navigation**;
 reading the answer is one cheap extraction call (set `extract=None` for navigate-only flows).
+
+## Pinned 0-LLM reads
+
+By default a data flow's replay does 0-LLM *navigation* but still makes **one** LLM extraction call to
+read the answer. For a **scalar** answer that sits in an element with a stable `id` or `data-test-id`
+(common in dashboards and internal tools), add `pin_read=True`: at learn time ultracua pins a locator
+to that element, and replay reads it **deterministically — 0 LLM, no API key, typically sub-second**
+(and one fewer paid call, every run).
+
+```python
+spec = FlowSpec(name="latest-version", start_url=…, goal="open the release page",
+                extract="the latest version number", pin_read=True)
+res = asyncio.run(learn_flow(spec))   # res.pinned is True iff a 0-LLM read was pinned
+approve_flow(spec)
+v = asyncio.run(replay_flow(spec))    # reads the live value with no model call
+```
+
+CLI: `ultracua flow learn --pin-read …` (it prints whether the pin was recorded).
+
+It's **best-effort + safe**:
+
+- A pin is recorded only when the value maps to **exactly one** element with a stable **`id` or
+  `data-test-id`** (verified by reading it back). A purely positional anchor is **refused** — a layout
+  shift could resolve it to the wrong element. If it can't pin (no stable anchor, the value is buried
+  in prose, ambiguous, or not a scalar), the flow silently keeps using the LLM extractor; check
+  `res.pinned` (or the CLI output) to see which path you got.
+- The pin anchors on the element's **id / test-id**, never the value, so it returns *today's* value
+  on each replay.
+- Reads are **strict**: the live text must be one clean scalar of the recorded type. If the element
+  is gone, the locator is ambiguous, or the text no longer parses cleanly (a second number appears,
+  scientific notation, a range), replay **fails loud** (`FlowReplayError`) — it never returns a wrong
+  value — and you re-learn.
+- Structured (dict / list) answers aren't pinned yet — that's a follow-up.
 
 ## Discovery reliability
 

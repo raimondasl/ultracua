@@ -115,9 +115,11 @@ async def describe(page: Page, ref: str) -> Optional[LocatorSpec]:
     return LocatorSpec(**raw)
 
 
-async def resolve(page: Page, spec: LocatorSpec) -> Optional[Locator]:
-    """Resolve a spec to a unique, visible Playwright Locator, trying resilient
-    strategies before brittle ones. Returns None on drift (nothing resolves)."""
+async def resolve(page: Page, spec: LocatorSpec, unique: bool = False) -> Optional[Locator]:
+    """Resolve a spec to a visible Playwright Locator, trying resilient strategies before brittle
+    ones. Returns None on drift (nothing resolves). With `unique=True`, an ambiguous candidate
+    (count != 1) is never accepted — used by pinned reads, where picking the wrong `.first` element
+    would silently return a wrong value, so ambiguity must fail loud instead."""
     candidates: list[Locator] = []
     if spec.testid:
         candidates.append(page.get_by_test_id(spec.testid))
@@ -153,8 +155,8 @@ async def resolve(page: Page, spec: LocatorSpec) -> Optional[Locator]:
                 continue
             if n == 1:
                 return first
-            if ambiguous is None:
+            if not unique and ambiguous is None:
                 ambiguous = first
         except Exception:
             continue
-    return ambiguous
+    return None if unique else ambiguous

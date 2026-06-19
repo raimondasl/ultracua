@@ -29,6 +29,7 @@ from .config import settings
 from .extract import extract
 from .flow import run_cached
 from .obs import get_logger
+from .pin import find_pin, read_pin
 from .providers import build_router, get_provider
 
 if TYPE_CHECKING:
@@ -107,6 +108,7 @@ class FlowSpec:
     goal: str
     extract: Optional[str] = None          # what data to pull (None = navigate-only flow)
     extract_schema: Optional[dict] = None  # optional JSON schema for the extracted `data`
+    pin_read: bool = False                 # try to pin a deterministic 0-LLM read of a scalar answer
     headers: Optional[dict] = None         # auth via extra HTTP headers
     storage_state: Optional[str] = None    # auth via a Playwright storage_state JSON (cookies)
     login: Optional[Union[LoginSpec, LoginCallable]] = None  # how to (re)authenticate on expiry
@@ -128,6 +130,7 @@ class LearnResult:
     found: bool = False
     approved: bool = False
     shape: Any = None  # signature of the extracted data's structure (for replay drift checks)
+    pinned: bool = False  # did a deterministic 0-LLM read get pinned (pin_read flows)?
     note: str = ""
 
 
@@ -146,6 +149,7 @@ class FlowMeta:
     runs: int = 0
     successes: int = 0
     consecutive_failures: int = 0
+    read_pin: Optional[dict] = None  # a pinned 0-LLM read (locator + value type), if learned
 
 
 @dataclass
@@ -291,7 +295,7 @@ async def _condition_present(
             await asyncio.sleep(interval / 1000.0)
 
 
-def _make_finalize(spec: FlowSpec, router, out: dict):
+def _make_finalize(spec: FlowSpec, router, out: dict, pin: Optional[dict] = None):
     async def _finalize(session):
         if spec.mutate is not None:
             # WRITE flow: success is action-completion — the declared confirm check must hold,
@@ -324,12 +328,22 @@ def _make_finalize(spec: FlowSpec, router, out: dict):
             await session.page.wait_for_load_state("networkidle", timeout=8000)
         except Exception:  # noqa: BLE001
             pass
+        if pin is not None:  # REPLAY of a pinned flow: read the answer deterministically (0 LLM)
+            val = await read_pin(session.page, pin)
+            if val is not None:
+                out["data"], out["found"], out["pinned"] = val, True, True
+                return {"solved": True, "data": val}
+            out["found"] = False
+            out["error"] = "pinned read could not resolve or cleanly parse (page changed) — re-learn the flow"
+            return {"solved": False}
         try:
             text = await session.page.inner_text("body")
         except Exception:  # noqa: BLE001
             text = ""
         ex = await extract(router, spec.extract, text, schema=spec.extract_schema)
         out["data"], out["found"], out["error"] = ex.data, ex.found, ex.error
+        if spec.pin_read and ex.found:  # LEARN: try to pin a 0-LLM read of the answer for replays
+            out["pin"] = await find_pin(session.page, ex.data)
         return {"solved": ex.found, "data": ex.data}
 
     return _finalize
@@ -505,13 +519,18 @@ async def _learn_once(
     cached = cache.get(key)
     data, found = out.get("data"), bool(out.get("found"))
     meta = _load_meta(cache, key)  # preserve `approved` across re-learns
+    pinned = False
     if cached is not None:
         meta.shape, meta.learned_ts = _shape_of(data), time.time()
+        # Bind the pin to the just-learned DOM: a re-learn ALWAYS resets it (a fresh pin, or None
+        # when pin_read is off / unpinnable) so a stale pin can never outlive the cached flow.
+        meta.read_pin = out.get("pin") if spec.pin_read else None
+        pinned = meta.read_pin is not None
         _save_meta(cache, key, meta)
     return LearnResult(
         spec=spec, cached=cached is not None, steps=list(cached.steps) if cached else [],
         data=data, found=found, approved=meta.approved, shape=_shape_of(data),
-        note=report.note or report.mode,
+        pinned=pinned, note=report.note or report.mode,
     )
 
 
@@ -563,11 +582,12 @@ def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Op
 async def _attempt_replay(spec, router, cache, key, meta, check_shape):
     """One pure 0-LLM replay attempt. Returns (ok, data, reason)."""
     out: dict = {}
+    pin = meta.read_pin if spec.pin_read else None  # deterministic 0-LLM read, if one was learned
     report = await run_cached(
         url=spec.start_url, goal=spec.goal, provider=None, cache=cache, mode="replay",
         max_steps=spec.max_steps, headless=spec.headless, scope=spec.scope,
         extra_headers=spec.headers, storage_state=spec.storage_state,
-        finalize=_make_finalize(spec, router, out),
+        finalize=_make_finalize(spec, router, out, pin=pin),
     )
     if report.mode == "miss":
         return False, None, "no learned flow — run learn first"
@@ -633,10 +653,11 @@ async def replay(
             dp, dr = _router(provider_name or settings.provider)
             provider = provider if provider is not None else dp
             router = router if router is not None else dr
-    elif router is None and spec.extract is not None:
+    elif router is None and spec.extract is not None and not (spec.pin_read and meta.read_pin):
         # extraction only (incl. a write that also extracts a confirmation number): build just the
-        # router, no agent provider. Flows that don't extract (navigate-only reads, or writes whose
-        # confirm check is selector/url/text based) never call the LLM -> no router needed.
+        # router, no agent provider. Flows that don't extract (navigate-only reads, writes whose
+        # confirm check is selector/url/text based, or a PINNED read) never call the LLM on replay
+        # -> no router needed, and no API key required to run.
         router = build_router(provider_name or settings.provider)
 
     def _ok(data):
