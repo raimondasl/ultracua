@@ -52,6 +52,9 @@ class Settings:
     # default to STRONG; cached replay uses no LLM, so a fast routine tier rarely applies.
     # Set ULTRACUA_TIER=fast to drive routine steps cheaply (escalates to strong on give_up).
     tier: str = os.getenv("ULTRACUA_TIER", "strong")
+    # Sampling temperature for the agent's decisions. >0 is what makes best-of-N actually RESAMPLE
+    # diverse attempts (the provider default isn't guaranteed non-zero across backends/proxies).
+    authoring_temperature: float = float(os.getenv("ULTRACUA_TEMPERATURE", "1.0"))
     headless: bool = _flag("ULTRACUA_HEADLESS", True)
     max_steps: int = int(os.getenv("ULTRACUA_MAX_STEPS", "8"))
     # Stop a discovery run after this many consecutive no-progress steps (anti-loop): when

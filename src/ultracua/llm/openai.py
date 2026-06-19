@@ -65,6 +65,8 @@ def to_native(req: LLMRequest) -> dict:
         "max_completion_tokens": req.max_tokens,
         "messages": _messages_to_native(req),
     }
+    if req.temperature is not None:
+        body["temperature"] = req.temperature
     if tools:
         body["tools"] = tools
     if req.force_tool:

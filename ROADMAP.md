@@ -140,10 +140,14 @@ exact numbers.
   Neighbor-anchor *capture* is deferred to pair with the Tier-2 Similo 0-LLM heal tier, where it's used.
   [`snapshot.py`, `locators.py`]
 
-**Tier 2 — next:** best-of-N authoring (adaptive N + a learn-cost ceiling, read-only-by-default);
-reflexion retry on stalls; a Similo-style 0-LLM heal tier; a 0-LLM structured / list extractor (+ a
-JSON-LD tier) with a fail-loud row-count invariant; type-aware comparators + a scripted-oracle control
-arm in the variance gate; a **flow-staleness canary** (flag drift before a scheduled run fails at 6am).
+**Tier 2 — next:** ✅ **best-of-N authoring** (#48) — re-author up to N times, keep the first sample the
+verify-by-replay oracle confirms (`run_cached(samples=N)` / `flow.learn(samples=N)`; adaptive early-stop;
+benchmark via `variance --samples N`). READ-ONLY by design: it stops the instant a write fires *on the
+wire* (a same-origin non-idempotent request, caught even when the recipe's keyword/structural classifier
+misses an Enter-submit or formless POST), never re-authoring a write. Temperature is now plumbed so it
+actually resamples. *Still in Tier 2:* reflexion retry on stalls; a Similo-style 0-LLM heal tier; a
+0-LLM structured / list extractor (+ a JSON-LD tier) with a fail-loud row-count invariant; type-aware
+comparators + a scripted-oracle control arm in the variance gate; a **flow-staleness canary**.
 
 **Tier 3 — later:** parameterized typed slots; skill / workflow memory as a discovery prior (scales with
 flow volume); Phase G proper (barrier-commit multi-write + deterministic action primitives:

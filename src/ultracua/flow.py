@@ -98,6 +98,7 @@ async def run_cached(
     extra_headers: Optional[dict] = None,
     storage_state: Optional[str] = None,
     verify_replay: bool = False,
+    samples: int = 1,
 ) -> FlowReport:
     cache = cache or FlowCache()
     governor = governor or PacingGovernor()
@@ -124,6 +125,12 @@ async def run_cached(
 
     if provider is None and grounding is None:
         return FlowReport(mode="miss", success=False, note="learn requires a provider or grounding")
+    if samples and samples > 1:  # best-of-N: re-author up to N times, keep the first verified sample
+        return await _learn_n(
+            url, goal, key, provider, cache, max_steps, headless, on_step,
+            prepare, finalize, governor, scope, browser, verifier, grounding,
+            record_har_path, extra_headers, storage_state, verify_replay, samples,
+        )
     return await _learn(
         url, goal, key, provider, cache, max_steps, headless, on_step,
         prepare, finalize, governor, scope, browser, verifier, grounding,
@@ -156,12 +163,17 @@ async def _author_steps(
     session: BrowserSession, goal: str, provider: Optional[Provider], governor: PacingGovernor,
     max_steps: int, on_step: Optional[OnStep] = None, grounding: Optional[Any] = None,
     block_mutations: bool = False,
-) -> "tuple[list[CachedStep], bool, int, list[StepTrace]]":
+) -> "tuple[list[CachedStep], bool, int, list[StepTrace], bool]":
     """Drive the agent from the CURRENT page to author replayable steps toward `goal`.
 
     The shared discovery loop: `_learn` calls it after navigating to the start URL; the suffix-replan
     in `_replay` calls it from a mid-flow page to re-author just the broken tail. Returns
-    (steps, success, llm_calls, traces).
+    (steps, success, llm_calls, traces, performed_write).
+
+    `performed_write` answers "did a write fire ON THE WIRE this pass?" — NOT just "is a mutating step in
+    the recipe". Best-of-N / verify-by-replay must never re-run after a write (double-submit), and the
+    recipe's `mutating` flags miss Enter-submits and formless JS POSTs, so it also watches for same-origin
+    non-idempotent (POST/PUT/PATCH/DELETE) network requests, the precise signal.
 
     `block_mutations=True` (used by the replan path) refuses to EXECUTE any mutating action: a
     replay-triggered re-author must never perform a NEW write — it isn't approved and could
@@ -174,6 +186,18 @@ async def _author_steps(
     llm = 0
     success = False
     no_progress = 0
+    wrote = {"hit": False}  # did a write fire on the wire? (set by the request watcher + pre-act, below)
+    page = session.page
+
+    def _watch_request(req):  # same-origin non-idempotent request = a write fired (precise, classifier-free)
+        try:
+            if req.method in ("POST", "PUT", "PATCH", "DELETE") and origin_of(req.url) == origin_of(page.url):
+                wrote["hit"] = True
+        except Exception:  # noqa: BLE001
+            pass
+
+    if page is not None:
+        page.on("request", _watch_request)
     for i in range(max_steps):
         tr = StepTrace(index=i)
         with tr.measure("snapshot"):
@@ -238,6 +262,8 @@ async def _author_steps(
 
         ok, note = True, ""
         origin = origin_of(session.page.url)
+        if mutating:  # flag BEFORE acting: a click that commits the write then times out still counts
+            wrote["hit"] = True
         with tr.measure("act"):
             try:
                 async with governor.gate(origin):
@@ -246,8 +272,11 @@ async def _author_steps(
                 ok, note = False, f"{type(exc).__name__}: {exc}"
 
         with tr.measure("verify"):
-            after = await session.snapshot()
-            changed = state_changed(obs, after)
+            try:
+                after = await session.snapshot()
+                changed = state_changed(obs, after)
+            except Exception:  # noqa: BLE001 - a post-action navigation can race the snapshot; don't
+                changed = True  #               lose the attempt (and the write flag) to a transient throw
             tr.meta["changed"] = changed
         no_progress = 0 if (ok and changed) else no_progress + 1
 
@@ -279,7 +308,12 @@ async def _author_steps(
         if no_progress >= settings.stuck_limit:
             tr.meta["stuck"] = no_progress  # bail: agent looping without progress
             break
-    return steps, success, llm, traces
+    if page is not None:
+        try:
+            page.remove_listener("request", _watch_request)
+        except Exception:  # noqa: BLE001
+            pass
+    return steps, success, llm, traces, wrote["hit"] or any(s.mutating for s in steps)
 
 
 async def _verify_by_replay(
@@ -346,7 +380,7 @@ async def _learn(
             return FlowReport(mode="escalate", success=False, traces=traces,
                               note="interstitial/CAPTCHA detected", extra={"escalate": True})
 
-        steps, success, llm, step_traces = await _author_steps(
+        steps, success, llm, step_traces, performed_write = await _author_steps(
             session, goal, provider, governor, max_steps, on_step=on_step, grounding=grounding,
         )
         traces.extend(step_traces)
@@ -369,24 +403,33 @@ async def _learn(
             success = True
         extra = {"finalize": fin} if finalize else {}
         final_text = await _body_text(session)
+        cached_here = False
         if success and steps:
             candidate = CachedFlow(key=key, goal=goal, start_url=url, steps=steps, created_ts=time.time())
             # VERIFY-BY-REPLAY: a flow can look "solved" in-session yet not reproduce — its cached
             # locators may have leaned on learn-time state. Before caching, replay it 0-LLM on a FRESH
             # session and cache ONLY if every step reproduces; otherwise fail loud (don't cache a flow
-            # that won't replay). Write flows are exempt — re-replaying a mutating step would
-            # double-submit; they cache on the Phase-D confirm check and are approval-gated.
-            if verify_replay and not any(s.mutating for s in steps):
+            # that won't replay). Write flows are exempt — re-replaying a step that fired a write would
+            # double-submit; they cache on the Phase-D confirm check and are approval-gated. The gate
+            # keys off `performed_write` (a write fired on the wire), NOT the recipe's `mutating` flags,
+            # which miss Enter-submits and formless JS POSTs.
+            if verify_replay and not performed_write:
                 if await _verify_by_replay(url, key, candidate, cache, headless, prepare, governor,
                                            scope, browser, extra_headers, storage_state):
                     cache.put(candidate)
                     extra["verify"] = "passed"
+                    cached_here = True
                 else:
                     success = False
                     extra["verify"] = "failed"
                     _log.warning("learn: authored flow did NOT survive verify-by-replay — not cached")
             else:
                 cache.put(candidate)
+                cached_here = True
+        # `cached`: did THIS attempt cache a flow (vs a pre-existing one)? `performed_write`: did a write
+        # fire on the wire? Best-of-N uses both to stop the loop and to NEVER re-author after a write.
+        extra["cached"] = cached_here
+        extra["performed_write"] = performed_write
         used = _router.totals.since(_usnap) if _router is not None else None
         if used is not None:
             extra["usage"] = used.as_dict(settings.model)
@@ -401,6 +444,47 @@ async def _learn(
         )
     finally:
         await session.close()
+
+
+async def _learn_n(
+    url: str, goal: str, key: str, provider: Provider, cache: FlowCache, max_steps: Optional[int],
+    headless: Optional[bool], on_step: Optional[OnStep], prepare: Optional[Prepare],
+    finalize: Optional[Finalize], governor: PacingGovernor, scope: str, browser: Optional[Any] = None,
+    verifier: Optional[Verifier] = None, grounding: Optional[Any] = None,
+    record_har_path: Optional[str] = None, extra_headers: Optional[dict] = None,
+    storage_state: Optional[str] = None, verify_replay: bool = False, samples: int = 1,
+) -> FlowReport:
+    """Best-of-N authoring: re-author up to `samples` times and keep the FIRST sample the verify-by-replay
+    oracle confirms. Each attempt is a fresh `_learn` (fresh session -> the LLM resamples at
+    `settings.authoring_temperature`, default 1.0), converting discovery variance into a higher first-run
+    success rate. READ-ONLY by design: the loop STOPS as soon as a flow is cached (verified read, or a
+    write that cached on its confirm check), a write fired on the wire (`performed_write`), or an attempt
+    raised — re-authoring after a write would re-submit. Usage is reported cumulatively across attempts.
+    (Needs `verify_replay=True` to actually retry: without the oracle, attempt 1 always caches.)
+    """
+    samples = max(1, samples)
+    _router = getattr(provider, "router", None)
+    _usnap = _router.totals.snapshot() if _router is not None else None
+    last: Optional[FlowReport] = None
+    used = 0
+    for attempt in range(samples):
+        used = attempt + 1
+        try:
+            last = await _learn(
+                url, goal, key, provider, cache, max_steps, headless, on_step, prepare, finalize,
+                governor, scope, browser, verifier, grounding, record_har_path, extra_headers,
+                storage_state, verify_replay,
+            )
+        except Exception:  # an attempt that raised mid-way may have fired a write — never silently retry
+            _log.warning("best-of-N: attempt %d raised — stopping (a write may have fired)", used)
+            raise
+        if last.extra.get("cached") or last.extra.get("performed_write"):
+            break  # THIS attempt cached a (verified) read OR a write fired -> never re-author
+    if last is not None:
+        last.extra["samples_used"] = used
+        if _router is not None:  # cumulative cost across every attempt, not just the kept one
+            last.extra["usage"] = _router.totals.since(_usnap).as_dict(settings.model)
+    return last if last is not None else FlowReport(mode="learn", success=False)
 
 
 async def _replay(
@@ -478,13 +562,17 @@ async def _replay(
                         "replay: step %d %r failed (%s) — suffix-replanning the tail",
                         i, step.intent, note,
                     )
-                    new_steps, authored_ok, replan_llm, replan_traces = await _author_steps(
+                    new_steps, authored_ok, replan_llm, replan_traces, _replan_wrote = await _author_steps(
                         session, goal, provider, governor, settings.max_steps, on_step=on_step,
                         block_mutations=True,  # a replay-repair must never perform a NEW write
                     )
                     llm += replan_llm
                     traces.extend(replan_traces)
-                    if new_steps or authored_ok:
+                    # If the repair fired a write on the wire (a formless POST block_mutations can't see),
+                    # do NOT cache/keep it — re-replaying would re-submit. Fail loud instead.
+                    if _replan_wrote:
+                        _log.warning("replay: suffix-replan fired a write — refusing to cache the repair")
+                    elif new_steps or authored_ok:
                         flow = CachedFlow(
                             key=flow.key, goal=flow.goal, start_url=flow.start_url,
                             steps=list(flow.steps[:i]) + new_steps, created_ts=time.time(),
