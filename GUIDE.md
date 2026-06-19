@@ -122,10 +122,18 @@ success rate.
 ## Trust for unattended runs
 
 `replay(require_approved=True)` refuses any flow you haven't `approve_flow(spec)`d; replay also treats
-a change in the data's *shape* vs the learned run as drift; and `on_drift="relearn"` re-authors the
-flow instead of raising. So a scheduled run either returns trustworthy data or fails loudly — point
+a change in the data's *shape* vs the learned run as drift; and `on_drift="relearn"` recovers from
+drift instead of raising. So a scheduled run either returns trustworthy data or fails loudly — point
 cron at it and alert on a non-zero exit. (CLI: `ultracua flow approve --name …`; `flow replay
 --require-approved --on-drift relearn`.)
+
+`on_drift="relearn"` recovers in the cheapest way that works, escalating only as needed: a pure 0-LLM
+replay first; then a **suffix-replan repair** that re-authors *only the broken tail* from the current
+page while keeping the working prefix (so a locator/navigation change fixes itself without re-running
+the whole flow, and re-caches); and finally a full re-author from scratch (which also handles a change
+in the data's *shape*, since the steps still replay in that case). Write flows refuse `relearn`
+entirely — re-driving a write under uncertainty could double-submit, so they fail loud for a human to
+re-learn and re-approve.
 
 ## Auth refresh
 

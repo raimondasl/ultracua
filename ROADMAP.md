@@ -125,15 +125,22 @@ paths; SQLite cache + atomic/locked storage for many flows.
 
 ### Phase F — Replay fidelity & adaptive resilience ("survive a real redesign")
 
-Relevant-subtree preconditions (not the whole-page fingerprint); **suffix re-planning heal** — when
-single-step heal fails, re-learn only the *remaining tail* from the current page and keep the working
-prefix, instead of a full re-learn; a **drift-sandbox benchmark** (mutate fixtures, measure heal
-success/cost); optional embedding/visual anchor as an extra locator rank for renamed-but-same-purpose
-elements.
+**Done:** relevant-subtree preconditions (Phase D's precision mutation gate — drift is judged on the
+target's enclosing form/section, not the whole-page fingerprint); and **suffix re-planning heal** —
+when single-step heal can't fix a drifted step, re-author only the *remaining tail* from the current
+page, keep the working prefix, splice, and re-cache, instead of a full re-learn. It's wired into the
+engine's `auto`/`repair` modes and into the Flow API's `on_drift="relearn"` (which now escalates
+replay → suffix-replan repair → full re-author), and covered by a drift-sandbox test
+([tests/test_replan.py](tests/test_replan.py)) that breaks a mid-flow step and asserts the tail heals
+while the prefix is preserved. Writes still refuse re-planning under drift (double-submit risk).
+
+**Still open:** a drift-sandbox *benchmark* (mutate fixtures, measure heal success/cost across many
+mutations, not just a unit fixture); optional embedding/visual anchor as an extra locator rank for
+renamed-but-same-purpose elements.
 
 - *Enables:* "a vendor portal redesigns its checkout and the flow heals the changed step."
-- *Closes:* fingerprint over-sensitivity, single-step-local heal, accessible-name brittleness, the
-  live-replay regressions, no drift benchmark.
+- *Closes:* fingerprint over-sensitivity, single-step-local heal. Still open: accessible-name
+  brittleness, a drift benchmark.
 
 ### Phase G — Action breadth & multi-step writes ("real transactions, not just reads")
 

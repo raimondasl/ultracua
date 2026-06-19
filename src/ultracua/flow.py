@@ -105,18 +105,20 @@ async def run_cached(
     new_run_id()
     _log.info("run start: mode=%s cached=%s url=%s goal=%r", mode, cached is not None, url, goal)
 
-    if cached is not None and mode in ("auto", "replay"):
-        heal_provider = provider if mode == "auto" else None
+    if cached is not None and mode in ("auto", "replay", "repair"):
+        # "repair" = replay WITH the heal provider (self-heal + suffix-replan a drifted tail), but
+        # NO fall-through to a full re-author — the caller owns whole-flow relearn (and its metadata).
+        heal_provider = provider if mode in ("auto", "repair") else None
         report = await _replay(
             url, key, cached, cache, heal_provider, headless, on_step,
             prepare, finalize, goal, governor, scope, browser, record_har_path, extra_headers,
             storage_state,
         )
-        if report.success or mode == "replay" or report.mode == "escalate":
+        if report.success or mode in ("replay", "repair") or report.mode == "escalate":
             return report
         # auto-mode replay failed irrecoverably -> fall through to a fresh learn run.
 
-    if mode == "replay":
+    if mode in ("replay", "repair"):
         return FlowReport(mode="miss", success=False, note="no cached flow for key")
 
     if provider is None and grounding is None:
@@ -149,6 +151,131 @@ async def _vision_decide(session: BrowserSession, goal: str, grounding: Any, tr:
     return await grounding.decide(goal, png, vp)
 
 
+async def _author_steps(
+    session: BrowserSession, goal: str, provider: Optional[Provider], governor: PacingGovernor,
+    max_steps: int, on_step: Optional[OnStep] = None, grounding: Optional[Any] = None,
+    block_mutations: bool = False,
+) -> "tuple[list[CachedStep], bool, int, list[StepTrace]]":
+    """Drive the agent from the CURRENT page to author replayable steps toward `goal`.
+
+    The shared discovery loop: `_learn` calls it after navigating to the start URL; the suffix-replan
+    in `_replay` calls it from a mid-flow page to re-author just the broken tail. Returns
+    (steps, success, llm_calls, traces).
+
+    `block_mutations=True` (used by the replan path) refuses to EXECUTE any mutating action: a
+    replay-triggered re-author must never perform a NEW write — it isn't approved and could
+    double-submit. On a mutating decision the loop aborts (no act) so the caller fails loud / escalates
+    to a human re-learn. (Learning a write flow uses `block_mutations=False` — the write is intended.)
+    """
+    traces: list[StepTrace] = []
+    history: list[str] = []
+    steps: list[CachedStep] = []
+    llm = 0
+    success = False
+    no_progress = 0
+    for i in range(max_steps):
+        tr = StepTrace(index=i)
+        with tr.measure("snapshot"):
+            obs = await session.snapshot()
+
+        # Surface any WebMCP tools the page exposes so the agent can call them directly.
+        obs.webmcp_tools = await _webmcp_detect(session.page)
+
+        t0 = time.perf_counter()
+        if not obs.elements and grounding is not None:
+            action, ttft = await _vision_decide(session, goal, grounding, tr)
+        elif provider is not None:
+            action, ttft = await provider.decide(goal, obs, history)
+            if action.action == "need_vision":
+                if grounding is not None:
+                    action, ttft = await _vision_decide(session, goal, grounding, tr)
+                else:
+                    action = Action(action="give_up", intent="vision requested but unavailable")
+        else:
+            action, ttft = Action(action="give_up", intent="no target and no provider"), None
+        llm += 1
+        llm_ms = (time.perf_counter() - t0) * 1000.0
+        if ttft is not None:
+            tr.add("ttft", ttft)
+            tr.add("gen", max(0.0, llm_ms - ttft))
+        else:
+            tr.add("llm", llm_ms)
+        tr.meta["action"] = action.model_dump(exclude_none=True)
+
+        if action.action in ("done", "give_up"):
+            success = action.action == "done"
+            tr.meta["stop"] = action.action
+            traces.append(tr)
+            if on_step:
+                on_step(tr)
+            break
+
+        spec = None
+        precond_scope = ""
+        if action.action in ("click", "type") and action.ref:
+            with tr.measure("describe"):
+                spec = await describe(session.page, action.ref)
+        mutating = is_mutating(action.action, action.intent, spec.name if spec else "")
+        if block_mutations and mutating:
+            # A replay-triggered re-author must NOT perform a new write — abort before acting.
+            tr.meta["blocked"] = "mutation-under-replan"
+            traces.append(tr)
+            if on_step:
+                on_step(tr)
+            break
+        # For a mutating step, record the PRECISE precondition (the target's form/section) now,
+        # while the element is still present — the gate checks this at replay.
+        if mutating and action.action in ("click", "type") and action.ref:
+            precond_scope = await scope_fingerprint(
+                session.page.locator(f'[data-ultracua-ref="{action.ref}"]').first
+            )
+
+        ok, note = True, ""
+        origin = origin_of(session.page.url)
+        with tr.measure("act"):
+            try:
+                async with governor.gate(origin):
+                    await session.act(action)
+            except Exception as exc:  # noqa: BLE001
+                ok, note = False, f"{type(exc).__name__}: {exc}"
+
+        with tr.measure("verify"):
+            after = await session.snapshot()
+            changed = state_changed(obs, after)
+            tr.meta["changed"] = changed
+        no_progress = 0 if (ok and changed) else no_progress + 1
+
+        if ok:
+            steps.append(
+                CachedStep(
+                    intent=action.intent,
+                    action=action.action,
+                    locator=spec,
+                    text=action.text,
+                    coords=action.coords,
+                    tool=action.tool,
+                    args=action.args,
+                    precond_fingerprint=obs.fingerprint,
+                    precond_scope=precond_scope,
+                    mutating=mutating,
+                )
+            )
+        desc = action.action
+        if action.ref:
+            desc += f" {action.ref}"
+        if action.text:
+            desc += f" {action.text!r}"
+        history.append(f"{desc} -> {'ok' if ok else 'FAIL ' + note}")
+        traces.append(tr)
+        if on_step:
+            on_step(tr)
+
+        if no_progress >= settings.stuck_limit:
+            tr.meta["stuck"] = no_progress  # bail: agent looping without progress
+            break
+    return steps, success, llm, traces
+
+
 async def _learn(
     url: str,
     goal: str,
@@ -177,11 +304,6 @@ async def _learn(
         storage_state=storage_state,
     ).start()
     traces: list[StepTrace] = []
-    history: list[str] = []
-    steps: list[CachedStep] = []
-    llm = 0
-    success = False
-    no_progress = 0
     try:
         # Auth/setup headers must be on the context BEFORE the first navigation (e.g. a
         # Magento auto-login header on the initial admin request).
@@ -198,101 +320,10 @@ async def _learn(
             return FlowReport(mode="escalate", success=False, traces=traces,
                               note="interstitial/CAPTCHA detected", extra={"escalate": True})
 
-        for i in range(max_steps):
-            tr = StepTrace(index=i)
-            with tr.measure("snapshot"):
-                obs = await session.snapshot()
-
-            # Surface any WebMCP tools the page exposes so the agent can call them directly.
-            obs.webmcp_tools = await _webmcp_detect(session.page)
-
-            # Pick the action source: VISION when the DOM has nothing to address, else the
-            # DOM provider — which may itself request vision (need_vision) or a webmcp_call.
-            t0 = time.perf_counter()
-            if not obs.elements and grounding is not None:
-                action, ttft = await _vision_decide(session, goal, grounding, tr)
-            elif provider is not None:
-                action, ttft = await provider.decide(goal, obs, history)
-                if action.action == "need_vision":
-                    if grounding is not None:
-                        action, ttft = await _vision_decide(session, goal, grounding, tr)
-                    else:
-                        action = Action(action="give_up", intent="vision requested but unavailable")
-            else:
-                action, ttft = Action(action="give_up", intent="no target and no provider"), None
-            llm += 1
-            llm_ms = (time.perf_counter() - t0) * 1000.0
-            if ttft is not None:
-                tr.add("ttft", ttft)
-                tr.add("gen", max(0.0, llm_ms - ttft))
-            else:
-                tr.add("llm", llm_ms)
-            tr.meta["action"] = action.model_dump(exclude_none=True)
-
-            if action.action in ("done", "give_up"):
-                success = action.action == "done"
-                tr.meta["stop"] = action.action
-                traces.append(tr)
-                if on_step:
-                    on_step(tr)
-                break
-
-            spec = None
-            precond_scope = ""
-            if action.action in ("click", "type") and action.ref:
-                with tr.measure("describe"):
-                    spec = await describe(session.page, action.ref)
-                # For a mutating step, record the PRECISE precondition (the target's form/section)
-                # now, while the element is still present — the gate checks this at replay.
-                if is_mutating(action.action, action.intent, spec.name if spec else ""):
-                    precond_scope = await scope_fingerprint(
-                        session.page.locator(f'[data-ultracua-ref="{action.ref}"]').first
-                    )
-
-            ok, note = True, ""
-            origin = origin_of(session.page.url)
-            with tr.measure("act"):
-                try:
-                    async with governor.gate(origin):
-                        await session.act(action)
-                except Exception as exc:  # noqa: BLE001
-                    ok, note = False, f"{type(exc).__name__}: {exc}"
-
-            with tr.measure("verify"):
-                after = await session.snapshot()
-                changed = state_changed(obs, after)
-                tr.meta["changed"] = changed
-            no_progress = 0 if (ok and changed) else no_progress + 1
-
-            if ok:
-                name = spec.name if spec else ""
-                steps.append(
-                    CachedStep(
-                        intent=action.intent,
-                        action=action.action,
-                        locator=spec,
-                        text=action.text,
-                        coords=action.coords,
-                        tool=action.tool,
-                        args=action.args,
-                        precond_fingerprint=obs.fingerprint,
-                        precond_scope=precond_scope,
-                        mutating=is_mutating(action.action, action.intent, name),
-                    )
-                )
-            desc = action.action
-            if action.ref:
-                desc += f" {action.ref}"
-            if action.text:
-                desc += f" {action.text!r}"
-            history.append(f"{desc} -> {'ok' if ok else 'FAIL ' + note}")
-            traces.append(tr)
-            if on_step:
-                on_step(tr)
-
-            if no_progress >= settings.stuck_limit:
-                tr.meta["stuck"] = no_progress  # bail: agent looping without progress
-                break
+        steps, success, llm, step_traces = await _author_steps(
+            session, goal, provider, governor, max_steps, on_step=on_step, grounding=grounding,
+        )
+        traces.extend(step_traces)
 
         # The agent didn't cleanly emit `done` but took real steps — ask the verifier whether
         # the goal is actually met (e.g. fast tier solved it but didn't recognize completion).
@@ -362,6 +393,7 @@ async def _replay(
     success = True
     mode = "replay"
     dirty = False
+    replanned = False
     try:
         if extra_headers:
             await session.set_extra_http_headers(extra_headers)
@@ -399,11 +431,42 @@ async def _replay(
             if on_step:
                 on_step(tr)
             if not ok:
+                # Suffix-replan: the working prefix (steps[:i]) already drove us here, so re-author
+                # ONLY the broken tail from the current page rather than relearning the whole flow.
+                # Gated on a heal provider being present (auto mode) and the failed step being a READ
+                # — a write is never LLM-re-driven under drift (it could double-submit).
+                if provider is not None and not step.mutating:
+                    _log.warning(
+                        "replay: step %d %r failed (%s) — suffix-replanning the tail",
+                        i, step.intent, note,
+                    )
+                    new_steps, authored_ok, replan_llm, replan_traces = await _author_steps(
+                        session, goal, provider, governor, settings.max_steps, on_step=on_step,
+                        block_mutations=True,  # a replay-repair must never perform a NEW write
+                    )
+                    llm += replan_llm
+                    traces.extend(replan_traces)
+                    if new_steps or authored_ok:
+                        flow = CachedFlow(
+                            key=flow.key, goal=flow.goal, start_url=flow.start_url,
+                            steps=list(flow.steps[:i]) + new_steps, created_ts=time.time(),
+                        )
+                        mode, dirty, replanned, success = "replay+replan", True, True, authored_ok
+                        _log.info(
+                            "replay: suffix-replanned %d new step(s) onto a %d-step prefix",
+                            len(new_steps), i,
+                        )
+                        break
                 success = False
                 _log.warning("replay: step %d %r failed: %s", i, step.intent, note)
                 break
 
-        extra = {"finalize": await finalize(session)} if finalize else {}
+        fin = await finalize(session) if finalize else None
+        # A suffix-replan that reached the data page without the agent emitting `done` still solves
+        # the goal when the finalize extraction succeeds — mirror _learn's finalize-solved upgrade.
+        if replanned and not success and isinstance(fin, dict) and fin.get("solved"):
+            success = True
+        extra = {"finalize": fin} if finalize else {}
         final_text = await _body_text(session)
         if dirty and success:
             cache.put(flow)
@@ -513,6 +576,11 @@ async def _maybe_heal(
 ) -> tuple[bool, str, bool]:
     if provider is None:
         return False, note, False
+    if step.mutating:
+        # A mutating step is NEVER LLM-healed (a re-click could double-submit). The drift gate
+        # already fails loud on a changed precondition; this also covers a gate-passing step whose
+        # click merely throws — fail loud for a human to re-learn + re-approve, don't re-drive it.
+        return False, f"{note}; mutating step not healed (fail loud)", False
     with tr.measure("heal_snapshot"):
         obs = await session.snapshot()
     hint = f"{goal} — specifically right now: {step.intent}"

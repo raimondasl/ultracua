@@ -579,12 +579,19 @@ def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Op
     )
 
 
-async def _attempt_replay(spec, router, cache, key, meta, check_shape):
-    """One pure 0-LLM replay attempt. Returns (ok, data, reason)."""
+async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="replay", provider=None):
+    """One replay attempt. Returns (ok, data, reason).
+
+    `mode="replay"` is a pure 0-LLM run. `mode="repair"` additionally lets the engine self-heal /
+    suffix-replan a drifted step in place (re-authoring just the broken tail, preserving the working
+    prefix) using `provider` — used as a cheaper step before a full re-learn on `on_drift="relearn"`.
+    """
     out: dict = {}
-    pin = meta.read_pin if spec.pin_read else None  # deterministic 0-LLM read, if one was learned
+    # A learned pin anchors the OLD final page; a repaired flow may end elsewhere, so only trust the
+    # pin on a pure replay — let the LLM extractor re-read the live value when we re-plan the tail.
+    pin = meta.read_pin if (spec.pin_read and mode == "replay") else None
     report = await run_cached(
-        url=spec.start_url, goal=spec.goal, provider=None, cache=cache, mode="replay",
+        url=spec.start_url, goal=spec.goal, provider=provider, cache=cache, mode=mode,
         max_steps=spec.max_steps, headless=spec.headless, scope=spec.scope,
         extra_headers=spec.headers, storage_state=spec.storage_state,
         finalize=_make_finalize(spec, router, out, pin=pin),
@@ -691,10 +698,29 @@ async def replay(
                       f"precheck (would risk a double-submit) — add mutate.precheck_* or run "
                       f"`flow login` then replay")
         if on_drift == "relearn":  # (refused above for write flows)
+            # The flow has drifted, so a previously-learned pin (anchored to the OLD final page) is no
+            # longer trustworthy — drop it BEFORE we repair, and persist that first. The repair re-caches
+            # a flow that may end on a different page; clearing the pin only AFTER that cache write would
+            # leave a crash window where a stale pin could later be read against the new page. The repair
+            # itself doesn't use the pin (it re-reads via the LLM extractor), so clearing early is safe;
+            # a full re-learn below re-pins from scratch.
+            if spec.pin_read and meta.read_pin is not None:
+                meta.read_pin = None
+                _save_meta(cache, key, meta)
+            # Cheapest repair first: re-author ONLY the broken tail from the current page, keeping the
+            # working prefix (suffix-replan). This fixes locator/path drift without re-running the whole
+            # flow. It can't fix data-SHAPE drift (the steps still replay) — that falls to a full relearn.
+            ok, data, reason3 = await _attempt_replay(
+                spec, router, cache, key, meta, check_shape, mode="repair", provider=provider
+            )
+            if ok:
+                _log.info("flow %r: drift repaired by suffix-replan (prefix preserved)", spec.name)
+                return _ok(data)
+            # Full re-author from scratch (also refreshes the sidecar metadata: shape, pin, approval).
             res = await learn(spec, provider=provider, router=router, cache=cache)
             if res.cached and res.found:
                 return _ok(res.data)
-            reason = f"replay drifted ({reason}) and re-learn failed ({res.note})"
+            reason = f"replay drifted ({reason}); suffix-replan failed ({reason3}); re-learn failed ({res.note})"
         _record_run(cache, key, ok=False, error=reason)
         _log.warning("flow %r: replay FAILED — %s", spec.name, reason)
         raise FlowReplayError(f"{spec.name!r}: {reason}")
