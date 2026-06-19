@@ -78,10 +78,13 @@ See [GUIDE.md](GUIDE.md#pinned-0-llm-reads).
 
 The cached fast path is built to be the *trusted default*:
 
-- **Mutation gate** — steps classified as irreversible (submit / pay / send / delete / …) are never
-  blind-replayed. Before such a step the target's scope fingerprint must match the one recorded at
-  learn time; on drift the step **fails loud** (it is never LLM-healed — an agent must not re-drive a
-  write under uncertainty).
+- **Mutation gate** — steps classified as irreversible writes are never blind-replayed. The classifier
+  (`safety.classify_mutation`) is **DOM-structural first**: a click on a form-submit control is judged by
+  the form's **method** — GET is an idempotent read (search / filter), POST/PUT/DELETE/PATCH is a write —
+  which catches icon-only / bland-intent submits the keyword list misses and stops false-firing on reads
+  like "submit the search"; with no form context it falls back to a keyword heuristic. Before a mutating
+  step the target's scope fingerprint must match the one recorded at learn time; on drift the step **fails
+  loud** (it is never LLM-healed — an agent must not re-drive a write under uncertainty).
 - **Idempotency keys** — mutating replays carry an `Idempotency-Key` header so a server-honored retry
   can't duplicate a side effect. (The Flow API adds an opt-in *state precheck* for true one-shot
   idempotency — see [GUIDE.md](GUIDE.md#write-flows-submit--post--purchase).)
