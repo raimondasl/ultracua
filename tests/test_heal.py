@@ -34,6 +34,30 @@ async def test_heal_does_not_persist_a_no_effect_click() -> None:
         await session.close()
 
 
+async def test_mutating_step_is_never_healed() -> None:
+    # A mutating (write) step must FAIL LOUD rather than be LLM-re-driven — a re-click could
+    # double-submit. The heal short-circuits without ever consulting the provider.
+    html = "<!doctype html><html><body><button>Place order</button></body></html>"
+    session = await BrowserSession(headless=True).start()
+    try:
+        await session.page.set_content(html)
+        step = CachedStep(intent="place the order", action="click",
+                          locator=LocatorSpec(role="button", name="Gone", tag="button"), mutating=True)
+
+        class _BoomProvider:
+            async def decide(self, *a, **k):  # must never be called
+                raise AssertionError("provider consulted to heal a mutating step")
+
+        ok, note, did_heal = await _maybe_heal(
+            session, step, _BoomProvider(), StepTrace(index=0), _GOAL, "act failed"
+        )
+        assert ok is False and did_heal is False     # fail loud, not a heal
+        assert "mutating" in note
+        assert step.locator.name == "Gone"           # the cached locator is untouched
+    finally:
+        await session.close()
+
+
 async def test_heal_persists_when_click_changes_state() -> None:
     # clicking renames the button (an interactable name change -> the fingerprint changes)
     html = ("<!doctype html><html><body>"

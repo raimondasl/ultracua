@@ -370,11 +370,51 @@ async def test_on_drift_relearn_reauthors(tmp_path: Path) -> None:
     httpd, cache, spec = _fixture_spec(tmp_path, "relearn")
     try:
         await learn(spec, provider=_ClickFirstLink(), router=_extract_router(42), cache=cache)
-        # replay extracts a differently-shaped value (drift); on_drift=relearn re-authors and
-        # returns the fresh data. Router needs two responses: the drifting attempt + the relearn.
+        # replay extracts a differently-shaped value (SHAPE drift — the step still replays, so the
+        # suffix-replan can't help); on_drift=relearn escalates replay -> repair -> full re-author and
+        # returns the fresh data. Three extraction responses: replay, the repair attempt, the relearn.
         data = await replay(spec, on_drift="relearn", provider=_ClickFirstLink(),
-                            router=_extract_router(["x"], ["x"]), cache=cache)
+                            router=_extract_router(["x"], ["x"], ["x"]), cache=cache)
         assert data == ["x"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+class _DeclineHealThenAuthor:
+    """Declines the one-shot heal on its first call (forcing a suffix-replan), then re-authors by
+    clicking the first link. Drives the Flow API through the in-place repair path."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def decide(self, goal, obs, history):
+        self.calls += 1
+        if self.calls == 1:
+            return Action(action="give_up", intent="single-step heal can't fix the changed path"), None
+        for el in obs.elements:
+            if el.role == "link":
+                return Action(action="click", intent="open the answer page", ref=el.ref), None
+        return Action(action="done", intent="done"), None
+
+
+async def test_on_drift_relearn_repairs_broken_step_via_suffix_replan(tmp_path: Path) -> None:
+    # on_drift=relearn first tries a cheap in-place REPAIR (suffix-replan) before a full re-author.
+    # With only TWO extraction responses available, success proves the full re-learn was short-circuited.
+    from ultracua.locators import LocatorSpec
+
+    httpd, cache, spec = _fixture_spec(tmp_path, "replan")
+    try:
+        await learn(spec, provider=_ClickFirstLink(), router=_extract_router(42), cache=cache)
+        key = flow_key(spec.goal, spec.start_url, spec.scope)
+        cached = cache.get(key)
+        assert cached is not None and len(cached.steps) == 1
+        cached.steps[0].locator = LocatorSpec(role="link", name="this link is gone", tag="a")  # break it
+        cache.put(cached)
+
+        data = await replay(spec, on_drift="relearn", provider=_DeclineHealThenAuthor(),
+                            router=_extract_router(42, 42), cache=cache)
+        assert data == 42  # repaired (suffix-replanned) and read the value; relearn fallback unused
     finally:
         httpd.shutdown()
         httpd.server_close()
