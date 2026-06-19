@@ -16,11 +16,12 @@ from .safety import PacingGovernor, is_mutating
 from .types import Action, Element, Observation, StepResult
 from .verifiers import keyword_completion
 from .extract import Extraction, extract
-from .flows import FlowHealth, FlowReplayError, FlowSpec, LoginSpec, MutateSpec, refresh_auth
+from .flows import FleetRun, FlowHealth, FlowReplayError, FlowSpec, LoginSpec, MutateSpec, refresh_auth
 from .flows import approve as approve_flow
 from .flows import health as flow_health
 from .flows import learn as learn_flow
 from .flows import replay as replay_flow
+from .flows import run_all as run_all_flows
 from .flows import unapprove as unapprove_flow
 from .vision import AnthropicGrounding, MockGrounding
 
@@ -57,11 +58,13 @@ __all__ = [
     "LoginSpec",
     "MutateSpec",
     "FlowHealth",
+    "FleetRun",
     "FlowReplayError",
     "learn_flow",
     "replay_flow",
     "approve_flow",
     "unapprove_flow",
+    "run_all_flows",
     "refresh_auth",
     "flow_health",
     "extract",

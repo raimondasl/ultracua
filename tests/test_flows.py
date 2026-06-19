@@ -29,6 +29,7 @@ from ultracua.flows import (
     load_spec,
     refresh_auth,
     replay,
+    run_all,
     save_spec,
     unapprove,
 )
@@ -206,6 +207,59 @@ async def test_pin_read_falls_back_to_llm_when_unpinnable(tmp_path: Path) -> Non
         assert res.cached and res.found and not res.pinned       # couldn't pin
         data = await replay(spec, router=_extract_router(42), cache=cache)  # falls back to the extractor
         assert data == 42
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# --- Phase E: fleet supervisor (run_all) ------------------------------------------------------
+async def test_run_all_classifies_ok_failed_skipped(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)            # load_spec/save_spec use .ultracua/specs under cwd
+    _write_fixture(tmp_path)
+    httpd, base = _serve(tmp_path)
+    cache = FlowCache(root=tmp_path / "cache")
+    try:
+        # ok: a navigate-only flow (extract=None -> 0-LLM, no router), learned + approved
+        ok = FlowSpec(name="ok", start_url=f"{base}/page1.html", goal="open the answer page", headless=True)
+        save_spec(ok)
+        await learn(ok, provider=_ClickFirstLink(), router=_extract_router(), cache=cache)
+        approve(ok, cache=cache)
+        # failed: learned + approved, but the cached flow is deleted -> replay raises (no learned flow)
+        bad = FlowSpec(name="bad", start_url=f"{base}/page1.html", goal="open the answer page two", headless=True)
+        save_spec(bad)
+        await learn(bad, provider=_ClickFirstLink(), router=_extract_router(), cache=cache)
+        approve(bad, cache=cache)
+        cache.delete(flow_key(bad.goal, bad.start_url, bad.scope))
+        # skipped (write): a mutate flow is skipped without include_writes
+        save_spec(FlowSpec(name="w", start_url=f"{base}/page1.html", goal="g",
+                           mutate=MutateSpec(confirm_text_contains="x")))
+        # skipped (unapproved): a navigate-only flow that was never approved
+        un = FlowSpec(name="un", start_url=f"{base}/page1.html", goal="open the answer page three", headless=True)
+        save_spec(un)
+        await learn(un, provider=_ClickFirstLink(), router=_extract_router(), cache=cache)
+
+        results = {r.name: r for r in await run_all(names=["ok", "bad", "w", "un"], cache=cache)}
+        assert results["ok"].status == "ok" and results["ok"].ok
+        assert results["bad"].status == "failed" and not results["bad"].ok and results["bad"].error
+        assert results["w"].status == "skipped" and "write" in results["w"].error
+        assert results["un"].status == "skipped" and "approved" in results["un"].error
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_run_all_can_include_writes_and_unapproved(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_fixture(tmp_path)
+    httpd, base = _serve(tmp_path)
+    cache = FlowCache(root=tmp_path / "cache")
+    try:
+        un = FlowSpec(name="un", start_url=f"{base}/page1.html", goal="open the answer page", headless=True)
+        save_spec(un)
+        await learn(un, provider=_ClickFirstLink(), router=_extract_router(), cache=cache)  # not approved
+        # default: skipped (unapproved); with approved_only=False it runs
+        assert (await run_all(names=["un"], cache=cache))[0].status == "skipped"
+        assert (await run_all(names=["un"], approved_only=False, cache=cache))[0].status == "ok"
     finally:
         httpd.shutdown()
         httpd.server_close()

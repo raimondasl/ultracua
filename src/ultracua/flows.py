@@ -747,3 +747,58 @@ def load_spec(name: str) -> FlowSpec:
 def list_specs() -> list[str]:
     d = _specs_dir()
     return sorted(p.stem for p in d.glob("*.json")) if d.exists() else []
+
+
+# --- fleet supervisor (Phase E) ---------------------------------------------------------------
+@dataclass
+class FleetRun:
+    """One flow's outcome in a fleet run (`run_all`)."""
+
+    name: str
+    ok: bool
+    status: str           # "ok" | "failed" | "skipped"
+    ms: float = 0.0
+    data: Any = None
+    error: Optional[str] = None
+
+
+async def run_all(
+    *, names: Optional[list[str]] = None, approved_only: bool = True, include_writes: bool = False,
+    concurrency: Optional[int] = None, on_drift: str = "raise", provider_name: Optional[str] = None,
+    cache: Optional[FlowCache] = None,
+) -> list[FleetRun]:
+    """Replay every saved flow once (concurrently) and return each outcome — the thin fleet
+    supervisor behind `ultracua flow run-all`.
+
+    Safe defaults for unattended use: **read flows only** (write flows are skipped unless
+    `include_writes=True`) and **approved flows only**. Each replay records its outcome into health
+    as usual. Point cron / Task Scheduler at the CLI and alert on a non-zero exit (any flow failed).
+    Concurrency is capped (each replay uses its own browser); pass `concurrency=` or set
+    `ULTRACUA_CONCURRENCY`.
+    """
+    cache = cache or _default_cache()
+    names = names if names is not None else list_specs()
+    sem = asyncio.Semaphore(concurrency or settings.concurrency)
+
+    async def _one(name: str) -> FleetRun:
+        try:
+            spec = load_spec(name)
+        except Exception as exc:  # noqa: BLE001 - a missing/malformed spec is a failed flow, not a crash
+            return FleetRun(name=name, ok=False, status="failed", error=f"load failed: {exc}")
+        if spec.mutate is not None and not include_writes:
+            return FleetRun(name=name, ok=False, status="skipped", error="write flow (use --include-writes)")
+        meta = _load_meta(cache, flow_key(spec.goal, spec.start_url, spec.scope))
+        if approved_only and not meta.approved:
+            return FleetRun(name=name, ok=False, status="skipped", error="not approved")
+        async with sem:  # only actual replays consume a browser slot; the skips above are free
+            t0 = time.perf_counter()
+            try:
+                data = await replay(spec, require_approved=approved_only, on_drift=on_drift,
+                                    provider_name=provider_name, cache=cache)
+                return FleetRun(name=name, ok=True, status="ok",
+                                ms=(time.perf_counter() - t0) * 1000.0, data=data)
+            except FlowReplayError as exc:
+                return FleetRun(name=name, ok=False, status="failed",
+                                ms=(time.perf_counter() - t0) * 1000.0, error=str(exc))
+
+    return await asyncio.gather(*[_one(n) for n in names])

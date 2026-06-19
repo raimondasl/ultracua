@@ -13,7 +13,8 @@ walkthrough start with [EXAMPLES.md](EXAMPLES.md); for how it works inside see
 - [Trust for unattended runs](#trust-for-unattended-runs)
 - [Auth refresh](#auth-refresh)
 - [Write flows (submit / post / purchase)](#write-flows-submit--post--purchase)
-- [Fleet health + scheduling](#fleet-health--scheduling)
+- [Run a fleet](#run-a-fleet)
+- [Fleet health](#fleet-health)
 - [Providers & tiering](#providers--tiering)
 
 ## The one-shot agent
@@ -174,18 +175,44 @@ Write semantics:
 CLI: `ultracua flow learn --confirm-text-contains "Order placed" …`, or `flow set-mutate --name …
 --confirm-*`.
 
-## Fleet health + scheduling
+## Run a fleet
 
-Every `replay` records its outcome, so you can monitor a fleet: `flow_health(spec)` (CLI `ultracua
-flow status`) reports each flow as `healthy` / `failing` / `stale` / `never-run` with run counts and
-the last error (`flow status --stale-after <hours>` flags a flow whose last success is too old).
+Once you have several saved flows, **`ultracua flow run-all`** is the supervisor: it replays every
+saved flow once (concurrently), prints a consolidated report, and **exits non-zero if any flow
+failed** — so you point cron / Task Scheduler at it and alert on the exit code.
 
-Scheduling stays yours — point cron / Task Scheduler at `ultracua flow replay --name …
---require-approved` (it exits non-zero on drift, so alert on failure) and poll `flow status` for
-health. No scheduler is built in, by design.
+```bash
+uv run ultracua flow run-all                      # read + approved flows only (safe default)
+uv run ultracua flow run-all --json fleet.json    # also write a machine-readable run record
+uv run ultracua flow run-all --alert-webhook https://hooks.slack.com/…   # POST on any failure
+```
 
-Add `--verbose` to `flow learn` / `flow replay` (and the example script) to log each run with a
-`run_id` and its token usage + `$` cost.
+```
+  [FAIL] vendor-status         3.1s  'vendor-status': replay failed (page drift?): …
+  [OK]   daily-orders          0.2s  1284
+  [OK]   latest-version        1.9s  "2.31.0"
+  [SKIP] place-order                 write flow (use --include-writes)
+  [SKIP] draft-flow                  not approved
+
+== 2 ok, 1 failed, 2 skipped (of 5) ==
+```
+
+Safe defaults for unattended use: **read flows only** (write flows are skipped unless
+`--include-writes`, since a blanket run shouldn't fire purchases) and **approved flows only**
+(`--include-unapproved` to override). `--concurrency N` caps how many run at once (each uses its own
+browser); `--on-drift relearn` re-authors read flows that drifted. The same API is `run_all_flows()`
+in Python, returning a `FleetRun` per flow.
+
+## Fleet health
+
+Every `replay` (including via `run-all`) records its outcome, so you can also monitor a fleet's
+*history*: `flow_health(spec)` (CLI `ultracua flow status`) reports each flow as `healthy` /
+`failing` / `stale` / `never-run` with run counts and the last error (`flow status --stale-after
+<hours>` flags a flow whose last success is too old). No scheduler is built in, by design — cron +
+`flow run-all` is the pattern.
+
+Add `--verbose` to `flow learn` / `flow replay` / `flow run-all` (and the example script) to log each
+run with a `run_id` and its token usage + `$` cost.
 
 ## Providers & tiering
 
