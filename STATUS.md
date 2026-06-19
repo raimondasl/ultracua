@@ -2,16 +2,18 @@
 
 A dated, honest snapshot: what's shipped, how proven it is, what the latest benchmark runs
 measured, the known fragilities (with `file:line`), and the prioritized path forward. The
-forward-looking phase plan lives in [ROADMAP.md](ROADMAP.md) — Phases A–D are shipped; the
-longer-term directions (E–J) are in *"Beyond Phase D"* there.
+forward-looking phase plan lives in [ROADMAP.md](ROADMAP.md) — Phases A–D are shipped, and several
+of the longer-term phases have since landed (E fleet supervisor, F suffix-replan, H pinned 0-LLM
+reads, J CI); the full plan (E–J) is in *"Beyond Phase D"* there.
 
 ## Verdict
 
 **A validated prototype of a genuinely novel pattern — the core thesis is proven, the replay
 engine is the moat, and it is not yet hardened for unattended production.** Phases 0–4 (core
 engine), A–C (the Flow API: define → learn → approve → replay → auth-refresh → health), and D
-(write flows) are shipped and merged. 105 tests, all key-less (real headless Chromium against
-local fixtures). Secrets handling is a real strength: credentials are env-sourced at runtime and
+(write flows) are shipped and merged, and the ops layer has since hardened (logging, CI,
+retry/backoff, fleet supervisor). 145 tests, all key-less (real headless Chromium against local
+fixtures, run in CI on Linux + Windows). Secrets handling is a real strength: credentials are env-sourced at runtime and
 **never persisted** — only the resulting `storage_state` cookies are saved (atomically).
 
 ## What's shipped, by layer
@@ -19,9 +21,9 @@ local fixtures). Secrets handling is a real strength: credentials are env-source
 | Layer | Shipped & solid | Thin / fragile |
 |---|---|---|
 | **Engine** (`flow.py`) | learn → replay → heal loop; **suffix-replan** (re-author the broken tail, keep the prefix) when single-step heal can't fix a drifted step; ranked resilient locators (testid → role+name → … → css); mutation gate that **fails loud, never LLM-heals a write**; stuck/interstitial detection; pacing governor | whole-page fingerprint is **over-sensitive for reads** (a banner/badge flips it → false "drift"; writes already gate on the target's subtree); first-match locator binding when role+name is non-unique |
-| **Flow API** (`flows.py`) | full lifecycle; approval gate; data-shape drift; fail-loud `FlowReplayError`; auth-refresh; fleet health; Phase D writes with action-completion + opt-in idempotency precheck | scheduling is "your job" (no supervisor); meta sidecars are **non-atomic / unlocked** (concurrent replays can corrupt health) |
-| **Providers** (`llm/`, `providers/`) | provider-neutral types; Anthropic path with real prompt-cache + streaming TTFT; reusable extraction; JSON-RPC daemon + Node client | OpenAI/Gemini **translation-tested but never run live**; OpenAI sends `max_tokens` (breaks newer models); **no retry/backoff/timeout**; **token usage is computed then dropped** (`llm_agent.py:129`) |
-| **Ops / packaging** | config via `ULTRACUA_*` env; data kept off C:; `.env` gitignored | **no logging anywhere** (only `print`); **no CI**; version mismatch (`pyproject` 0.1.0 vs `__init__` 0.15.0); daemon is single-flight and unauthenticated |
+| **Flow API** (`flows.py`) | full lifecycle; approval gate; data-shape drift; fail-loud `FlowReplayError`; auth-refresh; fleet health + **fleet supervisor** (`flow run-all`: concurrent replay, pass/fail/skip classification, non-zero exit, alert webhook); Phase D writes with action-completion + opt-in idempotency precheck | no built-in **scheduler** (by design — point cron / Task Scheduler at `flow run-all`); meta sidecars now write **atomically** (temp + `os.replace`), but the health read-modify-write is **unlocked** — two concurrent *processes* on the same flow can lose a health update (last-writer-wins; in-process `run-all` is safe) |
+| **Providers** (`llm/`, `providers/`) | provider-neutral types; Anthropic path with real prompt-cache + streaming TTFT; reusable extraction; **Router retry/backoff/timeout** (transient-aware, capped exponential + jitter); **per-run token + est. $ cost accounting** (`FlowReport.extra["usage"]`); JSON-RPC daemon + Node client | OpenAI/Gemini **translation-tested but never run live** (no network cassette like Anthropic's); OpenAI sends `max_tokens` not `max_completion_tokens` (`openai.py:63`) → 400s on newer models |
+| **Ops / packaging** | config via `ULTRACUA_*` env; data kept off C:; `.env` gitignored; **stdlib logging** with a per-run `run_id` contextvar; **GitHub Actions CI** (Linux + Windows, key-less suite); **single-sourced version** (`importlib.metadata`) | daemon is single-flight and unauthenticated |
 
 ## Benchmarks (run 2026-06-18)
 
@@ -43,7 +45,9 @@ not noise (see below).
   does not. It measures *"what fraction of step time was the LLM,"* not end-to-end wall-clock
   (excludes process/browser startup).
 - **"Replay 0-LLM" means 0-LLM *navigation*.** Data-retrieval replays still make **one uncounted
-  LLM extraction call** in `finalize`; `llm_calls` only counts self-heal.
+  LLM extraction call** in `finalize`; `llm_calls` only counts self-heal. (Exception: a `pin_read`
+  flow whose answer has a stable `id`/`data-test-id` anchor reads the value deterministically —
+  0-LLM end-to-end, no extraction call. Phase H, #36.)
 - **Live replay is not perfectly faithful** (2/8 shopping regressions) — real evidence that some
   multi-step flows don't reproduce cleanly today.
 
@@ -59,6 +63,9 @@ the other two (`click-link`, `focus-text-2`) were plain discovery variance this 
 multi-step/auth pages, and (3) operability — *not* in making replay faster (it already is).
 
 ## Top fragilities a real deployment would hit
+
+*This is the original pre-#27 audit, kept for the record — items 1–7 have since been fixed (see
+**Near-term priorities** below for the PR that landed each); only #8 remains open.*
 
 1. **No observability** — the codebase uses no `logging`; a failed scheduled replay surfaces only a
    `FlowReplayError` string. Nothing to debug a 3am failure with. *(biggest production gap)*
@@ -80,8 +87,10 @@ multi-step/auth pages, and (3) operability — *not* in making replay faster (it
 
 ## Near-term priorities
 
-**Update (2026-06-19): all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7). The suite
-grew from 105 → 122 tests (key-less); version 0.18.0. Original list with the PR that landed each:
+**Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
+phases have kept landing since: **#33–#35 CI (Phase J), #36 pinned 0-LLM reads (Phase H), #37 fleet
+supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 → **145** tests
+(key-less); version **0.22.0**. Original near-term list with the PR that landed each:
 
 1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`
    atomic (temp + `os.replace`). *Handled fragilities 4, 7.*
@@ -97,7 +106,9 @@ grew from 105 → 122 tests (key-less); version 0.18.0. Original list with the P
 7. ✅ **Write/auth benchmark** (#29) — `benchmarks/write_flow_bench.py`: write action-completion,
    one-shot idempotency, and auth-refresh recovery from session expiry, against a local fixture.
 
-The remaining work is the longer-term phases below — none of the near-term fragilities are open.
+None of the near-term fragilities are open, and the longer-term phases below are now partly landed
+(E fleet supervisor, F suffix-replan, H pinned reads, J CI) — G (multi-write) and I (recorder/web
+UI), plus a drift-sandbox benchmark, remain.
 
 See [ROADMAP.md → *Beyond Phase D*](ROADMAP.md) for the longer-term phases (E–J) with the concrete
 use cases each unlocks and the gap each closes.
