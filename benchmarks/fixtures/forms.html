@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ultracua fixture — Forms</title>
+  </head>
+  <body>
+    <h1>Forms Fixture</h1>
+
+    <!-- A WRITE: icon-only submit (no text, bland aria-label) inside a POST form. The keyword
+         heuristic would miss it; the structural classifier catches it via the form method. -->
+    <form method="post" onsubmit="return false">
+      <button type="submit" aria-label="save changes"></button>
+    </form>
+
+    <!-- A READ: a search submit inside a GET form. Its intent says "submit" (a keyword), but a GET
+         form is idempotent, so the structural classifier must NOT flag it as a write. -->
+    <form method="get" onsubmit="return false">
+      <input name="q" aria-label="query" />
+      <button type="submit">Run search</button>
+    </form>
+  </body>
+</html>

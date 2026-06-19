@@ -18,7 +18,7 @@ import random
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional
 from urllib.parse import urlsplit
 
 # Keywords marking a step as state-mutating (irreversible side effect).
@@ -28,15 +28,40 @@ MUTATING_KEYWORDS = (
     "place order", "sign up", "log out", "sign out", "unsubscribe",
 )
 
+# HTTP methods that are NOT safe/idempotent — a form using one of these is a write.
+NONIDEMPOTENT_METHODS = ("post", "put", "delete", "patch")
+
+
+def _keyword_mutating(intent: str, name: str) -> bool:
+    blob = f"{intent} {name}".lower()
+    return any(k in blob for k in MUTATING_KEYWORDS)
+
+
+def classify_mutation(action: str, intent: str = "", name: str = "",
+                      ctx: Optional[dict] = None) -> bool:
+    """Does this step likely cause an irreversible side effect?
+
+    Prefers the target's STRUCTURAL signal over keywords. A click on a form-submit control is judged by
+    the form's METHOD — GET is an idempotent read (search / filter), POST/PUT/DELETE/PATCH is a write.
+    That catches icon-only / bland-intent submit buttons the keyword list misses, and stops false-firing
+    on reads like "submit the search". With no form context (a JS-driven button) it falls back to the
+    keyword heuristic. `ctx` is a `{submit: bool, form_method: str}` probe of the target (see
+    `snapshot.mutation_context`). `type` / `scroll` / `navigate` are never mutating on their own.
+    """
+    ctx = ctx or {}
+    if action == "click":
+        method = (ctx.get("form_method") or "").lower()
+        if ctx.get("submit") and method:        # a real form submit -> the method is decisive
+            return method in NONIDEMPOTENT_METHODS
+        return _keyword_mutating(intent, name)  # JS button / non-submit -> keyword fallback
+    if action == "press":  # Enter can submit a form; without the focused element's form, use keywords
+        return _keyword_mutating(intent, name)
+    return False  # type/scroll/navigate are not mutating by themselves
+
 
 def is_mutating(action: str, intent: str = "", name: str = "") -> bool:
-    """Heuristic: does this step likely cause an irreversible side effect?"""
-    blob = f"{intent} {name}".lower()
-    if action == "click":
-        return any(k in blob for k in MUTATING_KEYWORDS)
-    if action == "press":  # Enter can submit a form
-        return any(k in blob for k in MUTATING_KEYWORDS)
-    return False  # type/scroll/navigate are not mutating by themselves
+    """Keyword-only classification (no DOM context) — a back-compat shim over `classify_mutation`."""
+    return classify_mutation(action, intent, name, None)
 
 
 def idempotency_key(scope: str, step_index: int, intent: str) -> str:

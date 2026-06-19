@@ -31,13 +31,13 @@ from .locators import describe, resolve
 from .providers.base import Provider
 from .safety import (
     PacingGovernor,
+    classify_mutation,
     idempotency_key,
-    is_mutating,
     looks_like_interstitial,
     origin_of,
 )
 from .obs import UsageTotals, get_logger, new_run_id
-from .snapshot import scope_fingerprint
+from .snapshot import mutation_context, scope_fingerprint
 from .timing import StepTrace
 from .types import Action, Observation
 from .verify import state_changed
@@ -213,10 +213,15 @@ async def _author_steps(
 
         spec = None
         precond_scope = ""
+        ctx: dict = {}
         if action.action in ("click", "type") and action.ref:
             with tr.measure("describe"):
                 spec = await describe(session.page, action.ref)
-        mutating = is_mutating(action.action, action.intent, spec.name if spec else "")
+            if action.action == "click":  # structural write-signal (does it submit a form? method?)
+                ctx = await mutation_context(
+                    session.page.locator(f'[data-ultracua-ref="{action.ref}"]').first
+                )
+        mutating = classify_mutation(action.action, action.intent, spec.name if spec else "", ctx)
         if block_mutations and mutating:
             # A replay-triggered re-author must NOT perform a new write — abort before acting.
             tr.meta["blocked"] = "mutation-under-replan"

@@ -124,16 +124,16 @@ helps for I). Techniques below are directional — mapped to our code, not leani
 exact numbers.
 
 **Tier 1 — do now (one cohesive push):**
-- **Verify-by-replay before cache** + **oracle calibration** — after `_learn` authors a flow, replay it
-  0-LLM on a fresh session and only `cache.put` if it reproduces; calibrate the gate's false-accept /
-  false-reject on injected known-good / known-broken flows. Fail-loud made concrete. (Skips write flows —
-  re-replaying a write would double-submit.) [`flow.py:_learn`]
-- **pass^k + per-step hazard metrics** — report all-k-succeed (not just the mean rate) and which step
-  index first fails, so discovery gains are provable. [`benchmarks/variance.py`, `FlowReport.step_traces`]
-- **Write-safety classification** — replace the `is_mutating` keyword heuristic with a learn-time
-  per-step risk classification persisted on `CachedStep` (closes a confirmed double-submit gap: icon-only
-  submits / type+Enter slip the gate today). [`safety.py`, `flow.py:_author_steps`]
-- **Grounding hygiene** — spatial (reading-order) snapshot sort; real accessible-name
+- ✅ **Verify-by-replay before cache** + **oracle calibration** (#43) — after `_learn` authors a flow,
+  replay it 0-LLM on a fresh session and only `cache.put` if it reproduces; the gate is calibrated on
+  injected known-good / known-broken flows. Fail-loud made concrete. (Skips write flows.) [`flow.py:_learn`]
+- ✅ **pass^k + per-step hazard metrics** (#43) — report all-k-succeed (not just the mean rate) and which
+  step index first fails. [`benchmarks/variance.py`, `FlowReport.step_traces`]
+- ✅ **Write-safety classification** (#44) — `is_mutating` → `classify_mutation`, a DOM-structural
+  classifier (form **method**: GET=read, POST/PUT/DELETE/PATCH=write) with a keyword fallback. Catches
+  icon-only / bland-intent submits the keywords missed and stops false-firing on reads like "submit the
+  search". [`safety.py`, `snapshot.mutation_context`, `flow.py:_author_steps`]
+- **Grounding hygiene** *(remaining)* — spatial (reading-order) snapshot sort; real accessible-name
   (`aria-labelledby` / `<label for>`); neighbor-anchor capture. Cheap LEARN-side wins that also sturdy the
   cached locators. [`snapshot.py`, `locators.py`]
 

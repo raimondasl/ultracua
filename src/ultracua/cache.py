@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from .locators import LocatorSpec
 from .types import ActionType
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3  # v3: per-step `mutating` now uses the DOM-structural write classifier (form method)
 
 
 class CachedStep(BaseModel):

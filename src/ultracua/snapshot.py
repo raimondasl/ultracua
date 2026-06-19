@@ -172,6 +172,33 @@ async def scope_fingerprint(locator) -> str:
     return xxhash.xxh64(json.dumps(out, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
+# Structural write-signal for a CLICK target: does activating it submit a form, and with what method?
+# (`<button>` defaults to type=submit inside a form; `<input type=submit|image>` submits.) The mutation
+# classifier judges a real form submit by its method — GET=read, POST/PUT/DELETE/PATCH=write.
+_MUTATION_CTX_JS = r"""
+(el) => {
+  const tag = (el.tagName || '').toLowerCase();
+  const type = (el.getAttribute('type') || '').toLowerCase();
+  const isSubmit =
+    type === 'submit' ||
+    (tag === 'button' && (type === '' || type === 'submit')) ||
+    (tag === 'input' && (type === 'submit' || type === 'image'));
+  const form = el.closest('form');
+  const method = form ? (form.getAttribute('method') || 'get').toLowerCase() : '';
+  return { submit: !!isSubmit, form_method: method };
+}
+"""
+
+
+async def mutation_context(locator) -> dict:
+    """Probe a click target for its write-signal: `{submit, form_method}`. Returns {} on failure (the
+    caller then falls back to the keyword heuristic). See `safety.classify_mutation`."""
+    try:
+        return await locator.evaluate(_MUTATION_CTX_JS)
+    except Exception:  # noqa: BLE001 - target gone / detached -> no structural signal
+        return {}
+
+
 async def capture(page, max_elements: int) -> Observation:
     """Capture a scoped snapshot of the given Playwright page."""
     raw = await page.evaluate(SNAPSHOT_JS, max_elements)
