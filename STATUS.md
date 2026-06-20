@@ -47,12 +47,19 @@ This is the swing above, now pinned down and acted on. Records in [`baselines/`]
 |---|---|---|---|
 | **N=1** (baseline, raw authoring) | **52%** | **± 13%** (40–70%, i.e. 4–7/10) | $4.24 |
 | **N=3 best-of-N** (re-author, keep first verify-passing) | **60%** | **± 0%** (6/10 *every* rep) | $6.58 (**1.55×**) |
+| **N=3 + reflexion** (feed a failed sample's lesson forward) | **52%** | ± 4% (mostly 5/10) | $8.32 (**−8 pts, +26%**) |
 
 The headline is the **variance collapse, not the +8 points**: best-of-N drove run-to-run spread to
 **zero** — discovery is now deterministic. Cost rose only **1.55×** (not 3×) thanks to adaptive
-early-stop. The remaining 40% is a **capability ceiling** (≈4 tasks 3 samples still can't author),
-a *different* problem from variance — so further reliability comes from grounding/capability, not more
-sampling. (`uv run --group bench python -m benchmarks.variance --bench miniwob --all --samples 3`.)
+early-stop.
+
+**Reflexion is a measured dead-end (kept opt-in, OFF by default).** Feeding a failed attempt's
+LLM-written lesson to the next sample made it *worse* (60%→52%, +26% cost): the advice misdirects an
+otherwise-clean re-roll. This is the actionable finding — the remaining 40% is a genuine **capability
+ceiling** (≈4 tasks like garbled-label checkboxes), unmoved by *either* more sampling or reflection. So
+the next reliability gain must come from **capability** (the Phase I recorder / better grounding), NOT
+more discovery-loop cleverness — the loop is measured-done. (`variance --bench miniwob --all --samples 3
+[--reflect]`.)
 
 **Honest caveats on the headline numbers:**
 
