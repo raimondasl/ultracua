@@ -100,6 +100,7 @@ async def run_cached(
     storage_state: Optional[str] = None,
     verify_replay: bool = False,
     samples: int = 1,
+    reflect: bool = False,
 ) -> FlowReport:
     cache = cache or FlowCache()
     governor = governor or PacingGovernor()
@@ -130,7 +131,7 @@ async def run_cached(
         return await _learn_n(
             url, goal, key, provider, cache, max_steps, headless, on_step,
             prepare, finalize, governor, scope, browser, verifier, grounding,
-            record_har_path, extra_headers, storage_state, verify_replay, samples,
+            record_har_path, extra_headers, storage_state, verify_replay, samples, reflect,
         )
     return await _learn(
         url, goal, key, provider, cache, max_steps, headless, on_step,
@@ -379,6 +380,7 @@ async def _learn(
     extra_headers: Optional[dict] = None,
     storage_state: Optional[str] = None,
     verify_replay: bool = False,
+    reflections: Optional[list] = None,
 ) -> FlowReport:
     max_steps = max_steps or settings.max_steps
     _router = getattr(provider, "router", None)  # for per-run token/cost accounting, if available
@@ -404,8 +406,14 @@ async def _learn(
             return FlowReport(mode="escalate", success=False, traces=traces,
                               note="interstitial/CAPTCHA detected", extra={"escalate": True})
 
+        # Reflexion: prior failed attempts' lessons ride in the AUTHORING goal only — never the cache key
+        # or the stored `CachedFlow.goal` (those stay the original `goal`), so replay still keys correctly.
+        author_goal = goal
+        if reflections:
+            author_goal = goal + "\n\nLESSONS FROM PRIOR FAILED ATTEMPTS (do not repeat these mistakes):\n" + \
+                "\n".join(f"- {r}" for r in reflections)
         steps, success, llm, step_traces, performed_write = await _author_steps(
-            session, goal, provider, governor, max_steps, on_step=on_step, grounding=grounding,
+            session, author_goal, provider, governor, max_steps, on_step=on_step, grounding=grounding,
         )
         traces.extend(step_traces)
 
@@ -470,6 +478,53 @@ async def _learn(
         await session.close()
 
 
+def _trajectory(report: FlowReport) -> str:
+    """A terse, model-readable summary of what a failed authoring attempt did (for the reflection)."""
+    lines = []
+    for tr in report.step_traces:
+        a = tr.meta.get("action") or {}
+        bits = []
+        if tr.meta.get("changed") is False:
+            bits.append("no page change")
+        for k in ("stop", "stuck", "blocked"):
+            if tr.meta.get(k):
+                bits.append(f"{k}={tr.meta[k]}")
+        lines.append(f"  {a.get('action', '?')} ({a.get('intent', '')})"
+                     + (f" -> {', '.join(bits)}" if bits else ""))
+    return "\n".join(lines) or "  (no actions taken)"
+
+
+async def _reflect(provider: Provider, goal: str, report: FlowReport) -> Optional[str]:
+    """One LLM call: given a FAILED authoring attempt, return 1-2 sentences of concrete advice for the
+    next attempt. Returns None if the provider has no router or the call fails (reflexion degrades to
+    plain best-of-N). Cost lands in the router totals, so `_learn_n` counts it."""
+    router = getattr(provider, "router", None)
+    if router is None:
+        return None
+    if report.extra.get("verify") == "failed":
+        reason = "authored a flow, but it did NOT reproduce on a fresh 0-LLM replay (unstable locators / non-deterministic path)."
+    elif not report.step_traces:
+        reason = "took no useful action."
+    else:
+        reason = "did not reach a verified, replayable flow."
+    from .llm.types import LLMRequest, Message, TextBlock
+    req = LLMRequest(
+        system=("You review a FAILED browser-automation attempt so the NEXT attempt succeeds. Reply with "
+                "ONE or TWO sentences of concrete, actionable advice — specific elements or actions to try "
+                "or avoid. Do not restate the goal or apologize."),
+        messages=[Message("user", [TextBlock(
+            f"GOAL: {goal}\n\nWHAT THE FAILED ATTEMPT DID:\n{_trajectory(report)}\n\n"
+            f"OUTCOME: it {reason}\n\nFINAL PAGE (excerpt): {report.final_text[:400]}\n\n"
+            "ADVICE FOR THE NEXT ATTEMPT:")])],
+        max_tokens=160, temperature=settings.authoring_temperature,
+    )
+    try:
+        txt = (await router.complete(req, tier="strong")).text().strip()
+        return txt[:400] or None
+    except Exception:  # noqa: BLE001 - reflexion is best-effort; fall back to plain re-sampling
+        return None
+
+
 async def _learn_n(
     url: str, goal: str, key: str, provider: Provider, cache: FlowCache, max_steps: Optional[int],
     headless: Optional[bool], on_step: Optional[OnStep], prepare: Optional[Prepare],
@@ -477,36 +532,46 @@ async def _learn_n(
     verifier: Optional[Verifier] = None, grounding: Optional[Any] = None,
     record_har_path: Optional[str] = None, extra_headers: Optional[dict] = None,
     storage_state: Optional[str] = None, verify_replay: bool = False, samples: int = 1,
+    reflect: bool = False,
 ) -> FlowReport:
     """Best-of-N authoring: re-author up to `samples` times and keep the FIRST sample the verify-by-replay
     oracle confirms. Each attempt is a fresh `_learn` (fresh session -> the LLM resamples at
     `settings.authoring_temperature`, default 1.0), converting discovery variance into a higher first-run
-    success rate. READ-ONLY by design: the loop STOPS as soon as a flow is cached (verified read, or a
-    write that cached on its confirm check), a write fired on the wire (`performed_write`), or an attempt
-    raised — re-authoring after a write would re-submit. Usage is reported cumulatively across attempts.
-    (Needs `verify_replay=True` to actually retry: without the oracle, attempt 1 always caches.)
+    success rate. With `reflect=True`, a failed attempt is summarized into one LLM-written lesson that is
+    fed to the NEXT attempt — learning from the failure instead of resampling blindly (attacks the tasks
+    that blind best-of-N plateaus on). READ-ONLY by design: the loop STOPS as soon as a flow is cached
+    (verified read, or a write that cached on its confirm check), a write fired on the wire
+    (`performed_write`), or an attempt raised — re-authoring after a write would re-submit. Usage is
+    reported cumulatively across attempts. (Needs `verify_replay=True` to actually retry.)
     """
     samples = max(1, samples)
     _router = getattr(provider, "router", None)
     _usnap = _router.totals.snapshot() if _router is not None else None
     last: Optional[FlowReport] = None
     used = 0
+    reflections: list = []
     for attempt in range(samples):
         used = attempt + 1
         try:
             last = await _learn(
                 url, goal, key, provider, cache, max_steps, headless, on_step, prepare, finalize,
                 governor, scope, browser, verifier, grounding, record_har_path, extra_headers,
-                storage_state, verify_replay,
+                storage_state, verify_replay, reflections or None,
             )
         except Exception:  # an attempt that raised mid-way may have fired a write — never silently retry
             _log.warning("best-of-N: attempt %d raised — stopping (a write may have fired)", used)
             raise
         if last.extra.get("cached") or last.extra.get("performed_write"):
             break  # THIS attempt cached a (verified) read OR a write fired -> never re-author
+        if reflect and attempt + 1 < samples:  # learn from this failure before the next sample
+            lesson = await _reflect(provider, goal, last)
+            if lesson:
+                reflections.append(lesson)
     if last is not None:
         last.extra["samples_used"] = used
-        if _router is not None:  # cumulative cost across every attempt, not just the kept one
+        if reflections:
+            last.extra["reflections"] = list(reflections)
+        if _router is not None:  # cumulative cost across every attempt (incl. reflection calls)
             last.extra["usage"] = _router.totals.since(_usnap).as_dict(settings.model)
     return last if last is not None else FlowReport(mode="learn", success=False)
 

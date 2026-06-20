@@ -184,11 +184,11 @@ def _now_iso() -> str:
 
 
 # --- benchmark runners (each returns a record) ------------------------------------------------
-async def _demo_rep(provider_name: str, root: Path, samples: int = 1) -> dict:
+async def _demo_rep(provider_name: str, root: Path, samples: int = 1, reflect: bool = False) -> dict:
     url = index_url()
     cache = FlowCache(root=root)  # fresh -> each rep re-learns (the point: discovery variance)
     learn = await run_cached(url, GOAL, get_provider(provider_name), cache, mode="learn", headless=True,
-                             samples=samples, verify_replay=samples > 1)
+                             samples=samples, verify_replay=samples > 1, reflect=reflect)
     replay = await run_cached(url, GOAL, None, cache, mode="replay", headless=True)
     ok = bool(replay.success and replay.llm_calls == 0 and SUCCESS_TEXT.lower() in replay.final_text.lower())
     speedup = learn.total_ms / replay.total_ms if replay.total_ms else 0.0
@@ -197,12 +197,12 @@ async def _demo_rep(provider_name: str, root: Path, samples: int = 1) -> dict:
             "learn_ms": learn.total_ms, "replay_ms": replay.total_ms, "first_fail": first_fail}
 
 
-async def run_demo(provider_name: str, reps: int, samples: int = 1) -> dict:
-    print(f"variance: bench=demo-shop provider={provider_name} reps={reps} samples={samples}\n")
+async def run_demo(provider_name: str, reps: int, samples: int = 1, reflect: bool = False) -> dict:
+    print(f"variance: bench=demo-shop provider={provider_name} reps={reps} samples={samples} reflect={reflect}\n")
     results = []
     with tempfile.TemporaryDirectory() as td:
         for i in range(reps):
-            r = await _demo_rep(provider_name, Path(td) / f"rep{i}", samples)
+            r = await _demo_rep(provider_name, Path(td) / f"rep{i}", samples, reflect)
             results.append(r)
             print(f"  rep {i + 1}/{reps}: replay_ok={r['ok']} speedup={r['speedup']:.1f}x "
                   f"learn={r['learn_ms']:.0f}ms replay={r['replay_ms']:.0f}ms ${r['cost']:.4f}")
@@ -213,7 +213,7 @@ async def run_demo(provider_name: str, reps: int, samples: int = 1) -> dict:
         cost_usd=sum(r["cost"] for r in results),
         first_fail=[r["first_fail"] for r in results],
     )
-    record["samples"] = samples
+    record["samples"], record["reflect"] = samples, reflect
     sr, sp = record["metrics"]["replay_success_rate"], record["metrics"]["speedup"]
     print(f"\n== demo-shop, {reps} reps ==")
     print(f"replay success:  {int(sr['mean'] * reps + 0.5)}/{reps}  (rate {sr['mean']:.2f})")
@@ -223,12 +223,14 @@ async def run_demo(provider_name: str, reps: int, samples: int = 1) -> dict:
     return record
 
 
-async def run_miniwob(provider_name: str, reps: int, all_tasks: bool, seed: int, samples: int = 1) -> dict:
+async def run_miniwob(provider_name: str, reps: int, all_tasks: bool, seed: int, samples: int = 1,
+                      reflect: bool = False) -> dict:
     from benchmarks.miniwob_bench import _raw, _run_task
     from benchmarks.miniwob_env import EASY_TASKS, TASKS, StaticServer, miniwob_html_root
 
     tasks = TASKS if all_tasks else EASY_TASKS
-    print(f"variance: bench=miniwob provider={provider_name} reps={reps} tasks={len(tasks)} samples={samples}\n")
+    print(f"variance: bench=miniwob provider={provider_name} reps={reps} tasks={len(tasks)} "
+          f"samples={samples} reflect={reflect}\n")
     fracs, costs = [], []
     server = StaticServer(miniwob_html_root())
     base = server.start()
@@ -238,7 +240,8 @@ async def run_miniwob(provider_name: str, reps: int, all_tasks: bool, seed: int,
                 cache = FlowCache(root=Path(td) / f"rep{i}")
                 ok, cost = 0, 0.0
                 for task in tasks:
-                    _instr, learn, replay = await _run_task(base, cache, task, provider_name, seed, samples)
+                    _instr, learn, replay = await _run_task(base, cache, task, provider_name, seed,
+                                                            samples, reflect)
                     if _raw(replay) > 0:
                         ok += 1
                     cost += _cost(learn)
@@ -252,7 +255,7 @@ async def run_miniwob(provider_name: str, reps: int, all_tasks: bool, seed: int,
         "miniwob", provider_name, reps, _now_iso(),
         {"replay_success_rate": fracs}, cost_usd=sum(costs),
     )
-    record["samples"] = samples
+    record["samples"], record["reflect"] = samples, reflect
     sr = record["metrics"]["replay_success_rate"]
     print(f"\n== miniwob ({len(tasks)} tasks), {reps} reps ==")
     print(f"replay success rate: mean {sr['mean'] * 100:.0f}% +/- {sr['std'] * 100:.0f}%  "
@@ -305,6 +308,9 @@ if __name__ == "__main__":
     ap.add_argument("--samples", type=int, default=1,
                     help="best-of-N authoring: re-author up to N times, keep the first verified sample "
                          "(N>1 enables the verify-by-replay oracle). Default 1 = the N=1 baseline.")
+    ap.add_argument("--reflect", action="store_true",
+                    help="reflexion: feed a failed attempt's LLM-written lesson to the next sample "
+                         "(only meaningful with --samples >1).")
     ap.add_argument("--json", type=Path, default=None, metavar="PATH",
                     help="write the run record as JSON (record a baseline)")
     ap.add_argument("--baseline", type=Path, default=None, metavar="PATH",
@@ -312,9 +318,9 @@ if __name__ == "__main__":
     args = ap.parse_args()
 
     if args.bench == "demo":
-        record = asyncio.run(run_demo(args.provider, args.reps, args.samples))
+        record = asyncio.run(run_demo(args.provider, args.reps, args.samples, args.reflect))
     else:
-        record = asyncio.run(run_miniwob(args.provider, args.reps, args.all, args.seed, args.samples))
+        record = asyncio.run(run_miniwob(args.provider, args.reps, args.all, args.seed, args.samples, args.reflect))
 
     if args.json:
         _write_json(record, args.json)
