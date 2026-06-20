@@ -39,6 +39,21 @@ A saved prior MiniWoB run scored **8/10 @ 49–280×**; today's fresh run scored
 `click-link` and `focus-text-2` failing to *author* this time. That swing is the headline insight,
 not noise (see below).
 
+### Discovery reliability — best-of-N (measured 2026-06-19→20, Anthropic, MiniWoB++ ×10, 5 reps)
+
+This is the swing above, now pinned down and acted on. Records in [`baselines/`](baselines/).
+
+| Config | Per-task success | Variance | Cost (5 reps) |
+|---|---|---|---|
+| **N=1** (baseline, raw authoring) | **52%** | **± 13%** (40–70%, i.e. 4–7/10) | $4.24 |
+| **N=3 best-of-N** (re-author, keep first verify-passing) | **60%** | **± 0%** (6/10 *every* rep) | $6.58 (**1.55×**) |
+
+The headline is the **variance collapse, not the +8 points**: best-of-N drove run-to-run spread to
+**zero** — discovery is now deterministic. Cost rose only **1.55×** (not 3×) thanks to adaptive
+early-stop. The remaining 40% is a **capability ceiling** (≈4 tasks 3 samples still can't author),
+a *different* problem from variance — so further reliability comes from grounding/capability, not more
+sampling. (`uv run --group bench python -m benchmarks.variance --bench miniwob --all --samples 3`.)
+
 **Honest caveats on the headline numbers:**
 
 - **"Speedup" is an in-process micro-timing.** `learn.total` includes LLM latency; `replay.total`
