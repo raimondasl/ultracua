@@ -145,9 +145,16 @@ verify-by-replay oracle confirms (`run_cached(samples=N)` / `flow.learn(samples=
 benchmark via `variance --samples N`). READ-ONLY by design: it stops the instant a write fires *on the
 wire* (a same-origin non-idempotent request, caught even when the recipe's keyword/structural classifier
 misses an Enter-submit or formless POST), never re-authoring a write. Temperature is now plumbed so it
-actually resamples. *Still in Tier 2:* reflexion retry on stalls; a Similo-style 0-LLM heal tier; a
-0-LLM structured / list extractor (+ a JSON-LD tier) with a fail-loud row-count invariant; type-aware
-comparators + a scripted-oracle control arm in the variance gate; a **flow-staleness canary**.
+actually resamples. Measured (#50): MiniWoB 52%→60% and run-to-run variance **±13%→0%** at 1.55× cost —
+the remaining 40% is a *capability ceiling*, not variance.
+
+✅ **reflexion retry** (#51) — best-of-N resampled blindly; reflexion instead summarizes a failed
+attempt into one LLM-written lesson (`flow._reflect`) and feeds it to the NEXT sample (in the authoring
+goal only — never the cache key). It's the lever for the capability-ceiling tasks blind sampling
+plateaus on. Opt-in (`run_cached(reflect=True)`; benchmark `variance --samples N --reflect`); the
+write-safety stop still gates. *Still in Tier 2:* a Similo-style 0-LLM heal tier; a 0-LLM structured /
+list extractor (+ a JSON-LD tier) with a fail-loud row-count invariant; type-aware comparators + a
+scripted-oracle control arm in the variance gate; a **flow-staleness canary**.
 
 **Tier 3 — later:** parameterized typed slots; skill / workflow memory as a discovery prior (scales with
 flow volume); Phase G proper (barrier-commit multi-write + deterministic action primitives:
