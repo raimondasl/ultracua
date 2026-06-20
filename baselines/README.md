@@ -8,7 +8,14 @@ fixed reference instead of a single noisy run.
 | File | Bench | Captured | Headline |
 |---|---|---|---|
 | `demo.json` | demo-shop (4-step) | 2026-06-19 | 5/5 replay, speedup **86.3× ± 20.9**, ~$0.27 — no discovery variance (cost/speedup reference) |
-| `miniwob.json` | MiniWoB++ ×10 | 2026-06-19 | replay success **52% ± 13%** (40–70%), pass^k=0 (no rep got all 10), ~$4.24 — the discovery-reliability reference |
+| `miniwob.json` | MiniWoB++ ×10 (N=1) | 2026-06-19 | replay success **52% ± 13%** (40–70%), pass^k=0, ~$4.24 — the discovery-reliability reference |
+| `miniwob_bestof3.json` | MiniWoB++ ×10 (**N=3 best-of-N**) | 2026-06-20 | **60% ± 0%** (6/10 every rep), ~$6.58 (1.55×) — best-of-N vs the N=1 baseline: +8 pts and **variance → 0** |
+
+**Best-of-N result (N=3 vs N=1):** re-authoring up to 3× and keeping the first verify-passing sample
+lifted per-task success 52%→60% and — the real win — **collapsed run-to-run variance from ±13% to
+zero** (every rep landed on exactly 6/10). Cost rose only 1.55× (adaptive early-stop, not 3×). The
+remaining 40% is a capability ceiling, not variance. The regression gate prints "REGRESSION" against
+`miniwob.json` *only* on cost (>25% by design) — success went up.
 
 The MiniWoB number is the one that matters: it's where LLM authoring is unreliable (the bottleneck),
 so it's the headroom best-of-N should close. The demo flow authors reliably (no variance).
