@@ -148,13 +148,16 @@ misses an Enter-submit or formless POST), never re-authoring a write. Temperatur
 actually resamples. Measured (#50): MiniWoB 52%→60% and run-to-run variance **±13%→0%** at 1.55× cost —
 the remaining 40% is a *capability ceiling*, not variance.
 
-✅ **reflexion retry** (#51) — best-of-N resampled blindly; reflexion instead summarizes a failed
-attempt into one LLM-written lesson (`flow._reflect`) and feeds it to the NEXT sample (in the authoring
-goal only — never the cache key). It's the lever for the capability-ceiling tasks blind sampling
-plateaus on. Opt-in (`run_cached(reflect=True)`; benchmark `variance --samples N --reflect`); the
-write-safety stop still gates. *Still in Tier 2:* a Similo-style 0-LLM heal tier; a 0-LLM structured /
-list extractor (+ a JSON-LD tier) with a fail-loud row-count invariant; type-aware comparators + a
-scripted-oracle control arm in the variance gate; a **flow-staleness canary**.
+⚠️ **reflexion retry** (#51, **measured net-harmful — kept opt-in, OFF**) — summarize a failed attempt
+into one LLM-written lesson (`flow._reflect`) and feed it to the next sample (in the authoring goal only,
+never the cache key). The hypothesis was that learning-from-failure beats blind resampling on the
+ceiling tasks. **#52 measured the opposite**: MiniWoB 60%→52% at +26% cost — the advice misdirects an
+otherwise-clean re-roll. The implementation + the `--reflect` harness stay (useful to re-test on harder
+benchmarks), but it's off by default. **The discovery loop is now measured-done**; the remaining 40% is
+a capability ceiling, so further gains belong to **capability** (Phase I recorder / grounding), not the
+loop. *Still in Tier 2 (replay/extraction-side, orthogonal to the ceiling):* a Similo-style 0-LLM heal
+tier; a 0-LLM structured / list extractor (+ a JSON-LD tier) with a fail-loud row-count invariant;
+type-aware comparators + a scripted-oracle control arm in the variance gate; a **flow-staleness canary**.
 
 **Tier 3 — later:** parameterized typed slots; skill / workflow memory as a discovery prior (scales with
 flow volume); Phase G proper (barrier-commit multi-write + deterministic action primitives:
