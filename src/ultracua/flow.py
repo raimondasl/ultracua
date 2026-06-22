@@ -814,10 +814,14 @@ async def _replay_step(
 
         if step.action in ("click", "type") and step.locator is not None:
             with tr.measure("resolve"):
-                loc = await resolve(page, step.locator)
+                # unique=True: never silently bind the first of several ambiguous matches — that could
+                # click/type the WRONG element and return wrong data. The neighbor anchor disambiguates
+                # most same-name cases; a genuinely ambiguous bind fails loud here -> heal (auto) or a
+                # loud replay failure to re-learn, never a silent wrong-element actuation.
+                loc = await resolve(page, step.locator, unique=True)
             if loc is None:
                 return await _maybe_heal(
-                    session, step, provider, tr, goal, "locator unresolved (drift)"
+                    session, step, provider, tr, goal, "locator unresolved or ambiguous (drift)"
                 )
             note = ""
             async with governor.gate(origin):
