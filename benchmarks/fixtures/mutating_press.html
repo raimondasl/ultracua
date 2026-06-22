@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ultracua fixture — Press-submit login</title>
+  </head>
+  <body>
+    <h1>Sign in</h1>
+    <!-- A POST form submitted by pressing Enter in the field (no button click) — the REFLESS mutating
+         submit the precise gate must scope on the focused element's form, not the whole page. -->
+    <form id="login-form" action="https://api.example.test/login" method="post">
+      <input name="user" aria-label="Username" />
+      <button type="submit">Sign in</button>
+    </form>
+    <p id="s">not signed in</p>
+  </body>
+</html>

@@ -89,6 +89,33 @@ async def describe(page: Page, ref: str) -> Optional[LocatorSpec]:
     return LocatorSpec(**raw)
 
 
+# Returns the focused element's ref ONLY if it uniquely + correctly resolves back to it. The snapshot
+# re-tags survivors `e0..eN` each step and never clears old tags, so a focused field that was EVICTED
+# from this step's snapshot can carry a STALE ref that now ALSO tags a different survivor; describing
+# such a ref (DOM-order-first querySelector) would silently capture the WRONG element. Bail (null) on
+# any such ambiguity so the caller fails closed to the coarser whole-page gate instead of a wrong locator.
+_FOCUSED_REF_JS = r"""
+() => {
+  const a = document.activeElement;
+  if (!a || a === document.body || a === document.documentElement) return null;
+  const ref = a.getAttribute('data-ultracua-ref');
+  if (!ref) return null;
+  const m = document.querySelectorAll('[data-ultracua-ref="' + ref + '"]');
+  return (m.length === 1 && m[0] === a) ? ref : null;
+}
+"""
+
+
+async def focused_ref(page: Page) -> Optional[str]:
+    """The `data-ultracua-ref` of the focused element, but only when that ref unambiguously identifies
+    it (see `_FOCUSED_REF_JS`). Returns None otherwise — used to pin a refless submit's focused field by
+    identity, failing closed rather than trusting a stale/duplicated ref."""
+    try:
+        return await page.evaluate(_FOCUSED_REF_JS)
+    except Exception:  # noqa: BLE001 - page navigating / detached -> no trustworthy ref
+        return None
+
+
 async def resolve(page: Page, spec: LocatorSpec, unique: bool = False) -> Optional[Locator]:
     """Resolve a spec to a visible Playwright Locator, trying resilient strategies before brittle
     ones. Returns None on drift (nothing resolves). With `unique=True`, an ambiguous candidate

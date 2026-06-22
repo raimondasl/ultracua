@@ -27,7 +27,7 @@ from typing import Any, Awaitable, Callable, Optional
 from .browser import BrowserSession
 from .cache import CachedFlow, CachedStep, FlowCache, flow_key
 from .config import settings
-from .locators import describe, resolve
+from .locators import describe, focused_ref, resolve
 from .providers.base import Provider
 from .safety import (
     PacingGovernor,
@@ -279,6 +279,20 @@ async def _author_steps(
             precond_scope = await scope_fingerprint(
                 session.page.locator(f'[data-ultracua-ref="{action.ref}"]').first
             )
+        elif mutating and action.action == "press":
+            # A refless submit (Enter) has no ref of its own — anchor the precondition on the FOCUSED
+            # field (the submit context) BY IDENTITY: capture its locator so replay re-resolves and
+            # re-focuses that exact element and gates on ITS form/section. (Anchoring on activeElement
+            # at replay would instead fingerprint whatever happens to be focused — not identity-stable.)
+            # `focused_ref` fails closed (None) on a stale/ambiguous ref, so we never store a WRONG
+            # locator — we fall back to the whole-page gate instead.
+            ref = await focused_ref(session.page)
+            if ref:
+                spec = await describe(session.page, ref)  # stored as the press step's locator
+                if spec is not None:
+                    precond_scope = await scope_fingerprint(
+                        session.page.locator(f'[data-ultracua-ref="{ref}"]').first
+                    )
 
         ok, note = True, ""
         origin = origin_of(session.page.url)
@@ -720,7 +734,10 @@ async def _replay_step(
         with tr.measure("gate"):
             if step.precond_scope and step.locator is not None:
                 # PRECISE gate: did the target's enclosing form/section change? (ignores unrelated
-                # page churn — banners, badges — that the whole-page fingerprint over-flags as drift)
+                # page churn — banners, badges — that the whole-page fingerprint over-flags as drift).
+                # For a refless submit (press), step.locator is the FOCUSED field captured at learn, so
+                # this resolves that exact element and scopes ITS form — identity-stable, not focus-of-
+                # the-moment.
                 target = await resolve(page, step.locator)
                 if target is None:
                     drifted, reason = True, "mutation gate: target missing — refusing to re-drive a write"
@@ -729,7 +746,7 @@ async def _replay_step(
                     if current and current != step.precond_scope:
                         drifted, reason = True, "mutation gate: form/section drift — refusing to re-drive a write"
             else:
-                # fallback (old flow, or a press/navigate submit with no recorded scope)
+                # fallback (old flow, or a navigate/refless submit with no recorded scope)
                 obs = await session.snapshot()
                 if step.precond_fingerprint and obs.fingerprint != step.precond_fingerprint:
                     drifted, reason = True, "mutation gate: page drift — refusing to re-drive a write"
@@ -743,6 +760,16 @@ async def _replay_step(
     try:
         if step.action in ("press", "scroll", "navigate", "click_xy", "webmcp_call"):
             note = ""
+            if step.action == "press" and step.locator is not None:
+                # Re-establish the learned focus so the Enter-submit fires from the RIGHT field
+                # (the gate just verified that field's form scope). Best-effort: the gate is the
+                # safety check; pressing on the existing focus is the pre-existing fallback.
+                focus_loc = await resolve(page, step.locator)
+                if focus_loc is not None:
+                    try:
+                        await focus_loc.focus(timeout=settings.action_timeout_ms)
+                    except Exception:  # noqa: BLE001 - couldn't focus -> press whatever's focused
+                        pass
             async with governor.gate(origin):
                 with tr.measure("act"):
                     try:
