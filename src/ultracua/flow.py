@@ -24,6 +24,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
 from .browser import BrowserSession
 from .cache import CachedFlow, CachedStep, FlowCache, flow_key
 from .config import settings
@@ -770,15 +772,33 @@ async def _replay_step(
                         await focus_loc.focus(timeout=settings.action_timeout_ms)
                     except Exception:  # noqa: BLE001 - couldn't focus -> press whatever's focused
                         pass
+            act = Action(
+                action=step.action, intent=step.intent, text=step.text,
+                coords=step.coords, tool=step.tool, args=step.args,
+            )
             async with governor.gate(origin):
                 with tr.measure("act"):
                     try:
-                        await session.act(
-                            Action(
-                                action=step.action, intent=step.intent, text=step.text,
-                                coords=step.coords, tool=step.tool, args=step.args,
-                            )
-                        )
+                        if step.action == "press" and step.mutating:
+                            # A refless submit fires the form POST ASYNCHRONOUSLY: page.keyboard.press
+                            # returns before the request leaves the browser. Await the in-flight write so
+                            # the Idempotency-Key (set by the gate above) is still on the context when the
+                            # POST is issued — otherwise the `finally` below clears it first and the write
+                            # replays WITHOUT the dedupe key (a retried submit could double-submit). Unlike
+                            # a click, whose loc.click() auto-waits enough to keep the header live, the press
+                            # needs this explicit await. Bounded, and tolerant of the no-write case (a
+                            # JS-only submit that fires no network request): the header was set throughout
+                            # the act, so nothing is lost.
+                            try:
+                                async with page.expect_request(
+                                    lambda r: is_write_request(r.method, r.url),
+                                    timeout=settings.action_timeout_ms,
+                                ):
+                                    await session.act(act)
+                            except PlaywrightTimeoutError:
+                                pass
+                        else:
+                            await session.act(act)
                         return True, "", False
                     except Exception as exc:  # noqa: BLE001
                         note = f"{type(exc).__name__}"

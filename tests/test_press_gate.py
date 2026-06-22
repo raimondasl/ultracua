@@ -17,6 +17,10 @@ from ultracua.providers.scripted import ScriptedProvider
 
 _FIX = Path(__file__).parents[1] / "benchmarks" / "fixtures" / "mutating_press.html"
 URL = _FIX.resolve().as_uri()
+# Same login flow, but the submit dispatches its POST ASYNCHRONOUSLY (deferred fetch) — the timing that
+# actually trips the header-clear race; a navigation submit queues its request synchronously and masks it.
+_FIX_ASYNC = Path(__file__).parents[1] / "benchmarks" / "fixtures" / "mutating_press_async.html"
+URL_ASYNC = _FIX_ASYNC.resolve().as_uri()
 GOAL = "sign in"
 STEPS = [
     {"action": "type", "role": "textbox", "name": "username", "text": "alice", "intent": "enter the username"},
@@ -113,9 +117,50 @@ async def test_press_gate_allows_write_under_unrelated_churn(tmp_path: Path) -> 
     replay = await run_cached(URL, GOAL, None, cache, mode="replay",
                               prepare=_recorder(caps, drift="outside"), headless=True)
     assert replay.success is True  # unrelated churn outside the form does not trip the gate
-    assert caps  # the Enter-submit write fired — the gate allowed it (was false-refused by the page fp)
-    # NOTE: the idempotency-key is NOT asserted here — a refless submit doesn't carry it today (the press
-    # act doesn't await the form-submit navigation, so the header clears before the POST); separate gap.
+    # the Enter-submit write fired (gate allowed it, was false-refused by the page fp) AND carried the
+    # idempotency key — the press act now awaits the in-flight POST so the header is still set on the wire.
+    assert caps and caps[0].get("idempotency-key", "").startswith("uca-")
+
+
+async def test_idempotency_key_injected_on_press_submit_replay(tmp_path: Path) -> None:
+    """A refless mutating submit (press Enter) carries the Idempotency-Key on replay, exactly like a
+    click-submit (tests/test_safety_integration.py::test_idempotency_key_injected_on_mutating_replay).
+    This is the NAVIGATION-submit case: the form POST is queued synchronously during the keypress, so it
+    already carried the key — the async-submit race guard is the deferred-fetch test below."""
+    cache = FlowCache(root=tmp_path)
+    learn_caps: list = []
+    replay_caps: list = []
+
+    learn = await run_cached(URL, GOAL, ScriptedProvider(list(STEPS)), cache, mode="learn",
+                             prepare=_recorder(learn_caps), headless=True)
+    assert learn.success
+
+    replay = await run_cached(URL, GOAL, None, cache, mode="replay",
+                              prepare=_recorder(replay_caps), headless=True)
+    assert replay.success
+    # Learn did NOT inject a key; replay DID (mutation-gated, idempotent) — even for a refless submit.
+    assert learn_caps and "idempotency-key" not in learn_caps[0]
+    assert replay_caps and replay_caps[0].get("idempotency-key", "").startswith("uca-")
+
+
+async def test_idempotency_key_held_until_async_press_submit_fires(tmp_path: Path) -> None:
+    """REGRESSION GUARD: when the refless submit dispatches its write ASYNCHRONOUSLY (an SPA-style fetch
+    fired a tick after the keypress), the press replay must hold the Idempotency-Key on the context until
+    the POST actually goes out. Before the fix, `session.act` returned the moment keyboard.press did and
+    `_replay_step`'s `finally` cleared the header BEFORE the deferred POST fired — so the write replayed
+    WITHOUT the dedupe key (a retried submit could double-submit). The fix awaits the in-flight write
+    (page.expect_request) so the header is still live when it leaves the browser. Fails without the fix."""
+    cache = FlowCache(root=tmp_path)
+    learn = await run_cached(URL_ASYNC, GOAL, ScriptedProvider(list(STEPS)), cache, mode="learn",
+                             prepare=_recorder([]), headless=True)
+    assert learn.success
+
+    caps: list = []
+    replay = await run_cached(URL_ASYNC, GOAL, None, cache, mode="replay",
+                              prepare=_recorder(caps), headless=True)
+    assert replay.success
+    # the DEFERRED POST carried the key — the press act awaited the in-flight write before clearing it.
+    assert caps and caps[0].get("idempotency-key", "").startswith("uca-")
 
 
 async def test_press_gate_blocks_write_under_form_drift(tmp_path: Path) -> None:

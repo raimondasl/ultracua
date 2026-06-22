@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ultracua fixture — Deferred (AJAX) press-submit login</title>
+  </head>
+  <body>
+    <h1>Sign in</h1>
+    <!-- A REFLESS mutating submit whose write is dispatched ASYNCHRONOUSLY: the form's submit handler
+         defers the POST by a tick (setTimeout) before fetch()ing, so the network write leaves the
+         browser AFTER page.keyboard.press() has already returned. This is the timing under which the
+         idempotency header must be HELD until the in-flight write actually fires — a plain navigation
+         submit (see mutating_press.html) queues its request synchronously and masks the race. -->
+    <form id="login-form" onsubmit="return false">
+      <input name="user" aria-label="Username" />
+      <button type="submit">Sign in</button>
+    </form>
+    <p id="s">not signed in</p>
+    <script>
+      const form = document.getElementById("login-form");
+      const input = form.querySelector('input[name="user"]');
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        // Defer the write a full tick so the POST is initiated only after keyboard.press() returns.
+        setTimeout(() => {
+          fetch("https://api.example.test/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ user: input.value }),
+          }).then(() => {
+            document.getElementById("s").textContent = "signed in";
+          });
+        }, 50);
+      });
+    </script>
+  </body>
+</html>
