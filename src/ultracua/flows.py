@@ -15,6 +15,7 @@ The product-facing layer over the `run_cached` engine — see ROADMAP.md (Phase 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import json
 import os
@@ -213,6 +214,91 @@ def _meta_path(cache: FlowCache, key: str) -> Path:
     return Path(cache.root) / f"{key}.meta.json"
 
 
+# Cross-process exclusive lock for the meta read-modify-write. fcntl on POSIX, msvcrt on Windows —
+# both release automatically on fd close / process death, so a crashed holder never wedges others.
+# Acquire NON-BLOCKING + retry: msvcrt's blocking LK_LOCK is unfair and gives up after ~10s by RAISING
+# EDEADLOCK, which would silently degrade to an unlocked write under contention; a tight try-lock loop
+# is fair and only ever degrades on a truly pathological (> deadline) wedge — and even then it logs
+# loudly, never silently dropping a health update.
+_LOCK_DEADLINE_S = 30.0
+_LOCK_POLL_S = 0.01
+
+try:  # POSIX
+    import fcntl
+
+    def _try_lock(fd: int) -> bool:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            return False  # held by another process
+
+    def _unlock_fd(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+except ImportError:  # Windows
+    import msvcrt
+
+    def _try_lock(fd: int) -> bool:
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)  # non-blocking 1-byte region at pos 0
+            return True
+        except OSError:
+            return False  # held by another process
+
+    def _unlock_fd(fd: int) -> None:
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+
+
+@contextlib.contextmanager
+def _meta_lock(cache: FlowCache, key: str):
+    """Hold an exclusive CROSS-PROCESS lock for a flow's meta read-modify-write, so two scheduled
+    processes (or an operator edit racing a scheduled run) can't lose a health/trust update
+    (last-writer-wins). Locks a dedicated `<key>.meta.lock` file — never the meta file itself, which
+    is atomically replaced. On a pathological wedge (no acquire within the deadline) it proceeds
+    UNLOCKED but **logs loudly** — it never silently drops an update. NOTE: acquisition is a synchronous
+    spin on the caller's event-loop thread, so the guarded critical section must stay tiny."""
+    Path(cache.root).mkdir(parents=True, exist_ok=True)
+    lock_path = Path(cache.root) / f"{key}.meta.lock"
+    f = None
+    locked = False
+    try:
+        try:
+            f = open(lock_path, "a+")
+            f.seek(0)
+        except OSError as exc:  # can't even open the lock file -> degrade, but loudly
+            _log.warning("meta lock: cannot open %s (%s) — proceeding unlocked", lock_path, exc)
+            yield
+            return
+        deadline = time.monotonic() + _LOCK_DEADLINE_S
+        while not (locked := _try_lock(f.fileno())):
+            if time.monotonic() >= deadline:
+                _log.warning("meta lock for %s not acquired in %.0fs — proceeding UNLOCKED (possible "
+                             "lost health update under extreme contention)", key, _LOCK_DEADLINE_S)
+                break
+            time.sleep(_LOCK_POLL_S)
+        yield
+    finally:
+        if f is not None:
+            if locked:
+                try:
+                    f.seek(0)
+                    _unlock_fd(f.fileno())
+                except OSError:
+                    pass
+            f.close()
+
+
+def _update_meta(cache: FlowCache, key: str, mutate: Callable[["FlowMeta"], None]) -> None:
+    """Load → mutate → atomically save a flow's meta UNDER the cross-process lock. Every writer of the
+    meta sidecar (run records, learn, approve/unapprove, relearn pin-clear) goes through this, so a
+    scheduled run record can't be clobbered by a concurrent operator edit of the same flow (or vice
+    versa). Reads (health views, the replay snapshot) need no lock — the atomic save never tears."""
+    with _meta_lock(cache, key):
+        meta = _load_meta(cache, key)
+        mutate(meta)
+        _save_meta(cache, key, meta)
+
+
 def _load_meta(cache: FlowCache, key: str) -> FlowMeta:
     p = _meta_path(cache, key)
     if p.exists():
@@ -233,26 +319,25 @@ def _save_meta(cache: FlowCache, key: str, meta: FlowMeta) -> None:
 
 
 def _record_run(cache: FlowCache, key: str, *, ok: bool, error: Optional[str] = None) -> None:
-    """Record a replay outcome into the flow's run history (for the fleet health view).
-
-    The read-modify-write is atomic within a process (no `await` between the reload and the atomic
-    `_save_meta`, so the single-threaded event loop can't interleave two records). The temp+replace
-    write also keeps the file valid for a concurrent reader in another process.
+    """Record a replay outcome into the flow's run history (for the fleet health view). The
+    read-modify-write runs under `_meta_lock` (via `_update_meta`), so concurrent records OR a
+    concurrent operator edit of the same flow can't lose a run-count / failure-streak update.
     """
-    meta = _load_meta(cache, key)  # reload so we don't clobber a concurrent shape/approval update
-    now = time.time()
-    meta.last_run_ts = now
-    meta.runs += 1
-    if ok:
-        meta.last_ok_ts = now
-        meta.successes += 1
-        meta.consecutive_failures = 0
-        meta.last_error = None
-    else:
-        meta.consecutive_failures += 1
-        meta.last_error = error
-        meta.last_error_ts = now
-    _save_meta(cache, key, meta)
+    def _apply(meta: FlowMeta) -> None:
+        now = time.time()
+        meta.last_run_ts = now
+        meta.runs += 1
+        if ok:
+            meta.last_ok_ts = now
+            meta.successes += 1
+            meta.consecutive_failures = 0
+            meta.last_error = None
+        else:
+            meta.consecutive_failures += 1
+            meta.last_error = error
+            meta.last_error_ts = now
+
+    _update_meta(cache, key, _apply)
 
 
 def _default_cache() -> FlowCache:
@@ -530,18 +615,24 @@ async def _learn_once(
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     cached = cache.get(key)
     data, found = out.get("data"), bool(out.get("found"))
-    meta = _load_meta(cache, key)  # preserve `approved` across re-learns
     pinned = False
+    approved = False
     if cached is not None:
-        meta.shape, meta.learned_ts = _shape_of(data), time.time()
-        # Bind the pin to the just-learned DOM: a re-learn ALWAYS resets it (a fresh pin, or None
-        # when pin_read is off / unpinnable) so a stale pin can never outlive the cached flow.
-        meta.read_pin = out.get("pin") if spec.pin_read else None
-        pinned = meta.read_pin is not None
-        _save_meta(cache, key, meta)
+        def _apply(meta: FlowMeta) -> None:  # under the lock: preserve `approved`, refresh shape/pin
+            nonlocal pinned, approved
+            meta.shape, meta.learned_ts = _shape_of(data), time.time()
+            # Bind the pin to the just-learned DOM: a re-learn ALWAYS resets it (a fresh pin, or None
+            # when pin_read is off / unpinnable) so a stale pin can never outlive the cached flow.
+            meta.read_pin = out.get("pin") if spec.pin_read else None
+            pinned = meta.read_pin is not None
+            approved = meta.approved
+
+        _update_meta(cache, key, _apply)
+    else:
+        approved = _load_meta(cache, key).approved
     return LearnResult(
         spec=spec, cached=cached is not None, steps=list(cached.steps) if cached else [],
-        data=data, found=found, approved=meta.approved, shape=_shape_of(data),
+        data=data, found=found, approved=approved, shape=_shape_of(data),
         pinned=pinned, performed_write=bool(report.extra.get("performed_write")),
         note=report.note or report.mode,
     )
@@ -553,17 +644,13 @@ def approve(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> None:
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     if cache.get(key) is None:
         raise FlowReplayError(f"{spec.name!r}: nothing to approve — learn the flow first")
-    meta = _load_meta(cache, key)
-    meta.approved = True
-    _save_meta(cache, key, meta)
+    _update_meta(cache, key, lambda m: setattr(m, "approved", True))
 
 
 def unapprove(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> None:
     cache = cache or _default_cache()
     key = flow_key(spec.goal, spec.start_url, spec.scope)
-    meta = _load_meta(cache, key)
-    meta.approved = False
-    _save_meta(cache, key, meta)
+    _update_meta(cache, key, lambda m: setattr(m, "approved", False))
 
 
 def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Optional[float] = None) -> FlowHealth:
@@ -718,8 +805,8 @@ async def replay(
             # itself doesn't use the pin (it re-reads via the LLM extractor), so clearing early is safe;
             # a full re-learn below re-pins from scratch.
             if spec.pin_read and meta.read_pin is not None:
-                meta.read_pin = None
-                _save_meta(cache, key, meta)
+                meta.read_pin = None  # keep the in-memory snapshot consistent for the repair below
+                _update_meta(cache, key, lambda m: setattr(m, "read_pin", None))
             # Cheapest repair first: re-author ONLY the broken tail from the current page, keeping the
             # working prefix (suffix-replan). This fixes locator/path drift without re-running the whole
             # flow. It can't fix data-SHAPE drift (the steps still replay) — that falls to a full relearn.
