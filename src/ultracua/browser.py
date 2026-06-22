@@ -48,20 +48,28 @@ class BrowserSession:
         self.page: Page | None = None
 
     async def start(self) -> "BrowserSession":
-        if self._shared_browser is None:
-            self._pw = await async_playwright().start()
-            self.browser = await self._pw.chromium.launch(headless=self.headless)
-        context_kwargs: dict = {}
-        if self._record_har_path:
-            context_kwargs["record_har_path"] = self._record_har_path
-            context_kwargs["record_har_content"] = "embed"
-        if self._storage_state:
-            context_kwargs["storage_state"] = self._storage_state
-        self.context = await self.browser.new_context(**context_kwargs)
-        self.context.set_default_timeout(settings.action_timeout_ms)
-        self.context.set_default_navigation_timeout(settings.nav_timeout_ms)
-        self.page = await self.context.new_page()
-        return self
+        try:
+            if self._shared_browser is None:
+                self._pw = await async_playwright().start()
+                self.browser = await self._pw.chromium.launch(headless=self.headless)
+            context_kwargs: dict = {}
+            if self._record_har_path:
+                context_kwargs["record_har_path"] = self._record_har_path
+                context_kwargs["record_har_content"] = "embed"
+            if self._storage_state:
+                context_kwargs["storage_state"] = self._storage_state
+            self.context = await self.browser.new_context(**context_kwargs)
+            self.context.set_default_timeout(settings.action_timeout_ms)
+            self.context.set_default_navigation_timeout(settings.nav_timeout_ms)
+            self.page = await self.context.new_page()
+            return self
+        except BaseException:
+            # A failure AFTER launch (bad storage_state, new_context/new_page raising, cancellation)
+            # would otherwise leak the driver + Chromium: the caller's `session = await ...start()`
+            # never binds, so its `finally: session.close()` never runs. close() is None-guarded and
+            # only stops what we own, so tearing down whatever we created here is safe; then re-raise.
+            await self.close()
+            raise
 
     async def goto(self, url: str) -> None:
         assert self.page is not None
