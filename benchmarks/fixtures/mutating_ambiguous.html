@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ultracua fixture — Two identical order forms</title>
+  </head>
+  <body>
+    <h1>Checkout</h1>
+    <!-- TWO structurally-identical POST forms (think a header mini-checkout + a main checkout) that share
+         role+name AND carry NO disambiguating test-id / id / unique-css. Each form is wrapped in three
+         identical single-child <div>s so the captured css path (locators.DESCRIBE_JS caps the path at 5
+         ancestors) is "div > div > div > form > button" for BOTH submit buttons — the discriminating outer
+         wrapper sits BEYOND that 5-level window, so resolve() cannot tell the two buttons apart by any
+         anchor. With the precise mutation gate resolving WITHOUT unique=True a blind replay would bind the
+         WRONG-but-identical form's `.first`, fingerprint ITS (identical) scope, match, and submit; with
+         unique=True the ambiguous target fails loud instead. -->
+    <div class="region">
+      <div><div><div>
+        <form action="https://api.example.test/order" method="post">
+          <button type="submit">Place order</button>
+        </form>
+      </div></div></div>
+    </div>
+    <div class="region">
+      <div><div><div>
+        <form action="https://api.example.test/order" method="post">
+          <button type="submit">Place order</button>
+        </form>
+      </div></div></div>
+    </div>
+    <p id="s">cart not submitted</p>
+  </body>
+</html>

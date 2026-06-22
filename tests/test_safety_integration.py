@@ -11,6 +11,9 @@ from ultracua.providers.scripted import ScriptedProvider
 
 _FIX = Path(__file__).parents[1] / "benchmarks" / "fixtures" / "mutating.html"
 URL = _FIX.resolve().as_uri()
+# Two structurally-identical order forms that share role+name with no disambiguating test-id/id/unique-css.
+_FIX_AMBIG = Path(__file__).parents[1] / "benchmarks" / "fixtures" / "mutating_ambiguous.html"
+URL_AMBIG = _FIX_AMBIG.resolve().as_uri()
 GOAL = "place the order"
 STEPS = [
     {"action": "click", "role": "button", "name": "place order", "intent": "place the order"},
@@ -98,6 +101,29 @@ async def test_mutation_gate_ignores_unrelated_drift(tmp_path: Path) -> None:
     )
     assert replay.success is True   # unrelated churn outside the form does not trip the gate
     assert caps and caps[0].get("idempotency-key", "").startswith("uca-")  # the write fired, gated
+
+
+async def test_mutation_gate_fails_loud_on_two_identical_forms(tmp_path: Path) -> None:
+    """Write-safety residual: on a page with two structurally-identical forms that share role+name and
+    have NO disambiguating test-id/id/unique-css, the precise gate resolves the write target with
+    unique=True — so an AMBIGUOUS target FAILS LOUD instead of blind-binding the wrong-but-identical
+    form, fingerprint-matching its (identical) scope, and submitting it. Before the fix the gate bound a
+    blind `.first`, passed, and re-drove the write into a possibly-wrong form."""
+    cache = FlowCache(root=tmp_path)
+    learn_caps: list = []
+    learn = await run_cached(
+        URL_AMBIG, GOAL, ScriptedProvider(list(STEPS)), cache, mode="learn",
+        prepare=_recorder(learn_caps), headless=True,
+    )
+    assert learn.success
+    assert len(learn_caps) == 1  # learn legitimately fired the write once (the first form)
+
+    replay_caps: list = []
+    replay = await run_cached(
+        URL_AMBIG, GOAL, None, cache, mode="replay", prepare=_recorder(replay_caps), headless=True
+    )
+    assert replay.success is False  # ambiguous write target -> gate fails loud, never guesses a `.first`
+    assert replay_caps == []        # ...and NO order POST was sent into either identical form
 
 
 async def test_mutating_step_under_drift_is_never_healed(tmp_path: Path) -> None:

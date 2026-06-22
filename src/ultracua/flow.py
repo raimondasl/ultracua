@@ -740,9 +740,14 @@ async def _replay_step(
                 # For a refless submit (press), step.locator is the FOCUSED field captured at learn, so
                 # this resolves that exact element and scopes ITS form — identity-stable, not focus-of-
                 # the-moment.
-                target = await resolve(page, step.locator)
+                # unique=True: an AMBIGUOUS target — two structurally-identical forms sharing role+name
+                # with no disambiguating test-id/id/unique-css (a header mini-login + a main login) — must
+                # FAIL LOUD, not bind a blind `.first` whose identical form scope then fingerprint-matches
+                # and waves the write through into the WRONG form. Same fail-on-ambiguity rationale as the
+                # pinned-read gate (locators.resolve docstring).
+                target = await resolve(page, step.locator, unique=True)
                 if target is None:
-                    drifted, reason = True, "mutation gate: target missing — refusing to re-drive a write"
+                    drifted, reason = True, "mutation gate: target missing/ambiguous — refusing to re-drive a write"
                 else:
                     current = await scope_fingerprint(target)
                     if current and current != step.precond_scope:
@@ -766,7 +771,10 @@ async def _replay_step(
                 # Re-establish the learned focus so the Enter-submit fires from the RIGHT field
                 # (the gate just verified that field's form scope). Best-effort: the gate is the
                 # safety check; pressing on the existing focus is the pre-existing fallback.
-                focus_loc = await resolve(page, step.locator)
+                # unique=True for symmetry with the gate above: never re-focus a blind `.first` when the
+                # field is ambiguous (the gate already failed loud in that case — this just refuses to
+                # silently re-focus a wrong-but-identical field on any path that reaches here).
+                focus_loc = await resolve(page, step.locator, unique=True)
                 if focus_loc is not None:
                     try:
                         await focus_loc.focus(timeout=settings.action_timeout_ms)
