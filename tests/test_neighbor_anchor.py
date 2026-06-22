@@ -1,9 +1,12 @@
 """Neighbor-anchor disambiguation: `describe` captures a distinguishing text from an element's enclosing
-landmark (section heading / row text), and `resolve` tries it FIRST — so an ambiguous role+name resolves
-to the right element by its section/row context (robust) instead of falling through to the brittle
-positional css path. resolve only ever returns a count==1 match, so it never binds the wrong element; when
-even css goes ambiguous (drift adds a sibling), `unique=True` fails loud rather than guessing. Completes
-the silent-wrong-bind closure (#57 did the write target) for the read/click path.
+landmark (section heading / aria-label / row text) plus WHERE it came from, and `resolve` uses it as a
+LAST-resort tiebreaker — so an ambiguous role+name resolves to the right element by its section/row context
+instead of failing loud or binding the brittle positional css. A "heading"/"label" anchor is matched
+PRECISELY (exact heading text / exact aria-label) so an unrelated section that merely *contains* the anchor
+word in its body can't single-match the wrong element; only a "row" anchor (no cleaner signal) keeps the
+loose whole-subtree substring. resolve only ever returns a count==1 match, so it never binds the wrong
+element; when even css goes ambiguous (drift adds a sibling), `unique=True` fails loud rather than guessing.
+Completes the silent-wrong-bind closure (#57 did the write target) for the read/click path.
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ async def test_describe_captures_section_heading_anchor() -> None:
             '<section><h2>Billing</h2><button data-ultracua-ref="e0">Save</button></section>'
         )
         spec = await describe(session.page, "e0")
-        assert spec is not None and spec.anchor == "Billing"
+        assert spec is not None and spec.anchor == "Billing" and spec.anchor_source == "heading"
     finally:
         await session.close()
 
@@ -39,6 +42,7 @@ async def test_describe_captures_row_text_anchor() -> None:
         )
         spec = await describe(session.page, "e0")
         assert spec is not None and spec.anchor and "Widget A" in spec.anchor
+        assert spec.anchor_source == "row"
     finally:
         await session.close()
 
@@ -123,5 +127,59 @@ async def test_resolve_fails_loud_when_drift_makes_every_locator_ambiguous() -> 
         )
         assert await resolve(session.page, spec, unique=True) is None  # genuinely ambiguous -> fail loud
         assert await resolve(session.page, spec, unique=False) is not None  # non-critical: first-match
+    finally:
+        await session.close()
+
+
+async def test_heading_anchor_never_binds_a_body_substring_section_when_all_ambiguous() -> None:
+    # HARDENING REGRESSION: a heading-source anchor must match the heading's EXACT text, not a loose
+    # whole-subtree substring. Genuinely-all-ambiguous setup (no unique css to rescue us): one "Billing"
+    # section with a plain `section > button` Save (no id). DRIFT rebrands its heading ("Billing"->"Payment")
+    # so it no longer carries the word, AND adds a SECOND section whose BODY contains "Billing" plus its own
+    # Save. role+name, text, AND css all go count==2; the old loose has_text("Billing") would single-match
+    # the WRONG (body-substring) section and confidently bind its button. The precise matcher finds no
+    # element with EXACT text "Billing", so the anchor contributes nothing -> fail loud, not a wrong bind.
+    session = await BrowserSession(headless=True).start()
+    try:
+        await session.page.set_content(
+            '<section><h2>Billing</h2><button data-which="real">Save</button></section>'
+        )
+        await _tag_nth(session.page, "button", 0)
+        spec = await describe(session.page, "e0")
+        assert spec.anchor == "Billing" and spec.anchor_source == "heading" and spec.elem_id is None
+        await session.page.evaluate(
+            "() => { document.querySelector('h2').textContent = 'Payment'; "
+            "const s = document.createElement('section'); "
+            "s.innerHTML = '<h2>Notes</h2><p>Billing questions? contact us</p>"
+            "<button data-which=other>Save</button>'; document.body.appendChild(s); }"
+        )
+        assert await resolve(session.page, spec, unique=True) is None  # nothing unique -> fail loud
+        # even the non-critical first-match must land on the real button, never the body-substring section's.
+        loc = await resolve(session.page, spec, unique=False)
+        assert loc is not None and (await loc.get_attribute("data-which")) == "real"
+    finally:
+        await session.close()
+
+
+async def test_label_anchor_disambiguates_by_exact_aria_label() -> None:
+    # The "label" source matches the landmark's OWN aria-label EXACTLY (not substring). Two same-name Save
+    # buttons in aria-labelled sections; css goes ambiguous on drift. A second section whose label merely
+    # *contains* the word ("Billing history") must NOT be matched, so the right button still binds uniquely
+    # where the old loose has_text would have matched both labels and failed loud.
+    session = await BrowserSession(headless=True).start()
+    try:
+        await session.page.set_content(
+            '<section aria-label="Billing"><button data-which="billing">Save</button></section>'
+        )
+        await _tag_nth(session.page, "button", 0)
+        spec = await describe(session.page, "e0")
+        assert spec.anchor == "Billing" and spec.anchor_source == "label" and spec.elem_id is None
+        await session.page.evaluate(
+            "() => { const s = document.createElement('section'); "
+            "s.setAttribute('aria-label', 'Billing history'); "
+            "s.innerHTML = '<button data-which=other>Save</button>'; document.body.appendChild(s); }"
+        )
+        loc = await resolve(session.page, spec, unique=True)
+        assert loc is not None and (await loc.get_attribute("data-which")) == "billing"
     finally:
         await session.close()

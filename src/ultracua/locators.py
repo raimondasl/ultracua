@@ -37,6 +37,13 @@ _LANDMARKS = ("form,fieldset,section,article,aside,nav,dialog,"
               "[role=region],[role=group],[role=form],li,tr,[role=listitem]")
 
 
+def _attr_eq(attr: str, value: str) -> str:
+    """A CSS `[attr="value"]` selector with the value safely quoted — anchor text can contain quotes
+    or backslashes that would otherwise break the selector or change its meaning."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'[{attr}="{escaped}"]'
+
+
 class LocatorSpec(BaseModel):
     """Ranked, resilient identification of one element, captured at record time."""
 
@@ -52,6 +59,11 @@ class LocatorSpec(BaseModel):
     # aria-label / row text). Used at replay to disambiguate two same-role+name elements that sit in
     # different sections/rows — so an ambiguous role+name resolves to the RIGHT one instead of guessing.
     anchor: Optional[str] = None
+    # Where `anchor` came from, so resolve() can pick a PRECISE matcher instead of a loose substring:
+    # "label" (landmark aria-label), "heading" (its heading/legend/caption/summary), or "row" (a li/tr's
+    # own collapsed text). "label"/"heading" anchors carry a clean signal -> match them exactly; only "row"
+    # (and old specs with no recorded source) fall back to the loose whole-subtree has_text substring.
+    anchor_source: Optional[str] = None
 
 
 # Runs in the page. Reuses snapshot.py's SHARED role/accessible-name derivation (so the captured name
@@ -79,24 +91,27 @@ DESCRIBE_JS = r"""
   // Neighbor anchor: a short distinguishing text from the nearest enclosing landmark — its aria-label or
   // heading/legend/caption, or (for a row-like container with neither) its own collapsed text. Two
   // same-role+name controls in different sections/rows get different anchors -> replay disambiguates.
+  // The SOURCE travels with the text so resolve() can match cleanly anchors (label/heading) PRECISELY and
+  // reserve the loose whole-subtree substring for row text (which has no cleaner signal).
   const LM = 'form,fieldset,section,article,aside,nav,dialog,[role=region],[role=group],[role=form],li,tr,[role=listitem]';
   const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
   const anchorOf = (e) => {
     let c = e.closest(LM), hops = 0;
     while (c && hops < 4) {
       const al = norm(c.getAttribute && c.getAttribute('aria-label'));
-      if (al) return al.slice(0, 60);
+      if (al) return { text: al.slice(0, 60), source: 'label' };
       const h = c.querySelector('h1,h2,h3,h4,h5,h6,legend,caption,summary,[role=heading]');
-      if (h) { const t = norm(h.innerText || h.textContent); if (t) return t.slice(0, 60); }
+      if (h) { const t = norm(h.innerText || h.textContent); if (t) return { text: t.slice(0, 60), source: 'heading' }; }
       const role = c.getAttribute && c.getAttribute('role');
       if (/^(li|tr)$/.test(c.tagName.toLowerCase()) || role === 'listitem') {
-        const t = norm(c.innerText || c.textContent); if (t) return t.slice(0, 60);
+        const t = norm(c.innerText || c.textContent); if (t) return { text: t.slice(0, 60), source: 'row' };
       }
       c = c.parentElement ? c.parentElement.closest(LM) : null;
       hops++;
     }
     return null;
   };
+  const anchor = anchorOf(el);
   return {
     role: roleOf(el),
     name: nameOf(el),
@@ -106,7 +121,8 @@ DESCRIBE_JS = r"""
     placeholder: el.getAttribute('placeholder'),
     text: (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80),
     css: cssPath(el),
-    anchor: anchorOf(el),
+    anchor: anchor ? anchor.text : null,
+    anchor_source: anchor ? anchor.source : null,
   };
 }
 """
@@ -175,12 +191,23 @@ async def resolve(page: Page, spec: LocatorSpec, unique: bool = False) -> Option
     if spec.anchor and spec.role in KNOWN_ROLES and spec.name:
         # NEIGHBOR disambiguation, LAST resort: only reached when nothing above (incl. the positional
         # css) resolved uniquely — i.e. the locators are genuinely ambiguous. Scope the role+name to the
-        # landmark (section/row) carrying the captured anchor text. Placed last on purpose: it must NOT
-        # override a confident (count==1) match, because `has_text` is a loose whole-subtree substring —
-        # putting it first let an unrelated section that merely *contains* the anchor word mis-bind a
-        # write/read that the css had resolved correctly. As a tiebreaker among already-ambiguous matches
-        # it only ever narrows, and a wrong/duplicate landmark still yields count!=1 -> fail loud.
-        scoped = page.locator(_LANDMARKS).filter(has_text=spec.anchor)
+        # landmark (section/row) carrying the captured anchor. Placed last on purpose: it must NOT override
+        # a confident (count==1) match. HOW we match the landmark depends on where the anchor came from:
+        #   - "heading": the landmark holds a heading/legend/caption/summary whose EXACT text is the anchor.
+        #     Match precisely (has= an exact-text descendant) — a loose whole-subtree has_text would let an
+        #     unrelated section whose BODY merely *contains* the anchor word ("Billing questions?" vs a
+        #     "Billing" heading) confidently single-match the WRONG section.
+        #   - "label": the landmark's own aria-label IS the anchor — match that attribute exactly.
+        #   - "row"/unknown (old specs): no cleaner signal than the row's collapsed text, so keep the loose
+        #     has_text substring. Still only a tiebreaker among already-ambiguous matches; it only narrows,
+        #     and a wrong/duplicate landmark still yields count!=1 -> fail loud.
+        landmark = page.locator(_LANDMARKS)
+        if spec.anchor_source == "heading":
+            scoped = landmark.filter(has=page.get_by_text(spec.anchor, exact=True))
+        elif spec.anchor_source == "label":
+            scoped = landmark.and_(page.locator(_attr_eq("aria-label", spec.anchor)))
+        else:
+            scoped = landmark.filter(has_text=spec.anchor)
         candidates.append(scoped.get_by_role(spec.role, name=spec.name, exact=True))  # type: ignore[arg-type]
 
     # Prefer a candidate that resolves UNIQUELY (count == 1) over an ambiguous role+name match:
