@@ -55,3 +55,18 @@ async def test_resolve_prefers_unique_candidate_over_ambiguous_first() -> None:
         assert loc is not None
         assert await loc.evaluate("el => el.id") == "btn-b"  # not the first 'Submit' (btn-a)
         await browser.close()
+
+
+async def test_resolve_unique_fails_loud_on_fully_ambiguous_target() -> None:
+    # NOTHING disambiguates: role+name AND css both match both 'Submit' buttons, and there's no
+    # test-id/id to break the tie. resolve() lenient binds a blind `.first`; resolve(unique=True) must
+    # FAIL LOUD (None) — the contract the mutation gate leans on to refuse re-driving a write into the
+    # wrong-but-identical form (two structurally-identical forms).
+    spec = LocatorSpec(role="button", name="Submit", tag="button", css="form > button")
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch()
+        page = await (await browser.new_context()).new_page()
+        await page.set_content(AMBIGUOUS_HTML)
+        assert await resolve(page, spec) is not None           # lenient: a blind `.first`
+        assert await resolve(page, spec, unique=True) is None  # strict: ambiguous -> fail loud
+        await browser.close()
