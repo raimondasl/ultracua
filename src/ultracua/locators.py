@@ -31,6 +31,11 @@ KNOWN_ROLES = {
     "option",
 }
 
+# Landmark/section containers used to scope a neighbor-anchored disambiguation (must mirror the `LM`
+# list in DESCRIBE_JS so capture and resolve agree on what counts as a "section/row").
+_LANDMARKS = ("form,fieldset,section,article,aside,nav,dialog,"
+              "[role=region],[role=group],[role=form],li,tr,[role=listitem]")
+
 
 class LocatorSpec(BaseModel):
     """Ranked, resilient identification of one element, captured at record time."""
@@ -43,6 +48,10 @@ class LocatorSpec(BaseModel):
     placeholder: Optional[str] = None
     text: Optional[str] = None
     css: Optional[str] = None
+    # Neighbor anchor: a distinguishing text from the element's enclosing landmark (section heading /
+    # aria-label / row text). Used at replay to disambiguate two same-role+name elements that sit in
+    # different sections/rows — so an ambiguous role+name resolves to the RIGHT one instead of guessing.
+    anchor: Optional[str] = None
 
 
 # Runs in the page. Reuses snapshot.py's SHARED role/accessible-name derivation (so the captured name
@@ -67,6 +76,27 @@ DESCRIBE_JS = r"""
     }
     return parts.join(' > ');
   };
+  // Neighbor anchor: a short distinguishing text from the nearest enclosing landmark — its aria-label or
+  // heading/legend/caption, or (for a row-like container with neither) its own collapsed text. Two
+  // same-role+name controls in different sections/rows get different anchors -> replay disambiguates.
+  const LM = 'form,fieldset,section,article,aside,nav,dialog,[role=region],[role=group],[role=form],li,tr,[role=listitem]';
+  const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+  const anchorOf = (e) => {
+    let c = e.closest(LM), hops = 0;
+    while (c && hops < 4) {
+      const al = norm(c.getAttribute && c.getAttribute('aria-label'));
+      if (al) return al.slice(0, 60);
+      const h = c.querySelector('h1,h2,h3,h4,h5,h6,legend,caption,summary,[role=heading]');
+      if (h) { const t = norm(h.innerText || h.textContent); if (t) return t.slice(0, 60); }
+      const role = c.getAttribute && c.getAttribute('role');
+      if (/^(li|tr)$/.test(c.tagName.toLowerCase()) || role === 'listitem') {
+        const t = norm(c.innerText || c.textContent); if (t) return t.slice(0, 60);
+      }
+      c = c.parentElement ? c.parentElement.closest(LM) : null;
+      hops++;
+    }
+    return null;
+  };
   return {
     role: roleOf(el),
     name: nameOf(el),
@@ -76,6 +106,7 @@ DESCRIBE_JS = r"""
     placeholder: el.getAttribute('placeholder'),
     text: (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80),
     css: cssPath(el),
+    anchor: anchorOf(el),
   };
 }
 """
@@ -141,6 +172,16 @@ async def resolve(page: Page, spec: LocatorSpec, unique: bool = False) -> Option
             candidates.append(page.locator(spec.css))
         except Exception:
             pass
+    if spec.anchor and spec.role in KNOWN_ROLES and spec.name:
+        # NEIGHBOR disambiguation, LAST resort: only reached when nothing above (incl. the positional
+        # css) resolved uniquely — i.e. the locators are genuinely ambiguous. Scope the role+name to the
+        # landmark (section/row) carrying the captured anchor text. Placed last on purpose: it must NOT
+        # override a confident (count==1) match, because `has_text` is a loose whole-subtree substring —
+        # putting it first let an unrelated section that merely *contains* the anchor word mis-bind a
+        # write/read that the css had resolved correctly. As a tiebreaker among already-ambiguous matches
+        # it only ever narrows, and a wrong/duplicate landmark still yields count!=1 -> fail loud.
+        scoped = page.locator(_LANDMARKS).filter(has_text=spec.anchor)
+        candidates.append(scoped.get_by_role(spec.role, name=spec.name, exact=True))  # type: ignore[arg-type]
 
     # Prefer a candidate that resolves UNIQUELY (count == 1) over an ambiguous role+name match:
     # a unique test-id / id / css path disambiguates two "Submit" buttons that role+name can't.
