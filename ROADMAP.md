@@ -156,8 +156,30 @@ otherwise-clean re-roll. The implementation + the `--reflect` harness stay (usef
 benchmarks), but it's off by default. **The discovery loop is now measured-done**; the remaining 40% is
 a capability ceiling, so further gains belong to **capability** (Phase I recorder / grounding), not the
 loop. *Still in Tier 2 (replay/extraction-side, orthogonal to the ceiling):* a Similo-style 0-LLM heal
-tier; a 0-LLM structured / list extractor (+ a JSON-LD tier) with a fail-loud row-count invariant;
-type-aware comparators + a scripted-oracle control arm in the variance gate; a **flow-staleness canary**.
+tier; type-aware comparators + a scripted-oracle control arm in the variance gate; a **flow-staleness
+canary**.
+
+✗ **0-LLM DOM list extractor** (attempted, **reviewed-unsafe — pulled back, NOT shipped**) — extend the
+scalar pin to lists/dicts by inducing a row selector + field paths from a learned list, gated by a
+learn-time in-page round-trip (only cache an extractor that exactly reproduces the learned list). It
+passed a 14-test key-less suite, then an **adversarial review browser-reproduced three ways it silently
+returns wrong data** — the one outcome this project forbids: (1) **incomplete** — a row that drops a
+state class on replay (`even/odd`, `featured`, `sold-out`) is silently omitted (for a digest flow, the
+dropped row is the alert you needed); (2) **wrong cell** — `:nth-of-type` field paths aren't
+`:scope`-scoped or class-anchored, so a column insert / nested element makes every row read a
+wrong-but-present value (shape-drift can't see it); (3) **phantom** — a footer / `Total` / ad row
+matching the row class is silently included. **Root cause: a learn/replay verification asymmetry** — all
+exactness was checked at *learn* time, then replay trusted a positional, count-unbounded, full-class-set
+selector against a never-verified page (the *scalar* pin re-verifies at replay via `resolve(unique=True)`;
+the list reader didn't). A safe version is a large rewrite (container-scoped rows + `:scope` class-anchored
+cells + a replay-time **completeness** re-verify: every container child of the row tag must be a valid
+row → else fail loud) that narrows coverage hard — only structured tables with an *anchorable container,
+classed cells, distinct field classes, and no in-container footer*, **refusing bare-text lists entirely** —
+and still carries a residual phantom-mimic risk. That's a thin reward (one cheap LLM extraction call saved
+per replay) for a rewrite that can still silently mislead, so it was **pulled back**: lists keep using the
+reliable one-call LLM extractor. **If 0-LLM structured reads are revisited, JSON-LD** (the site's *own*
+declared `ItemList`/object data) **is the safer mechanism** — authoritative, no induction, no positional
+selectors.
 
 **Tier 3 — later:** parameterized typed slots; skill / workflow memory as a discovery prior (scales with
 flow volume); Phase G proper (barrier-commit multi-write + deterministic action primitives:
