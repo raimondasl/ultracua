@@ -296,6 +296,24 @@ def _flow_run_all(args: argparse.Namespace) -> None:
     raise SystemExit(1 if failed else 0)  # cron alerts on a non-zero exit
 
 
+def _flow_canary(args: argparse.Namespace) -> None:
+    from .flows import canary, canary_all, load_spec
+
+    if args.name:
+        results = [asyncio.run(canary(load_spec(args.name)))]
+    else:
+        results = asyncio.run(canary_all(concurrency=args.concurrency))
+    rank = {"stale": 0, "error": 1, "not-learned": 2, "fresh": 3}
+    for r in sorted(results, key=lambda r: (rank.get(r.status, 9), r.name)):
+        mark = {"fresh": "FRESH", "stale": "STALE", "error": "ERROR",
+                "not-learned": "NEW"}.get(r.status, r.status.upper())
+        print(f"  [{mark:<5}] {r.name:<24} {r.detail}")
+    stale = [r for r in results if r.status in ("stale", "error")]
+    fresh = sum(1 for r in results if r.status == "fresh")
+    print(f"\n== {fresh} fresh, {len(stale)} stale/error (of {len(results)}) ==")
+    raise SystemExit(1 if stale else 0)  # cron alerts on a non-zero exit
+
+
 def _add_login_args(parser, *, url_required: bool) -> None:
     """Shared --login-* flags for `learn` (login optional) and `set-login` (login required)."""
     parser.add_argument("--login-url", dest="login_url", required=url_required,
@@ -413,6 +431,13 @@ def _flow_main(argv) -> None:
                      help="POST a JSON alert here if any flow fails (Slack/Discord/etc. incoming webhook).")
     pra.add_argument("--verbose", "-v", action="store_true", help="log each replay (INFO).")
 
+    pca = sub.add_parser("canary", help="Cheap freshness probe: does each flow still START (0-LLM, "
+                                        "read-only, no health record)? Exits non-zero if any is stale. "
+                                        "Point cron at this MORE often than run-all to catch rot early.")
+    pca.add_argument("--name", help="a single flow (default: all).")
+    pca.add_argument("--concurrency", type=int, default=None,
+                     help="max flows probed at once (default ULTRACUA_CONCURRENCY).")
+
     sub.add_parser("list", help="List saved flows.")
 
     args = p.parse_args(argv)
@@ -436,6 +461,8 @@ def _flow_main(argv) -> None:
         _flow_status(args)
     elif args.cmd == "run-all":
         _flow_run_all(args)
+    elif args.cmd == "canary":
+        _flow_canary(args)
     elif args.cmd == "list":
         _flow_list()
 

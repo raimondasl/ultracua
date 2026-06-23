@@ -211,6 +211,28 @@ Safe defaults for unattended use: **read flows only** (write flows are skipped u
 browser); `--on-drift relearn` re-authors read flows that drifted. The same API is `run_all_flows()`
 in Python, returning a `FleetRun` per flow.
 
+**Catch rot early with `flow canary`.** `run-all` actually replays everything (and performs reads);
+`flow canary` is a cheap, **read-only** freshness probe — it just navigates to each flow's start URL
+and checks the first cached control still resolves, with **no actions, no writes, no health record**.
+Point cron at it *more often* than `run-all` so a redesigned landing/login page is flagged the day it
+changes, not when the nightly run fails. It exits non-zero if any flow is stale:
+
+```bash
+uv run ultracua flow canary            # probe every saved flow's entry point (0-LLM, read-only)
+uv run ultracua flow canary --name daily-orders
+```
+
+```
+  [STALE] vendor-status         entry control no longer resolves: 'open the status page'
+  [FRESH] daily-orders
+  [NEW]   draft-flow            learn the flow first
+
+== 1 fresh, 1 stale/error (of 3) ==
+```
+
+It's intentionally shallow (entry step only — mid-flow drift is still caught by the full `run-all`).
+The Python API is `canary(spec)` / `canary_all()`, returning a `CanaryResult` per flow.
+
 ## Fleet health
 
 Every `replay` (including via `run-all`) records its outcome, so you can also monitor a fleet's

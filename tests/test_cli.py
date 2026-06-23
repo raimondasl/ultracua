@@ -170,3 +170,28 @@ def test_run_all_no_alert_when_no_webhook(monkeypatch) -> None:
     with pytest.raises(SystemExit) as ei:
         cli._flow_run_all(_run_all_args())  # alert_webhook=None
     assert ei.value.code == 1 and called["n"] == 0
+
+
+# --- _flow_canary (exit code: non-zero if any flow is stale/error) ----------------------------
+def _canary(name, status):
+    return types.SimpleNamespace(name=name, status=status, detail="")
+
+
+def test_canary_exit_zero_when_all_fresh(monkeypatch) -> None:
+    async def fake_canary_all(**kw):
+        return [_canary("a", "fresh"), _canary("b", "not-learned")]
+
+    monkeypatch.setattr("ultracua.flows.canary_all", fake_canary_all)
+    with pytest.raises(SystemExit) as ei:
+        cli._flow_canary(_ns(name=None, concurrency=None))
+    assert ei.value.code == 0
+
+
+def test_canary_exit_one_when_any_stale(monkeypatch) -> None:
+    async def fake_canary_all(**kw):
+        return [_canary("a", "fresh"), _canary("b", "stale")]
+
+    monkeypatch.setattr("ultracua.flows.canary_all", fake_canary_all)
+    with pytest.raises(SystemExit) as ei:
+        cli._flow_canary(_ns(name=None, concurrency=None))
+    assert ei.value.code == 1
