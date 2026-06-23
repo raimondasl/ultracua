@@ -29,6 +29,7 @@ from .cache import FlowCache, flow_key
 from .config import settings
 from .extract import extract
 from .flow import run_cached
+from .locators import resolve
 from .obs import get_logger
 from .pin import find_pin, read_pin
 from .providers import build_router, get_provider
@@ -926,5 +927,70 @@ async def run_all(
             except FlowReplayError as exc:
                 return FleetRun(name=name, ok=False, status="failed",
                                 ms=(time.perf_counter() - t0) * 1000.0, error=str(exc))
+
+    return await asyncio.gather(*[_one(n) for n in names])
+
+
+@dataclass
+class CanaryResult:
+    """One flow's freshness verdict from a `canary` probe."""
+
+    name: str
+    status: str           # "fresh" | "stale" | "not-learned" | "error"
+    detail: str = ""
+
+
+async def canary(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> CanaryResult:
+    """A cheap, READ-ONLY staleness probe: does the flow still *start*? Navigate to the start URL (with
+    the flow's auth cookies / headers) and check the FIRST cached actionable step's locator still
+    resolves — with **no actions, no writes, and no health record**. Catches entry-page rot EARLY (a
+    redesigned landing/login page, a moved entry control) so a scheduled flow is flagged the day the site
+    changes, not when its 3am run fails. Intentionally shallow — mid-flow drift is still caught by the
+    full `run_all` replay; the canary is a fast first-line warning you can run far more often.
+    """
+    cache = cache or _default_cache()
+    flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+    if flow is None:
+        return CanaryResult(spec.name, "not-learned", "learn the flow first")
+    first = next((s for s in flow.steps if s.locator is not None), None)
+    if first is None:
+        return CanaryResult(spec.name, "fresh", "no locator step to probe")
+    try:
+        session = await BrowserSession(headless=spec.headless, storage_state=spec.storage_state).start()
+    except Exception as exc:  # noqa: BLE001 - a browser/profile problem is ours, not the flow's
+        return CanaryResult(spec.name, "error", f"browser start failed: {type(exc).__name__}: {exc}")
+    try:
+        if spec.headers:
+            await session.set_extra_http_headers(spec.headers)
+        await session.goto(spec.start_url)
+        # unique=True: an entry control that's now ambiguous is as stale as one that's gone — either way a
+        # 0-LLM replay can't trust it. resolve does no action, so this never touches the page's state.
+        loc = await resolve(session.page, first.locator, unique=True)
+        if loc is None:
+            return CanaryResult(spec.name, "stale", f"entry control no longer resolves: {first.intent!r}")
+        return CanaryResult(spec.name, "fresh")
+    except Exception as exc:  # noqa: BLE001 - an unreachable/erroring start page is itself staleness
+        return CanaryResult(spec.name, "stale", f"start page not reachable: {type(exc).__name__}: {exc}")
+    finally:
+        await session.close()
+
+
+async def canary_all(
+    *, names: Optional[list[str]] = None, cache: Optional[FlowCache] = None,
+    concurrency: Optional[int] = None,
+) -> list[CanaryResult]:
+    """Probe every saved flow's freshness concurrently — the cheap early-warning counterpart to
+    `run_all`. Point cron at `flow canary` more frequently than the full `run-all` to catch rot early."""
+    cache = cache or _default_cache()
+    names = names if names is not None else list_specs()
+    sem = asyncio.Semaphore(concurrency or settings.concurrency)
+
+    async def _one(name: str) -> CanaryResult:
+        try:
+            spec = load_spec(name)
+        except Exception as exc:  # noqa: BLE001
+            return CanaryResult(name, "error", f"load failed: {exc}")
+        async with sem:
+            return await canary(spec, cache=cache)
 
     return await asyncio.gather(*[_one(n) for n in names])

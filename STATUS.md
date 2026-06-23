@@ -1,4 +1,4 @@
-# ultracua — status & observations (2026-06-18)
+# ultracua — status & observations (2026-06-23)
 
 A dated, honest snapshot: what's shipped, how proven it is, what the latest benchmark runs
 measured, the known fragilities (with `file:line`), and the prioritized path forward. The
@@ -12,18 +12,20 @@ reads, J CI); the full plan (E–J) is in *"Beyond Phase D"* there.
 engine is the moat, and it is not yet hardened for unattended production.** Phases 0–4 (core
 engine), A–C (the Flow API: define → learn → approve → replay → auth-refresh → health), and D
 (write flows) are shipped and merged, and the ops layer has since hardened (logging, CI,
-retry/backoff, fleet supervisor). 145 tests, all key-less (real headless Chromium against local
-fixtures, run in CI on Linux + Windows). Secrets handling is a real strength: credentials are env-sourced at runtime and
-**never persisted** — only the resulting `storage_state` cookies are saved (atomically).
+retry/backoff, fleet supervisor + freshness canary, a cross-process meta lock, and a standing
+locator-resilience benchmark). **231 tests**, all key-less (real headless Chromium against local
+fixtures, run in CI on Linux + Windows); version **0.35.0**. Secrets handling is a real strength:
+credentials are env-sourced at runtime and **never persisted** — only the resulting `storage_state`
+cookies are saved (atomically).
 
 ## What's shipped, by layer
 
 | Layer | Shipped & solid | Thin / fragile |
 |---|---|---|
-| **Engine** (`flow.py`) | learn → replay → heal loop; **verify-by-replay before cache** (a learned read flow is cached only if it reproduces on a fresh 0-LLM replay — most discovery failures are caught here); **suffix-replan** (re-author the broken tail, keep the prefix) when single-step heal can't fix a drifted step; ranked resilient locators (testid → role+name → … → css); mutation gate that **fails loud, never LLM-heals a write**; stuck/interstitial detection; pacing governor | the mutation gate's **fallback** still uses the whole-page fingerprint for *refless* mutating submits (Enter-press / navigate), so unrelated churn can false-flag drift there (click/type writes already gate on the target's subtree; **reads gate on data *shape*, not the page hash** — banner/count-insensitive); first-match locator binding when role+name is non-unique |
-| **Flow API** (`flows.py`) | full lifecycle; approval gate; data-shape drift; fail-loud `FlowReplayError`; auth-refresh; fleet health + **fleet supervisor** (`flow run-all`: concurrent replay, pass/fail/skip classification, non-zero exit, alert webhook); Phase D writes with action-completion + opt-in idempotency precheck | no built-in **scheduler** (by design — point cron / Task Scheduler at `flow run-all`); meta sidecars now write **atomically** (temp + `os.replace`), but the health read-modify-write is **unlocked** — two concurrent *processes* on the same flow can lose a health update (last-writer-wins; in-process `run-all` is safe) |
+| **Engine** (`flow.py`) | learn → replay → heal loop; **verify-by-replay before cache** (a learned read flow is cached only if it reproduces on a fresh 0-LLM replay — most discovery failures are caught here); **suffix-replan** (re-author the broken tail, keep the prefix) when single-step heal can't fix a drifted step; ranked resilient locators (testid → role+name → **neighbor-anchor** → css) that **fail loud on an ambiguous bind, never silently first-match** (`resolve(unique=True)`); mutation gate that **fails loud, never LLM-heals a write** — incl. *refless* Enter-submits, now gated on the **focused field's** form-scope (#55), not the whole page; stuck/interstitial detection; pacing governor; resilience measured by a standing **drift-sandbox** (12/12 cosmetic drifts survive 0-LLM, 0 wrong-binds) | a mutating **navigate** submit (rare) still falls back to the whole-page fingerprint; a purely *positional* css whose target is removed can retarget a moved-in neighbor (documented residual in `resolve`); the heal LLM call still grounds from a single snapshot (no multi-modal/vision tie-break) |
+| **Flow API** (`flows.py`) | full lifecycle; approval gate; data-shape drift; fail-loud `FlowReplayError`; auth-refresh; fleet health + **fleet supervisor** (`flow run-all`: concurrent replay, pass/fail/skip classification, non-zero exit, alert webhook) + a cheap read-only **freshness canary** (`flow canary`: does each flow still *start*? — catches entry-page rot before a scheduled run fails); Phase D writes with action-completion + opt-in idempotency precheck; the health read-modify-write is now **cross-process locked** (#54), so concurrent scheduled processes can't lose a health update | no built-in **scheduler** (by design — point cron / Task Scheduler at `flow run-all` + `flow canary`); the canary is intentionally shallow (entry step only — mid-flow drift still needs the full `run-all`) |
 | **Providers** (`llm/`, `providers/`) | provider-neutral types; Anthropic path with real prompt-cache + streaming TTFT; reusable extraction; **Router retry/backoff/timeout** (transient-aware, capped exponential + jitter); **per-run token + est. $ cost accounting** (`FlowReport.extra["usage"]`); **all three adapters' `.complete()` glue covered by key-less live-path tests**; JSON-RPC daemon + Node client | the live-path tests replay **recorded/synthetic** responses, not a real API call (no keys in CI); Gemini's test injects the SDK response object rather than exercising its HTTP/deserialization layer |
-| **Ops / packaging** | config via `ULTRACUA_*` env; data kept off C:; `.env` gitignored; **stdlib logging** with a per-run `run_id` contextvar; **GitHub Actions CI** (Linux + Windows, key-less suite); **single-sourced version** (`importlib.metadata`) | daemon is single-flight and unauthenticated |
+| **Ops / packaging** | config via `ULTRACUA_*` env; data kept off C:; `.env` gitignored; **stdlib logging** with a per-run `run_id` contextvar; **GitHub Actions CI** (Linux + Windows, key-less suite); **single-sourced version** (`importlib.metadata`) | the JSON-RPC daemon is single-flight, unauthenticated, and (now **documented as**) the raw *engine* surface that bypasses the Flow safety gates — engine-only, not a service; a real service daemon (auth + the Flow verbs) is Phase I |
 
 ## Benchmarks (run 2026-06-18)
 
@@ -112,7 +114,8 @@ multi-step/auth pages, and (3) operability — *not* in making replay faster (it
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
 phases have kept landing since: **#33–#35 CI (Phase J), #36 pinned 0-LLM reads (Phase H), #37 fleet
 supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 → **145** tests
-(key-less); version **0.22.0**. Original near-term list with the PR that landed each:
+(key-less); version **0.22.0** *at the time* — it has since grown to **231 tests / 0.35.0** as the
+trust-hardening below landed. Original near-term list with the PR that landed each:
 
 1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`
    atomic (temp + `os.replace`). *Handled fragilities 4, 7.*
@@ -128,9 +131,15 @@ supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 →
 7. ✅ **Write/auth benchmark** (#29) — `benchmarks/write_flow_bench.py`: write action-completion,
    one-shot idempotency, and auth-refresh recovery from session expiry, against a local fixture.
 
-None of the near-term fragilities are open, and the longer-term phases below are now partly landed
-(E fleet supervisor, F suffix-replan, H pinned reads, J CI) — G (multi-write) and I (recorder/web
-UI), plus a drift-sandbox benchmark, remain.
+None of the near-term fragilities are open. A second wave of trust-hardening has since landed:
+**#54** cross-process meta lock + `BrowserSession.start()` leak fix + CLI tests; **#55–#57** the
+refless-submit write gate (focused-field scope) + idempotency-on-Enter + `unique=True` write target;
+**#58/#59/#61** neighbor-anchor disambiguation + `unique=True` read actuation (closing the last
+silent-wrong-bind) hardened against substring/cross-tag mis-binds; **#60** the **drift-sandbox**
+locator-resilience benchmark; and this wave's **freshness canary** + daemon-contract docs. Of the
+longer-term phases, **E fleet supervisor, F suffix-replan, H pinned reads, J CI** are landed —
+**G (barrier-commit multi-write)** and **I (recorder / web UI / service daemon)** remain, with the
+**recorder** the measured-correct next lever on the ~40% MiniWoB capability ceiling.
 
 See [ROADMAP.md → *Beyond Phase D*](ROADMAP.md) for the longer-term phases (E–J) with the concrete
 use cases each unlocks and the gap each closes.

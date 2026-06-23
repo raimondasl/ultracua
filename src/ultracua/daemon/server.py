@@ -9,6 +9,15 @@ Methods:
   - "run"           -> drive run_cached (learn/replay/auto); returns the FlowReport summary
   - "cache.delete"  -> delete a cached flow by (goal, url, scope)
 
+CONTRACT — this is the raw ENGINE surface, NOT the safety-gated Flow API. `"run"` calls `run_cached`
+directly, so it deliberately BYPASSES everything `flows.replay()` enforces: the approval gate, the
+write/mutate action-completion check, data-shape-drift detection, auth refresh, and the per-flow health
+record. It will happily learn-and-perform a write, and a `replay` here is a bare engine replay. Treat it
+as a low-level driver for a trusted in-process caller (the bundled Python/Node clients) — do NOT expose it
+as a multi-tenant network service or build an unattended fleet on it. For the safe, gated lifecycle
+(approve -> replay-fails-loud-on-drift -> run-all -> canary) use the `ultracua.flows` API / the `flow` CLI.
+The server is single-flight and UNAUTHENTICATED; a real service daemon (auth + the Flow verbs) is Phase I.
+
 Requests are handled sequentially (the browser is the bottleneck); stdin is read in a
 worker thread so the asyncio loop (which Playwright needs) stays free.
 """
