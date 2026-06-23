@@ -163,36 +163,88 @@ async def focused_ref(page: Page) -> Optional[str]:
         return None
 
 
+async def _same_element(a: Locator, b: Locator) -> bool:
+    """True iff locators `a` and `b` resolve to the SAME live DOM element. Used to decide whether the two
+    independent 'guess' strategies (fuzzy text vs css path) agree. Any error (detached node, navigation)
+    -> False, i.e. treated as a DISAGREEMENT so the caller fails loud — the safe direction for a
+    trust-relevant resolve. Each locator is already known to be count==1 when this is called."""
+    try:
+        handle = await b.element_handle()
+        if handle is None:
+            return False
+        try:
+            return bool(await a.evaluate("(el, other) => el === other", handle))
+        finally:
+            await handle.dispose()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def resolve(page: Page, spec: LocatorSpec, unique: bool = False) -> Optional[Locator]:
     """Resolve a spec to a visible Playwright Locator, trying resilient strategies before brittle
     ones. Returns None on drift (nothing resolves). With `unique=True`, an ambiguous candidate
-    (count != 1) is never accepted — used by pinned reads, where picking the wrong `.first` element
-    would silently return a wrong value, so ambiguity must fail loud instead."""
-    candidates: list[Locator] = []
+    (count != 1) is never accepted — used by clicks/pinned reads/the mutation gate, where picking the
+    wrong `.first` element would silently actuate/return the wrong target, so ambiguity must fail loud.
+
+    Resolution runs in three tiers:
+      1. CONFIDENT locators that are anchored to a stable identity (test-id, role+name, placeholder,
+         exact whole-text, id). The first that resolves uniquely wins — these can't drift onto an
+         unrelated element the way a fuzzy match can.
+      2. Two GUESS strategies for an element whose confident locators all broke: the cached text as a
+         tag-scoped SUBSTRING (re-finds a lightly-augmented label of the SAME element kind), and the
+         recorded css path. Each can mis-resolve alone — a same-tag sibling that merely shares the cached
+         substring; a positional css now pointing at a moved-in neighbor. css is structural, so a unique
+         css match is trusted UNLESS the substring guess uniquely contradicts it (then neither is
+         trustworthy -> fail loud). The substring guess is NEVER trusted on its own: with the target's own
+         text changed it may have landed on a decoy, and there's nothing to corroborate it, so a lone
+         substring match fails loud (unique) rather than silently binding a maybe-wrong element.
+      3. The NEIGHBOR ANCHOR, a careful last-resort tiebreaker (only narrows; never overrides a confident
+         match).
+    """
+    # --- Tier 1: confident, identity-anchored locators (first unique match wins) ---
+    confident: list[Locator] = []
     if spec.testid:
-        candidates.append(page.get_by_test_id(spec.testid))
+        confident.append(page.get_by_test_id(spec.testid))
     if spec.role in KNOWN_ROLES and spec.name:
-        candidates.append(page.get_by_role(spec.role, name=spec.name, exact=True))  # type: ignore[arg-type]
-        candidates.append(page.get_by_role(spec.role, name=spec.name, exact=False))  # type: ignore[arg-type]
+        confident.append(page.get_by_role(spec.role, name=spec.name, exact=True))  # type: ignore[arg-type]
+        confident.append(page.get_by_role(spec.role, name=spec.name, exact=False))  # type: ignore[arg-type]
     if spec.placeholder:
-        candidates.append(page.get_by_placeholder(spec.placeholder, exact=True))
+        confident.append(page.get_by_placeholder(spec.placeholder, exact=True))
     if spec.text:
-        # exact first — substring text matching also matches ancestor containers, which
-        # would resolve a leaf <span> "link" to its enclosing <div> and miss the handler.
-        candidates.append(page.get_by_text(spec.text, exact=True))
-        candidates.append(page.get_by_text(spec.text, exact=False))
+        # Exact WHOLE-text match — anchored to the element's own text, so it can't leak into a container.
+        # Also tag-scoped (like the Tier-2 substring): exact whole-text still matches ACROSS tags, so a
+        # removed roleless <span> "Save" whose exact text reappears as a <p> "Save" would otherwise bind
+        # that prose. Scoping to `spec.tag` makes it bind only the SAME kind of element it captured (and
+        # falls back to the un-scoped form for legacy specs with no recorded tag).
+        exact_text = page.get_by_text(spec.text, exact=True)
+        if spec.tag:
+            exact_text = exact_text.and_(page.locator(spec.tag))
+        confident.append(exact_text)
     if spec.elem_id:
-        candidates.append(page.locator(f'[id="{spec.elem_id}"]'))
+        confident.append(page.locator(f'[id="{spec.elem_id}"]'))
+
+    # --- Tier 2: the two independent "guess" locators (cross-checked against each other) ---
+    # Fuzzy substring text, SCOPED to the element's own tag. A bare get_by_text(exact=False) matches the
+    # smallest element whose subtree merely CONTAINS the cached text, which sweeps into surrounding PROSE
+    # (a renamed "Continue" link let an unrelated <p> "…then continue." single-match and silently mis-bind).
+    # Constraining it to `spec.tag` keeps its real value — re-finding a link whose label was lightly
+    # AUGMENTED ("Proceed"->"Proceed now") where exact-text fails — while making it physically unable to
+    # bind a different KIND of element than the one captured. (tag is always present — a required field;
+    # role is not, since a roleless span/div "link" has role ∉ KNOWN_ROLES, so tag is the right scope key.)
+    fuzzy_text = (page.get_by_text(spec.text, exact=False).and_(page.locator(spec.tag))
+                  if spec.text and spec.tag else None)
+    css_loc: Optional[Locator] = None
     if spec.css:
         try:
-            candidates.append(page.locator(spec.css))
-        except Exception:
-            pass
+            css_loc = page.locator(spec.css)
+        except Exception:  # noqa: BLE001
+            css_loc = None
+
+    # --- Tier 3: neighbor-anchor tiebreaker (LAST resort; only narrows, never overrides) ---
+    anchor_loc: Optional[Locator] = None
     if spec.anchor and spec.role in KNOWN_ROLES and spec.name:
-        # NEIGHBOR disambiguation, LAST resort: only reached when nothing above (incl. the positional
-        # css) resolved uniquely — i.e. the locators are genuinely ambiguous. Scope the role+name to the
-        # landmark (section/row) carrying the captured anchor. Placed last on purpose: it must NOT override
-        # a confident (count==1) match. HOW we match the landmark depends on where the anchor came from:
+        # Scope the role+name to the landmark (section/row) carrying the captured anchor. HOW we match the
+        # landmark depends on where the anchor came from:
         #   - "heading": the landmark holds a heading/legend/caption/summary whose EXACT text is the anchor.
         #     Match precisely (has= an exact-text descendant) — a loose whole-subtree has_text would let an
         #     unrelated section whose BODY merely *contains* the anchor word ("Billing questions?" vs a
@@ -208,24 +260,70 @@ async def resolve(page: Page, spec: LocatorSpec, unique: bool = False) -> Option
             scoped = landmark.and_(page.locator(_attr_eq("aria-label", spec.anchor)))
         else:
             scoped = landmark.filter(has_text=spec.anchor)
-        candidates.append(scoped.get_by_role(spec.role, name=spec.name, exact=True))  # type: ignore[arg-type]
+        anchor_loc = scoped.get_by_role(spec.role, name=spec.name, exact=True)  # type: ignore[arg-type]
 
-    # Prefer a candidate that resolves UNIQUELY (count == 1) over an ambiguous role+name match:
-    # a unique test-id / id / css path disambiguates two "Submit" buttons that role+name can't.
-    # Fall back to the first ambiguous visible match only if nothing resolves uniquely.
     ambiguous: Optional[Locator] = None
-    for loc in candidates:
+
+    async def classify(loc: Locator) -> tuple[str, Optional[Locator]]:
+        """-> ("unique"|"ambiguous"|"none", first-visible-match)."""
         try:
             n = await loc.count()
             if n == 0:
-                continue
+                return "none", None
             first = loc.first
             if not await first.is_visible():
-                continue
-            if n == 1:
-                return first
-            if not unique and ambiguous is None:
-                ambiguous = first
-        except Exception:
-            continue
+                return "none", None
+            return ("unique" if n == 1 else "ambiguous"), first
+        except Exception:  # noqa: BLE001
+            return "none", None
+
+    # Tier 1: a confident unique match wins outright; record the first ambiguous for the lenient fallback.
+    for loc in confident:
+        kind, first = await classify(loc)
+        if kind == "unique":
+            return first
+        if kind == "ambiguous" and not unique and ambiguous is None:
+            ambiguous = first
+
+    # Tier 2: reconcile the two guesses.
+    fu = cu = None
+    if fuzzy_text is not None:
+        kind, first = await classify(fuzzy_text)
+        if kind == "unique":
+            fu = first
+        elif kind == "ambiguous" and not unique and ambiguous is None:
+            ambiguous = first
+    if css_loc is not None:
+        kind, first = await classify(css_loc)
+        if kind == "unique":
+            cu = first
+        elif kind == "ambiguous" and not unique and ambiguous is None:
+            ambiguous = first
+    if cu is not None and (fu is None or await _same_element(fu, cu)):
+        # css resolves uniquely and the fuzzy guess does NOT contradict it (absent / ambiguous / agrees).
+        # css is a structural locator, so trust it — this is what recovers a renamed target
+        # (`target-renamed`, `span-renamed`) where the tag-scoped substring rightly finds nothing.
+        return cu
+    if cu is not None and fu is not None:
+        # Both resolve uniquely but to DIFFERENT elements (a same-tag sibling that shares the cached
+        # substring vs a drifted positional css pointing at a moved-in neighbor). Neither is trustworthy
+        # -> fail loud (unique); lenient keeps css as a best-effort structural guess.
+        if not unique and ambiguous is None:
+            ambiguous = cu
+    elif fu is not None:
+        # Only the FUZZY substring resolved (css is gone or itself ambiguous). On its own it may have
+        # matched a same-tag DECOY that merely shares the cached substring (the target's own text changed),
+        # with nothing to corroborate it — so it is NOT trusted for a critical bind and fails loud. Lenient
+        # callers keep it as a last-ditch guess.
+        if not unique and ambiguous is None:
+            ambiguous = fu
+
+    # Tier 3: neighbor anchor.
+    if anchor_loc is not None:
+        kind, first = await classify(anchor_loc)
+        if kind == "unique":
+            return first
+        if kind == "ambiguous" and not unique and ambiguous is None:
+            ambiguous = first
+
     return None if unique else ambiguous

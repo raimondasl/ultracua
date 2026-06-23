@@ -1,75 +1,129 @@
 {
   "provider": "scripted",
-  "cosmetic_total": 9,
-  "cosmetic_survived_0llm": 8,
-  "cosmetic_survived_incl_heal": 8,
-  "resilience_0llm": 0.8889,
+  "cosmetic_total": 12,
+  "cosmetic_survived_0llm": 12,
+  "cosmetic_survived_incl_heal": 12,
+  "resilience_0llm": 1.0,
   "wrong_binds": 0,
   "ambiguous_disambiguated": true,
   "semantic_failed_loud": true,
+  "conflict_no_wrongbind": true,
   "rows": [
     {
+      "scenario": "anchor-link",
       "drift": "none",
       "kind": "cosmetic",
       "outcome": "survived",
       "llm": 0
     },
     {
+      "scenario": "anchor-link",
       "drift": "banner-added",
       "kind": "cosmetic",
       "outcome": "survived",
       "llm": 0
     },
     {
+      "scenario": "anchor-link",
       "drift": "section-id-removed",
       "kind": "cosmetic",
       "outcome": "survived",
       "llm": 0
     },
     {
+      "scenario": "anchor-link",
       "drift": "target-classed",
       "kind": "cosmetic",
       "outcome": "survived",
       "llm": 0
     },
     {
+      "scenario": "anchor-link",
       "drift": "target-wrapped",
       "kind": "cosmetic",
       "outcome": "survived",
       "llm": 0
     },
     {
+      "scenario": "anchor-link",
       "drift": "sibling-inserted",
       "kind": "cosmetic",
       "outcome": "survived",
       "llm": 0
     },
     {
+      "scenario": "anchor-link",
       "drift": "section-reordered",
       "kind": "cosmetic",
       "outcome": "survived",
       "llm": 0
     },
     {
+      "scenario": "anchor-link",
       "drift": "heading-renamed",
       "kind": "cosmetic",
       "outcome": "survived",
       "llm": 0
     },
     {
+      "scenario": "anchor-link",
       "drift": "target-renamed",
       "kind": "cosmetic",
-      "outcome": "drifted",
+      "outcome": "survived",
       "llm": 0
     },
     {
+      "scenario": "anchor-link",
       "drift": "ambiguous-twin",
       "kind": "ambiguous",
       "outcome": "survived",
       "llm": 0
     },
     {
+      "scenario": "anchor-link",
       "drift": "target-removed",
+      "kind": "semantic",
+      "outcome": "drifted",
+      "llm": 0
+    },
+    {
+      "scenario": "span-link",
+      "drift": "span-none",
+      "kind": "cosmetic",
+      "outcome": "survived",
+      "llm": 0
+    },
+    {
+      "scenario": "span-link",
+      "drift": "span-renamed",
+      "kind": "cosmetic",
+      "outcome": "survived",
+      "llm": 0
+    },
+    {
+      "scenario": "span-link",
+      "drift": "span-reordered",
+      "kind": "cosmetic",
+      "outcome": "survived",
+      "llm": 0
+    },
+    {
+      "scenario": "span-link",
+      "drift": "span-augmented-reordered",
+      "kind": "conflict",
+      "outcome": "drifted",
+      "llm": 0
+    },
+    {
+      "scenario": "span-link",
+      "drift": "span-sibling-decoy",
+      "kind": "conflict",
+      "outcome": "drifted",
+      "llm": 0
+    },
+    {
+      "scenario": "span-link",
+      "drift": "span-removed-crosstag-twin",
       "kind": "semantic",
       "outcome": "drifted",
       "llm": 0
