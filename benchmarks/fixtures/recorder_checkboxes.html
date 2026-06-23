@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ultracua fixture — garbled-label select (recorder spike)</title>
+  </head>
+  <body>
+    <!-- A grounding-HARD selection task: the labels are garbled/ambiguous, which is where the LLM's
+         autonomous grounding misses on the MiniWoB ceiling. A human just clicks the right two — and the
+         recorder captures exactly those nodes. -->
+    <p id="prompt">Select <b>qux</b> and <b>foo</b>, then show the result.</p>
+    <!-- no ids / test-ids on the checkboxes on purpose — the recorder must capture them by their
+         (accessible) name + a css path, like a real garbled page, not lean on a convenient hook. -->
+    <form id="f" onsubmit="return false">
+      <label><input type="checkbox" /> wbxz</label><br />
+      <label><input type="checkbox" /> qux</label><br />
+      <label><input type="checkbox" /> foo</label><br />
+      <label><input type="checkbox" /> baz</label><br />
+    </form>
+    <p><input type="text" id="note" aria-label="note" placeholder="note" /></p>
+    <button id="show" type="button">Show result</button>
+    <div id="result"></div>
+    <script>
+      document.getElementById("show").addEventListener("click", function () {
+        var sel = Array.prototype.slice
+          .call(document.querySelectorAll("input[type=checkbox]:checked"))
+          .map(function (c) { return c.parentElement.textContent.trim(); })
+          .join(",");
+        var note = document.getElementById("note").value;
+        document.getElementById("result").textContent = "selected: " + sel + " | note: " + note;
+      });
+    </script>
+  </body>
+</html>
