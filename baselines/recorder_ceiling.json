@@ -1,0 +1,120 @@
+{
+  "provider": "none",
+  "instances": 9,
+  "recorder_solved": 9,
+  "recorder_rate": 1.0,
+  "all_replays_0llm": true,
+  "all_id_free": true,
+  "multi_target_instances": 4,
+  "llm_solved": null,
+  "rows": [
+    {
+      "task": "click-checkboxes",
+      "seed": 1,
+      "instruction": "Select nothing and click Submit.",
+      "steps": 1,
+      "n_targets": 0,
+      "id_free": true,
+      "replay_success": true,
+      "reward": 1,
+      "recorder_solved": true,
+      "llm_calls": 0
+    },
+    {
+      "task": "click-checkboxes",
+      "seed": 2,
+      "instruction": "Select C0ZWRz, vrD, YT0peP and click Submit.",
+      "steps": 4,
+      "n_targets": 3,
+      "id_free": true,
+      "replay_success": true,
+      "reward": 1,
+      "recorder_solved": true,
+      "llm_calls": 0
+    },
+    {
+      "task": "click-checkboxes",
+      "seed": 3,
+      "instruction": "Select YM2l8 and click Submit.",
+      "steps": 2,
+      "n_targets": 1,
+      "id_free": true,
+      "replay_success": true,
+      "reward": 1,
+      "recorder_solved": true,
+      "llm_calls": 0
+    },
+    {
+      "task": "click-checkboxes-large",
+      "seed": 1,
+      "instruction": "Select ZMhn, LU, QMz, hIUXfQq, LEb9SX4, S4, Byrc4nt and click Submit.",
+      "steps": 8,
+      "n_targets": 7,
+      "id_free": true,
+      "replay_success": true,
+      "reward": 1,
+      "recorder_solved": true,
+      "llm_calls": 0
+    },
+    {
+      "task": "click-checkboxes-large",
+      "seed": 2,
+      "instruction": "Select 8F7cug, DW, 3HK, MC0ZWRz, hP2pD, balppEZ, oI1B, jx4Q6, YT0peP, hv and click Submit.",
+      "steps": 11,
+      "n_targets": 10,
+      "id_free": true,
+      "replay_success": true,
+      "reward": 1,
+      "recorder_solved": true,
+      "llm_calls": 0
+    },
+    {
+      "task": "click-checkboxes-large",
+      "seed": 3,
+      "instruction": "Select hyK, bs, QK6cNs, zrt9Ff6, l8f0bGy, X6W5r, ThTJr, VkEp, WMIYM, ZTdCm, IYNJy and click Submit.",
+      "steps": 12,
+      "n_targets": 11,
+      "id_free": true,
+      "replay_success": true,
+      "reward": 1,
+      "recorder_solved": true,
+      "llm_calls": 0
+    },
+    {
+      "task": "click-option",
+      "seed": 1,
+      "instruction": "Select S4 and click Submit.",
+      "steps": 2,
+      "n_targets": 1,
+      "id_free": true,
+      "replay_success": true,
+      "reward": 1,
+      "recorder_solved": true,
+      "llm_calls": 0
+    },
+    {
+      "task": "click-option",
+      "seed": 2,
+      "instruction": "Select hv and click Submit.",
+      "steps": 2,
+      "n_targets": 1,
+      "id_free": true,
+      "replay_success": true,
+      "reward": 1,
+      "recorder_solved": true,
+      "llm_calls": 0
+    },
+    {
+      "task": "click-option",
+      "seed": 3,
+      "instruction": "Select NJyUX and click Submit.",
+      "steps": 2,
+      "n_targets": 1,
+      "id_free": true,
+      "replay_success": true,
+      "reward": 1,
+      "recorder_solved": true,
+      "llm_calls": 0
+    }
+  ]
+}

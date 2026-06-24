@@ -100,11 +100,14 @@ def _step_from_event(ev: dict) -> CachedStep:
 async def record_demo(
     url: str, demo: Demo, *, goal: str, cache: FlowCache, scope: str = "default",
     headless: bool = True, settle_ms: int = 80,
+    prepare: Optional[Callable[[BrowserSession], Awaitable[None]]] = None,
 ) -> CachedFlow:
     """Capture a demonstration of `goal` at `url` into a cached, replayable `CachedFlow`.
 
     `demo(page)` performs the flow (a human in a headed browser; a scripted sequence in tests). Each touched
-    control is described into a resilient `LocatorSpec` at the moment it's acted on. Returns the cached flow.
+    control is described into a resilient `LocatorSpec` at the moment it's acted on. `prepare(session)` runs
+    after navigation, before the demo — a post-nav seed/setup hook (the SAME one replay uses, so the recorded
+    locators land on the same DOM). Returns the cached flow.
     """
     session = await BrowserSession(headless=headless).start()
     events: list[dict] = []
@@ -114,6 +117,8 @@ async def record_demo(
     await page.add_init_script(_CAPTURE_JS)
     try:
         await session.goto(url)
+        if prepare is not None:
+            await prepare(session)
         await demo(page)                       # the demonstration
         await page.wait_for_timeout(settle_ms)  # let the last exfiltration calls flush before teardown
     finally:
