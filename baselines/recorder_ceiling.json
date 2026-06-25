@@ -1,12 +1,12 @@
 {
-  "provider": "none",
+  "provider": "anthropic",
   "instances": 9,
   "recorder_solved": 9,
   "recorder_rate": 1.0,
   "all_replays_0llm": true,
   "all_id_free": true,
   "multi_target_instances": 4,
-  "llm_solved": null,
+  "llm_solved": 4,
   "rows": [
     {
       "task": "click-checkboxes",
@@ -18,7 +18,8 @@
       "replay_success": true,
       "reward": 1,
       "recorder_solved": true,
-      "llm_calls": 0
+      "llm_calls": 0,
+      "llm_solved": false
     },
     {
       "task": "click-checkboxes",
@@ -30,7 +31,8 @@
       "replay_success": true,
       "reward": 1,
       "recorder_solved": true,
-      "llm_calls": 0
+      "llm_calls": 0,
+      "llm_solved": false
     },
     {
       "task": "click-checkboxes",
@@ -42,7 +44,8 @@
       "replay_success": true,
       "reward": 1,
       "recorder_solved": true,
-      "llm_calls": 0
+      "llm_calls": 0,
+      "llm_solved": true
     },
     {
       "task": "click-checkboxes-large",
@@ -54,7 +57,8 @@
       "replay_success": true,
       "reward": 1,
       "recorder_solved": true,
-      "llm_calls": 0
+      "llm_calls": 0,
+      "llm_solved": false
     },
     {
       "task": "click-checkboxes-large",
@@ -66,7 +70,8 @@
       "replay_success": true,
       "reward": 1,
       "recorder_solved": true,
-      "llm_calls": 0
+      "llm_calls": 0,
+      "llm_solved": false
     },
     {
       "task": "click-checkboxes-large",
@@ -78,7 +83,8 @@
       "replay_success": true,
       "reward": 1,
       "recorder_solved": true,
-      "llm_calls": 0
+      "llm_calls": 0,
+      "llm_solved": false
     },
     {
       "task": "click-option",
@@ -90,7 +96,8 @@
       "replay_success": true,
       "reward": 1,
       "recorder_solved": true,
-      "llm_calls": 0
+      "llm_calls": 0,
+      "llm_solved": true
     },
     {
       "task": "click-option",
@@ -102,7 +109,8 @@
       "replay_success": true,
       "reward": 1,
       "recorder_solved": true,
-      "llm_calls": 0
+      "llm_calls": 0,
+      "llm_solved": true
     },
     {
       "task": "click-option",
@@ -114,7 +122,8 @@
       "replay_success": true,
       "reward": 1,
       "recorder_solved": true,
-      "llm_calls": 0
+      "llm_calls": 0,
+      "llm_solved": true
     }
   ]
 }

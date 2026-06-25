@@ -17,11 +17,14 @@ Two claims, held to different standards:
   positive `WOB_RAW_REWARD`** on **9/9** seeded instances (0–11 targets; 4 multi-target) — gated key-less in
   CI (`tests/test_recorder_ceiling.py`; `benchmarks/recorder_ceiling.py`). Crucially the **ids are stripped
   from the recorded specs**, so replay re-grounds by **role+name+css** — the *same* surface the LLM
-  mis-grounds, not MiniWoB's internal `chN` ids. Honest scope: the **"LLM fails these" contrast is asserted
-  from STATUS's measured ceiling, not run in this harness** (the `--provider` arm runs it on the same seeds,
-  paid); `click-checkboxes-large` is a stress extension of the class, not separately measured vs the LLM;
-  and *semantic* `click-checkboxes-soft` is excluded — it needs a knowledge-bearing demonstrator (a human /
-  an LLM caption), the honest boundary of a scripted oracle. The recorder routes around *grounding*, but the
+  mis-grounds, not MiniWoB's internal `chN` ids. **Same-seed contrast (measured, `--provider anthropic`,
+  N=1): recorder 9/9 vs LLM authoring 4/9** — the LLM solves only *single-target* instances and **misses
+  every multi-target garbled selection** (3/7/10/11 targets) and the empty "Select nothing"; the recorder's
+  5-instance edge *is* the grounding ceiling. (One real-LLM run — the count can wiggle, but the
+  single-vs-multi-target split is robust, and best-of-N doesn't move that multi-target ceiling per STATUS.)
+  Honest scope: `click-checkboxes-large` is a stress extension of `click-checkboxes`; *semantic*
+  `click-checkboxes-soft` is excluded — it needs a knowledge-bearing demonstrator (a human / an LLM
+  caption), the honest boundary of a scripted oracle. The recorder routes around *grounding*, but the
   demonstration must still be *correct*.
 
 **Recommendation: proceed to a full build.** It's a **medium** build (front-end over the existing engine);
@@ -114,7 +117,7 @@ the lever caveat in the Verdict.
 
 | Piece | Size | Notes |
 |---|---|---|
-| ✅ **MiniWoB ceiling validation (was GATING)** | done | **DONE (demonstration→replay half)** — recorder solves 9/9 garbled-label instances 0-LLM, id-free (role+name+css), gated in CI. The LLM-fails contrast is from STATUS; run `--provider` for a same-seed measurement. |
+| ✅ **MiniWoB ceiling validation (was GATING)** | done | **DONE + same-seed contrast measured** — recorder **9/9** garbled-label instances 0-LLM, id-free (role+name+css), gated in CI; vs **LLM authoring 4/9** (`--provider anthropic`, N=1) — the LLM misses every multi-target selection. |
 | Capture core (this spike, hardened) | S–M | label/nav handshake (not a fixed timeout), shadow/iframe, `select`/`press`/`scroll`/hover/drag |
 | `describe()` reuse + verify-by-replay | S | share **one** `specOf` (resolution parity); gate on reproduce |
 | Intent (post-hoc LLM caption) | S | one off-replay-path call; must run *before* `classify_mutation` |
