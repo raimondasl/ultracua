@@ -11,9 +11,18 @@ Two claims, held to different standards:
   CI), reproducing the exact result. The mechanism is real and non-circular (the locator is read from the
   node the click *landed on*, not the demo's selector). Because the output is the same artifact the replay
   engine already consumes, the recorder is a new authoring **front-end**, not a new engine.
-- **Lever — ASSERTED, not yet measured.** "This moves the ~40% ceiling" rests on *reasoning* plus one
-  synthetic fixture; **no LLM was run against it**. The gating next step is to demo the ~4 real MiniWoB
-  ceiling tasks and confirm they replay — only that turns the lever claim into a measured result.
+- **Lever — MEASURED (the demonstration→replay half).** On the real MiniWoB++ ceiling tasks
+  (`click-checkboxes`, `click-checkboxes-large`, `click-option`), a "human" demo-oracle reads the
+  instruction's named targets, the recorder captures it, and the recorded flow **replays 0-LLM to a
+  positive `WOB_RAW_REWARD`** on **9/9** seeded instances (0–11 targets; 4 multi-target) — gated key-less in
+  CI (`tests/test_recorder_ceiling.py`; `benchmarks/recorder_ceiling.py`). Crucially the **ids are stripped
+  from the recorded specs**, so replay re-grounds by **role+name+css** — the *same* surface the LLM
+  mis-grounds, not MiniWoB's internal `chN` ids. Honest scope: the **"LLM fails these" contrast is asserted
+  from STATUS's measured ceiling, not run in this harness** (the `--provider` arm runs it on the same seeds,
+  paid); `click-checkboxes-large` is a stress extension of the class, not separately measured vs the LLM;
+  and *semantic* `click-checkboxes-soft` is excluded — it needs a knowledge-bearing demonstrator (a human /
+  an LLM caption), the honest boundary of a scripted oracle. The recorder routes around *grounding*, but the
+  demonstration must still be *correct*.
 
 **Recommendation: proceed to a full build.** It's a **medium** build (front-end over the existing engine);
 the risk is concentrated in a few identified places — intent, **write capture (currently a no-op gate —
@@ -105,7 +114,7 @@ the lever caveat in the Verdict.
 
 | Piece | Size | Notes |
 |---|---|---|
-| **MiniWoB ceiling validation (GATING)** | S–M | demo the ~4 ceiling tasks, confirm they replay — **the real proof of the lever**; coupled to capture hardening because those tasks exercise `select` / dynamic content / nav, so do it *with* (not after) the capture work |
+| ✅ **MiniWoB ceiling validation (was GATING)** | done | **DONE (demonstration→replay half)** — recorder solves 9/9 garbled-label instances 0-LLM, id-free (role+name+css), gated in CI. The LLM-fails contrast is from STATUS; run `--provider` for a same-seed measurement. |
 | Capture core (this spike, hardened) | S–M | label/nav handshake (not a fixed timeout), shadow/iframe, `select`/`press`/`scroll`/hover/drag |
 | `describe()` reuse + verify-by-replay | S | share **one** `specOf` (resolution parity); gate on reproduce |
 | Intent (post-hoc LLM caption) | S | one off-replay-path call; must run *before* `classify_mutation` |
@@ -113,14 +122,11 @@ the lever caveat in the Verdict.
 | `flow record` CLI + review/approve UX | M | headed browser, stop signal, inspect |
 
 **Total: a medium build (~1–2 focused PRs of capture+integration, then the CLI/UX), de-risked by this
-spike.** The single highest-value next step is the **MiniWoB ceiling validation** — demo the ~4 tasks
-sampling can't crack and confirm they replay, turning the "moves the ceiling" claim from reasoning into a
-measured result.
+spike — and the lever is now measured, not just argued.**
 
 ## Recommendation
 
-Proceed. Build order: **harden capture *and* run the MiniWoB ceiling validation together** (they're
-coupled — the ceiling tasks exercise the untested `select`/dynamic/nav paths, and the validation is what
-turns the lever from asserted to measured) → `describe` reuse + verify-by-replay → intent caption → write
-capture (reviewed) → the `flow record` CLI/UX. Do not invest in the CLI/UX before the ceiling validation
-confirms the lever.
+Proceed. The gating MiniWoB ceiling validation is **done** (lever measured). Remaining build order: harden
+capture (label/nav handshake, `select`/`press`/`scroll`) → `describe` reuse + verify-by-replay → intent
+caption → write capture (reviewed) → the `flow record` CLI/UX. Don't ship the CLI/UX before the
+write-capture trust work lands (a recorded write currently replays ungated — §2).

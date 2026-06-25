@@ -12,6 +12,7 @@ fixed reference instead of a single noisy run.
 | `miniwob_bestof3.json` | MiniWoB++ ×10 (**N=3 best-of-N**) | 2026-06-20 | **60% ± 0%** (6/10 every rep), ~$6.58 (1.55×) — best-of-N vs the N=1 baseline: +8 pts and **variance → 0** |
 | `miniwob_reflect3.json` | MiniWoB++ ×10 (**N=3 + reflexion**) | 2026-06-20 | **52% ± 4%** (mostly 5/10), ~$8.32 — reflexion measured **net-harmful** vs best-of-N (−8 pts, +26% cost) |
 | `drift.json` | drift-sandbox (2 scenarios, 17 DOM drifts) | 2026-06-23 | **0-LLM resilience 12/12 (100%)** cosmetic drifts, **wrong-binds 0**, ambiguous twin disambiguated, 2 conflict drifts fail loud (never wrong), removed / cross-tag-twin targets fail loud — the **key-less, no-LLM** locator-resilience reference |
+| `recorder_ceiling.json` | recorder ceiling (MiniWoB++, 3 tasks × 3 seeds) | 2026-06-23 | **recorder solved 9/9 garbled-label instances 0-LLM** (`click-checkboxes`/`-large`/`click-option`), **re-grounding by role+name+css (ids stripped)** to a positive `WOB_RAW_REWARD` — key-less proof that a *demonstration* of these tasks replays 0-LLM on the LLM's own grounding surface |
 
 **Drift-sandbox** ([`benchmarks/drift_sandbox.py`](../benchmarks/drift_sandbox.py)) is the **only key-less
 baseline** — it learns a flow then replays it against a distribution of realistic DOM drifts. It runs **two
@@ -48,6 +49,22 @@ removed / cross-tag-twin targets fail loud. (Known residual, documented in `reso
 css whose target is removed can retarget a moved-in neighbor with nothing to contradict it — closing that
 would also break the legitimate `span-renamed` recovery that relies on positional css, so it's the accepted
 cost of keeping css as a fallback tier.)
+
+**Recorder ceiling** ([`benchmarks/recorder_ceiling.py`](../benchmarks/recorder_ceiling.py)) turns the
+Phase-I recorder's lever from *asserted* to *measured*: for each seeded MiniWoB++ instance a "human"
+demo-oracle reads the instruction's named targets, the recorder captures it, and the recorded flow replays
+**0-LLM** to `reward > 0`. Crucially the id/test-id are **stripped from the recorded specs**, so replay
+re-grounds by **role+name+css** — the same grounding surface the LLM mis-grounds (not MiniWoB's internal
+`chN` ids). Key-less + gated in CI (`tests/test_recorder_ceiling.py`). Honest scope:
+
+- The "**LLM fails these**" half is **asserted from STATUS's measured ceiling** (`miniwob.json`), **not run
+  here** — the `--provider` arm runs LLM authoring on the *same* seeds for a true same-seed contrast (paid).
+- `click-checkboxes` + `click-option` are in STATUS's measured miss set; `click-checkboxes-large` (7–11
+  targets) is a **stress extension** of the same class, not separately measured against the LLM.
+- The 9 instances span 0–11 targets (one is the trivial "Select nothing"); 4 are multi-target.
+- *Semantic* `click-checkboxes-soft` is **excluded** — it needs a knowledge-bearing demonstrator (a human /
+  an LLM caption), the honest boundary of a scripted oracle: the recorder routes around *grounding*, but
+  the demonstration must still be *correct*.
 
 **Best-of-N result (N=3 vs N=1):** re-authoring up to 3× and keeping the first verify-passing sample
 lifted per-task success 52%→60% and — the real win — **collapsed run-to-run variance from ±13% to
