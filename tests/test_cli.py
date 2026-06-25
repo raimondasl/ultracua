@@ -195,3 +195,35 @@ def test_canary_exit_one_when_any_stale(monkeypatch) -> None:
     with pytest.raises(SystemExit) as ei:
         cli._flow_canary(_ns(name=None, concurrency=None))
     assert ei.value.code == 1
+
+
+# --- _flow_record (persists on success; fails loud when refused) -------------------------------
+def _record_args(**kw):
+    base = dict(name="x", url="http://x.test/", goal="g", storage_state=None)
+    base.update(kw)
+    return _ns(**base)
+
+
+def test_record_persists_spec_on_success(monkeypatch) -> None:
+    from ultracua.flows import RecordResult
+
+    async def fake_record(spec, **kw):
+        return RecordResult(spec, cached=True, reproduced=True, performed_write=False, steps=[])
+
+    saved: dict = {}
+    monkeypatch.setattr("ultracua.flows.record", fake_record)
+    monkeypatch.setattr("ultracua.flows.save_spec", lambda s: saved.update(name=s.name))
+    cli._flow_record(_record_args())            # no SystemExit -> success
+    assert saved.get("name") == "x"             # persisted so `flow replay --name` finds it
+
+
+def test_record_fails_loud_when_refused(monkeypatch) -> None:
+    from ultracua.flows import RecordResult
+
+    async def fake_record(spec, **kw):
+        return RecordResult(spec, cached=False, reproduced=False, performed_write=True,
+                            steps=[], note="a WRITE fired during the demo")
+
+    monkeypatch.setattr("ultracua.flows.record", fake_record)
+    with pytest.raises(SystemExit):
+        cli._flow_record(_record_args())

@@ -30,7 +30,8 @@ async def _demo(page) -> None:
 
 async def test_recorder_captures_a_demo_and_replays_it_0llm(tmp_path) -> None:
     cache = FlowCache(root=tmp_path)
-    flow = await record_demo(URL, _demo, goal=GOAL, cache=cache, headless=True)
+    flow, wrote = await record_demo(URL, _demo, goal=GOAL, cache=cache, headless=True)
+    assert wrote is False  # a read/selection demo fires no write on the wire
 
     # The demonstration was captured as clicks + a type, each pinned to a RESILIENT locator (role+name+css),
     # NOT a positional guess — the exact nodes the human touched.
@@ -58,6 +59,6 @@ async def test_recorder_captures_a_demo_and_replays_it_0llm(tmp_path) -> None:
 async def test_recorder_replay_uses_no_llm(tmp_path) -> None:
     # the whole point: a recorded flow replays with ZERO model calls (no grounding, no heal)
     cache = FlowCache(root=tmp_path)
-    await record_demo(URL, _demo, goal=GOAL, cache=cache, headless=True)
+    await record_demo(URL, _demo, goal=GOAL, cache=cache, headless=True)  # (flow, performed_write)
     report = await run_cached(URL, GOAL, None, cache, mode="replay", headless=True)
     assert report.success and report.llm_calls == 0 and report.healed_steps == 0

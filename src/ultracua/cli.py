@@ -296,6 +296,32 @@ def _flow_run_all(args: argparse.Namespace) -> None:
     raise SystemExit(1 if failed else 0)  # cron alerts on a non-zero exit
 
 
+def _flow_record(args: argparse.Namespace) -> None:
+    from .flows import FlowSpec, record
+
+    spec = FlowSpec(name=args.name, start_url=args.url, goal=args.goal, storage_state=args.storage_state)
+
+    async def _demo(page) -> None:  # the "stop signal": the human demos in the browser, then presses Enter
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None, input, "\n>>> Demonstrate the flow in the browser window, then press Enter here to finish… ")
+
+    print(f"opening {args.url} — a browser window will appear; perform the flow, then return here.")
+    res = asyncio.run(record(spec, demo=_demo, headless=False))
+    print(f"\ncaptured {len(res.steps)} step(s):")
+    for s in res.steps:
+        name = (s.locator.name if s.locator else "") or (s.locator.tag if s.locator else "")
+        print(f"  {s.action} {name!r}" + (f" = {s.text!r}" if s.text else ""))
+    if res.cached:
+        from .flows import save_spec
+
+        save_spec(spec)  # persist so `flow replay/approve/run-all --name` find it
+        print(f"\nrecorded + verified {spec.name!r} (replays 0-LLM). Approve it to run unattended:\n"
+              f"    ultracua flow approve --name {spec.name}")
+    else:
+        raise SystemExit(f"\nNOT recorded: {res.note}")
+
+
 def _flow_canary(args: argparse.Namespace) -> None:
     from .flows import canary, canary_all, load_spec
 
@@ -431,6 +457,14 @@ def _flow_main(argv) -> None:
                      help="POST a JSON alert here if any flow fails (Slack/Discord/etc. incoming webhook).")
     pra.add_argument("--verbose", "-v", action="store_true", help="log each replay (INFO).")
 
+    prc = sub.add_parser("record", help="RECORD a flow by demonstrating it in a headed browser "
+                                        "(read/selection flows only; verify-by-replayed, then approve).")
+    prc.add_argument("--name", required=True, help="name to save the flow under.")
+    prc.add_argument("--url", required=True, help="start URL to open for the demonstration.")
+    prc.add_argument("--goal", required=True, help="a short description of the flow (forms the cache key).")
+    prc.add_argument("--storage-state", dest="storage_state",
+                     help="a Playwright storage_state JSON (cookies) to start authenticated.")
+
     pca = sub.add_parser("canary", help="Cheap freshness probe: does each flow still START (0-LLM, "
                                         "read-only, no health record)? Exits non-zero if any is stale. "
                                         "Point cron at this MORE often than run-all to catch rot early.")
@@ -461,6 +495,8 @@ def _flow_main(argv) -> None:
         _flow_status(args)
     elif args.cmd == "run-all":
         _flow_run_all(args)
+    elif args.cmd == "record":
+        _flow_record(args)
     elif args.cmd == "canary":
         _flow_canary(args)
     elif args.cmd == "list":

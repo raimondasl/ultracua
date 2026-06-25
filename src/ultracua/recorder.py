@@ -31,7 +31,7 @@ from typing import Awaitable, Callable, Optional
 from .browser import BrowserSession
 from .cache import CachedFlow, CachedStep, FlowCache, flow_key
 from .locators import LocatorSpec
-from .safety import classify_mutation
+from .safety import classify_mutation, is_write_request
 from .snapshot import _ACCNAME_JS, _ROLEOF_JS
 
 # Runs in the page (injected before any page script, re-installed on every navigation). On each click of
@@ -101,18 +101,46 @@ async def record_demo(
     url: str, demo: Demo, *, goal: str, cache: FlowCache, scope: str = "default",
     headless: bool = True, settle_ms: int = 80,
     prepare: Optional[Callable[[BrowserSession], Awaitable[None]]] = None,
-) -> CachedFlow:
+    storage_state: Optional[str] = None, extra_headers: Optional[dict] = None,
+) -> "tuple[CachedFlow, bool]":
     """Capture a demonstration of `goal` at `url` into a cached, replayable `CachedFlow`.
 
     `demo(page)` performs the flow (a human in a headed browser; a scripted sequence in tests). Each touched
     control is described into a resilient `LocatorSpec` at the moment it's acted on. `prepare(session)` runs
-    after navigation, before the demo — a post-nav seed/setup hook (the SAME one replay uses, so the recorded
-    locators land on the same DOM). Returns the cached flow.
+    after navigation, before the demo (the SAME hook replay uses, so the recorded locators land on the same
+    DOM); `storage_state`/`extra_headers` seed auth so the demo runs in the same context as replay.
+
+    Returns `(flow, performed_write)`. `performed_write` flags that the demo touched the WRITE surface — a
+    **non-idempotent HTTP request** (POST/PUT/PATCH/DELETE, caught via `page.on("request")` — covers form
+    submits + fetch/XHR) OR **any WebSocket frame sent** (treated as a write-suspect, since read vs write
+    isn't distinguishable over a socket). NOT detected: a **side-effecting GET** (a write behind a GET — we
+    trust HTTP method semantics, the same limitation as the engine's classifier) or a `navigator.sendBeacon`
+    (Playwright surfaces it inconsistently). Recording writes isn't gate-safe yet, so the caller refuses on
+    `performed_write`.
     """
-    session = await BrowserSession(headless=headless).start()
+    session = await BrowserSession(headless=headless, storage_state=storage_state).start()
     events: list[dict] = []
+    wrote = {"hit": False}
     page = session.page
     assert page is not None
+
+    def _watch_request(req) -> None:  # a non-idempotent, non-telemetry HTTP request = a write the human did
+        try:
+            if is_write_request(req.method, req.url):
+                wrote["hit"] = True
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _watch_ws(ws) -> None:  # any frame SENT over a socket is a write-suspect (can't tell read from write)
+        try:
+            ws.on("framesent", lambda *_: wrote.__setitem__("hit", True))
+        except Exception:  # noqa: BLE001
+            pass
+
+    page.on("request", _watch_request)
+    page.on("websocket", _watch_ws)
+    if extra_headers:
+        await session.set_extra_http_headers(extra_headers)
     await page.expose_function("__ultracua_record", lambda ev: events.append(ev))
     await page.add_init_script(_CAPTURE_JS)
     try:
@@ -128,7 +156,7 @@ async def record_demo(
     flow = CachedFlow(key=flow_key(goal, url, scope), goal=goal, start_url=url,
                       steps=steps, created_ts=time.time())
     cache.put(flow)
-    return flow
+    return flow, wrote["hit"]
 
 
 def recorded_steps_summary(flow: CachedFlow) -> list[str]:
