@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Union
 
 from .browser import BrowserSession
-from .cache import FlowCache, flow_key
+from .cache import CachedStep, FlowCache, flow_key
 from .config import settings
 from .extract import extract
 from .flow import run_cached
@@ -33,6 +33,7 @@ from .locators import resolve
 from .obs import get_logger
 from .pin import find_pin, read_pin
 from .providers import build_router, get_provider
+from .recorder import record_demo
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
@@ -994,3 +995,69 @@ async def canary_all(
             return await canary(spec, cache=cache)
 
     return await asyncio.gather(*[_one(n) for n in names])
+
+
+# --- recorder (Phase I) -----------------------------------------------------------------------
+@dataclass
+class RecordResult:
+    """Outcome of `record` — a human demonstration captured into a (maybe-cached) flow."""
+
+    spec: FlowSpec
+    cached: bool            # True iff the demo verified-by-replay and was kept
+    reproduced: bool        # did it replay 0-LLM on a fresh session?
+    performed_write: bool   # did a write fire during the demo? (refused — read flows only for now)
+    steps: list[CachedStep]
+    note: str = ""
+
+
+async def record(
+    spec: FlowSpec, *, demo: Callable[[Any], Awaitable[None]], headless: bool = False,
+    cache: Optional[FlowCache] = None,
+) -> RecordResult:
+    """Capture a human DEMONSTRATION of `spec` into a cached, replayable flow (Phase I recorder).
+
+    `demo(page)` drives the demonstration — in the `flow record` CLI it just waits while the human clicks
+    through the task in a headed browser; in tests it's a scripted sequence. The capture produces an
+    ordinary `CachedFlow`, so the whole replay engine (resolve + drift gate + canary + run-all) works on it.
+
+    **READ / selection flows only for now.** If a write is detected during the demo — a **non-idempotent
+    HTTP request** (POST/PUT/PATCH/DELETE, incl. form submits + fetch/XHR), a **WebSocket frame** sent, or a
+    keyword-`mutating` step — recording is REFUSED: a recorded write would replay *ungated* (capturing its
+    precondition is a separate, trust-critical follow-up). **Residual (NOT detected):** a write behind a
+    **GET** link, or via `navigator.sendBeacon` — we trust HTTP method semantics, the same limitation as the
+    engine's classifier, so don't record a flow that mutates via a GET. The capture is then
+    **verify-by-replayed**: cached only if its *navigation* reproduces 0-LLM on a fresh session
+    (navigation-fidelity, NOT a correctness check — you confirm correctness by watching your own demo), and
+    the caller saves the spec so `replay` / `run-all` / `canary` find it.
+    """
+    cache = cache or _default_cache()
+    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    flow, wire_write = await record_demo(
+        spec.start_url, demo, goal=spec.goal, cache=cache, scope=spec.scope, headless=headless,
+        storage_state=spec.storage_state, extra_headers=spec.headers,  # demo in the SAME context as verify
+    )
+    if wire_write or any(s.mutating for s in flow.steps):
+        cache.delete(key)  # never keep an un-gated write flow
+        cause = ("a WRITE fired on the wire (a non-idempotent request or a WebSocket frame)" if wire_write
+                 else "a WRITE-like (mutating) action was captured")
+        return RecordResult(spec, cached=False, reproduced=False, performed_write=wire_write,
+                            steps=list(flow.steps),
+                            note=f"{cause} during the demo — recording write flows isn't supported yet "
+                                 f"(it would replay ungated). Re-record a read-only flow.")
+    if not flow.steps:
+        cache.delete(key)
+        return RecordResult(spec, cached=False, reproduced=False, performed_write=False, steps=[],
+                            note="no actions were captured — nothing to record.")
+    # verify-by-replay: only trust a recorded flow that reproduces 0-LLM on a fresh session. (The caller
+    # persists the spec — e.g. the `flow record` CLI calls save_spec — so record() stays side-effect-light.)
+    report = await run_cached(
+        url=spec.start_url, goal=spec.goal, provider=None, cache=cache, mode="replay", headless=True,
+        scope=spec.scope, extra_headers=spec.headers, storage_state=spec.storage_state,
+    )
+    reproduced = report.success
+    if not reproduced:
+        cache.delete(key)
+    return RecordResult(spec, cached=reproduced, reproduced=reproduced, performed_write=False,
+                        steps=list(flow.steps),
+                        note="" if reproduced else "the recorded flow did NOT reproduce on a fresh 0-LLM "
+                             "replay — not cached. Re-record (the page may depend on record-time state).")

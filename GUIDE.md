@@ -79,6 +79,29 @@ uv run ultracua flow list
 instruction (+ optional `extract_schema` for validated structure). Replay does 0-LLM **navigation**;
 reading the answer is one cheap extraction call (set `extract=None` for navigate-only flows).
 
+### Record a flow by demonstration (Phase I)
+
+When the LLM can't reliably *author* a flow — the grounding-hard tasks where it picks the wrong element
+(measured: a recorder cracks **9/9** such MiniWoB tasks vs LLM authoring **4/9** on the same seeds) — you
+can **demonstrate** it instead. `flow record` opens a headed browser; you click through the task, press
+Enter, and it captures your clicks into the **same cached flow** the engine replays — then **verify-by-
+replays** it (cached only if it reproduces 0-LLM) so it's trustworthy from the start.
+
+```bash
+uv run ultracua flow record --name pick-items --url <url> --goal "select the right items"
+# → a browser opens; do the task; press Enter; it verifies + caches.
+uv run ultracua flow approve --name pick-items     # then it runs unattended like any learned flow
+uv run ultracua flow replay  --name pick-items
+```
+
+**Read / selection flows only for now.** A write is **refused** when it fires as a non-idempotent HTTP
+request (POST/PUT/PATCH/DELETE) or a WebSocket frame — caught even when the button's label hides it. It
+**trusts HTTP method semantics**, so a write *behind a GET* link (or via `sendBeacon`) isn't detected —
+don't record a flow that mutates via a GET. Verify-by-replay confirms the flow's **navigation** reproduces
+(you confirm it did the *right* thing by watching your own demo); a recorded write would replay *ungated*,
+so capturing a write's precondition is a separate, trust-critical follow-up. The Python API is
+`record(spec, demo=…)`, returning a `RecordResult`.
+
 ## Pinned 0-LLM reads
 
 By default a data flow's replay does 0-LLM *navigation* but still makes **one** LLM extraction call to
