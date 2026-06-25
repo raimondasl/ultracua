@@ -83,15 +83,18 @@ the lever caveat in the Verdict.
    post-hoc LLM caption pass (cheap, one call, off the replay path); or infer from the element.
    **Recommend** the post-hoc LLM caption — but it must run **before** `classify_mutation` (or classification
    must move to a structural-only signal, see §2). Keeps replay 0-LLM.
-2. **Write capture** *(medium, TRUST-CRITICAL — bigger than "just `precond_scope`")*. Two gaps, both real:
-   (a) the recorder captures **no structural mutation signal at all** — `_step_from_event` calls
-   `classify_mutation(..., ctx={})`, so it runs keyword-only; the learn path gets the form-method via
-   `mutation_context(el)`, which the recorder must also capture inline at record time. (b) Even if a step
-   *is* flagged mutating, it carries **no `precond_scope` and no `precond_fingerprint`**, so the write gate
-   is a **no-op** (`flow.py` falls through to `precond_fingerprint` which is empty) → a recorded write
-   would replay **completely ungated**. Out of scope here (selection tasks are non-mutating, verified), but
-   the full build must capture `mutation_context(el)` **and** `scope_fingerprint(el)` inline for mutating
-   clicks / Enter-submits, and route recorded writes through approval + the gate. Adversarial-review gated.
+2. ✅ **Write capture** *(medium, TRUST-CRITICAL — BUILT)*. Both gaps closed: (a) the capture now computes
+   `mutation_context(el)` (form method) **and** `scope_fingerprint(el)` **inline** at record time — the same
+   `_MUTATION_CTX_JS` + `SCOPE_JS` the learn path uses, hashed by the shared `hash_scope` for byte-identical
+   parity with the replay gate; `_step_from_event(ev, write_flow=…)` records the submit as a gated mutating
+   step (with `precond_scope`). (b) `flows.record()` no longer refuses writes: a **declared** write (the user
+   supplies a `--confirm-*` check, since the recorder can't infer action-completion) is routed through
+   approval + the mutation gate + idempotency exactly like a learned write — it refuses under form/section
+   drift, never double-submits (no verify-by-replay), and is approval-gated. A **fail-closed guard** refuses
+   to cache any declared write whose write step couldn't be gated, so a recorded write can never replay
+   ungated. Declaring the write also closes the GET-/`sendBeacon`-write residual (gated + approval-gated
+   rather than silently cached as a read). Adversarial-reviewed; covered by `tests/test_record.py` (POST-form
+   + formless-keyword commits, gated, refusing under drift, idempotency-keyed).
 3. **Capture fidelity** *(medium)*. The spike covers `click` + text `type` (both tested). The full build
    needs: `select` (dropdowns), keyboard `press` (Enter-submit, shortcuts), `scroll`, **hover/mouseover
    menus**, **right-click / context menus**, **drag**, **post-click dynamic content** (a click reveals
@@ -121,15 +124,15 @@ the lever caveat in the Verdict.
 | Capture core (this spike, hardened) | S–M | label/nav handshake (not a fixed timeout), shadow/iframe, `select`/`press`/`scroll`/hover/drag |
 | `describe()` reuse + verify-by-replay | S | share **one** `specOf` (resolution parity); gate on reproduce |
 | Intent (post-hoc LLM caption) | S | one off-replay-path call; must run *before* `classify_mutation` |
-| Write capture + gate integration | M | trust-critical (capture `mutation_context` + `precond_scope`; route via approval+gate) → adversarial review |
-| `flow record` CLI + review/approve UX | M | headed browser, stop signal, inspect |
+| ✅ **Write capture + gate integration** | done | trust-critical — `mutation_context` + `scope_fingerprint` captured inline (shared `hash_scope` parity); declared writes routed via approval+gate+idempotency; fail-closed guard; adversarial-reviewed |
+| `flow record` CLI + review/approve UX | M | headed browser, stop signal, inspect (`--confirm-*` now declares a write) |
 
 **Total: a medium build (~1–2 focused PRs of capture+integration, then the CLI/UX), de-risked by this
 spike — and the lever is now measured, not just argued.**
 
 ## Recommendation
 
-Proceed. The gating MiniWoB ceiling validation is **done** (lever measured). Remaining build order: harden
-capture (label/nav handshake, `select`/`press`/`scroll`) → `describe` reuse + verify-by-replay → intent
-caption → write capture (reviewed) → the `flow record` CLI/UX. Don't ship the CLI/UX before the
-write-capture trust work lands (a recorded write currently replays ungated — §2).
+Proceed. The gating MiniWoB ceiling validation is **done** (lever measured), the `flow record` CLI shipped,
+and **write capture has landed** (§2: declared writes replay gated + approval-gated + idempotency-keyed,
+fail-closed; adversarial-reviewed). Remaining build order: harden capture (label/nav handshake,
+`select`/`press`/`scroll`) → `describe` reuse → intent caption.

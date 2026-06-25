@@ -199,7 +199,12 @@ def test_canary_exit_one_when_any_stale(monkeypatch) -> None:
 
 # --- _flow_record (persists on success; fails loud when refused) -------------------------------
 def _record_args(**kw):
-    base = dict(name="x", url="http://x.test/", goal="g", storage_state=None)
+    base = dict(name="x", url="http://x.test/", goal="g", storage_state=None,
+                # the --confirm-*/--precheck-* flags `_add_mutate_args` adds to `flow record` (a confirm
+                # check DECLARES a WRITE recording); all default to None for a read-flow demo.
+                confirm_selector=None, confirm_text_contains=None, confirm_url_contains=None,
+                mutate_timeout_ms=None, precheck_url=None, precheck_selector=None,
+                precheck_text_contains=None, precheck_url_contains=None)
     base.update(kw)
     return _ns(**base)
 
@@ -227,3 +232,23 @@ def test_record_fails_loud_when_refused(monkeypatch) -> None:
     monkeypatch.setattr("ultracua.flows.record", fake_record)
     with pytest.raises(SystemExit):
         cli._flow_record(_record_args())
+
+
+def test_record_declares_a_write_flow_via_confirm_arg(monkeypatch) -> None:
+    # A --confirm-* flag makes `flow record` a WRITE recording: the built spec carries a MutateSpec, and a
+    # cached write is persisted (approval-gated) like a learned write.
+    from ultracua.flows import MutateSpec, RecordResult
+
+    seen: dict = {}
+
+    async def fake_record(spec, **kw):
+        seen["mutate"] = spec.mutate
+        return RecordResult(spec, cached=True, reproduced=False, performed_write=True,
+                            is_write=True, steps=[], note="")
+
+    saved: dict = {}
+    monkeypatch.setattr("ultracua.flows.record", fake_record)
+    monkeypatch.setattr("ultracua.flows.save_spec", lambda s: saved.update(name=s.name))
+    cli._flow_record(_record_args(confirm_text_contains="Order placed"))  # no SystemExit -> kept
+    assert isinstance(seen["mutate"], MutateSpec) and seen["mutate"].confirm_text_contains == "Order placed"
+    assert saved.get("name") == "x"

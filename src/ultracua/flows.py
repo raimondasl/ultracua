@@ -1003,10 +1003,11 @@ class RecordResult:
     """Outcome of `record` — a human demonstration captured into a (maybe-cached) flow."""
 
     spec: FlowSpec
-    cached: bool            # True iff the demo verified-by-replay and was kept
-    reproduced: bool        # did it replay 0-LLM on a fresh session?
-    performed_write: bool   # did a write fire during the demo? (refused — read flows only for now)
+    cached: bool            # True iff the flow was kept (read: verified-by-replay; write: gated + cached)
+    reproduced: bool        # did it replay 0-LLM on a fresh session? (read flows only — a write isn't re-run)
+    performed_write: bool   # did a write fire on the wire during the demo?
     steps: list[CachedStep]
+    is_write: bool = False  # is this a WRITE flow (approval-gated, idempotency-keyed on replay)?
     note: str = ""
 
 
@@ -1020,36 +1021,87 @@ async def record(
     through the task in a headed browser; in tests it's a scripted sequence. The capture produces an
     ordinary `CachedFlow`, so the whole replay engine (resolve + drift gate + canary + run-all) works on it.
 
-    **READ / selection flows only for now.** If a write is detected during the demo — a **non-idempotent
-    HTTP request** (POST/PUT/PATCH/DELETE, incl. form submits + fetch/XHR), a **WebSocket frame** sent, or a
-    keyword-`mutating` step — recording is REFUSED: a recorded write would replay *ungated* (capturing its
-    precondition is a separate, trust-critical follow-up). **Residual (NOT detected):** a write behind a
-    **GET** link, or via `navigator.sendBeacon` — we trust HTTP method semantics, the same limitation as the
-    engine's classifier, so don't record a flow that mutates via a GET. The capture is then
-    **verify-by-replayed**: cached only if its *navigation* reproduces 0-LLM on a fresh session
-    (navigation-fidelity, NOT a correctness check — you confirm correctness by watching your own demo), and
-    the caller saves the spec so `replay` / `run-all` / `canary` find it.
+    **READ flows** verify-by-replay: cached only if their *navigation* reproduces 0-LLM on a fresh session
+    (navigation-fidelity, NOT a correctness check — you confirm correctness by watching your own demo).
+
+    **WRITE flows** are captured SAFELY when you DECLARE the write up front via `spec.mutate` (a confirm
+    check — the recorder can't infer the action-completion signal). A demonstrated form-submit is recorded
+    as a gated mutating step (its `precond_scope` captured inline), and the flow is routed through approval +
+    the mutation gate + idempotency exactly like a learned write: it never relearns under drift, the gate
+    refuses it under form/section drift (fail loud, no blind re-fire), and replay is approval-gated. A write
+    is NOT verify-by-replayed (re-firing it would double-submit) — approval is the human verification.
+
+    If a write is demonstrated WITHOUT a declared confirm check (`spec.mutate` unset) — a non-idempotent
+    request / WebSocket frame on the wire, or a keyword-`mutating` step — recording is REFUSED with guidance
+    to re-record with `--confirm-*`. **Residual:** a write behind a **GET** link or `navigator.sendBeacon`
+    isn't auto-detected; declaring the flow a write (`spec.mutate`) still captures it safely (gate + approval),
+    so don't rely on auto-detection for those — declare them. The caller saves the spec so `replay` /
+    `run-all` / `canary` find it.
     """
     cache = cache or _default_cache()
     key = flow_key(spec.goal, spec.start_url, spec.scope)
+    declared_write = spec.mutate is not None
     flow, wire_write = await record_demo(
         spec.start_url, demo, goal=spec.goal, cache=cache, scope=spec.scope, headless=headless,
         storage_state=spec.storage_state, extra_headers=spec.headers,  # demo in the SAME context as verify
+        mutate=declared_write,  # gate the demonstrated write step(s) at capture time
     )
-    if wire_write or any(s.mutating for s in flow.steps):
-        cache.delete(key)  # never keep an un-gated write flow
-        cause = ("a WRITE fired on the wire (a non-idempotent request or a WebSocket frame)" if wire_write
-                 else "a WRITE-like (mutating) action was captured")
-        return RecordResult(spec, cached=False, reproduced=False, performed_write=wire_write,
-                            steps=list(flow.steps),
-                            note=f"{cause} during the demo — recording write flows isn't supported yet "
-                                 f"(it would replay ungated). Re-record a read-only flow.")
+    detected_write = wire_write or any(s.mutating for s in flow.steps)
+
     if not flow.steps:
         cache.delete(key)
-        return RecordResult(spec, cached=False, reproduced=False, performed_write=False, steps=[],
-                            note="no actions were captured — nothing to record.")
-    # verify-by-replay: only trust a recorded flow that reproduces 0-LLM on a fresh session. (The caller
-    # persists the spec — e.g. the `flow record` CLI calls save_spec — so record() stays side-effect-light.)
+        return RecordResult(spec, cached=False, reproduced=False, performed_write=wire_write, is_write=False,
+                            steps=[], note="no actions were captured — nothing to record.")
+
+    # A write was demonstrated but NOT declared (no confirm check) -> refuse. The recorder can't infer the
+    # action-completion signal, so a write must be declared like `flow learn` (spec.mutate / --confirm-*).
+    if detected_write and not declared_write:
+        cache.delete(key)  # never keep a write flow with no confirm check
+        cause = ("a WRITE fired on the wire (a non-idempotent request or a WebSocket frame)" if wire_write
+                 else "a WRITE-like (mutating) action was captured")
+        return RecordResult(spec, cached=False, reproduced=False, performed_write=wire_write, is_write=True,
+                            steps=list(flow.steps),
+                            note=f"{cause} during the demo — recording a WRITE needs an action-completion "
+                                 f"check the recorder can't infer. Re-record declaring the write (a confirm "
+                                 f"check: --confirm-text-contains / --confirm-selector / --confirm-url-"
+                                 f"contains), or re-record a read-only flow.")
+
+    if declared_write:
+        # A DECLARED write: record_demo gated the write step(s) at capture (precond_scope), so the cached
+        # flow is routed through approval + the mutation gate + idempotency exactly like a learned write.
+        # We do NOT verify-by-replay — re-firing a mutating step would double-submit; a recorded write is
+        # verified by the human watching their own demo plus the approval gate, not an automated replay.
+        if not spec.mutate.has_confirm():
+            cache.delete(key)
+            return RecordResult(spec, cached=False, reproduced=False, performed_write=wire_write,
+                                is_write=True, steps=list(flow.steps),
+                                note="a write flow needs a confirm check — set mutate.confirm_selector / "
+                                     "confirm_text_contains / confirm_url_contains.")
+        # Fail-closed invariant guard: a recorded write must NEVER be cached UNGATED. Two ways that could
+        # slip through, both refused here:
+        #   - a mutating step with no precondition (empty precond_scope; the recorder never sets a whole-page
+        #     precond_fingerprint, so the replay gate would be a no-op and the step fires blind / under drift); or
+        #   - a write provably fired ON THE WIRE but NOTHING could be gated (the last-click fallback couldn't
+        #     capture a scope), so we can't guarantee the write replays through the gate.
+        # record_demo scopes every mutating click of a declared write, so these only trip when a scope
+        # genuinely couldn't be captured (detached node / JS error) — refuse rather than cache an un-gateable
+        # write. (A GET-/sendBeacon-write with NO wire signal and no mutating step is the acknowledged
+        # undetectable residual: it's cached approval-gated — the human-in-the-loop gate is its safety.)
+        gated = [s for s in flow.steps if s.mutating and s.precond_scope]
+        ungated = [s for s in flow.steps if s.mutating and not s.precond_scope]
+        if ungated or (wire_write and not gated):
+            cache.delete(key)
+            return RecordResult(spec, cached=False, reproduced=False, performed_write=wire_write,
+                                is_write=True, steps=list(flow.steps),
+                                note="a demonstrated WRITE could not be gated (its precondition wasn't "
+                                     "captured) — not cached, to never replay a write ungated. Re-record the "
+                                     "demonstration.")
+        return RecordResult(spec, cached=True, reproduced=False, performed_write=wire_write, is_write=True,
+                            steps=list(flow.steps), note="")
+
+    # READ flow: verify-by-replay — only trust a recorded flow that reproduces 0-LLM on a fresh session.
+    # (The caller persists the spec — e.g. the `flow record` CLI calls save_spec — so record() stays
+    # side-effect-light.)
     report = await run_cached(
         url=spec.start_url, goal=spec.goal, provider=None, cache=cache, mode="replay", headless=True,
         scope=spec.scope, extra_headers=spec.headers, storage_state=spec.storage_state,
@@ -1057,7 +1109,7 @@ async def record(
     reproduced = report.success
     if not reproduced:
         cache.delete(key)
-    return RecordResult(spec, cached=reproduced, reproduced=reproduced, performed_write=False,
+    return RecordResult(spec, cached=reproduced, reproduced=reproduced, performed_write=False, is_write=False,
                         steps=list(flow.steps),
                         note="" if reproduced else "the recorded flow did NOT reproduce on a fresh 0-LLM "
                              "replay — not cached. Re-record (the page may depend on record-time state).")

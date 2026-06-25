@@ -94,13 +94,28 @@ uv run ultracua flow approve --name pick-items     # then it runs unattended lik
 uv run ultracua flow replay  --name pick-items
 ```
 
-**Read / selection flows only for now.** A write is **refused** when it fires as a non-idempotent HTTP
-request (POST/PUT/PATCH/DELETE) or a WebSocket frame — caught even when the button's label hides it. It
-**trusts HTTP method semantics**, so a write *behind a GET* link (or via `sendBeacon`) isn't detected —
-don't record a flow that mutates via a GET. Verify-by-replay confirms the flow's **navigation** reproduces
-(you confirm it did the *right* thing by watching your own demo); a recorded write would replay *ungated*,
-so capturing a write's precondition is a separate, trust-critical follow-up. The Python API is
-`record(spec, demo=…)`, returning a `RecordResult`.
+**Read flows** verify-by-replay: cached only if their **navigation** reproduces 0-LLM on a fresh session
+(you confirm it did the *right* thing by watching your own demo).
+
+**Write flows** are captured **safely** when you **declare** the write up front with a confirm check
+(`--confirm-text-contains` / `--confirm-selector` / `--confirm-url-contains` — the recorder can't infer the
+action-completion signal). The demonstrated submit is recorded as a **gated** step (its enclosing-form
+precondition captured at record time), so on replay the **mutation gate refuses it under form/section
+drift** (fail loud, never a blind re-fire), it carries an **Idempotency-Key**, and it is **approval-gated**
+— exactly like a *learned* write. A write is **not** verify-by-replayed (re-firing would double-submit);
+approval is the human verification.
+
+```bash
+uv run ultracua flow record --name place-order --url <url> --goal "place the order" \
+    --confirm-text-contains "Order placed"
+uv run ultracua flow approve --name place-order    # verify your demo, then approve
+```
+
+A write demonstrated **without** a declared confirm check is **refused** with guidance to re-record. The
+recorder trusts HTTP method semantics, so a write *behind a GET* link or via `sendBeacon` isn't
+auto-detected — **declare those as writes** (`--confirm-*`) and they're captured gated + approval-gated all
+the same; don't rely on auto-detection for them. The Python API is `record(spec, demo=…)` (set
+`spec.mutate` for a write), returning a `RecordResult` (`is_write` flags a write flow).
 
 ## Pinned 0-LLM reads
 
