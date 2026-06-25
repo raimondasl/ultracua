@@ -188,6 +188,17 @@ SCOPE_JS = r"""
 """
 
 
+def hash_scope(out) -> str:
+    """Hash a raw scope array (the list of [role, name, tag] interactable triples returned by SCOPE_JS)
+    into the precond_scope string. Split out from `scope_fingerprint` so a caller that already has the
+    raw array — the recorder, which evaluates SCOPE_JS INLINE at record time on the live click target —
+    produces a BYTE-IDENTICAL fingerprint to the replay-time gate, which is the whole point: the gate
+    compares the recorded hash to a freshly recomputed one. Returns "" for an empty/missing array."""
+    if not out:
+        return ""
+    return xxhash.xxh64(json.dumps(out, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
 async def scope_fingerprint(locator) -> str:
     """Fingerprint the interactables in the target locator's enclosing form/section (the precise
     mutation-gate precondition). Returns "" if it can't be computed (caller falls back)."""
@@ -195,9 +206,7 @@ async def scope_fingerprint(locator) -> str:
         out = await locator.evaluate(SCOPE_JS)
     except Exception:  # noqa: BLE001 - target gone / detached -> caller treats as no scope
         return ""
-    if not out:
-        return ""
-    return xxhash.xxh64(json.dumps(out, ensure_ascii=False).encode("utf-8")).hexdigest()
+    return hash_scope(out)
 
 
 # Structural write-signal for a CLICK target: does activating it submit a form, and with what method?

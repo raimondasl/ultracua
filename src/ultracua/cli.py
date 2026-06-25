@@ -299,7 +299,11 @@ def _flow_run_all(args: argparse.Namespace) -> None:
 def _flow_record(args: argparse.Namespace) -> None:
     from .flows import FlowSpec, record
 
-    spec = FlowSpec(name=args.name, start_url=args.url, goal=args.goal, storage_state=args.storage_state)
+    # A confirm check (--confirm-*) DECLARES this a WRITE recording — the recorder can't infer the
+    # action-completion signal, so a demonstrated write must declare it (just like `flow learn`).
+    mutate = _mutate_from_args(args) if _has_confirm_args(args) else None
+    spec = FlowSpec(name=args.name, start_url=args.url, goal=args.goal,
+                    storage_state=args.storage_state, mutate=mutate)
 
     async def _demo(page) -> None:  # the "stop signal": the human demos in the browser, then presses Enter
         loop = asyncio.get_event_loop()
@@ -311,13 +315,21 @@ def _flow_record(args: argparse.Namespace) -> None:
     print(f"\ncaptured {len(res.steps)} step(s):")
     for s in res.steps:
         name = (s.locator.name if s.locator else "") or (s.locator.tag if s.locator else "")
-        print(f"  {s.action} {name!r}" + (f" = {s.text!r}" if s.text else ""))
+        marker = "  [write — gated]" if s.mutating else ""
+        print(f"  {s.action} {name!r}" + (f" = {s.text!r}" if s.text else "") + marker)
     if res.cached:
         from .flows import save_spec
 
         save_spec(spec)  # persist so `flow replay/approve/run-all --name` find it
-        print(f"\nrecorded + verified {spec.name!r} (replays 0-LLM). Approve it to run unattended:\n"
-              f"    ultracua flow approve --name {spec.name}")
+        if res.is_write:
+            print(f"\nrecorded WRITE flow {spec.name!r} (gated + idempotency-keyed; refuses under drift). "
+                  f"It is approval-gated — verify your demo, then approve to run unattended:\n"
+                  f"    ultracua flow approve --name {spec.name}")
+            if res.note:
+                print(res.note)
+        else:
+            print(f"\nrecorded + verified {spec.name!r} (replays 0-LLM). Approve it to run unattended:\n"
+                  f"    ultracua flow approve --name {spec.name}")
     else:
         raise SystemExit(f"\nNOT recorded: {res.note}")
 
@@ -457,13 +469,15 @@ def _flow_main(argv) -> None:
                      help="POST a JSON alert here if any flow fails (Slack/Discord/etc. incoming webhook).")
     pra.add_argument("--verbose", "-v", action="store_true", help="log each replay (INFO).")
 
-    prc = sub.add_parser("record", help="RECORD a flow by demonstrating it in a headed browser "
-                                        "(read/selection flows only; verify-by-replayed, then approve).")
+    prc = sub.add_parser("record", help="RECORD a flow by demonstrating it in a headed browser. Reads are "
+                                        "verify-by-replayed; a WRITE needs a --confirm-* check (then it is "
+                                        "gated + idempotency-keyed). Approve it to run unattended.")
     prc.add_argument("--name", required=True, help="name to save the flow under.")
     prc.add_argument("--url", required=True, help="start URL to open for the demonstration.")
     prc.add_argument("--goal", required=True, help="a short description of the flow (forms the cache key).")
     prc.add_argument("--storage-state", dest="storage_state",
                      help="a Playwright storage_state JSON (cookies) to start authenticated.")
+    _add_mutate_args(prc)  # set any --confirm-* to DECLARE + safely capture a WRITE flow
 
     pca = sub.add_parser("canary", help="Cheap freshness probe: does each flow still START (0-LLM, "
                                         "read-only, no health record)? Exits non-zero if any is stale. "
