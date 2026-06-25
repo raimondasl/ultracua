@@ -12,7 +12,7 @@ fixed reference instead of a single noisy run.
 | `miniwob_bestof3.json` | MiniWoB++ ×10 (**N=3 best-of-N**) | 2026-06-20 | **60% ± 0%** (6/10 every rep), ~$6.58 (1.55×) — best-of-N vs the N=1 baseline: +8 pts and **variance → 0** |
 | `miniwob_reflect3.json` | MiniWoB++ ×10 (**N=3 + reflexion**) | 2026-06-20 | **52% ± 4%** (mostly 5/10), ~$8.32 — reflexion measured **net-harmful** vs best-of-N (−8 pts, +26% cost) |
 | `drift.json` | drift-sandbox (2 scenarios, 17 DOM drifts) | 2026-06-23 | **0-LLM resilience 12/12 (100%)** cosmetic drifts, **wrong-binds 0**, ambiguous twin disambiguated, 2 conflict drifts fail loud (never wrong), removed / cross-tag-twin targets fail loud — the **key-less, no-LLM** locator-resilience reference |
-| `recorder_ceiling.json` | recorder ceiling (MiniWoB++, 3 tasks × 3 seeds) | 2026-06-23 | **recorder solved 9/9 garbled-label instances 0-LLM** (`click-checkboxes`/`-large`/`click-option`), **re-grounding by role+name+css (ids stripped)** to a positive `WOB_RAW_REWARD` — key-less proof that a *demonstration* of these tasks replays 0-LLM on the LLM's own grounding surface |
+| `recorder_ceiling.json` | recorder ceiling (MiniWoB++, 3 tasks × 3 seeds) | 2026-06-24 | **recorder 9/9 vs LLM authoring 4/9** on the *same* seeds — recorder solves all garbled-label instances 0-LLM, **re-grounding by role+name+css (ids stripped)**; the LLM (N=1) solves only single-target and **misses every multi-target selection** (the grounding ceiling) |
 
 **Drift-sandbox** ([`benchmarks/drift_sandbox.py`](../benchmarks/drift_sandbox.py)) is the **only key-less
 baseline** — it learns a flow then replays it against a distribution of realistic DOM drifts. It runs **two
@@ -57,10 +57,12 @@ demo-oracle reads the instruction's named targets, the recorder captures it, and
 re-grounds by **role+name+css** — the same grounding surface the LLM mis-grounds (not MiniWoB's internal
 `chN` ids). Key-less + gated in CI (`tests/test_recorder_ceiling.py`). Honest scope:
 
-- The "**LLM fails these**" half is **asserted from STATUS's measured ceiling** (`miniwob.json`), **not run
-  here** — the `--provider` arm runs LLM authoring on the *same* seeds for a true same-seed contrast (paid).
-- `click-checkboxes` + `click-option` are in STATUS's measured miss set; `click-checkboxes-large` (7–11
-  targets) is a **stress extension** of the same class, not separately measured against the LLM.
+- **Same-seed contrast (MEASURED, `--provider anthropic`):** LLM authoring (N=1) solved **4/9** — *every
+  single-target* instance (3 × `click-option`, 1 single-box `click-checkboxes`) — and **missed every
+  multi-target** garbled selection (3 / 7 / 10 / 11 targets) **plus** the empty "Select nothing". The
+  recorder's 9/9 cracks exactly the 5 the LLM can't. (One real-LLM run — the count can wiggle, but the
+  single-vs-multi-target split is the robust signal; best-of-N doesn't move the multi-target ceiling, per
+  STATUS. `click-checkboxes-large` is a stress extension of `click-checkboxes`.)
 - The 9 instances span 0–11 targets (one is the trivial "Select nothing"); 4 are multi-target.
 - *Semantic* `click-checkboxes-soft` is **excluded** — it needs a knowledge-bearing demonstrator (a human /
   an LLM caption), the honest boundary of a scripted oracle: the recorder routes around *grounding*, but
