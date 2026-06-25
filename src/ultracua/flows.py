@@ -1041,12 +1041,25 @@ async def record(
     cache = cache or _default_cache()
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     declared_write = spec.mutate is not None
-    flow, wire_write = await record_demo(
+    flow, wire_write, crossed_origin = await record_demo(
         spec.start_url, demo, goal=spec.goal, cache=cache, scope=spec.scope, headless=headless,
         storage_state=spec.storage_state, extra_headers=spec.headers,  # demo in the SAME context as verify
         mutate=declared_write,  # gate the demonstrated write step(s) at capture time
     )
     detected_write = wire_write or any(s.mutating for s in flow.steps)
+
+    # A CROSS-origin navigation during the demo orphans the prior origin's not-yet-captured events (incl. the
+    # navigating click itself) — the recording may be silently truncated, and a write flow isn't verify-by-
+    # replayed to catch it. Refuse rather than cache a possibly-incomplete flow. (Same-origin multi-page is
+    # fine; cross-origin recording — SSO / external checkout — is a documented unsupported case for now.)
+    if crossed_origin:
+        cache.delete(key)
+        return RecordResult(spec, cached=False, reproduced=False, performed_write=wire_write,
+                            is_write=declared_write or detected_write, steps=list(flow.steps),
+                            note="the demonstration crossed a site/origin boundary (e.g. an SSO or external "
+                                 "checkout redirect); steps on the page navigated away from can't be captured "
+                                 "reliably, so the flow was NOT cached. Record the cross-origin portion as a "
+                                 "separate same-origin flow, or keep the demo on one origin.")
 
     if not flow.steps:
         cache.delete(key)

@@ -263,6 +263,196 @@ async def test_record_write_flow_formless_commit_refuses_under_drift(tmp_path) -
         httpd.server_close()
 
 
+# A SELECT-driven write: an onchange handler fires a POST (fetch). `classify_mutation` never flags a select,
+# so without explicit select write-gating this would replay UNGATED (the adversarial review's C1/H4). A
+# DECLARED write must capture the select as a GATED mutating step (via the timestamp-correlated fallback,
+# since a formless select has no form method), idempotency-keyed, refusing under section drift.
+def _serve_select_write(counter: dict, drift: bool = False):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def _send(self, body: str, code: int = 200) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.split("?")[0] == "/":
+                counter["gets"] = counter.get("gets", 0) + 1
+                extra = "<button>extra</button>" if (drift and counter["gets"] > 1) else ""
+                self._send(
+                    f"<h1>Order</h1>{extra}"
+                    "<select id=qty aria-label='qty'><option value=''>--</option>"
+                    "<option value='2'>two</option><option value='3'>three</option></select>"
+                    "<div id=out></div>"
+                    "<script>document.getElementById('qty').addEventListener('change',function(){"
+                    " fetch('/save',{method:'POST'}).then(r=>r.text()).then(t=>{"
+                    " document.getElementById('out').textContent=t;});});</script>")
+            else:
+                self._send("not found", 404)
+
+        def do_POST(self) -> None:  # noqa: N802
+            counter["orders"] = counter.get("orders", 0) + 1            # the irreversible side effect
+            counter["idem"] = self.headers.get("Idempotency-Key")
+            self._send("Order placed")
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def _select_order_demo(page) -> None:
+    await page.select_option("#qty", "2")                          # onchange -> fetch POST (the write)
+    await page.get_by_text("Order placed").wait_for()              # let the POST land during the demo
+
+
+async def test_record_write_flow_gates_a_submitting_select(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_select_write(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="selord", start_url=f"{base}/", goal="set the quantity",
+                        mutate=MutateSpec(confirm_text_contains="Order placed"))
+        res = await record(spec, demo=_select_order_demo, headless=True, cache=cache)
+        assert res.is_write is True and res.cached is True and res.performed_write is True
+        assert counter["orders"] == 1                              # placed once during the demo
+        # THE C1/H4 HOLE, CLOSED: the select write is a GATED mutating step, not an ungated select.
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        writes = [s for s in flow.steps if s.mutating]
+        assert len(writes) == 1 and writes[0].action == "select" and writes[0].precond_scope
+
+        approve(spec, cache=cache)
+        result = await replay(spec, cache=cache)
+        assert result == {"status": "confirmed", "data": None}
+        assert counter["orders"] == 2                              # exactly one more — gated, no double-submit
+        assert (counter.get("idem") or "").startswith("uca-")      # the POST carried an Idempotency-Key
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_record_write_flow_select_refuses_under_drift(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_select_write(counter, drift=True)         # replay's section grows a control
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="seldrift", start_url=f"{base}/", goal="set the quantity",
+                        mutate=MutateSpec(confirm_text_contains="Order placed"))
+        res = await record(spec, demo=_select_order_demo, headless=True, cache=cache)
+        assert res.is_write is True and res.cached is True
+        assert counter["orders"] == 1
+        approve(spec, cache=cache)
+        with pytest.raises(FlowReplayError):                        # section drift -> the gate refuses
+            await replay(spec, cache=cache)
+        assert counter["orders"] == 1                              # the select write was NOT re-fired
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# A <select> inside a REAL <form method=post> that submits on change: here `classify_mutation` still says
+# read, but the form METHOD is visible to the inline override (recorder._step_from_event), so the select is
+# gated WITHOUT needing the wire-watcher fallback (the C1 form_method-override branch).
+def _serve_select_form_write(counter: dict):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def _send(self, body: str) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def do_GET(self) -> None:  # noqa: N802
+            self._send("<form action='/save' method='post'>"
+                       "<select id=q aria-label='qty' onchange='this.form.submit()'>"
+                       "<option value=''>--</option><option value='2'>two</option></select></form>")
+
+        def do_POST(self) -> None:  # noqa: N802
+            counter["orders"] = counter.get("orders", 0) + 1
+            counter["idem"] = self.headers.get("Idempotency-Key")
+            length = int(self.headers.get("Content-Length") or 0)
+            if length:
+                self.rfile.read(length)
+            self._send("<h1>Order placed</h1>")
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_record_write_flow_gates_a_form_submitting_select(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_select_form_write(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="selform", start_url=f"{base}/", goal="choose quantity",
+                        mutate=MutateSpec(confirm_text_contains="Order placed"))
+
+        async def _demo(page) -> None:
+            await page.select_option("#q", "2")                       # onchange submits the POST form
+            await page.get_by_role("heading", name="Order placed").wait_for()
+
+        res = await record(spec, demo=_demo, headless=True, cache=cache)
+        assert res.is_write is True and res.cached is True
+        assert counter["orders"] == 1
+        # Gated via the form_method OVERRIDE (not the wire fallback): a mutating select with a precond_scope.
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        writes = [s for s in flow.steps if s.mutating]
+        assert len(writes) == 1 and writes[0].action == "select" and writes[0].precond_scope
+
+        approve(spec, cache=cache)
+        result = await replay(spec, cache=cache)
+        assert result == {"status": "confirmed", "data": None}
+        assert counter["orders"] == 2                                # one more — gated, no double-submit
+        assert (counter.get("idem") or "").startswith("uca-")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# CROSS-ORIGIN refusal: a demo that navigates to a DIFFERENT origin orphans the prior origin's not-yet-drained
+# events (incl. the navigating click) — the recording could be silently truncated, and a flow isn't always
+# verify-by-replayed to catch it. `record` must FAIL LOUD rather than cache a possibly-incomplete flow.
+def _serve_linking(target_url: str):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def do_GET(self) -> None:  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(f"<h1>origin A</h1><a href='{target_url}'>cross</a>".encode())
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_record_refuses_a_cross_origin_demo(tmp_path) -> None:
+    httpd_b, base_b = _serve()                          # origin B (a different port = a different origin)
+    httpd_a, base_a = _serve_linking(f"{base_b}/")      # origin A links to B
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="xo", start_url=f"{base_a}/", goal="hop across origins")
+
+        async def _demo(page) -> None:
+            await page.get_by_role("link", name="cross").click()   # A -> B : a CROSS-origin navigation
+            await page.wait_for_load_state("domcontentloaded")
+
+        res = await record(spec, demo=_demo, headless=True, cache=cache)
+        assert res.cached is False and "origin" in res.note.lower()
+        assert cache.get(flow_key(spec.goal, spec.start_url, spec.scope)) is None  # not kept
+    finally:
+        for h in (httpd_a, httpd_b):
+            h.shutdown()
+            h.server_close()
+
+
 async def test_record_write_flow_requires_a_confirm_check(tmp_path) -> None:
     # spec.mutate set but with NO confirm check -> a write flow can't be confirmed, so it's refused.
     counter: dict = {}

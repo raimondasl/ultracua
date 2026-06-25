@@ -84,8 +84,15 @@ reading the answer is one cheap extraction call (set `extract=None` for navigate
 When the LLM can't reliably *author* a flow — the grounding-hard tasks where it picks the wrong element
 (measured: a recorder cracks **9/9** such MiniWoB tasks vs LLM authoring **4/9** on the same seeds) — you
 can **demonstrate** it instead. `flow record` opens a headed browser; you click through the task, press
-Enter, and it captures your clicks into the **same cached flow** the engine replays — then **verify-by-
-replays** it (cached only if it reproduces 0-LLM) so it's trustworthy from the start.
+Enter, and it captures your interactions into the **same cached flow** the engine replays — then **verify-
+by-replays** it (cached only if it reproduces 0-LLM) so it's trustworthy from the start.
+
+It captures **clicks** (incl. checkboxes/radios), **typing**, **dropdown** choices (single & multi-select),
+**Enter-to-submit** on a text field, and **scrolling**, and follows you **across same-origin page
+navigations** without dropping a step (the demonstration is buffered in-page and drained as you go). *If the
+demo crosses a **site/origin boundary** (e.g. an SSO or external-checkout redirect), recording **fails loud**
+and is not cached — record the cross-origin portion as a separate same-origin flow. Capture runs in the
+top frame only; iframe/shadow-DOM interactions aren't captured yet.*
 
 ```bash
 uv run ultracua flow record --name pick-items --url <url> --goal "select the right items"

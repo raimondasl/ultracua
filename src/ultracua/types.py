@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 ActionType = Literal[
     "click", "type", "press", "scroll", "navigate", "done", "give_up",
+    "select",        # choose an <option> in a <select> by value (recorder; replay via select_option)
     "click_xy",      # vision tier: click pixel coordinates (canvas / opaque widgets)
     "webmcp_call",   # WebMCP tier: invoke a site-exposed structured tool
     "need_vision",   # agent can't find the target in the DOM -> fall to the vision tier

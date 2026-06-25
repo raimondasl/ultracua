@@ -95,16 +95,26 @@ the lever caveat in the Verdict.
    ungated. Declaring the write also closes the GET-/`sendBeacon`-write residual (gated + approval-gated
    rather than silently cached as a read). Adversarial-reviewed; covered by `tests/test_record.py` (POST-form
    + formless-keyword commits, gated, refusing under drift, idempotency-keyed).
-3. **Capture fidelity** *(medium)*. The spike covers `click` + text `type` (both tested). The full build
-   needs: `select` (dropdowns), keyboard `press` (Enter-submit, shortcuts), `scroll`, **hover/mouseover
-   menus**, **right-click / context menus**, **drag**, **post-click dynamic content** (a click reveals
-   controls the demonstrator immediately uses), file upload, date pickers, multi-tab, and shadow DOM /
-   iframes. **Untested in the spike (deferred, NOT shown-safe):** the label→input synthetic-click double-fire
-   across browsers, and — importantly — the **exfiltration-vs-navigation race**: the spike's final action
-   mutates the same page, so a *navigating* click is never exercised; the fixed `wait_for_timeout(80)` flush
-   is a **latent flake** under real navigation (the context can tear down before the last `expose_function`
-   call is delivered). The build needs a synchronous handshake (a `pagehide`/`sendBeacon` flush or a store
-   drained post-navigation), not a fixed timeout.
+3. ⚠️ **Capture fidelity** *(medium — PARTLY BUILT, adversarially reviewed)*. **Built + tested**
+   (`tests/test_recorder_fidelity.py`, `tests/test_record.py`): `select` (dropdowns → a `select` step,
+   replayed via `select_option`; **single AND multi-select** — the full selected set is JSON-encoded so a
+   `<select multiple>` doesn't silently drop options); keyboard `press` (Enter-submit on a text input with no
+   submit button — the "type then Enter" pattern; the field's value is captured as a `type` step **before**
+   the press so replay fills then submits, never an empty field, and the press is captured only when no
+   synthetic submit-button click would *also* fire, so replay never double-submits); `scroll` (debounced +
+   coalesced, a best-effort viewport restore). **Write-safe by construction:** a `<select>` or Enter that
+   **submits/posts** in a declared-write flow is captured as a **gated** mutating step (the formless case via
+   a timestamp-correlated fallback that ties the gate to the actuated step which *caused* the wire write, not
+   an arbitrary trailing click) — so a select-/Enter-driven write can't replay ungated or double-submit. The
+   **exfiltration-vs-navigation race is FIXED**: events are written **synchronously to `sessionStorage`**
+   (survives same-origin navigation) and **drained post-navigation + at the end**, replacing the fixed
+   `wait_for_timeout` flush; a test demonstrates a *navigating* click and asserts no step is dropped.
+   **Cross-origin is now LOUD, not silent:** a cross-origin main-frame hop orphans the prior origin's events
+   (per-origin `sessionStorage`), so `record()` **refuses to cache** rather than risk a truncated flow.
+   Capture runs in the **top frame only** (a sub-frame's queue is never drained). **Still deferred (NOT
+   shown-safe):** cross-origin / SSO recording, keyboard shortcuts / non-Enter keys, **hover/mouseover
+   menus**, **right-click / context menus**, **drag**, **post-click dynamic content**, file upload, date
+   pickers, multi-tab, shadow DOM / iframes, and the label→input synthetic-click double-fire across browsers.
 4. **Locator quality** *(small, but a correctness risk)*. The spike inlines `role/name/css` and sets
    `anchor=null`; this `specOf`/`cssPath` is a hand-rolled near-duplicate of `DESCRIBE_JS`. If the two drift,
    recorded specs and learn-path specs resolve **differently** — undermining the "same artifact" claim. The
@@ -121,7 +131,7 @@ the lever caveat in the Verdict.
 | Piece | Size | Notes |
 |---|---|---|
 | ✅ **MiniWoB ceiling validation (was GATING)** | done | **DONE + same-seed contrast measured** — recorder **9/9** garbled-label instances 0-LLM, id-free (role+name+css), gated in CI; vs **LLM authoring 4/9** (`--provider anthropic`, N=1) — the LLM misses every multi-target selection. |
-| Capture core (this spike, hardened) | S–M | label/nav handshake (not a fixed timeout), shadow/iframe, `select`/`press`/`scroll`/hover/drag |
+| ✅ **Capture core (nav handshake + select/press/scroll)** | done | sessionStorage store drained post-navigation (no fixed timeout); `select`/`press`/`scroll` captured + replayed, tested key-less. Deferred: shadow/iframe, hover/drag, non-Enter keys |
 | `describe()` reuse + verify-by-replay | S | share **one** `specOf` (resolution parity); gate on reproduce |
 | Intent (post-hoc LLM caption) | S | one off-replay-path call; must run *before* `classify_mutation` |
 | ✅ **Write capture + gate integration** | done | trust-critical — `mutation_context` + `scope_fingerprint` captured inline (shared `hash_scope` parity); declared writes routed via approval+gate+idempotency; fail-closed guard; adversarial-reviewed |
@@ -133,6 +143,9 @@ spike — and the lever is now measured, not just argued.**
 ## Recommendation
 
 Proceed. The gating MiniWoB ceiling validation is **done** (lever measured), the `flow record` CLI shipped,
-and **write capture has landed** (§2: declared writes replay gated + approval-gated + idempotency-keyed,
-fail-closed; adversarial-reviewed). Remaining build order: harden capture (label/nav handshake,
-`select`/`press`/`scroll`) → `describe` reuse → intent caption.
+**write capture has landed** (§2: declared writes replay gated + approval-gated + idempotency-keyed,
+fail-closed; adversarial-reviewed), and **capture fidelity is hardened** (§3: nav handshake via a
+sessionStorage store drained post-navigation, plus `select`/`press`/`scroll`, tested key-less). Remaining
+build order: `describe` reuse (share one `specOf` for resolution parity + neighbor-anchor on recorded steps)
+→ intent caption (one post-hoc LLM pass, before `classify_mutation`) → deferred capture (shadow/iframe,
+hover/drag, multi-tab).
