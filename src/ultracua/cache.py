@@ -31,7 +31,8 @@ SCHEMA_VERSION = 4  # v4: reading-order snapshot (changes ref order + fingerprin
 class CachedStep(BaseModel):
     intent: str
     action: ActionType
-    locator: Optional[LocatorSpec] = None  # None for press/scroll/navigate/click_xy/webmcp_call
+    locator: Optional[LocatorSpec] = None  # set for click/type/select (and a recorded press: the focused
+    #                                        field); None for scroll/navigate/click_xy/webmcp_call
     text: Optional[str] = None
     coords: Optional[list[int]] = None  # [x, y] for click_xy (vision tier)
     tool: Optional[str] = None  # WebMCP tool name (webmcp_call)

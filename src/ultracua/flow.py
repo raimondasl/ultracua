@@ -20,6 +20,7 @@ deterministic instance and read an outcome; the finalize result lands in
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
@@ -713,6 +714,22 @@ async def _replay(
         await session.close()
 
 
+def _select_values(text: Optional[str]):
+    """Decode a recorded `select` step's value. A multi-select is recorded as a JSON ARRAY of option values
+    (see recorder._CAPTURE_JS); a single select as a bare string. Returns a list for the former (so
+    `select_option` selects exactly that set and deselects the rest) or the string for the latter. A bare
+    value that merely looks numeric (`"3"` -> int) is NOT a list, so it stays a single string. (Known narrow
+    edge: a SINGLE-select whose option `value` attribute is itself a JSON array literal — e.g. `'["x"]'` —
+    would be decoded as a multi-select set; option values are effectively never JSON arrays in real HTML, so
+    this is an accepted residual rather than a flag on every step.)"""
+    raw = text or ""
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return raw
+    return parsed if isinstance(parsed, list) else raw
+
+
 async def _replay_step(
     session: BrowserSession,
     step: CachedStep,
@@ -812,7 +829,7 @@ async def _replay_step(
                         note = f"{type(exc).__name__}"
             return await _maybe_heal(session, step, provider, tr, goal, note)
 
-        if step.action in ("click", "type") and step.locator is not None:
+        if step.action in ("click", "type", "select") and step.locator is not None:
             with tr.measure("resolve"):
                 # unique=True: never silently bind the first of several ambiguous matches — that could
                 # click/type the WRONG element and return wrong data. The neighbor anchor disambiguates
@@ -829,6 +846,25 @@ async def _replay_step(
                     try:
                         if step.action == "click":
                             await loc.click(timeout=settings.action_timeout_ms)
+                        elif step.action == "select":  # recorder: re-select the recorded option(s) by value
+                            vals = _select_values(step.text)
+                            if step.mutating:
+                                # A submitting/posting <select> (onchange="form.submit()" / fetch-POST) fires
+                                # its write ASYNCHRONOUSLY — like the refless press, select_option returns
+                                # before the request leaves. Await the in-flight write so the Idempotency-Key
+                                # set by the gate is still on the context when the POST is issued (else the
+                                # `finally` clears it first and a retried run could double-submit). Tolerant of
+                                # the no-write case (a pure client-side onchange).
+                                try:
+                                    async with page.expect_request(
+                                        lambda r: is_write_request(r.method, r.url),
+                                        timeout=settings.action_timeout_ms,
+                                    ):
+                                        await loc.select_option(vals, timeout=settings.action_timeout_ms)
+                                except PlaywrightTimeoutError:
+                                    pass
+                            else:
+                                await loc.select_option(vals, timeout=settings.action_timeout_ms)
                         else:
                             await loc.fill(step.text or "", timeout=settings.action_timeout_ms)
                         return True, "", False

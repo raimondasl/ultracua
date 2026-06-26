@@ -118,10 +118,17 @@ class BrowserSession:
             await page.click(self._sel(action.ref))
         elif a == "type":
             await page.fill(self._sel(action.ref), action.text or "")
+        elif a == "select":  # recorder: choose an <option> by value
+            await page.select_option(self._sel(action.ref), action.text or "")
         elif a == "press":
             await page.keyboard.press(action.text or "Enter")
         elif a == "scroll":
-            await page.mouse.wheel(0, 600)
+            # A recorded scroll carries the absolute Y it settled at (deterministic viewport restore);
+            # the agent/vision tier emits a textless scroll -> the legacy fixed wheel-down.
+            if action.text and action.text.lstrip("-").isdigit():
+                await page.evaluate("(y) => window.scrollTo(0, y)", int(action.text))
+            else:
+                await page.mouse.wheel(0, 600)
         elif a == "navigate":
             await self.goto(action.text or "about:blank")
         elif a == "click_xy":  # vision tier: click pixel coordinates
