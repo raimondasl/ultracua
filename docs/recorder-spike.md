@@ -115,11 +115,12 @@ the lever caveat in the Verdict.
    shown-safe):** cross-origin / SSO recording, keyboard shortcuts / non-Enter keys, **hover/mouseover
    menus**, **right-click / context menus**, **drag**, **post-click dynamic content**, file upload, date
    pickers, multi-tab, shadow DOM / iframes, and the label→input synthetic-click double-fire across browsers.
-4. **Locator quality** *(small, but a correctness risk)*. The spike inlines `role/name/css` and sets
-   `anchor=null`; this `specOf`/`cssPath` is a hand-rolled near-duplicate of `DESCRIBE_JS`. If the two drift,
-   recorded specs and learn-path specs resolve **differently** — undermining the "same artifact" claim. The
-   full build must share **one** `specOf` between `describe()` and the capture script (so recorded steps also
-   get the neighbor-anchor), not just for DRY but for resolution parity.
+4. ✅ **Locator quality** *(small, correctness — BUILT)*. The capture script no longer hand-rolls
+   `specOf`/`cssPath`: it imports the **one** `_SPECOF_JS` that `DESCRIBE_JS` uses on the learn path
+   (`locators.py`), so a recorded step resolves **identically** to a learned one (resolution parity by
+   construction) AND now carries the **neighbor anchor** it used to set `null` — a recorded same-role+name
+   control disambiguates by its section/row on replay. Covered by
+   `tests/test_recorder_fidelity.py::test_recorded_step_carries_the_neighbor_anchor`.
 5. **Verification** *(small)*. A recorded flow should pass **verify-by-replay** before it's trusted
    (re-run it 0-LLM on a fresh session; cache only if it reproduces) — the same gate the learn path uses.
 6. **Product surface** *(medium)*. A `flow record` CLI that opens a **headed** browser, the human performs
@@ -132,7 +133,7 @@ the lever caveat in the Verdict.
 |---|---|---|
 | ✅ **MiniWoB ceiling validation (was GATING)** | done | **DONE + same-seed contrast measured** — recorder **9/9** garbled-label instances 0-LLM, id-free (role+name+css), gated in CI; vs **LLM authoring 4/9** (`--provider anthropic`, N=1) — the LLM misses every multi-target selection. |
 | ✅ **Capture core (nav handshake + select/press/scroll)** | done | sessionStorage store drained post-navigation (no fixed timeout); `select`/`press`/`scroll` captured + replayed, tested key-less. Deferred: shadow/iframe, hover/drag, non-Enter keys |
-| `describe()` reuse + verify-by-replay | S | share **one** `specOf` (resolution parity); gate on reproduce |
+| ✅ **`describe()` reuse** | done | capture imports the **one** `_SPECOF_JS` `describe()` uses — resolution parity + recorded steps gain the neighbor anchor; tested key-less. (Verify-by-replay already gates read flows.) |
 | Intent (post-hoc LLM caption) | S | one off-replay-path call; must run *before* `classify_mutation` |
 | ✅ **Write capture + gate integration** | done | trust-critical — `mutation_context` + `scope_fingerprint` captured inline (shared `hash_scope` parity); declared writes routed via approval+gate+idempotency; fail-closed guard; adversarial-reviewed |
 | `flow record` CLI + review/approve UX | M | headed browser, stop signal, inspect (`--confirm-*` now declares a write) |
@@ -144,8 +145,8 @@ spike — and the lever is now measured, not just argued.**
 
 Proceed. The gating MiniWoB ceiling validation is **done** (lever measured), the `flow record` CLI shipped,
 **write capture has landed** (§2: declared writes replay gated + approval-gated + idempotency-keyed,
-fail-closed; adversarial-reviewed), and **capture fidelity is hardened** (§3: nav handshake via a
-sessionStorage store drained post-navigation, plus `select`/`press`/`scroll`, tested key-less). Remaining
-build order: `describe` reuse (share one `specOf` for resolution parity + neighbor-anchor on recorded steps)
-→ intent caption (one post-hoc LLM pass, before `classify_mutation`) → deferred capture (shadow/iframe,
-hover/drag, multi-tab).
+fail-closed; adversarial-reviewed), **capture fidelity is hardened** (§3: nav handshake via a sessionStorage
+store drained post-navigation, plus `select`/`press`/`scroll`, tested key-less), and **`describe()` reuse is
+done** (§4: capture shares the one `_SPECOF_JS` for resolution parity + neighbor-anchor on recorded steps).
+Remaining build order: **intent caption** (one post-hoc LLM pass, before `classify_mutation`) → deferred
+capture (shadow/iframe, hover/drag, multi-tab).

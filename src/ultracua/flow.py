@@ -841,32 +841,37 @@ async def _replay_step(
                     session, step, provider, tr, goal, "locator unresolved or ambiguous (drift)"
                 )
             note = ""
+
+            async def _actuate() -> None:
+                if step.action == "click":
+                    await loc.click(timeout=settings.action_timeout_ms)
+                elif step.action == "select":  # recorder: re-select the recorded option(s) by value
+                    await loc.select_option(_select_values(step.text), timeout=settings.action_timeout_ms)
+                else:
+                    await loc.fill(step.text or "", timeout=settings.action_timeout_ms)
+
             async with governor.gate(origin):
                 with tr.measure("act"):
                     try:
-                        if step.action == "click":
-                            await loc.click(timeout=settings.action_timeout_ms)
-                        elif step.action == "select":  # recorder: re-select the recorded option(s) by value
-                            vals = _select_values(step.text)
-                            if step.mutating:
-                                # A submitting/posting <select> (onchange="form.submit()" / fetch-POST) fires
-                                # its write ASYNCHRONOUSLY — like the refless press, select_option returns
-                                # before the request leaves. Await the in-flight write so the Idempotency-Key
-                                # set by the gate is still on the context when the POST is issued (else the
-                                # `finally` clears it first and a retried run could double-submit). Tolerant of
-                                # the no-write case (a pure client-side onchange).
-                                try:
-                                    async with page.expect_request(
-                                        lambda r: is_write_request(r.method, r.url),
-                                        timeout=settings.action_timeout_ms,
-                                    ):
-                                        await loc.select_option(vals, timeout=settings.action_timeout_ms)
-                                except PlaywrightTimeoutError:
-                                    pass
-                            else:
-                                await loc.select_option(vals, timeout=settings.action_timeout_ms)
+                        if step.mutating:
+                            # A mutating click/type/select can fire its write ASYNCHRONOUSLY — an
+                            # onchange/oninput autosave fetch-POST, or a <select onchange=form.submit()> —
+                            # returning before the request leaves. Await the in-flight write so the
+                            # Idempotency-Key the gate set is still on the context when the POST is issued
+                            # (else the `finally` clears it first and a retried run could double-submit).
+                            # Tolerant of the no-write case (a pure client-side handler): the header was live
+                            # for the whole act, so nothing is lost. (A form-submit click also auto-waits its
+                            # navigation, so this only ever ADDS safety.)
+                            try:
+                                async with page.expect_request(
+                                    lambda r: is_write_request(r.method, r.url),
+                                    timeout=settings.action_timeout_ms,
+                                ):
+                                    await _actuate()
+                            except PlaywrightTimeoutError:
+                                pass
                         else:
-                            await loc.fill(step.text or "", timeout=settings.action_timeout_ms)
+                            await _actuate()
                         return True, "", False
                     except Exception as exc:  # noqa: BLE001
                         note = f"act failed: {type(exc).__name__}"

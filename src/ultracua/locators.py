@@ -32,7 +32,7 @@ KNOWN_ROLES = {
 }
 
 # Landmark/section containers used to scope a neighbor-anchored disambiguation (must mirror the `LM`
-# list in DESCRIBE_JS so capture and resolve agree on what counts as a "section/row").
+# list in `_SPECOF_JS` so capture and resolve agree on what counts as a "section/row").
 _LANDMARKS = ("form,fieldset,section,article,aside,nav,dialog,"
               "[role=region],[role=group],[role=form],li,tr,[role=listitem]")
 
@@ -66,13 +66,14 @@ class LocatorSpec(BaseModel):
     anchor_source: Optional[str] = None
 
 
-# Runs in the page. Reuses snapshot.py's SHARED role/accessible-name derivation (so the captured name
-# matches what learning saw and what get_by_role resolves) and adds a short css path.
-DESCRIBE_JS = r"""
-(ref) => {
-  const el = document.querySelector('[data-ultracua-ref="' + ref + '"]');
-  if (!el) return null;
-""" + _ROLEOF_JS + _ACCNAME_JS + r"""
+# Runs in the page. Builds a LocatorSpec from a live element `el`, reusing snapshot.py's SHARED
+# role/accessible-name derivation (so the captured name matches what learning saw and what get_by_role
+# resolves), a short css path, and the neighbor anchor. ASSUMES `roleOf`/`nameOf` are already defined in
+# scope (i.e. `_ROLEOF_JS + _ACCNAME_JS` is concatenated before it). Factored out of DESCRIBE_JS so the
+# RECORDER (recorder.py) builds a recorded step's spec with the IDENTICAL css path + neighbor anchor as the
+# learn path — resolution PARITY by construction (a recorded spec resolves exactly as a learned one would),
+# and recorded steps gain the drift-resilient neighbor anchor they previously lacked.
+_SPECOF_JS = r"""
   const cssPath = (e) => {
     const parts = [];
     while (e && e.nodeType === 1 && parts.length < 5) {
@@ -94,36 +95,47 @@ DESCRIBE_JS = r"""
   // The SOURCE travels with the text so resolve() can match cleanly anchors (label/heading) PRECISELY and
   // reserve the loose whole-subtree substring for row text (which has no cleaner signal).
   const LM = 'form,fieldset,section,article,aside,nav,dialog,[role=region],[role=group],[role=form],li,tr,[role=listitem]';
-  const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+  const _ucnorm = (s) => (s || '').replace(/\s+/g, ' ').trim();
   const anchorOf = (e) => {
     let c = e.closest(LM), hops = 0;
     while (c && hops < 4) {
-      const al = norm(c.getAttribute && c.getAttribute('aria-label'));
+      const al = _ucnorm(c.getAttribute && c.getAttribute('aria-label'));
       if (al) return { text: al.slice(0, 60), source: 'label' };
       const h = c.querySelector('h1,h2,h3,h4,h5,h6,legend,caption,summary,[role=heading]');
-      if (h) { const t = norm(h.innerText || h.textContent); if (t) return { text: t.slice(0, 60), source: 'heading' }; }
+      if (h) { const t = _ucnorm(h.innerText || h.textContent); if (t) return { text: t.slice(0, 60), source: 'heading' }; }
       const role = c.getAttribute && c.getAttribute('role');
       if (/^(li|tr)$/.test(c.tagName.toLowerCase()) || role === 'listitem') {
-        const t = norm(c.innerText || c.textContent); if (t) return { text: t.slice(0, 60), source: 'row' };
+        const t = _ucnorm(c.innerText || c.textContent); if (t) return { text: t.slice(0, 60), source: 'row' };
       }
       c = c.parentElement ? c.parentElement.closest(LM) : null;
       hops++;
     }
     return null;
   };
-  const anchor = anchorOf(el);
-  return {
-    role: roleOf(el),
-    name: nameOf(el),
-    tag: el.tagName.toLowerCase(),
-    elem_id: el.id || null,
-    testid: el.getAttribute('data-testid'),
-    placeholder: el.getAttribute('placeholder'),
-    text: (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80),
-    css: cssPath(el),
-    anchor: anchor ? anchor.text : null,
-    anchor_source: anchor ? anchor.source : null,
+  const specOf = (el) => {
+    const anchor = anchorOf(el);
+    return {
+      role: roleOf(el),
+      name: nameOf(el),
+      tag: el.tagName.toLowerCase(),
+      elem_id: el.id || null,
+      testid: el.getAttribute('data-testid'),
+      placeholder: el.getAttribute('placeholder'),
+      text: (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80),
+      css: cssPath(el),
+      anchor: anchor ? anchor.text : null,
+      anchor_source: anchor ? anchor.source : null,
+    };
   };
+"""
+
+# Runs in the page. Looks up the `data-ultracua-ref`-tagged element and returns its shared `specOf`.
+DESCRIBE_JS = r"""
+(ref) => {
+  const el = document.querySelector('[data-ultracua-ref="' + ref + '"]');
+  if (!el) return null;
+""" + _ROLEOF_JS + _ACCNAME_JS + _SPECOF_JS + r"""
+  return specOf(el);
 }
 """
 
