@@ -70,6 +70,16 @@ class Settings:
     # land just after verify returns). Generous on purpose — a missed write means a double-submit on
     # re-author, far worse than a wasted best-of-N re-sample. See `flow._author_steps`.
     write_window_ms: int = int(os.getenv("ULTRACUA_WRITE_WINDOW_MS", "2000"))
+    # Replay write-settle bound: how long the mutation gate holds the Idempotency-Key on the context AFTER a
+    # mutating actuation, awaiting the in-flight write (page.expect_request) before the `finally` clears it.
+    # A click/select/press-triggered write fires near-immediately (synchronous / microtask / short timer), so
+    # this is kept SHORT: a mutating step that fires NO write (a preventDefault'd submit, a client-only button)
+    # then waits only this long, NOT the full action_timeout_ms (a multi-second stall on every no-write
+    # mutating step). The replay code waits min(action_timeout_ms, write_settle_ms), so this never exceeds the
+    # action timeout. Raise it if a flow's write is dispatched on a longer timer/debounce. CLAMPED to >=1ms:
+    # Playwright treats an expect_request timeout of exactly 0 as "wait forever", so 0/negative (a tuner trying
+    # to "disable" the wait) would HANG a no-write mutating step — the floor degrades that to ~immediate instead.
+    write_settle_ms: int = max(1, int(os.getenv("ULTRACUA_WRITE_SETTLE_MS", "1000")))
     # Max flows run concurrently by run_many (as separate contexts in one browser).
     concurrency: int = int(os.getenv("ULTRACUA_CONCURRENCY", "4"))
     # Root for large/working data kept off the system drive (benchmark downloads, the

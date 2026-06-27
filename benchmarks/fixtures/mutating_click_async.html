@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ultracua fixture — Deferred (AJAX) formless click-submit</title>
+  </head>
+  <body>
+    <h1>Cart</h1>
+    <!-- A FORMLESS mutating click (no <form>) whose write is dispatched ASYNCHRONOUSLY: the click handler
+         defers the POST by a tick (setTimeout) before fetch()ing, so the network write leaves the browser
+         AFTER loc.click() has already returned. The mutating-click replay gate must HOLD the idempotency
+         header until the in-flight write fires — exactly the press deferred case (mutating_press_async.html),
+         but with a click handler as the trigger. The button is keyword-mutating ("Place order"), so the
+         classifier gates it without any <form>. (The recorder REFUSES a deferred-click write at capture time;
+         this is the LEARNED-flow path, hence learned via ScriptedProvider in the test.) -->
+    <section id="checkout">
+      <button id="order">Place order</button>
+    </section>
+    <p id="s">cart</p>
+    <script>
+      document.getElementById("order").addEventListener("click", () => {
+        // Defer the write a full tick so the POST is initiated only after loc.click() returns.
+        setTimeout(() => {
+          fetch("https://api.example.test/order", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ item: "widget" }),
+          }).then(() => {
+            document.getElementById("s").textContent = "ordered";
+          });
+        }, 50);
+      });
+    </script>
+  </body>
+</html>
