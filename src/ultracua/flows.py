@@ -1041,7 +1041,7 @@ async def record(
     cache = cache or _default_cache()
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     declared_write = spec.mutate is not None
-    flow, wire_write, crossed_origin = await record_demo(
+    flow, wire_write, crossed_origin, unattributed_writes = await record_demo(
         spec.start_url, demo, goal=spec.goal, cache=cache, scope=spec.scope, headless=headless,
         storage_state=spec.storage_state, extra_headers=spec.headers,  # demo in the SAME context as verify
         mutate=declared_write,  # gate the demonstrated write step(s) at capture time
@@ -1090,25 +1090,33 @@ async def record(
                                 is_write=True, steps=list(flow.steps),
                                 note="a write flow needs a confirm check — set mutate.confirm_selector / "
                                      "confirm_text_contains / confirm_url_contains.")
-        # Fail-closed invariant guard: a recorded write must NEVER be cached UNGATED. Two ways that could
-        # slip through, both refused here:
+        # Fail-closed invariant guard: a recorded write must NEVER be cached UNGATED. Three ways that could
+        # slip through, all refused here:
         #   - a mutating step with no precondition (empty precond_scope; the recorder never sets a whole-page
-        #     precond_fingerprint, so the replay gate would be a no-op and the step fires blind / under drift); or
-        #   - a write provably fired ON THE WIRE but NOTHING could be gated (the last-click fallback couldn't
-        #     capture a scope), so we can't guarantee the write replays through the gate.
-        # record_demo scopes every mutating click of a declared write, so these only trip when a scope
-        # genuinely couldn't be captured (detached node / JS error) — refuse rather than cache an un-gateable
-        # write. (A GET-/sendBeacon-write with NO wire signal and no mutating step is the acknowledged
-        # undetectable residual: it's cached approval-gated — the human-in-the-loop gate is its safety.)
+        #     precond_fingerprint, so the replay gate would be a no-op and the step fires blind / under drift);
+        #   - `unattributed_writes` > 0: a genuine wire write (fetch/XHR/sendBeacon) that could be tied to NO
+        #     single commit — any DEFERRED write (timer / awaited round-trip / load-or-interval handler, whose
+        #     cause isn't provable in-page), a nested synthetic commit's turn, or one orphaned by a cross-origin
+        #     hop — so it would replay ungated on whichever step re-triggers it (a load-armed write even fires
+        #     on page load, outside any step's gate). Checked PER WRITE, independent of whether OTHER steps are
+        #     gated (the masking class the old all-or-nothing check let through: one unrelated gated step
+        #     disarmed the refusal); or
+        #   - a write provably fired ON THE WIRE but NOTHING could be gated at all (belt-and-suspenders for a
+        #     write with no marker — e.g. a web-worker fetch the init-script can't instrument).
+        # Only a write fired SYNCHRONOUSLY from its own single action is gated; a refusal here means a write
+        # couldn't be tied to one action — re-record so each write fires directly from a single action. (A
+        # GET-write with NO wire signal and no mutating step is the acknowledged undetectable residual: cached
+        # approval-gated — the human-in-the-loop gate is its safety.)
         gated = [s for s in flow.steps if s.mutating and s.precond_scope]
         ungated = [s for s in flow.steps if s.mutating and not s.precond_scope]
-        if ungated or (wire_write and not gated):
+        if ungated or unattributed_writes or (wire_write and not gated):
             cache.delete(key)
             return RecordResult(spec, cached=False, reproduced=False, performed_write=wire_write,
                                 is_write=True, steps=list(flow.steps),
-                                note="a demonstrated WRITE could not be gated (its precondition wasn't "
-                                     "captured) — not cached, to never replay a write ungated. Re-record the "
-                                     "demonstration.")
+                                note="a demonstrated WRITE could not be tied to a single commit (a write fired "
+                                     "from a nested/forwarded click, or was deferred past another action, or "
+                                     "its precondition wasn't captured) — not cached, to never replay a write "
+                                     "ungated. Re-record so each write fires directly from one action.")
         return RecordResult(spec, cached=True, reproduced=False, performed_write=wire_write, is_write=True,
                             steps=list(flow.steps), note="")
 

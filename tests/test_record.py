@@ -265,9 +265,9 @@ async def test_record_write_flow_formless_commit_refuses_under_drift(tmp_path) -
 
 # A SELECT-driven write: an onchange handler fires a POST (fetch). `classify_mutation` never flags a select,
 # so without explicit select write-gating this would replay UNGATED (the adversarial review's C1/H4). A
-# DECLARED write must capture the select as a GATED mutating step (via the gate-all wire-write fallback,
-# since a formless select has no form method, so every scoped actuated step is gated when a write fired and
-# no commit was classified), idempotency-keyed, refusing under section drift.
+# DECLARED write must capture the select as a GATED mutating step (via PER-WRITE attribution — the fetch
+# marker ties the POST to the select that was actuated when it fired, since a formless select has no form
+# method), idempotency-keyed, refusing under section drift.
 def _serve_select_write(counter: dict, drift: bool = False):
     class _H(http.server.BaseHTTPRequestHandler):
         def log_message(self, *a) -> None:
@@ -353,82 +353,6 @@ async def test_record_write_flow_select_refuses_under_drift(tmp_path) -> None:
         httpd.server_close()
 
 
-# A TYPE-driven write: an input autosaves (fires a POST on `change`). `classify_mutation` never flags a
-# `type`, and there is ALSO a benign (non-writing) button click in the demo. The gate-all fallback must gate
-# the TYPE (the real write) — not just the benign click — or the autosave would replay UNGATED (the
-# describe-reuse review's H1). Exercises the MULTI-actuation gate-all path.
-def _serve_type_autosave_write(counter: dict, drift: bool = False):
-    class _H(http.server.BaseHTTPRequestHandler):
-        def log_message(self, *a) -> None:
-            pass
-
-        def _send(self, body: str) -> None:
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html")
-            self.end_headers()
-            self.wfile.write(body.encode())
-
-        def do_GET(self) -> None:  # noqa: N802
-            counter["gets"] = counter.get("gets", 0) + 1
-            extra = "<button>extra</button>" if (drift and counter["gets"] > 1) else ""
-            # Autosave on `input` (NOT `change`): replay actuates a `type` via Playwright's fill(), which
-            # fires `input` but not `change`, so an input-triggered autosave re-fires on replay (a
-            # change/blur-only autosave would not — a separate replay-fidelity limitation).
-            self._send(
-                f"<h1>Profile</h1>{extra}<button id=tab>Details</button>"
-                "<input id=name aria-label='name'><div id=out></div>"
-                "<script>document.getElementById('tab').addEventListener('click',function(){});"  # benign
-                "document.getElementById('name').addEventListener('input',function(){"
-                " fetch('/save',{method:'POST'}).then(r=>r.text()).then(t=>{"
-                " document.getElementById('out').textContent=t;});});</script>")
-
-        def do_POST(self) -> None:  # noqa: N802
-            counter["saves"] = counter.get("saves", 0) + 1
-            counter["idem"] = self.headers.get("Idempotency-Key")
-            self._send("Saved")
-
-    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
-
-
-async def _type_autosave_demo(page) -> None:
-    await page.get_by_role("button", name="Details").click()   # a BENIGN scoped click (no write)
-    await page.fill("#name", "Ada")
-    await page.locator("#name").blur()                          # change -> autosave POST (the write)
-    await page.get_by_text("Saved").wait_for()
-
-
-async def test_record_write_flow_gates_a_type_autosave(tmp_path) -> None:
-    counter: dict = {}
-    httpd, base = _serve_type_autosave_write(counter)
-    try:
-        cache = FlowCache(root=tmp_path)
-        spec = FlowSpec(name="autosave", start_url=f"{base}/", goal="save the name",
-                        mutate=MutateSpec(confirm_text_contains="Saved"))
-        res = await record(spec, demo=_type_autosave_demo, headless=True, cache=cache)
-        assert res.is_write is True and res.cached is True and res.performed_write is True
-        assert counter["saves"] == 1                            # saved once during the demo
-        # THE H1 HOLE, CLOSED: the TYPE (the real write) is a gated mutating step — not left ungated while
-        # only the benign click is gated.
-        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
-        typed = [s for s in flow.steps if s.action == "type"]
-        assert len(typed) == 1 and typed[0].mutating and typed[0].precond_scope
-        # Documented OVER-GATE (gate-all): the benign Details click is gated too — the safe direction (a
-        # superfluous drift check on a non-writing step, never an ungated write). It actuates once regardless.
-        clicks = [s for s in flow.steps if s.action == "click"]
-        assert len(clicks) == 1 and clicks[0].mutating
-
-        approve(spec, cache=cache)
-        result = await replay(spec, cache=cache)
-        assert result == {"status": "confirmed", "data": None}
-        assert counter["saves"] == 2                            # exactly one more — gated, no double-save
-        assert (counter.get("idem") or "").startswith("uca-")   # the autosave POST carried an Idempotency-Key
-    finally:
-        httpd.shutdown()
-        httpd.server_close()
-
-
 # A <select> inside a REAL <form method=post> that submits on change: here `classify_mutation` still says
 # read, but the form METHOD is visible to the inline override (recorder._step_from_event), so the select is
 # gated WITHOUT needing the wire-watcher fallback (the C1 form_method-override branch).
@@ -491,9 +415,584 @@ async def test_record_write_flow_gates_a_form_submitting_select(tmp_path) -> Non
         httpd.server_close()
 
 
-# MASKING GUARD: a benign GET-form submit is classified mutating (via the override) but fires NO counted
-# write, so it must NOT offset the wire-write tally and let a separate formless POST cache UNGATED. (The
-# describe-reuse review's write-count masking finding.)
+# THE MASKING CLASS, CLOSED (per-write attribution). Two commits in one demo: (1) a SUBMIT button inside a
+# POST <form> whose native submit is SUPPRESSED (preventDefault) so it fires NO write, and (2) a SEPARATE
+# formless <button type=button> that fetch-POSTs — the real write. The suppressed submit is form-classified
+# as mutating (harmless — gating a non-writing submit only adds a drift check), which under the OLD
+# all-or-nothing fallback (gated behind `not any(mutating)`) suppressed attribution of the formless POST
+# entirely, leaving it UNGATED / double-submittable on replay. Per-write attribution ties the POST's marker
+# to the formless button's seq and gates EXACTLY that step — independently of the already-mutating submit.
+def _serve_suppressed_submit_plus_formless(counter: dict, drift: bool = False):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def _send(self, body: str, code: int = 200) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.split("?")[0] == "/":
+                counter["gets"] = counter.get("gets", 0) + 1
+                # drift grows the FORMLESS button's section on replay so its scope fingerprint diverges.
+                extra = "<button type=button>noise</button>" if (drift and counter["gets"] > 1) else ""
+                self._send(
+                    "<h1>Account</h1>"
+                    "<form action='/noop' method='post'><button>Validate</button></form>"
+                    f"<section id='savesec'>{extra}<button type=button id='save'>Save</button></section>"
+                    "<div id=out></div>"
+                    "<script>"
+                    " document.querySelector('form').addEventListener('submit',"
+                    "   function(e){ e.preventDefault(); });"          # the submit fires NO write
+                    " document.getElementById('save').addEventListener('click', function(){"
+                    "   fetch('/save',{method:'POST'}).then(r=>r.text())"
+                    "     .then(t=>{ document.getElementById('out').textContent=t; }); });"  # the REAL write
+                    "</script>")
+            else:
+                self._send("not found", 404)
+
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path.split("?")[0] == "/save":
+                counter["saves"] = counter.get("saves", 0) + 1     # the irreversible side effect
+                counter["idem"] = self.headers.get("Idempotency-Key")
+                self._send("SAVED-OK-777")                         # the confirm signal (ensures the POST landed)
+            else:                                                  # /noop is never hit (submit is suppressed)
+                counter["noop"] = counter.get("noop", 0) + 1
+                self._send("noop")
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def _suppressed_then_formless_demo(page) -> None:
+    await page.get_by_role("button", name="Validate").click()   # POST-form submit, preventDefault'd (no write)
+    await page.get_by_role("button", name="Save").click()       # formless fetch POST — the real write
+    await page.get_by_text("SAVED-OK-777").wait_for()           # let the POST land during the demo
+
+
+async def test_record_write_suppressed_submit_does_not_mask_a_formless_post(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_suppressed_submit_plus_formless(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="mask", start_url=f"{base}/", goal="validate then save",
+                        mutate=MutateSpec(confirm_text_contains="SAVED-OK-777"))
+        res = await record(spec, demo=_suppressed_then_formless_demo, headless=True, cache=cache)
+        assert res.is_write is True and res.cached is True and res.performed_write is True
+        assert counter["saves"] == 1                              # the demo saved exactly once
+        assert counter.get("noop") is None                       # the suppressed submit fired NO write
+
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        assert flow is not None
+        # THE FIX: the SEPARATE formless POST is gated on its OWN commit — not masked by the mutating submit.
+        save = [s for s in flow.steps if s.action == "click" and s.locator and s.locator.name == "Save"]
+        assert len(save) == 1 and save[0].mutating and save[0].precond_scope   # attributed + gated
+
+        approve(spec, cache=cache)
+        result = await replay(spec, cache=cache)
+        assert result == {"status": "confirmed", "data": None}
+        assert counter["saves"] == 2                              # exactly one more — gated, no double-submit
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_record_write_formless_post_refuses_under_section_drift(tmp_path) -> None:
+    # The masking-class fix must remain FAIL-LOUD: once the formless POST is gated on its own commit, a
+    # section drift on that commit refuses the write on replay (no blind re-fire).
+    counter: dict = {}
+    httpd, base = _serve_suppressed_submit_plus_formless(counter, drift=True)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="maskdrift", start_url=f"{base}/", goal="validate then save",
+                        mutate=MutateSpec(confirm_text_contains="SAVED-OK-777"))
+        res = await record(spec, demo=_suppressed_then_formless_demo, headless=True, cache=cache)
+        assert res.is_write is True and res.cached is True
+        assert counter["saves"] == 1
+        approve(spec, cache=cache)
+        with pytest.raises(FlowReplayError):                      # the Save section drifted -> gate refuses
+            await replay(spec, cache=cache)
+        assert counter["saves"] == 1                              # the formless write was NOT re-fired
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# DEFERRED WRITE -> FAIL LOUD. A write fired OUTSIDE its actuation's synchronous turn (a setTimeout/debounce
+# whose fetch lands only AFTER a later benign click) cannot be tied to the right commit by `__uclast` — the
+# in-page heuristic would mis-attribute it to the later benign click and cache the flow with the REAL commit
+# left ungated (the adversarial-review fail-open). `__uclast` is therefore valid only for the synchronous turn
+# (cleared on the next macrotask), so a deferred write reads null -> is UNATTRIBUTED -> `record` REFUSES the
+# whole flow rather than cache a write that would replay ungated. (Fail-loud is always safe; fail-open is the
+# bug class.)
+def _serve_deferred_write(counter: dict):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def _send(self, body: str, code: int = 200) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.split("?")[0] == "/":
+                self._send(
+                    "<h1>Editor</h1>"
+                    "<button type=button id='commit'>Commit</button>"
+                    "<button type=button id='next'>Next</button><div id=out></div>"
+                    "<script>"
+                    " document.getElementById('commit').addEventListener('click', function(){"
+                    "   setTimeout(function(){ fetch('/save',{method:'POST'}).then(r=>r.text())"
+                    "     .then(t=>{ document.getElementById('out').textContent=t; }); }, 120); });"
+                    " document.getElementById('next').addEventListener('click', function(){});"  # benign
+                    "</script>")
+            else:
+                self._send("not found", 404)
+
+        def do_POST(self) -> None:  # noqa: N802
+            counter["saves"] = counter.get("saves", 0) + 1
+            self._send("DEFERRED-SAVED")
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_record_write_deferred_write_outside_its_turn_is_refused(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_deferred_write(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="deferred", start_url=f"{base}/", goal="commit then move on",
+                        mutate=MutateSpec(confirm_text_contains="DEFERRED-SAVED"))
+
+        async def _demo(page) -> None:
+            await page.get_by_role("button", name="Commit").click()   # arms a write that fires 120ms LATER
+            await page.get_by_role("button", name="Next").click()     # a benign click in between
+            await page.get_by_text("DEFERRED-SAVED").wait_for()       # the deferred POST lands during the demo
+
+        res = await record(spec, demo=_demo, headless=True, cache=cache)
+        # The write fired outside Commit's turn (after Next), so it was UNATTRIBUTED -> the flow is REFUSED,
+        # NOT cached with the real commit ungated.
+        assert res.cached is False and "gated" in res.note
+        assert cache.get(flow_key(spec.goal, spec.start_url, spec.scope)) is None   # never cached
+        assert counter["saves"] == 1                                  # only the demo's own write; no replay
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# NESTED SYNTHETIC COMMIT -> FAIL LOUD. A single user click on a wrapper control whose handler dispatches a
+# nested click on a hidden control (`hidden.click()`) AND then fires a formless write: the nested click shares
+# the wrapper's synchronous turn, so the last-writer-wins __uclast can't tell which of the two commits issued
+# the write. Recording it under last-writer-wins would gate the (benign) nested commit and cache the wrapper's
+# real write UNGATED (the adversarial-review fail-open). The per-turn commit count (>1 in this turn) marks the
+# write UNATTRIBUTABLE -> `record` REFUSES rather than gate the wrong step.
+def _serve_nested_commit_write(counter: dict):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def _send(self, body: str, code: int = 200) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.split("?")[0] == "/":
+                self._send(
+                    "<h1>Wrapper</h1>"
+                    "<section id='secA'><button type=button id='alpha'>Alpha</button></section>"
+                    "<section id='secB'><button type=button id='beta'>Beta</button></section><div id=out></div>"
+                    "<script>"
+                    " document.getElementById('beta').addEventListener('click', function(){});"  # benign target
+                    " document.getElementById('alpha').addEventListener('click', function(){"
+                    "   document.getElementById('beta').click();"                # nested SYNTHETIC commit, same turn
+                    "   fetch('/save',{method:'POST'}).then(r=>r.text())"        # the REAL write, same turn
+                    "     .then(t=>{ document.getElementById('out').textContent=t; }); });"
+                    "</script>")
+            else:
+                self._send("not found", 404)
+
+        def do_POST(self) -> None:  # noqa: N802
+            counter["saves"] = counter.get("saves", 0) + 1
+            self._send("NESTED-SAVED")
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_record_write_nested_synthetic_commit_is_refused(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_nested_commit_write(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="nested", start_url=f"{base}/", goal="press the wrapper",
+                        mutate=MutateSpec(confirm_text_contains="NESTED-SAVED"))
+
+        async def _demo(page) -> None:
+            await page.get_by_role("button", name="Alpha").click()   # ONE gesture -> nested Beta click + write
+            await page.get_by_text("NESTED-SAVED").wait_for()
+
+        res = await record(spec, demo=_demo, headless=True, cache=cache)
+        # Two commits share the turn -> the write is unattributable -> REFUSED, not cached with Alpha ungated.
+        assert res.cached is False and "single" in res.note
+        assert cache.get(flow_key(spec.goal, spec.start_url, spec.scope)) is None
+        assert counter["saves"] == 1                                  # demo only; no cached flow -> no replay
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# AWAITED (deferred) write -> FAIL LOUD. A Save click whose handler does `fetch(prefetch).then(() => fetch(POST))`
+# — the write fires only after an awaited macrotask round-trip, in a LATER turn (__ucturn back to 0). The
+# in-page signal can't PROVE the deferred write's cause (a load-armed write would look identical), so it is
+# left UNATTRIBUTED and `record` REFUSES rather than risk gating the wrong step / caching an ungated write.
+# (Trading this validate-then-submit coverage for safety is deliberate: fail-loud, with re-record guidance.)
+def _serve_awaited_write(counter: dict):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def _send(self, body: str, code: int = 200) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def do_GET(self) -> None:  # noqa: N802
+            path = self.path.split("?")[0]
+            if path == "/":
+                self._send(
+                    "<h1>Save</h1><section id='sec'><button type=button id='save'>Save</button></section>"
+                    "<div id=out></div>"
+                    "<script>document.getElementById('save').addEventListener('click', function(){"
+                    "  fetch('/prefetch').then(function(){ return fetch('/save',{method:'POST'}); })"  # awaited
+                    "    .then(r=>r.text()).then(t=>{ document.getElementById('out').textContent=t; }); });</script>")
+            elif path == "/prefetch":
+                self._send("pre")                                     # a real GET round-trip (a later macrotask)
+            else:
+                self._send("not found", 404)
+
+        def do_POST(self) -> None:  # noqa: N802
+            counter["saves"] = counter.get("saves", 0) + 1
+            counter["idem"] = self.headers.get("Idempotency-Key")
+            self._send("ASYNC-SAVED")
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_record_write_awaited_deferred_write_is_refused(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_awaited_write(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="awaited", start_url=f"{base}/", goal="save after prefetch",
+                        mutate=MutateSpec(confirm_text_contains="ASYNC-SAVED"))
+
+        async def _demo(page) -> None:
+            await page.get_by_role("button", name="Save").click()
+            await page.get_by_text("ASYNC-SAVED").wait_for()          # the POST lands after the awaited GET
+
+        res = await record(spec, demo=_demo, headless=True, cache=cache)
+        # The write fires in a LATER turn (deferred) -> its cause isn't provable in-page -> REFUSED, fail loud.
+        assert res.cached is False and "single" in res.note
+        assert cache.get(flow_key(spec.goal, spec.start_url, spec.scope)) is None
+        assert counter["saves"] == 1                                  # demo only; no cached flow -> no replay
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# LOAD-ARMED write + ONE unrelated commit -> FAIL LOUD. The fail-open the deferred-attribution branch once
+# opened: a page arms a POST on LOAD (setTimeout) and the demo has exactly ONE benign click. If the deferred
+# write were attributed to that sole commit, the benign click would be gated while the load-armed write replays
+# UNGATED on every page load (outside any step's gate). It must be left unattributed -> `record` refuses.
+def _serve_load_armed_write(counter: dict):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def _send(self, body: str, code: int = 200) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.split("?")[0] == "/":
+                self._send(
+                    "<h1>Dashboard</h1><button type=button id='next'>Next</button><div id=out></div>"
+                    "<script>"
+                    " setTimeout(function(){ fetch('/save',{method:'POST'}).then(r=>r.text())"        # armed on LOAD
+                    "   .then(t=>{ document.getElementById('out').textContent=t; }); }, 120);"
+                    " document.getElementById('next').addEventListener('click', function(){});"       # benign
+                    "</script>")
+            else:
+                self._send("not found", 404)
+
+        def do_POST(self) -> None:  # noqa: N802
+            counter["saves"] = counter.get("saves", 0) + 1
+            self._send("LOAD-SAVED")
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_record_write_load_armed_write_with_single_commit_is_refused(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_load_armed_write(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="loadarmed", start_url=f"{base}/", goal="open the dashboard",
+                        mutate=MutateSpec(confirm_text_contains="LOAD-SAVED"))
+
+        async def _demo(page) -> None:
+            await page.get_by_role("button", name="Next").click()    # one benign, non-writing commit
+            await page.get_by_text("LOAD-SAVED").wait_for()          # the load-armed POST lands during the demo
+
+        res = await record(spec, demo=_demo, headless=True, cache=cache)
+        # The load-armed write must NOT be attributed to the sole benign click (that would cache it ungated).
+        assert res.cached is False and "single" in res.note
+        assert cache.get(flow_key(spec.goal, spec.start_url, spec.scope)) is None
+        assert counter["saves"] == 1                                  # demo only; not cached -> never re-fired
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# sendBeacon attribution: a click whose handler calls navigator.sendBeacon (the entry point Playwright surfaces
+# inconsistently — caught ONLY via the init-script marker, not page.on("request")). The beacon fires inside the
+# click's synchronous turn, so __uclast attributes it to that click, which is gated; under section drift the
+# gate refuses BEFORE the click, so the beacon is never re-fired.
+def _serve_beacon_write(counter: dict, drift: bool = False):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def _send(self, body: str, code: int = 200) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.split("?")[0] == "/":
+                counter["gets"] = counter.get("gets", 0) + 1
+                extra = "<button type=button>noise</button>" if (drift and counter["gets"] > 1) else ""
+                self._send(
+                    f"<h1>Survey</h1><section id='sec'>{extra}"
+                    "<button type=button id='track'>Track</button></section><div id=out></div>"
+                    "<script>document.getElementById('track').addEventListener('click', function(){"
+                    "  document.getElementById('out').textContent='BEACON-SENT';"  # confirm set synchronously
+                    "  navigator.sendBeacon('/save'); });</script>")
+            else:
+                self._send("not found", 404)
+
+        def do_POST(self) -> None:  # noqa: N802
+            counter["saves"] = counter.get("saves", 0) + 1
+            length = int(self.headers.get("Content-Length") or 0)
+            if length:
+                self.rfile.read(length)
+            self._send("ok")
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def _beacon_demo(page) -> None:
+    await page.get_by_role("button", name="Track").click()
+    await page.get_by_text("BEACON-SENT").wait_for()
+
+
+async def test_record_write_gates_a_sendbeacon(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_beacon_write(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="beacon", start_url=f"{base}/", goal="record the survey",
+                        mutate=MutateSpec(confirm_text_contains="BEACON-SENT"))
+        res = await record(spec, demo=_beacon_demo, headless=True, cache=cache)
+        assert res.is_write is True and res.cached is True
+        # The sendBeacon write is attributed to its click via the init-script marker and gated.
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        writes = [s for s in flow.steps if s.mutating]
+        assert len(writes) == 1 and writes[0].action == "click" and writes[0].precond_scope
+        approve(spec, cache=cache)
+        assert await replay(spec, cache=cache) == {"status": "confirmed", "data": None}
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_record_write_sendbeacon_refuses_under_drift(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_beacon_write(counter, drift=True)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="beacondrift", start_url=f"{base}/", goal="record the survey",
+                        mutate=MutateSpec(confirm_text_contains="BEACON-SENT"))
+        res = await record(spec, demo=_beacon_demo, headless=True, cache=cache)
+        assert res.is_write is True and res.cached is True
+        assert counter["saves"] == 1
+        approve(spec, cache=cache)
+        with pytest.raises(FlowReplayError):                          # the section drifted -> gate refuses
+            await replay(spec, cache=cache)
+        assert counter["saves"] == 1                                  # the beacon was NOT re-fired
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# XHR-driven write: a click whose handler issues XMLHttpRequest.open('POST')+send(). The send fires inside the
+# click's synchronous turn -> attributed to the click -> gated, idempotency-keyed, no double-submit on replay.
+def _serve_xhr_write(counter: dict):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def _send(self, body: str, code: int = 200) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.split("?")[0] == "/":
+                self._send(
+                    "<h1>Form</h1><section id='sec'><button type=button id='go'>Send</button></section>"
+                    "<div id=out></div>"
+                    "<script>document.getElementById('go').addEventListener('click', function(){"
+                    "  var x=new XMLHttpRequest(); x.open('POST','/save');"
+                    "  x.onload=function(){ document.getElementById('out').textContent=x.responseText; };"
+                    "  x.send(); });</script>")
+            else:
+                self._send("not found", 404)
+
+        def do_POST(self) -> None:  # noqa: N802
+            counter["saves"] = counter.get("saves", 0) + 1
+            counter["idem"] = self.headers.get("Idempotency-Key")
+            self._send("XHR-DONE")
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_record_write_gates_an_xhr_post(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_xhr_write(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="xhr", start_url=f"{base}/", goal="send via xhr",
+                        mutate=MutateSpec(confirm_text_contains="XHR-DONE"))
+
+        async def _demo(page) -> None:
+            await page.get_by_role("button", name="Send").click()
+            await page.get_by_text("XHR-DONE").wait_for()
+
+        res = await record(spec, demo=_demo, headless=True, cache=cache)
+        assert res.is_write is True and res.cached is True
+        assert counter["saves"] == 1
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        writes = [s for s in flow.steps if s.mutating]
+        assert len(writes) == 1 and writes[0].action == "click" and writes[0].precond_scope
+        approve(spec, cache=cache)
+        assert await replay(spec, cache=cache) == {"status": "confirmed", "data": None}
+        assert counter["saves"] == 2                                  # exactly one more — gated, no double-submit
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# TWO formless writes in ONE demo, each gated on its OWN commit with a DISTINCT precondition — the per-write
+# generalization of the masking fix (write A's gate cannot absorb write B's).
+def _serve_two_formless_writes(counter: dict):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def _send(self, body: str, code: int = 200) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.split("?")[0] == "/":
+                self._send(
+                    "<h1>Two</h1>"
+                    "<section id='secA'><button type=button id='a'>Alpha</button></section>"
+                    "<section id='secB'><button type=button id='b'>Beta</button></section><div id=out></div>"
+                    "<script>"
+                    " document.getElementById('a').addEventListener('click', function(){"
+                    "   fetch('/a',{method:'POST'}).then(r=>r.text()).then(t=>{document.getElementById('out').textContent=t;}); });"
+                    " document.getElementById('b').addEventListener('click', function(){"
+                    "   fetch('/b',{method:'POST'}).then(r=>r.text()).then(t=>{document.getElementById('out').textContent=t;}); });"
+                    "</script>")
+            else:
+                self._send("not found", 404)
+
+        def do_POST(self) -> None:  # noqa: N802
+            p = self.path.split("?")[0]
+            if p == "/a":
+                counter["a"] = counter.get("a", 0) + 1
+                self._send("A-OK")
+            elif p == "/b":
+                counter["b"] = counter.get("b", 0) + 1
+                self._send("B-OK")
+            else:
+                self._send("not found", 404)
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_record_write_two_formless_writes_each_gated_independently(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_two_formless_writes(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="twowrites", start_url=f"{base}/", goal="alpha then beta",
+                        mutate=MutateSpec(confirm_text_contains="B-OK"))
+
+        async def _demo(page) -> None:
+            await page.get_by_role("button", name="Alpha").click()
+            await page.get_by_text("A-OK").wait_for()
+            await page.get_by_role("button", name="Beta").click()
+            await page.get_by_text("B-OK").wait_for()
+
+        res = await record(spec, demo=_demo, headless=True, cache=cache)
+        assert res.is_write is True and res.cached is True
+        assert counter["a"] == 1 and counter["b"] == 1
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        writes = [s for s in flow.steps if s.mutating]
+        # BOTH clicks are gated, EACH on its own commit — and their preconditions DIFFER (distinct sections),
+        # so neither write's gate absorbed the other's.
+        assert len(writes) == 2 and all(w.action == "click" and w.precond_scope for w in writes)
+        names = sorted(w.locator.name for w in writes if w.locator)
+        assert names == ["Alpha", "Beta"]
+        assert writes[0].precond_scope != writes[1].precond_scope
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# MASKING GUARD (from the describe-reuse work): a benign GET-form submit is classified mutating (via the
+# override) but fires NO POST, so it must NOT mask a separate formless POST. Per-write attribution gates the
+# formless POST on its own marker; the GET-form submit is gated independently by the override. Both stay gated.
 def _serve_get_form_plus_post(counter: dict):
     class _H(http.server.BaseHTTPRequestHandler):
         def log_message(self, *a) -> None:
@@ -543,11 +1042,71 @@ async def test_record_write_flow_get_form_does_not_mask_a_formless_post(tmp_path
         res = await record(spec, demo=_save_then_search_demo, headless=True, cache=cache)
         assert res.is_write is True and res.cached is True
         assert counter["saves"] == 1
-        # THE MASKING HOLE, CLOSED: the formless POST "Save" is a GATED mutating step — the benign GET-form
-        # "Go" (classified mutating but firing no counted write) did NOT offset the write tally.
+        # THE MASKING HOLE, CLOSED: the formless POST "Save" is a GATED mutating step on its own marker — the
+        # benign GET-form "Go" did NOT mask it.
         flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
         save = [s for s in flow.steps if s.action == "click" and s.locator and s.locator.name == "Save"]
         assert len(save) == 1 and save[0].mutating and save[0].precond_scope
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# TYPE-driven autosave -> FAIL LOUD (supersedes the prior gate-all behaviour). An input autosaves (fires a POST
+# on `input`) and the demo also has a benign button click. A `type` is NOT a commit for per-write attribution
+# (COMMIT = click/press/select), so the autosave POST fires in a turn with no commit (__ucturn===0) -> it is
+# DEFERRED -> unattributed -> the flow is REFUSED. (The prior gate-all fallback OVER-GATED here — gating the
+# benign click + the type — but that same over-gating fails OPEN on a load-armed write; per-write attribution
+# refuses the ambiguous case instead. Re-record so the write fires directly from a single action.)
+def _serve_type_autosave_write(counter: dict, drift: bool = False):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def _send(self, body: str) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def do_GET(self) -> None:  # noqa: N802
+            counter["gets"] = counter.get("gets", 0) + 1
+            self._send(
+                "<h1>Profile</h1><button id=tab>Details</button>"
+                "<input id=name aria-label='name'><div id=out></div>"
+                "<script>document.getElementById('tab').addEventListener('click',function(){});"  # benign
+                "document.getElementById('name').addEventListener('input',function(){"
+                " fetch('/save',{method:'POST'}).then(r=>r.text()).then(t=>{"
+                " document.getElementById('out').textContent=t;});});</script>")
+
+        def do_POST(self) -> None:  # noqa: N802
+            counter["saves"] = counter.get("saves", 0) + 1
+            self._send("Saved")
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def _type_autosave_demo(page) -> None:
+    await page.get_by_role("button", name="Details").click()   # a BENIGN scoped click (no write)
+    await page.fill("#name", "Ada")                            # input -> autosave POST (the deferred write)
+    await page.get_by_text("Saved").wait_for()
+
+
+async def test_record_write_flow_type_autosave_is_refused(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_type_autosave_write(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="autosave", start_url=f"{base}/", goal="save the name",
+                        mutate=MutateSpec(confirm_text_contains="Saved"))
+        res = await record(spec, demo=_type_autosave_demo, headless=True, cache=cache)
+        # The autosave POST fires in a commitless turn (a `type` isn't a commit) -> unattributed -> REFUSED,
+        # never gating the benign Details click or caching the write ungated.
+        assert res.cached is False and "single" in res.note
+        assert cache.get(flow_key(spec.goal, spec.start_url, spec.scope)) is None
+        assert counter["saves"] == 1                            # demo only; not cached -> never re-fired
     finally:
         httpd.shutdown()
         httpd.server_close()

@@ -88,7 +88,7 @@ async def test_navigation_handshake_drops_no_step_across_a_page_boundary(tmp_pat
             await page.get_by_role("checkbox", name="beta").wait_for()
             await page.get_by_role("checkbox", name="beta").click()       # AFTER the navigation
 
-        flow, wrote, crossed = await record_demo(f"{base}/nav1", _demo, goal=goal, cache=cache, headless=True)
+        flow, wrote, crossed, _ = await record_demo(f"{base}/nav1", _demo, goal=goal, cache=cache, headless=True)
         assert wrote is False and crossed is False     # same-origin nav: nothing crossed, nothing dropped
         # all THREE steps survived — the pre-nav toggle, the navigating click, and the post-nav toggle.
         assert [s.action for s in flow.steps] == ["click", "click", "click"]
@@ -118,7 +118,7 @@ async def test_select_dropdown_is_captured_and_replays(tmp_path) -> None:
             await page.select_option("#s", "banana")  # a <select> change -> a `select` step
             await page.click("#show")
 
-        flow, _, _ = await record_demo(f"{base}/select", _demo, goal=goal, cache=cache, headless=True)
+        flow, _, _, _ = await record_demo(f"{base}/select", _demo, goal=goal, cache=cache, headless=True)
         assert [s.action for s in flow.steps] == ["select", "click"]
         sel = flow.steps[0]
         assert sel.action == "select" and sel.text == "banana"
@@ -147,7 +147,7 @@ async def test_multi_select_captures_the_full_set(tmp_path) -> None:
         async def _demo(page) -> None:
             await page.select_option("#ms", ["py", "go"])   # two options
 
-        flow, _, _ = await record_demo(f"{base}/multiselect", _demo, goal=goal, cache=cache, headless=True)
+        flow, _, _, _ = await record_demo(f"{base}/multiselect", _demo, goal=goal, cache=cache, headless=True)
         assert [s.action for s in flow.steps] == ["select"]
         assert flow.steps[0].text == '["py","go"]'          # the full set, JSON-encoded — not just "py"
 
@@ -177,7 +177,7 @@ async def test_enter_submit_is_captured_as_a_press_and_replays(tmp_path) -> None
             await page.fill("#q", "hello")            # sets the value (input only; no change without blur)
             await page.locator("#q").press("Enter")   # keydown Enter -> captures type("hello") THEN press
 
-        flow, wrote, _ = await record_demo(f"{base}/press", _demo, goal=goal, cache=cache, headless=True)
+        flow, wrote, _, _ = await record_demo(f"{base}/press", _demo, goal=goal, cache=cache, headless=True)
         assert wrote is False
         assert [s.action for s in flow.steps] == ["type", "press"]   # type recorded BEFORE press, no duplicate
         typed, pressed = flow.steps
@@ -212,7 +212,7 @@ async def test_enter_in_a_form_with_a_submit_button_is_not_double_recorded(tmp_p
             await page.locator("#q2").blur()          # a `type` step
             await page.locator("#q2").press("Enter")  # browser fires a click on "Search" — NOT a press
 
-        flow, _, _ = await record_demo(f"{base}/pressform", _demo, goal=goal, cache=cache, headless=True)
+        flow, _, _, _ = await record_demo(f"{base}/pressform", _demo, goal=goal, cache=cache, headless=True)
         assert [s.action for s in flow.steps] == ["type", "click"]   # exactly one submit, recorded as a click
         assert "press" not in [s.action for s in flow.steps]         # no double-submit on replay
         click = flow.steps[1]
@@ -234,7 +234,7 @@ async def test_scroll_is_captured_debounced_and_coalesced(tmp_path) -> None:
             await page.mouse.wheel(0, 800)
             await page.wait_for_timeout(200)   # -> a second; the two coalesce to ONE step (final Y)
 
-        flow, _, _ = await record_demo(f"{base}/scroll", _demo, goal=goal, cache=cache, headless=True)
+        flow, _, _, _ = await record_demo(f"{base}/scroll", _demo, goal=goal, cache=cache, headless=True)
         scrolls = [s for s in flow.steps if s.action == "scroll"]
         assert len(scrolls) == 1                       # consecutive scrolls coalesced to one
         assert int(scrolls[0].text) > 0                # captured the absolute Y it settled at
@@ -259,7 +259,7 @@ async def test_recorded_step_carries_the_neighbor_anchor(tmp_path) -> None:
             await (page.locator("section").filter(has_text="Shipping")
                    .get_by_role("button", name="Save").click())   # the SHIPPING Save (ambiguous by role+name)
 
-        flow, _, _ = await record_demo(f"{base}/anchored", _demo, goal=goal, cache=cache, headless=True)
+        flow, _, _, _ = await record_demo(f"{base}/anchored", _demo, goal=goal, cache=cache, headless=True)
         assert len(flow.steps) == 1
         loc = flow.steps[0].locator
         assert loc and loc.role == "button" and loc.name == "Save"
