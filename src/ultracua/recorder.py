@@ -41,41 +41,21 @@ from typing import Awaitable, Callable, Optional
 
 from .browser import BrowserSession
 from .cache import CachedFlow, CachedStep, FlowCache, flow_key
-from .locators import LocatorSpec
-from .safety import classify_mutation, is_write_request, origin_of
+from .locators import _SPECOF_JS, LocatorSpec
+from .safety import classify_mutation, is_write_request, NONIDEMPOTENT_METHODS, origin_of
 from .snapshot import _ACCNAME_JS, _MUTATION_CTX_JS, _ROLEOF_JS, SCOPE_JS, hash_scope
 
 # Runs in the page (injected before any page script, re-installed on every navigation). On each actuation it
-# computes a LocatorSpec INLINE (reusing the shared role/accessible-name derivation, so the captured name
-# matches what resolve() expects) and pushes the event onto a `sessionStorage` buffer. Writing to the store
-# is SYNCHRONOUS and survives same-origin navigation, so a navigating click's event is durable BEFORE the
-# page tears down — the Python side drains the store post-navigation and at the end (no fixed-timeout flush).
+# computes a LocatorSpec INLINE via the SHARED `specOf` (the very same one DESCRIBE_JS uses on the learn
+# path — imported from locators.py) so a recorded step resolves IDENTICALLY to a learned one AND gains the
+# drift-resilient neighbor anchor; it then pushes the event onto a `sessionStorage` buffer. Writing to the
+# store is SYNCHRONOUS and survives same-origin navigation, so a navigating click's event is durable BEFORE
+# the page tears down — the Python side drains the store post-navigation and at the end (no fixed-timeout
+# flush).
 _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in the TOP frame: a sub-frame's
                # sessionStorage queue is never drained (the drain runs on the main frame), so capturing there
                # would orphan events. (iframe/shadow capture is a documented deferred item.)
-               " if (window.__ucapt) return; window.__ucapt = 1;") + _ROLEOF_JS + _ACCNAME_JS + r"""
-  const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
-  const cssPath = (e) => {
-    const parts = [];
-    while (e && e.nodeType === 1 && parts.length < 5) {
-      if (e.id) { parts.unshift('#' + CSS.escape(e.id)); break; }
-      let part = e.tagName.toLowerCase();
-      const p = e.parentElement;
-      if (p) {
-        const sibs = Array.from(p.children).filter((c) => c.tagName === e.tagName);
-        if (sibs.length > 1) part += ':nth-of-type(' + (sibs.indexOf(e) + 1) + ')';
-      }
-      parts.unshift(part); e = e.parentElement;
-    }
-    return parts.join(' > ');
-  };
-  const specOf = (el) => ({
-    role: roleOf(el), name: nameOf(el), tag: el.tagName.toLowerCase(),
-    elem_id: el.id || null, testid: el.getAttribute('data-testid'),
-    placeholder: el.getAttribute('placeholder'),
-    text: norm(el.innerText || el.textContent).slice(0, 80),
-    css: cssPath(el), anchor: null, anchor_source: null,
-  });
+               " if (window.__ucapt) return; window.__ucapt = 1;") + _ROLEOF_JS + _ACCNAME_JS + _SPECOF_JS + r"""
   // The SAME write-signal probes the LEARN path uses (imported verbatim from snapshot.py), computed
   // INLINE on the target while it's present: `mutationCtx` -> {submit, form_method} (is it a form submit,
   // and with what HTTP method) and `scopeArray` -> the [role,name,tag] interactables of the target's
@@ -87,15 +67,13 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
                      '[role=checkbox],[role=radio],[role=tab],[role=menuitem],[role=combobox],' +
                      '[role=listbox],[role=option],[role=switch],[onclick]';
   // SYNCHRONOUS exfiltration: append to a sessionStorage queue (durable across same-origin navigation).
-  // The read+clear on the Python side is atomic in-page, so no event is lost between push and drain. Each
-  // event carries `ts` (Date.now) so the Python fallback gate can tie an undetected wire-write to the
-  // actuated step that CAUSALLY preceded it, not to an arbitrary trailing click.
+  // The read+clear on the Python side is atomic in-page, so no event is lost between push and drain.
   const KEY = '__ucbuf';
   const store = (action, el, value, ctx, scope) => {
     if (el && el.nodeType !== 1) return;
     try {
       const arr = JSON.parse(sessionStorage.getItem(KEY) || '[]');
-      arr.push({ action, spec: el ? specOf(el) : null, value, ctx, scope, ts: Date.now() });
+      arr.push({ action, spec: el ? specOf(el) : null, value, ctx, scope });
       sessionStorage.setItem(KEY, JSON.stringify(arr));
     } catch (e) {}
   };
@@ -135,7 +113,13 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
       // Suppress the `change` that an Enter-submit fires for a value we already captured on keydown (below),
       // so the field isn't typed twice.
       if (enterCaptured.has(el) && enterCaptured.get(el) === el.value) { enterCaptured.delete(el); return; }
-      store('type', el, el.value, null, null);  // checkbox/radio are captured by their click above
+      // A `change` can SUBMIT/POST too (an autosave-on-change input), i.e. a `type` can be a WRITE — so
+      // capture its ctx+scope inline, SYMMETRIC with the select branch, so the Python gate-all fallback can
+      // gate a type-driven write. (A type without a wire write stays non-mutating; the scope goes unused.)
+      let ctx = null, scope = null;
+      try { ctx = mutationCtx(el); } catch (e) {}
+      try { scope = scopeArray(el); } catch (e) {}
+      store('type', el, el.value, ctx, scope);  // checkbox/radio are captured by their click above
     }
   }, true);
   // Enter-submit on a TEXT input: the "type then Enter" pattern. We capture it ONLY when no synthetic
@@ -165,8 +149,9 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
     // BEFORE pressing Enter. (Enter fires keydown before the submit-triggered `change`, so without this the
     // cached order would be [press, type] and replay would submit an EMPTY field; for a formless input
     // `change` never fires at all, losing the value entirely.) Mark the element so the change listener
-    // above doesn't duplicate the type.
-    store('type', el, el.value, null, null);
+    // above doesn't duplicate the type. The type carries the SAME ctx+scope as the press, so if the type
+    // itself triggers a write the gate-all fallback can gate it.
+    store('type', el, el.value, ctx, scope);
     enterCaptured.set(el, el.value);
     store('press', el, 'Enter', ctx, scope);
   }, true);
@@ -195,13 +180,13 @@ def _step_from_event(ev: dict, *, write_flow: bool = False) -> CachedStep:
     intent = f"{action} {name}".strip()  # placeholder — real intents are an open question
     ctx = ev.get("ctx") or {}
     mutating = classify_mutation(action, intent, spec.name if spec else "", ctx)
-    # In a DECLARED write flow, gate any COMMIT the method-classifier treats as a read — a GET-form submit,
-    # an Enter-submit (`press`), or a SELECT that submits/posts on change (onchange="this.form.submit()" or
-    # a fetch-POST). `classify_mutation` never flags press/select on its own, so without these overrides a
-    # select- or Enter-driven write would replay UNGATED. The user has told us this flow writes, so its commit
-    # must replay through the mutation gate, not blind. (Closes the GET-/Enter-/select-write residual the
-    # engine's HTTP-method classifier can't see.)
-    if write_flow and action == "click" and ctx.get("submit"):
+    # In a DECLARED write flow, gate a COMMIT the method-classifier treats as a read — a GET-form submit (a
+    # write behind a GET). Require BOTH `submit` AND `form_method`, i.e. a real FORM submit: a bare formless
+    # <button> reports submit=true with no form_method, and force-gating it (a) over-gates a BENIGN formless
+    # button and (b) — worse — makes it `mutating`, which SHORT-CIRCUITS the wire-write fallback below and
+    # could leave the real (e.g. type-autosave) write ungated. A POST-form submit is already caught by
+    # `classify_mutation`; a formless write (bland-named button, autosave) is caught by the gate-all fallback.
+    if write_flow and action == "click" and ctx.get("submit") and ctx.get("form_method"):
         mutating = True
     if write_flow and action in ("press", "select") and ctx.get("form_method"):
         mutating = True
@@ -218,6 +203,25 @@ def _step_from_event(ev: dict, *, write_flow: bool = False) -> CachedStep:
     text = ev.get("value") if action in ("type", "select", "press", "scroll") else None
     return CachedStep(intent=intent, action=action, locator=spec, text=text,
                       mutating=mutating, precond_scope=precond_scope)
+
+
+def _fires_counted_write(ev: dict) -> bool:
+    """Does this event DEFINITELY fire a counted (non-idempotent) wire write — i.e. submit a POST/PUT/PATCH/
+    DELETE form? Used to tally how many observed wire writes the classifier already accounts for. Counts ONLY
+    the canonical cases that are sure to issue the write: a submit CLICK in a non-idempotent form, and an
+    Enter PRESS in one (a captured press means the form had no submit button, so Enter submits it). A GET-form
+    submit is excluded (it fires no counted write, so it must NOT offset the write tally and mask a real POST);
+    a `<select>` is excluded (we can't tell if onchange submits). Deliberately UNDER-counts vs the true write
+    so the fallback gate over-gates rather than masks. RESIDUAL (exotic, pre-existing): a submit click whose
+    native submit is SUPPRESSED — JS `preventDefault`, an HTML5-validation block — fires no write yet still
+    counts here, so it can COINCIDENTALLY offset a separate unaccounted formless POST (accounted == count) and
+    leave that POST ungated. Closing it needs per-write attribution (instrument fetch/XHR), a separate effort;
+    the human approval gate is the backstop. The realistic masker (a GET-form search + a formless save) is
+    closed by the form-method exclusion above."""
+    c = ev.get("ctx") or {}
+    if (c.get("form_method") or "").lower() not in NONIDEMPOTENT_METHODS:
+        return False
+    return ev.get("action") == "press" or (ev.get("action") == "click" and bool(c.get("submit")))
 
 
 def _coalesce_scrolls(steps: list[CachedStep]) -> list[CachedStep]:
@@ -255,9 +259,10 @@ async def record_demo(
     confirm check). It makes capture WRITE-GATE-SAFE: a form-submit click, an Enter-submit press, OR a
     submitting/posting `<select>` (any method, so a GET-form write is covered) is recorded as a mutating step
     carrying its `precond_scope`, so the existing replay mutation gate refuses it under form/section drift; and
-    if a write fires on the wire that no commit step carried (a formless fetch/XHR POST, a `sendBeacon`), the
-    actuated step that CAUSALLY PRECEDED the write (by timestamp) is gated as a fallback — so even an undetected
-    write replays THROUGH the gate (fail loud on drift) rather than blind.
+    if a write fires on the wire that no commit step carried (a formless fetch/XHR POST, a `sendBeacon`), EVERY
+    actuated step with a captured scope is gated as a fallback (an async write can't be attributed to one UI
+    event, so we over-gate rather than risk one slipping through) — so even an undetected write replays THROUGH
+    the gate (fail loud on drift) rather than blind.
 
     Returns `(flow, performed_write, crossed_origin)`. `performed_write` flags that the demo touched the WRITE
     surface — a **non-idempotent HTTP request** (POST/PUT/PATCH/DELETE, caught via `page.on("request")` —
@@ -272,27 +277,29 @@ async def record_demo(
     """
     session = await BrowserSession(headless=headless, storage_state=storage_state).start()
     events: list[dict] = []
-    wrote: dict = {"hit": False, "ts": None}  # ts = epoch-ms of the FIRST observed write (for the fallback gate)
+    # COUNT distinct wire writes (not just a bool): the fallback gate compares this to the number of steps the
+    # classifier already gated, so it can tell when there are MORE writes on the wire than commits it caught
+    # (an unaccounted formless write) vs exactly one accounted write (no over-gating needed). `ws` counts as
+    # at most 1 so a chatty socket can't inflate the count.
+    wrote = {"http": 0, "ws": False}
     nav = {"origin": None, "crossed": False}  # crossed=True iff a CROSS-origin main-frame navigation occurred
     page = session.page
     assert page is not None
     drain_tasks: list[asyncio.Future] = []
 
-    def _mark_write() -> None:
-        wrote["hit"] = True
-        if wrote["ts"] is None:
-            wrote["ts"] = time.time() * 1000  # epoch ms, comparable to the in-page Date.now() event stamps
+    def _write_count() -> int:
+        return wrote["http"] + (1 if wrote["ws"] else 0)
 
     def _watch_request(req) -> None:  # a non-idempotent, non-telemetry HTTP request = a write the human did
         try:
             if is_write_request(req.method, req.url):
-                _mark_write()
+                wrote["http"] += 1
         except Exception:  # noqa: BLE001
             pass
 
     def _watch_ws(ws) -> None:  # any frame SENT over a socket is a write-suspect (can't tell read from write)
         try:
-            ws.on("framesent", lambda *_: _mark_write())
+            ws.on("framesent", lambda *_: wrote.__setitem__("ws", True))
         except Exception:  # noqa: BLE001
             pass
 
@@ -355,35 +362,35 @@ async def record_demo(
 
     steps = [_step_from_event(ev, write_flow=mutate) for ev in events]  # 1:1 with `events` by index
     # Fallback gate for a DECLARED write whose write fired on the wire but no COMMIT step carried it (a formless
-    # fetch/XHR POST, or a sendBeacon): gate the actuated step (click/press/select WITH a captured scope) that
-    # CAUSALLY PRECEDED the first observed write — the demonstrated commit. We pick the LATEST actuated event
-    # whose timestamp is AT OR BEFORE the write (`ts <= wt`): the commit's capture-phase stamp is always before
-    # the write is observed (capture phase -> default action -> request -> Python sees it), so the most-recent
-    # at-or-before-write actuation IS the commit. A strict upper bound of `wt` (no forward slop) is what makes
-    # this safe: a benign actuation that fires AFTER the write can NEVER out-rank the commit and absorb the
-    # gate (which would leave the real write replaying ungated). `events`/`steps` are 1:1 by index here (BEFORE
-    # scroll-coalescing), so the event's captured scope drives the step's precond_scope; the scope is broad
-    # (often whole-body for a formless control) -> at worst more drift-refusals, never a blind write. If NO
-    # actuated step precedes the write, nothing is gated -> `flows.record` refuses (wire_write and nothing
-    # gated) rather than gate a non-commit step. Residual (documented): a write fired by an EARLIER action's
-    # delayed async request, with a benign actuation in between, would gate the benign one — timestamp
-    # attribution can't disambiguate a deferred async write; declaring the precise commit isn't possible here.
-    if mutate and wrote["hit"] and not any(s.mutating for s in steps):
-        wt = wrote["ts"]
-        cand = -1
+    # fetch/XHR POST, or a sendBeacon): an async wire write CANNOT be attributed to the single UI event that
+    # caused it (the page's fetch/XHR isn't tied to its trigger without instrumenting it, and a cross-clock
+    # event-ts-vs-write-time compare is unreliable — Python's wall clock is coarse on some platforms). So when
+    # there are MORE wire writes than the classifier already gated (`_write_count() > classified`), at least
+    # one write is unaccounted: we conservatively gate EVERY remaining actuated step (click/type/select/press)
+    # that carries a scope — `type` INCLUDED, since an autosave input is itself a write. Whichever one fired
+    # the extra write is then gated; a benign step only gains a SUPERFLUOUS drift check. Over-gating is the
+    # SAFE direction: a gated step actuates exactly ONCE regardless of the flag (the flag only ADDS a drift
+    # gate + idempotency header + disables self-heal), so it can never double-submit; its only cost is a
+    # benign step whose own section drifts then fails LOUD instead of self-healing. The count comparison keeps
+    # the COMMON single-write flow (one classified commit, one wire write) from over-gating its benign fields.
+    # We tally ONLY commits that DEFINITELY fired a counted write (`_fires_counted_write`: a non-idempotent
+    # form submit/Enter) — NOT every mutating step: a GET-form submit is classified mutating yet fires no
+    # counted write, so counting it would let it OFFSET (mask) a separate unaccounted formless POST and cache
+    # it ungated. If the unaccounted write has NO scoped actuated step to pin it to, nothing is gated ->
+    # `flows.record` refuses (wire write, nothing gated). `events`/`steps` are 1:1 here (pre scroll-coalesce).
+    accounted = sum(1 for ev in events if _fires_counted_write(ev))
+    if mutate and _write_count() > accounted:
         for i, ev in enumerate(events):
-            if (ev.get("action") in ("click", "press", "select") and ev.get("scope")
-                    and (wt is None or (ev.get("ts") or 0) <= wt)):  # at/before the write -> the causal commit
-                cand = i
-        if cand >= 0:
-            steps[cand] = steps[cand].model_copy(
-                update={"mutating": True, "precond_scope": hash_scope(events[cand]["scope"])}
-            )
+            if ev.get("action") in ("click", "type", "select", "press") and ev.get("scope") \
+                    and not steps[i].mutating:
+                steps[i] = steps[i].model_copy(
+                    update={"mutating": True, "precond_scope": hash_scope(events[i]["scope"])}
+                )
     steps = _coalesce_scrolls(steps)
     flow = CachedFlow(key=flow_key(goal, url, scope), goal=goal, start_url=url,
                       steps=steps, created_ts=time.time())
     cache.put(flow)
-    return flow, wrote["hit"], nav["crossed"]
+    return flow, _write_count() > 0, nav["crossed"]
 
 
 def recorded_steps_summary(flow: CachedFlow) -> list[str]:

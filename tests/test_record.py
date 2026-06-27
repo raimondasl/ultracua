@@ -265,8 +265,9 @@ async def test_record_write_flow_formless_commit_refuses_under_drift(tmp_path) -
 
 # A SELECT-driven write: an onchange handler fires a POST (fetch). `classify_mutation` never flags a select,
 # so without explicit select write-gating this would replay UNGATED (the adversarial review's C1/H4). A
-# DECLARED write must capture the select as a GATED mutating step (via the timestamp-correlated fallback,
-# since a formless select has no form method), idempotency-keyed, refusing under section drift.
+# DECLARED write must capture the select as a GATED mutating step (via the gate-all wire-write fallback,
+# since a formless select has no form method, so every scoped actuated step is gated when a write fired and
+# no commit was classified), idempotency-keyed, refusing under section drift.
 def _serve_select_write(counter: dict, drift: bool = False):
     class _H(http.server.BaseHTTPRequestHandler):
         def log_message(self, *a) -> None:
@@ -352,6 +353,82 @@ async def test_record_write_flow_select_refuses_under_drift(tmp_path) -> None:
         httpd.server_close()
 
 
+# A TYPE-driven write: an input autosaves (fires a POST on `change`). `classify_mutation` never flags a
+# `type`, and there is ALSO a benign (non-writing) button click in the demo. The gate-all fallback must gate
+# the TYPE (the real write) — not just the benign click — or the autosave would replay UNGATED (the
+# describe-reuse review's H1). Exercises the MULTI-actuation gate-all path.
+def _serve_type_autosave_write(counter: dict, drift: bool = False):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def _send(self, body: str) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def do_GET(self) -> None:  # noqa: N802
+            counter["gets"] = counter.get("gets", 0) + 1
+            extra = "<button>extra</button>" if (drift and counter["gets"] > 1) else ""
+            # Autosave on `input` (NOT `change`): replay actuates a `type` via Playwright's fill(), which
+            # fires `input` but not `change`, so an input-triggered autosave re-fires on replay (a
+            # change/blur-only autosave would not — a separate replay-fidelity limitation).
+            self._send(
+                f"<h1>Profile</h1>{extra}<button id=tab>Details</button>"
+                "<input id=name aria-label='name'><div id=out></div>"
+                "<script>document.getElementById('tab').addEventListener('click',function(){});"  # benign
+                "document.getElementById('name').addEventListener('input',function(){"
+                " fetch('/save',{method:'POST'}).then(r=>r.text()).then(t=>{"
+                " document.getElementById('out').textContent=t;});});</script>")
+
+        def do_POST(self) -> None:  # noqa: N802
+            counter["saves"] = counter.get("saves", 0) + 1
+            counter["idem"] = self.headers.get("Idempotency-Key")
+            self._send("Saved")
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def _type_autosave_demo(page) -> None:
+    await page.get_by_role("button", name="Details").click()   # a BENIGN scoped click (no write)
+    await page.fill("#name", "Ada")
+    await page.locator("#name").blur()                          # change -> autosave POST (the write)
+    await page.get_by_text("Saved").wait_for()
+
+
+async def test_record_write_flow_gates_a_type_autosave(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_type_autosave_write(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="autosave", start_url=f"{base}/", goal="save the name",
+                        mutate=MutateSpec(confirm_text_contains="Saved"))
+        res = await record(spec, demo=_type_autosave_demo, headless=True, cache=cache)
+        assert res.is_write is True and res.cached is True and res.performed_write is True
+        assert counter["saves"] == 1                            # saved once during the demo
+        # THE H1 HOLE, CLOSED: the TYPE (the real write) is a gated mutating step — not left ungated while
+        # only the benign click is gated.
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        typed = [s for s in flow.steps if s.action == "type"]
+        assert len(typed) == 1 and typed[0].mutating and typed[0].precond_scope
+        # Documented OVER-GATE (gate-all): the benign Details click is gated too — the safe direction (a
+        # superfluous drift check on a non-writing step, never an ungated write). It actuates once regardless.
+        clicks = [s for s in flow.steps if s.action == "click"]
+        assert len(clicks) == 1 and clicks[0].mutating
+
+        approve(spec, cache=cache)
+        result = await replay(spec, cache=cache)
+        assert result == {"status": "confirmed", "data": None}
+        assert counter["saves"] == 2                            # exactly one more — gated, no double-save
+        assert (counter.get("idem") or "").startswith("uca-")   # the autosave POST carried an Idempotency-Key
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
 # A <select> inside a REAL <form method=post> that submits on change: here `classify_mutation` still says
 # read, but the form METHOD is visible to the inline override (recorder._step_from_event), so the select is
 # gated WITHOUT needing the wire-watcher fallback (the C1 form_method-override branch).
@@ -409,6 +486,68 @@ async def test_record_write_flow_gates_a_form_submitting_select(tmp_path) -> Non
         assert result == {"status": "confirmed", "data": None}
         assert counter["orders"] == 2                                # one more — gated, no double-submit
         assert (counter.get("idem") or "").startswith("uca-")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# MASKING GUARD: a benign GET-form submit is classified mutating (via the override) but fires NO counted
+# write, so it must NOT offset the wire-write tally and let a separate formless POST cache UNGATED. (The
+# describe-reuse review's write-count masking finding.)
+def _serve_get_form_plus_post(counter: dict):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def _send(self, body: str) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.split("?")[0] == "/search":
+                self._send("<h1>results</h1>")
+            else:
+                self._send(
+                    "<form method=get action='/search'><input name=q aria-label='q'>"
+                    "<button>Go</button></form>"
+                    "<button id=save type=button>Save</button><div id=out></div>"
+                    "<script>document.getElementById('save').addEventListener('click',function(){"
+                    " fetch('/save',{method:'POST'}).then(r=>r.text()).then(t=>{"
+                    " document.getElementById('out').textContent=t;});});</script>")
+
+        def do_POST(self) -> None:  # noqa: N802
+            counter["saves"] = counter.get("saves", 0) + 1
+            self._send("Saved")
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def _save_then_search_demo(page) -> None:
+    await page.get_by_role("button", name="Save").click()      # a FORMLESS POST — the real write
+    await page.get_by_text("Saved").wait_for()
+    await page.get_by_role("button", name="Go").click()        # a GET-form submit (benign read) — navigates
+    await page.wait_for_load_state("domcontentloaded")
+
+
+async def test_record_write_flow_get_form_does_not_mask_a_formless_post(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_get_form_plus_post(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="mask", start_url=f"{base}/", goal="save then search",
+                        mutate=MutateSpec(confirm_text_contains="Saved"))
+        res = await record(spec, demo=_save_then_search_demo, headless=True, cache=cache)
+        assert res.is_write is True and res.cached is True
+        assert counter["saves"] == 1
+        # THE MASKING HOLE, CLOSED: the formless POST "Save" is a GATED mutating step — the benign GET-form
+        # "Go" (classified mutating but firing no counted write) did NOT offset the write tally.
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        save = [s for s in flow.steps if s.action == "click" and s.locator and s.locator.name == "Save"]
+        assert len(save) == 1 and save[0].mutating and save[0].precond_scope
     finally:
         httpd.shutdown()
         httpd.server_close()

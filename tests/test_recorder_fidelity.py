@@ -49,6 +49,13 @@ PAGES = {
     # --- scroll: a tall page so a wheel actually moves the viewport ---
     "/scroll": "<div style='height:3000px'>top</div>"
                "<button id=b aria-label='bottombtn'>at bottom</button>",
+    # --- neighbor anchor: two same-role+name buttons in differently-headed sections ---
+    "/anchored": "<section><h2>Billing</h2><button>Save</button></section>"
+                 "<section><h2>Shipping</h2><button>Save</button></section><div id=out></div>"
+                 "<script>document.querySelectorAll('section').forEach(function(s){"
+                 "s.querySelector('button').addEventListener('click',function(){"
+                 "document.getElementById('out').textContent='saved '+s.querySelector('h2').textContent;});});"
+                 "</script>",
 }
 
 
@@ -234,6 +241,37 @@ async def test_scroll_is_captured_debounced_and_coalesced(tmp_path) -> None:
 
         report = await run_cached(f"{base}/scroll", goal, None, cache, mode="replay", headless=True)
         assert report.success and report.llm_calls == 0   # the scroll step replays without error
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_recorded_step_carries_the_neighbor_anchor(tmp_path) -> None:
+    # describe()-reuse payoff: a recorded step now gets the SAME neighbor anchor the learn path captures
+    # (recorded specs used to set anchor=null). Two same-role+name "Save" buttons differ only by section
+    # heading -> the captured anchor disambiguates them on replay.
+    httpd, base = _serve()
+    try:
+        cache = FlowCache(root=tmp_path)
+        goal = "save shipping"
+
+        async def _demo(page) -> None:
+            await (page.locator("section").filter(has_text="Shipping")
+                   .get_by_role("button", name="Save").click())   # the SHIPPING Save (ambiguous by role+name)
+
+        flow, _, _ = await record_demo(f"{base}/anchored", _demo, goal=goal, cache=cache, headless=True)
+        assert len(flow.steps) == 1
+        loc = flow.steps[0].locator
+        assert loc and loc.role == "button" and loc.name == "Save"
+        assert loc.anchor == "Shipping" and loc.anchor_source == "heading"   # captured, not null
+
+        async def _finalize(session):
+            return {"out": await session.page.inner_text("#out")}
+
+        report = await run_cached(f"{base}/anchored", goal, None, cache, mode="replay",
+                                  headless=True, finalize=_finalize)
+        assert report.success and report.llm_calls == 0
+        assert report.extra["finalize"]["out"] == "saved Shipping"   # the anchor resolved the RIGHT button
     finally:
         httpd.shutdown()
         httpd.server_close()
