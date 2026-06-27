@@ -109,9 +109,17 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
   // Installed by add_init_script, which runs BEFORE any page script on every document — so a page can't first
   // capture an un-patched reference. Each patch is FAIL-SAFE: it calls through to the native impl with the
   // original `this`/args and returns or throws unchanged, recording inside try/catch — a recorder bug never
-  // alters page behaviour. (Documented residuals: web workers / sub-frames have their own globals the
-  // init-script doesn't reach; a page that re-grabs the native impl from another realm; `fetch.toString()` no
-  // longer reads `[native code]`. CSP/SRI don't apply — browser-injected, not page-loaded.)
+  // alters page behaviour. A WEB-WORKER / SERVICE-WORKER fetch/xhr write emits NO marker (the init-script
+  // doesn't run there) but its request surfaces to Playwright, and the Python side fails LOUD on the per-url
+  // shortfall (see the `xhr_urls` reconciliation), so such an un-instrumentable write is refused, never cached
+  // ungated. SUB-FRAME (iframe) writes are DELIBERATELY excluded from that reconciliation: the init-script
+  // bails in sub-frames, so counting their requests would false-refuse the many pages with a 3rd-party iframe
+  // (chat/ad/analytics) that POSTs — and an iframe interaction is never a recorded main-frame step anyway.
+  // (Residuals, all irreducible without per-request correlation: a WebSocket write-suspect carries no marker
+  // and isn't reconciled — sockets can't be gated; an iframe/cross-realm write TRIGGERED by a recorded
+  // main-frame action — e.g. via postMessage — could cache ungated; a non-surfacing marker and a worker write
+  // at the EXACT same (method,url) still offset; a page that re-grabs the native impl from another realm;
+  // `fetch.toString()` no longer reads `[native code]`. CSP/SRI don't apply — browser-injected.)
   const WRITE_METHODS = { POST: 1, PUT: 1, PATCH: 1, DELETE: 1 };
   // Attribute a write to a commit ONLY when the cause is UNAMBIGUOUS: a SINGLE commit fired in the write's own
   // SYNCHRONOUS turn (its synchronous code + microtasks), i.e. __ucturn === 1. Otherwise stamp seq=null so the
@@ -125,13 +133,27 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
   //   - __ucturn > 1    -> a NESTED synthetic commit shares the turn (wrapper -> hidden control); we can't tell
   //     which commit issued the write.
   const attributedSeq = () => (__ucturn === 1 ? __uclast : null);
-  const recordWire = (method, url) => {
+  // `src` (fetch/xhr/beacon) tags which entry point fired the marker. The Python side reconciles the
+  // fetch+xhr markers against the fetch/xhr requests Playwright saw on the wire: a write from a web worker /
+  // cross-realm context (which this init-script can't reach) surfaces as a fetch/xhr request with NO marker,
+  // so a shortfall = an un-gateable worker write -> fail loud. Beacons are excluded from that reconciliation
+  // (Playwright surfaces sendBeacon inconsistently, and workers can't sendBeacon).
+  const recordWire = (method, url, src) => {
     try {
       const m = (method || 'GET').toUpperCase();
       if (!WRITE_METHODS[m]) return;   // GET/HEAD can't be a state-changing write -> not worth a marker
+      // Resolve to the ABSOLUTE url (and drop the fragment, which never goes on the wire) so the marker's url
+      // matches the request url Playwright reports — the Python side reconciles markers to wire requests by
+      // (method, url). Resolve against document.baseURI (NOT location.href): the browser resolves a relative
+      // fetch/XHR url against the document base, which a <base href> element overrides — so baseURI is what
+      // matches the wire url. A relative or bad url that can't resolve stays as-is (it then matches no wire
+      // request, which only makes the reconciliation MORE conservative — fail loud, never fail open).
+      let u = String(url || '');
+      try { u = new URL(u, document.baseURI).href; } catch (e) {}
+      const hi = u.indexOf('#'); if (hi >= 0) u = u.slice(0, hi);
       const seq = attributedSeq();
       const arr = JSON.parse(sessionStorage.getItem(KEY) || '[]');
-      arr.push({ action: '__wirewrite', method: m, url: String(url || ''),
+      arr.push({ action: '__wirewrite', method: m, url: u, src: src,
                  seq: (typeof seq === 'number' ? seq : null) });
       sessionStorage.setItem(KEY, JSON.stringify(arr));
     } catch (e) {}
@@ -143,8 +165,12 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
         try {
           const method = (init && init.method) ||
                          (input && typeof input === 'object' && input.method) || 'GET';
-          const url = (typeof input === 'string') ? input : (input && input.url) || '';
-          recordWire(method, url);
+          // fetch accepts a string, a Request (string `.url`), OR a URL object (no `.url` — String() gives
+          // its href). Mis-reading a URL object as '' collapsed the marker to the page root and false-refused.
+          const url = (typeof input === 'string') ? input
+                    : (input && typeof input.url === 'string') ? input.url
+                    : (input != null ? String(input) : '');
+          recordWire(method, url, 'fetch');
         } catch (e) {}
         return _fetch.apply(this, arguments);
       };
@@ -158,7 +184,7 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
       return _open.apply(this, arguments);
     };
     XMLHttpRequest.prototype.send = function () {
-      try { recordWire(this.__ucm, this.__ucu); } catch (e) {}   // record at send -> __ucturn is current
+      try { recordWire(this.__ucm, this.__ucu, 'xhr'); } catch (e) {}   // record at send -> __ucturn is current
       return _send.apply(this, arguments);
     };
   } catch (e) {}
@@ -166,7 +192,7 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
     if (navigator.sendBeacon) {
       const _beacon = navigator.sendBeacon;
       navigator.sendBeacon = function (url) {
-        try { recordWire('POST', url); } catch (e) {}            // a beacon is always a POST
+        try { recordWire('POST', url, 'beacon'); } catch (e) {}            // a beacon is always a POST
         return _beacon.apply(navigator, arguments);
       };
     }
@@ -353,7 +379,20 @@ async def record_demo(
     """
     session = await BrowserSession(headless=headless, storage_state=storage_state).start()
     events: list[dict] = []
-    wrote: dict = {"hit": False}  # did ANY write fire on the wire? (drives performed_write + the un-gated guard)
+    # `hit` drives performed_write + the un-gated guard. `xhr_urls` tallies non-idempotent fetch/xhr writes
+    # seen on the wire, keyed by (method, url), reconciled against the in-page fetch/xhr markers (also keyed by
+    # (method, url)) to catch a write from a context the init-script can't instrument: a web worker / cross-
+    # realm fetch surfaces here but emits NO marker, so a per-url shortfall = an un-gateable write -> fail loud.
+    # Keying by URL (not a global count) stops a NON-surfacing marker (an aborted / CSP-blocked / throwing
+    # fetch that emits a marker but never hits the wire) from offsetting a real worker write at a DIFFERENT url.
+    # Redirect HOPS are excluded (redirected_from set): a method-preserving 307/308 redirect of an instrumented
+    # fetch is the SAME logical write the single JS call already markered once. Form submits are navigations
+    # (resource_type "document") and beacons ("ping") are excluded — the former is classifier-gated, the latter
+    # marker-gated and surfaced inconsistently. (Residual: a NON-surfacing marker and a worker write at the
+    # EXACT same (method, url) still offset — irreducible without per-request correlation; and a WebSocket
+    # write-suspect is outside this reconciliation — sockets carry no marker and can't be gated.)
+    wrote: dict = {"hit": False}
+    xhr_urls: dict = {}  # (METHOD, url) -> count of surfaced non-idempotent fetch/xhr writes (redirect hops excluded)
     nav = {"origin": None, "crossed": False}  # crossed=True iff a CROSS-origin main-frame navigation occurred
     page = session.page
     assert page is not None
@@ -366,6 +405,24 @@ async def record_demo(
         try:
             if is_write_request(req.method, req.url):
                 _mark_write()
+                # Count worker-capable write types (fetch/xhr), excluding redirect hops (the same logical write,
+                # already markered once by its JS call). ONLY count requests from a context that either CAN
+                # carry a marker (the TOP frame — where the init-script patched fetch/XHR) or is genuinely
+                # un-instrumentable (a service worker, or a dedicated worker — both attributed to the top frame
+                # / no frame). EXCLUDE SUB-FRAME requests: the init-script bails in sub-frames
+                # (window.top !== window) so an iframe deterministically emits NO marker — counting it would
+                # FALSE-REFUSE a normal page with a 3rd-party iframe (chat/ad/analytics) that POSTs. A service
+                # worker request has no frame (req.frame raises), so detect it via req.service_worker first.
+                if req.resource_type in ("fetch", "xhr") and req.redirected_from is None:
+                    countable = req.service_worker is not None  # SW write -> un-gateable -> count (fail loud)
+                    if not countable:
+                        try:
+                            countable = req.frame.parent_frame is None  # top frame (main realm + its workers)
+                        except Exception:  # noqa: BLE001 - no frame -> a cross-realm write -> count conservatively
+                            countable = True
+                    if countable:
+                        k = (req.method.upper(), req.url.split("#", 1)[0])
+                        xhr_urls[k] = xhr_urls.get(k, 0) + 1
         except Exception:  # noqa: BLE001
             pass
 
@@ -410,7 +467,11 @@ async def record_demo(
             nav["crossed"] = True
             nav["origin"] = o
 
-    page.on("request", _watch_request)
+    # CONTEXT scope (not page) for the request watcher: a Service Worker / cross-realm fetch is surfaced at the
+    # context, NOT the page, so a page-scoped watcher would MISS a SW write entirely (no marker either -> cached
+    # ungated, a fail-open). Context scope is a superset (page + workers + SW + any popup); extra wire
+    # visibility only ever makes the per-url reconciliation fail MORE loud (a shortfall), never fail open.
+    page.context.on("request", _watch_request)
     page.on("websocket", _watch_ws)
     page.on("framenavigated", _on_nav)
     if extra_headers:
@@ -449,10 +510,16 @@ async def record_demo(
     wire_writes = [ev for ev in events if ev.get("action") == "__wirewrite"]
     events = [ev for ev in events if ev.get("action") != "__wirewrite"]
     steps = [_step_from_event(ev, write_flow=mutate) for ev in events]  # 1:1 with `events` by index
-    # `unattributed_writes` counts genuine wire writes the JS could tie to NO single commit (seq=null).
-    # Surfaced so `flows.record` enforces attribution PER WRITE: it refuses the flow whenever ANY real write
-    # was not tied to a gated commit, instead of the old all-or-nothing "nothing at all was gated" check
-    # (which one unrelated gated step could disarm, caching the real write ungated). Fail-LOUD, never fail-open.
+    # `unattributed_writes` counts genuine wire writes that could NOT be tied to a gated commit, so
+    # `flows.record` refuses the flow rather than cache a real write ungated. Two sources, both fail-LOUD:
+    #   (1) a marker the JS tied to NO single commit (seq=null — a deferred/nested/background write); and
+    #   (2) a WORKER / cross-realm write: the init-script can't instrument a web worker, so its fetch/xhr POST
+    #       fires on the wire (seen by `_watch_request`) but emits NO marker. We reconcile PER (method, url):
+    #       every MAIN-realm fetch/xhr write emits a marker at the same (method, url) Playwright reports, so a
+    #       url seen on the wire MORE times than it was markered = an un-gateable worker write. Checked by
+    #       COUNT (not the existence guard) so it catches a worker write even when another step is gated — the
+    #       masking the old guard let through (`wire_write and not gated` is disarmed by any one gated step).
+    #       Form submits are navigations (excluded from `xhr_urls`) so a gated form submit never false-refuses.
     unattributed_writes = 0
     if mutate and wire_writes:
         by_seq = {ev["seq"]: i for i, ev in enumerate(events)
@@ -467,6 +534,14 @@ async def record_demo(
             if not (steps[i].mutating and steps[i].precond_scope):  # don't re-gate a form-classified commit
                 steps[i] = steps[i].model_copy(
                     update={"mutating": True, "precond_scope": hash_scope(events[i]["scope"])})
+    if mutate:
+        marker_urls: dict = {}  # (method, url) -> fetch/xhr markers; keyed identically to xhr_urls
+        for w in wire_writes:
+            if w.get("src") in ("fetch", "xhr") and is_write_request(w.get("method") or "", w.get("url") or ""):
+                k = ((w.get("method") or "").upper(), (w.get("url") or "").split("#", 1)[0])
+                marker_urls[k] = marker_urls.get(k, 0) + 1
+        for k, n_wire in xhr_urls.items():  # a url seen on the wire more than it was markered = worker write
+            unattributed_writes += max(0, n_wire - marker_urls.get(k, 0))
     steps = _coalesce_scrolls(steps)
     flow = CachedFlow(key=flow_key(goal, url, scope), goal=goal, start_url=url,
                       steps=steps, created_ts=time.time())
