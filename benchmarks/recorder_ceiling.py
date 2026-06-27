@@ -115,7 +115,7 @@ async def validate(task: str, seed: int, provider_name: str | None) -> dict:
         goal = await read_instruction(url, prepare)
         with TemporaryDirectory() as td:
             cache = FlowCache(root=Path(td))
-            flow, _, _ = await record_demo(url, _make_demo(), goal=goal, cache=cache, headless=True, prepare=prepare)
+            flow, _, _, _ = await record_demo(url, _make_demo(), goal=goal, cache=cache, headless=True, prepare=prepare)
             # Strip id/test-id from the recorded specs so REPLAY must re-ground by role+name+css — the SAME
             # surface the LLM mis-grounds. MiniWoB's `chN` ids are internal scaffolding a real garbled-label
             # page wouldn't hand us; leaning on them would measure "click the Nth box by id", not the
