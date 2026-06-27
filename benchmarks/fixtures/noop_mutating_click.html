@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ultracua fixture — keyword-mutating click that fires NO wire write</title>
+  </head>
+  <body>
+    <h1>Cart</h1>
+    <!-- A keyword-mutating CLICK ("Place order") that does NOTHING on the wire (client-only handler, no
+         fetch/XHR/submit). On replay it is classified mutating, so it enters the expect_request write-detect
+         wrapper — which finds no write and must TIME OUT (bounded by write_settle_ms) and PROCEED, not hang.
+         Used to guard against the timeout=0 ("wait forever") sentinel that a 0/negative write_settle_ms would
+         otherwise produce. type=button so it is keyword-mutating, never a form submit. -->
+    <section id="checkout">
+      <button id="order" type="button">Place order</button>
+    </section>
+    <p id="s">cart</p>
+    <script>
+      document.getElementById("order").addEventListener("click", () => {
+        document.getElementById("s").textContent = "noted";  // client-only — no network request
+      });
+    </script>
+  </body>
+</html>

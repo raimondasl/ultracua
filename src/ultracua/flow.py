@@ -781,6 +781,12 @@ async def _replay_step(
         tr.meta["idempotency_key"] = key
         await session.set_extra_http_headers({"Idempotency-Key": key})
 
+    # Bounded wait for a mutating step's (possibly async) write to leave the browser before the `finally`
+    # clears the Idempotency-Key. Kept SHORT (write_settle_ms) so a no-write mutating step doesn't stall the
+    # full action_timeout_ms, and FLOORED at 1ms so a 0/negative settle can't become Playwright's
+    # expect_request "wait forever" sentinel (timeout=0) and hang a no-write step.
+    write_settle_ms = max(1, min(settings.action_timeout_ms, settings.write_settle_ms))
+
     try:
         if step.action in ("press", "scroll", "navigate", "click_xy", "webmcp_call"):
             note = ""
@@ -809,15 +815,15 @@ async def _replay_step(
                             # returns before the request leaves the browser. Await the in-flight write so
                             # the Idempotency-Key (set by the gate above) is still on the context when the
                             # POST is issued — otherwise the `finally` below clears it first and the write
-                            # replays WITHOUT the dedupe key (a retried submit could double-submit). Unlike
-                            # a click, whose loc.click() auto-waits enough to keep the header live, the press
-                            # needs this explicit await. Bounded, and tolerant of the no-write case (a
-                            # JS-only submit that fires no network request): the header was set throughout
-                            # the act, so nothing is lost.
+                            # replays WITHOUT the dedupe key (a retried submit could double-submit). The wait
+                            # is BOUNDED to write_settle_ms (a press-triggered write fires near-immediately; a
+                            # no-write press must not stall the full action_timeout_ms), and tolerant of the
+                            # no-write case (a JS-only submit fires no network request): the header was set
+                            # throughout the act, so nothing is lost.
                             try:
                                 async with page.expect_request(
                                     lambda r: is_write_request(r.method, r.url),
-                                    timeout=settings.action_timeout_ms,
+                                    timeout=write_settle_ms,
                                 ):
                                     await session.act(act)
                             except PlaywrightTimeoutError:
@@ -855,17 +861,19 @@ async def _replay_step(
                     try:
                         if step.mutating:
                             # A mutating click/type/select can fire its write ASYNCHRONOUSLY — an
-                            # onchange/oninput autosave fetch-POST, or a <select onchange=form.submit()> —
-                            # returning before the request leaves. Await the in-flight write so the
-                            # Idempotency-Key the gate set is still on the context when the POST is issued
-                            # (else the `finally` clears it first and a retried run could double-submit).
-                            # Tolerant of the no-write case (a pure client-side handler): the header was live
-                            # for the whole act, so nothing is lost. (A form-submit click also auto-waits its
-                            # navigation, so this only ever ADDS safety.)
+                            # onchange/oninput autosave fetch-POST, a <select onchange=form.submit()>, or a
+                            # click handler that defers its fetch a tick — returning before the request leaves.
+                            # Await the in-flight write so the Idempotency-Key the gate set is still on the
+                            # context when the POST is issued (else the `finally` clears it first and a retried
+                            # run could double-submit). The wait is BOUNDED to write_settle_ms (these writes
+                            # fire near-immediately; a mutating step that fires NO write — a preventDefault'd
+                            # submit, a client-only button — must not stall the full action_timeout_ms).
+                            # Tolerant of the no-write case: the header was live for the whole act, so nothing
+                            # is lost. (A form-submit click also auto-waits its navigation -> this only ADDS safety.)
                             try:
                                 async with page.expect_request(
                                     lambda r: is_write_request(r.method, r.url),
-                                    timeout=settings.action_timeout_ms,
+                                    timeout=write_settle_ms,
                                 ):
                                     await _actuate()
                             except PlaywrightTimeoutError:
