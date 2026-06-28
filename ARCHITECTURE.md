@@ -7,6 +7,7 @@ for the current honest status + measured numbers see [STATUS.md](STATUS.md).
 ## Contents
 
 - [How replay works](#how-replay-works)
+- [Recorder (demonstration capture)](#recorder-demonstration-capture)
 - [Resilient locators](#resilient-locators)
 - [Snapshot & fingerprint](#snapshot--fingerprint)
 - [Pinned 0-LLM reads](#pinned-0-llm-reads)
@@ -39,6 +40,26 @@ and persisted as JSON under `.ultracua/flows/`.
 
 `prepare` (post-nav) and `finalize` (pre-close) hooks let a caller seed a deterministic instance and
 read a structured outcome; the finalize result lands in `FlowReport.extra["finalize"]`.
+
+A `CachedFlow` now has **two authoring front-ends** — LLM-in-the-loop **discovery** (above) or human
+**demonstration** (below) — both emitting the same `CachedStep` program that replay drives at 0-LLM.
+
+## Recorder (demonstration capture)
+
+`recorder.py` lets a human author a flow by demonstrating it once, as an alternative to LLM discovery.
+The injected init-script shares `_SPECOF_JS` with `DESCRIBE_JS` (so captured steps carry the same
+resilient locator hints replay resolves). Captured events — click / type / select / press(Enter) /
+scroll — buffer in a **same-origin-nav-durable `sessionStorage` queue** that is drained on
+`framenavigated` and again at the end, so a flow survives same-origin navigation. `_step_from_event`
+assembles each event into a `CachedStep`, yielding a `CachedFlow` identical in shape to a discovered one.
+
+Writes are gated the same way as the rest of the system: a declared write is approval-gated +
+idempotency-keyed, and a **formless** write is gated by **per-write attribution** — the init-script
+instruments `fetch` / `XMLHttpRequest.send` / `navigator.sendBeacon` to tie each non-idempotent request
+to the commit in its synchronous turn. An **un-instrumentable** write (web-worker / service-worker /
+cross-realm) or an **ambiguous/deferred** one is **refused, never cached ungated**; cross-origin demos
+fail loud. A best-effort post-hoc LLM call (`caption_intents`) relabels each step's intent for self-heal
+hints, `inspect` output, and the keyword side of `classify_mutation` — replay itself stays 0-LLM.
 
 ## Resilient locators
 
@@ -238,6 +259,7 @@ src/ultracua/
   cache.py        flow cache: keyed JSON store of CachedStep programs
   flow.py         run_cached — learn-and-record / no-LLM replay / self-heal / mutation gate
   flows.py        the Flow API: FlowSpec/LoginSpec/MutateSpec, learn/approve/replay/health/auth
+  recorder.py     demonstration recorder: capture init-script -> sessionStorage drain -> CachedFlow, plus per-write attribution (fetch/XHR/sendBeacon markers) and intent caption
   extract.py      reusable structured extraction (one forced-tool LLM call)
   safety.py       mutation classification, idempotency keys, pacing, interstitial detection
   obs.py          library logger (run_id) + token-usage / $ cost accounting

@@ -1,7 +1,7 @@
-# ultracua — status & observations (2026-06-23)
+# ultracua — status & observations (2026-06-28)
 
-A dated, honest snapshot: what's shipped, how proven it is, what the latest benchmark runs
-measured, the known fragilities (with `file:line`), and the prioritized path forward. The
+A dated, honest snapshot covering through the recorder arc: what's shipped, how proven it is, what the
+latest benchmark runs measured, the known fragilities (with `file:line`), and the prioritized path forward. The
 forward-looking phase plan lives in [ROADMAP.md](ROADMAP.md) — Phases A–D are shipped, and several
 of the longer-term phases have since landed (E fleet supervisor, F suffix-replan, H pinned 0-LLM
 reads, J CI); the full plan (E–J) is in *"Beyond Phase D"* there.
@@ -13,8 +13,8 @@ engine is the moat, and it is not yet hardened for unattended production.** Phas
 engine), A–C (the Flow API: define → learn → approve → replay → auth-refresh → health), and D
 (write flows) are shipped and merged, and the ops layer has since hardened (logging, CI,
 retry/backoff, fleet supervisor + freshness canary, a cross-process meta lock, and a standing
-locator-resilience benchmark). **231 tests**, all key-less (real headless Chromium against local
-fixtures, run in CI on Linux + Windows); version **0.35.0**. Secrets handling is a real strength:
+locator-resilience benchmark). **284 tests**, all key-less (real headless Chromium against local
+fixtures, run in CI on Linux + Windows); version **0.42.0**. Secrets handling is a real strength:
 credentials are env-sourced at runtime and **never persisted** — only the resulting `storage_state`
 cookies are saved (atomically).
 
@@ -26,6 +26,7 @@ cookies are saved (atomically).
 | **Flow API** (`flows.py`) | full lifecycle; approval gate; data-shape drift; fail-loud `FlowReplayError`; auth-refresh; fleet health + **fleet supervisor** (`flow run-all`: concurrent replay, pass/fail/skip classification, non-zero exit, alert webhook) + a cheap read-only **freshness canary** (`flow canary`: does each flow still *start*? — catches entry-page rot before a scheduled run fails); Phase D writes with action-completion + opt-in idempotency precheck; the health read-modify-write is now **cross-process locked** (#54), so concurrent scheduled processes can't lose a health update | no built-in **scheduler** (by design — point cron / Task Scheduler at `flow run-all` + `flow canary`); the canary is intentionally shallow (entry step only — mid-flow drift still needs the full `run-all`) |
 | **Providers** (`llm/`, `providers/`) | provider-neutral types; Anthropic path with real prompt-cache + streaming TTFT; reusable extraction; **Router retry/backoff/timeout** (transient-aware, capped exponential + jitter); **per-run token + est. $ cost accounting** (`FlowReport.extra["usage"]`); **all three adapters' `.complete()` glue covered by key-less live-path tests**; JSON-RPC daemon + Node client | the live-path tests replay **recorded/synthetic** responses, not a real API call (no keys in CI); Gemini's test injects the SDK response object rather than exercising its HTTP/deserialization layer |
 | **Ops / packaging** | config via `ULTRACUA_*` env; data kept off C:; `.env` gitignored; **stdlib logging** with a per-run `run_id` contextvar; **GitHub Actions CI** (Linux + Windows, key-less suite); **single-sourced version** (`importlib.metadata`) | the JSON-RPC daemon is single-flight, unauthenticated, and (now **documented as**) the raw *engine* surface that bypasses the Flow safety gates — engine-only, not a service; a real service daemon (auth + the Flow verbs) is Phase I |
+| **Recorder** (`recorder.py`, `flow record`) | **capture fidelity** (click / type / select / press(Enter) / scroll); **nav handshake** (survives same-origin navigation via a sessionStorage queue drained post-nav); **write gate + per-write attribution** (an init-script instruments fetch / XHR.send / sendBeacon to tie each non-idempotent request to the commit in its synchronous turn — declared writes are gated + approval-gated + idempotency-keyed, and an un-instrumentable / ambiguous write is **refused, never cached ungated**); verify-by-replay then cache; **intent caption** (best-effort post-hoc LLM relabel for self-heal hints + inspect + the keyword side of `classify_mutation`; replay stays 0-LLM) | **cross-origin** is a **loud refusal** (orphaned writes fail loud, not silently cached); **iframe / shadow-DOM** capture and **WebSocket** writes are not yet attributable |
 
 ## Benchmarks (run 2026-06-18)
 
@@ -59,8 +60,9 @@ early-stop.
 LLM-written lesson to the next sample made it *worse* (60%→52%, +26% cost): the advice misdirects an
 otherwise-clean re-roll. This is the actionable finding — the remaining 40% is a genuine **capability
 ceiling** (≈4 tasks like garbled-label checkboxes), unmoved by *either* more sampling or reflection. So
-the next reliability gain must come from **capability** (the Phase I recorder / better grounding), NOT
-more discovery-loop cleverness — the loop is measured-done. (`variance --bench miniwob --all --samples 3
+the next reliability gain had to come from **capability**, NOT more discovery-loop cleverness — the loop
+is measured-done. That lever **shipped**: the **recorder** (`flow record`) was measured against this exact
+MiniWoB ceiling and scored **9/9 vs the LLM's 4/9** (#64). (`variance --bench miniwob --all --samples 3
 [--reflect]`.)
 
 **Honest caveats on the headline numbers:**
@@ -114,7 +116,7 @@ multi-step/auth pages, and (3) operability — *not* in making replay faster (it
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
 phases have kept landing since: **#33–#35 CI (Phase J), #36 pinned 0-LLM reads (Phase H), #37 fleet
 supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 → **145** tests
-(key-less); version **0.22.0** *at the time* — it has since grown to **231 tests / 0.35.0** as the
+(key-less); version **0.22.0** *at the time* — it has since grown to **284 tests / 0.42.0** as the
 trust-hardening below landed. Original near-term list with the PR that landed each:
 
 1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`
@@ -136,10 +138,13 @@ None of the near-term fragilities are open. A second wave of trust-hardening has
 refless-submit write gate (focused-field scope) + idempotency-on-Enter + `unique=True` write target;
 **#58/#59/#61** neighbor-anchor disambiguation + `unique=True` read actuation (closing the last
 silent-wrong-bind) hardened against substring/cross-tag mis-binds; **#60** the **drift-sandbox**
-locator-resilience benchmark; and this wave's **freshness canary** + daemon-contract docs. Of the
-longer-term phases, **E fleet supervisor, F suffix-replan, H pinned reads, J CI** are landed —
-**G (barrier-commit multi-write)** and **I (recorder / web UI / service daemon)** remain, with the
-**recorder** the measured-correct next lever on the ~40% MiniWoB capability ceiling.
+locator-resilience benchmark; the **freshness canary** + daemon-contract docs; and the **recorder arc**
+(**#63–#72** + intent caption) — capture fidelity, the same-origin nav handshake, the write gate with
+**per-write attribution**, and the post-hoc intent caption, all via `flow record`. The recorder was
+measured against the exact MiniWoB capability ceiling and scored **9/9 vs the LLM's 4/9** (#64), so it
+**closed** that ~40% gap. Of the longer-term phases, **E fleet supervisor, F suffix-replan, H pinned
+reads, J CI, and the I recorder core** are landed — only **G (barrier-commit multi-write)** and the
+**Phase-I remainder (web UI / service daemon / registry)** remain open.
 
 See [ROADMAP.md → *Beyond Phase D*](ROADMAP.md) for the longer-term phases (E–J) with the concrete
 use cases each unlocks and the gap each closes.

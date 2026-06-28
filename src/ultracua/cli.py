@@ -297,7 +297,7 @@ def _flow_run_all(args: argparse.Namespace) -> None:
 
 
 def _flow_record(args: argparse.Namespace) -> None:
-    from .flows import FlowSpec, record
+    from .flows import FlowSpec, caption_for, record
 
     # A confirm check (--confirm-*) DECLARES this a WRITE recording — the recorder can't infer the
     # action-completion signal, so a demonstrated write must declare it (just like `flow learn`).
@@ -311,7 +311,9 @@ def _flow_record(args: argparse.Namespace) -> None:
             None, input, "\n>>> Demonstrate the flow in the browser window, then press Enter here to finish… ")
 
     print(f"opening {args.url} — a browser window will appear; perform the flow, then return here.")
-    res = asyncio.run(record(spec, demo=_demo, headless=False))
+    # Opt-in intent caption: one best-effort post-hoc LLM call to label the steps (off the replay path).
+    # None when no LLM is configured -> placeholder intents, recording stays key-less.
+    res = asyncio.run(record(spec, demo=_demo, headless=False, caption=caption_for(getattr(args, "provider", None))))
     print(f"\ncaptured {len(res.steps)} step(s):")
     for s in res.steps:
         name = (s.locator.name if s.locator else "") or (s.locator.tag if s.locator else "")

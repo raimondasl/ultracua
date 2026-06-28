@@ -68,6 +68,7 @@ Hacker News (read-only) and is built to record: `uv run python examples/hn_diges
 - **Trust controls** — approval gate, data-shape drift detection, **fail-loud** `FlowReplayError`.
 - **Auth refresh** — re-login on session expiry; credentials are env-sourced and **never persisted**.
 - **Write flows** — submit / post / purchase with **action-completion verification** + idempotency.
+- **Record by demonstration** — `ultracua flow record` captures a headed walkthrough into a cached **0-LLM** flow: reads are verify-by-replay; declared writes are **gated + approval-gated + idempotency-keyed**.
 - **Fleet supervisor** — `flow run-all` replays every saved flow, reports pass/fail, alerts, exits non-zero for cron; `flow status` for history.
 - **Multi-provider** — Anthropic / OpenAI / Gemini, fast/strong tiering, prompt caching.
 - **Drive from any language** — JSON-RPC daemon + a Node/JS client.
@@ -77,11 +78,12 @@ Hacker News (read-only) and is built to record: `uv run python examples/hn_diges
 | Doc | For |
 |---|---|
 | **[EXAMPLES.md](EXAMPLES.md)** | a worked, runnable real-site example — **start here** |
-| **[GUIDE.md](GUIDE.md)** | developer guide: the Flow API + CLI in depth (auth, write flows, health, providers) |
+| **[GUIDE.md](GUIDE.md)** | developer guide: the Flow API + CLI in depth (auth, write flows, record by demonstration, health, providers) |
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | how it works inside + how to contribute (engine, safety, tiers, benchmarks, layout) |
 | **[STATUS.md](STATUS.md)** | honest status, measured benchmarks, known fragilities |
 | **[ROADMAP.md](ROADMAP.md)** | what's next |
 | **[PLAN.md](PLAN.md)** | the original design + research basis |
+| **[docs/recorder-spike.md](docs/recorder-spike.md)** | the record-by-demonstration design (capture → gated cache → 0-LLM replay) |
 
 ## License
 

@@ -119,8 +119,8 @@ A 2026 literature + web sweep (browser-agent SOTA, programming-by-demonstration,
 eval rigor) converged on what our own benchmarks already showed: **discovery — the LLM authoring a
 working flow — is the bottleneck, and it's attackable with cheap, 0-LLM-preserving, learn-time-only
 changes.** This push is recommended before Phases G/I: it's days of work, it hits the proven
-bottleneck, and it de-risks both (write-safety hardens G; pass^k measurement lets us *prove* a recorder
-helps for I). Techniques below are directional — mapped to our code, not leaning on any one paper's
+bottleneck, and it de-risks both (write-safety hardens G; pass^k measurement let us *prove* the recorder
+helped for I — it shipped and beat the LLM on the ceiling task, #64). Techniques below are directional — mapped to our code, not leaning on any one paper's
 exact numbers.
 
 **Tier 1 — do now (one cohesive push):**
@@ -154,8 +154,8 @@ never the cache key). The hypothesis was that learning-from-failure beats blind 
 ceiling tasks. **#52 measured the opposite**: MiniWoB 60%→52% at +26% cost — the advice misdirects an
 otherwise-clean re-roll. The implementation + the `--reflect` harness stay (useful to re-test on harder
 benchmarks), but it's off by default. **The discovery loop is now measured-done**; the remaining 40% is
-a capability ceiling, so further gains belong to **capability** (Phase I recorder / grounding), not the
-loop. *Still in Tier 2 (replay/extraction-side, orthogonal to the ceiling):* a Similo-style 0-LLM heal
+a capability ceiling, so further gains belong to **capability** (the now-shipped Phase I recorder, #64 —
+which beat the LLM on the ceiling task — / grounding), not the loop. *Still in Tier 2 (replay/extraction-side, orthogonal to the ceiling):* a Similo-style 0-LLM heal
 tier; type-aware comparators + a scripted-oracle control arm in the variance gate; a **flow-staleness
 canary**.
 
@@ -237,12 +237,22 @@ below); per-flow cost budgets.
 
 ### Phase I — Distribution & product surface ("usable by non-builders")
 
-A **recorder** (learn from a human demonstration — directly attacks the discovery-failure
-bottleneck); a web UI over `flow_health` + a flow inspector/editor; a real service daemon (auth,
+✅ **A recorder** (learn from a human demonstration — directly attacks the discovery-failure
+bottleneck) — **shipped & hardened** ([`recorder.py`](src/ultracua/recorder.py), `flows.record`, the
+`flow record` CLI). Captures click / type / select / press(Enter) / scroll with high fidelity, surviving
+same-origin navigation (a sessionStorage queue drained post-nav). Declared writes are **gated +
+idempotency-keyed + approval-gated**; a formless write is tied to its commit by **per-write attribution**
+(the init-script instruments fetch / XMLHttpRequest.send / navigator.sendBeacon to attribute each
+non-idempotent request to the commit in its synchronous turn), and an un-instrumentable
+(worker / service-worker / cross-realm) or ambiguous/deferred write is **refused, never cached ungated**.
+A best-effort post-hoc **intent caption** (`caption_intents`) relabels each step's intent for self-heal
+hints / inspect output / the keyword side of `classify_mutation`; replay stays 0-LLM.
+**Still open:** a web UI over `flow_health` + a flow inspector/editor; a real service daemon (auth,
 multiple browser contexts, streaming traces, OpenAPI); flow import/export + a registry.
 
 - *Enables:* "a non-engineer records a flow by demoing it once; an ops team manages flows in a UI."
-- *Closes:* CLI-only surface, single-flight unauthenticated daemon, "discovery failed → needs an engineer."
+- *Closes:* "discovery failed → needs an engineer." Still open: CLI-only surface (web UI),
+  single-flight unauthenticated daemon.
 
 ### Phase J — Evaluation & confidence ("prove it keeps working")
 
