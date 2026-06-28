@@ -32,7 +32,7 @@ uv run ultracua --url https://example.com --goal "open the more information link
 Flags: `--mode auto|learn|replay`, `--fresh` (clear the cached flow first),
 `--provider anthropic|openai|gemini|mock`, `--tier fast|strong`, `--scope <name>`. Learned flows
 live under `.ultracua/flows/`. Env: `ULTRACUA_FAST_MODEL` (default `claude-haiku-4-5`),
-`ULTRACUA_MODEL` (strong, default `claude-opus-4-8`), `ULTRACUA_TIER` (default `fast`).
+`ULTRACUA_MODEL` (strong, default `claude-opus-4-8`), `ULTRACUA_TIER` (default `strong`).
 
 For *recurring* tasks, use the Flow API below — it adds named specs, structured extraction,
 approval, drift handling, and health.
@@ -100,6 +100,10 @@ uv run ultracua flow record --name pick-items --url <url> --goal "select the rig
 uv run ultracua flow approve --name pick-items     # then it runs unattended like any learned flow
 uv run ultracua flow replay  --name pick-items
 ```
+
+After capture, each recorded step's intent is auto-labeled by a best-effort post-hoc LLM caption
+(improves self-heal hints + the `flow inspect` view); replay stays 0-LLM, and the captioning is
+skipped if no API key is set.
 
 **Read flows** verify-by-replay: cached only if their **navigation** reproduces 0-LLM on a fresh session
 (you confirm it did the *right* thing by watching your own demo).
@@ -292,8 +296,9 @@ run with a `run_id` and its token usage + `$` cost.
 ## Providers & tiering
 
 The agent reaches LLMs through a provider-neutral layer with native Anthropic / OpenAI / Gemini
-adapters. A **fast tier** (Haiku 4.5) drives routine element selection and **escalates** to a
-**strong tier** (Opus 4.8 / Sonnet 4.6) when unsure.
+adapters. The **strong tier** (Opus 4.8 / Sonnet 4.6) is the default driver; opt into a cheaper
+**fast tier** (Haiku 4.5) with `ULTRACUA_TIER=fast` to drive routine element selection, which then
+**escalates** to the strong tier when unsure.
 
 ```bash
 ULTRACUA_LLM_BACKEND=anthropic ULTRACUA_TIER=fast \

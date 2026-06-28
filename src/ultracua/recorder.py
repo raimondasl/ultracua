@@ -1,9 +1,9 @@
-"""Phase-I RECORDER — learn a flow from a human DEMONSTRATION (SPIKE / experimental).
+"""Phase-I RECORDER — learn a flow from a human DEMONSTRATION.
 
 The discovery loop is measured-done; the remaining ~40% MiniWoB miss is a *capability* ceiling — tasks
 (garbled-label checkboxes, ambiguous options) where the LLM can't reliably GROUND (pick the right element).
 A demonstration removes grounding from the loop: a human clicks the right element, and we just read the
-DOM node under that click. This prototype proves the pipeline end-to-end:
+DOM node under that click. The pipeline is:
 
     capture (inject click/change/keydown/scroll listeners) -> describe each touched element (a resilient
     LocatorSpec) -> assemble the SAME `CachedFlow` the replay engine already consumes -> replay 0-LLM.
@@ -23,14 +23,22 @@ CAPTURE FIDELITY (see docs/recorder-spike.md):
     orphans the prior origin's not-yet-drained events (its sessionStorage doesn't carry over); we drain on
     every navigation to shrink that window, and the single-origin portal flow — the target use case — is
     fully covered.
-  - `intent` is a placeholder derived from the element ("click qux"); real intents (human label or a
-    post-hoc LLM pass) are an open question.
-  - WRITE recording is supported via `mutate=True`: a demonstrated form-submit (click) or Enter-submit
-    (press) is captured WITH its `precond_scope` (computed inline, exactly as the learn path does) so it
-    replays through the mutation gate; the caller (`flows.record`) routes it through approval + idempotency
-    like a learned write.
+  - `intent` starts as a placeholder ("click qux"); `caption_intents` (one off-replay-path LLM call, opt-in
+    via the `flow record` CLI — `record(caption=…)`) relabels each step with a concise, goal-grounded intent
+    for self-heal hints, the inspect output, and the keyword side of `classify_mutation`. Capture itself stays
+    key-less; replay stays 0-LLM.
+  - WRITE recording is supported via `mutate=True`. A write the form/keyword classifier can see — a
+    form-submit click, an Enter-submit press, a submitting/posting `<select>` — is captured WITH its
+    `precond_scope` so it replays through the mutation gate. A write it CAN'T see (a formless fetch/XHR POST,
+    a `sendBeacon`) is attributed PER-WRITE: the init-script instruments fetch / XMLHttpRequest.send /
+    navigator.sendBeacon to emit a `__wirewrite` marker tying each non-idempotent request to the commit fired
+    in its own synchronous turn, so the EXACT commit it caused is gated — no counting heuristic. A write whose
+    cause is ambiguous (deferred/awaited, nested, background) or un-instrumentable (web-worker /
+    service-worker / cross-realm — emits no marker but surfaces on the wire) is left UNATTRIBUTED and
+    `flows.record` REFUSES the flow, never caching a write ungated. The caller routes a cached write through
+    approval + idempotency like a learned write.
   - The `demo` is a callable that drives the page; in a real product it's a human in a headed browser,
-    in the test it's a scripted sequence of real interactions (so the spike stays key-less + deterministic).
+    in the test it's a scripted sequence of real interactions (so the recorder stays key-less + deterministic).
 """
 
 from __future__ import annotations
@@ -41,6 +49,7 @@ from typing import Awaitable, Callable, Optional
 
 from .browser import BrowserSession
 from .cache import CachedFlow, CachedStep, FlowCache, flow_key
+from .llm.types import LLMRequest, Message, TextBlock, ToolDef
 from .locators import _SPECOF_JS, LocatorSpec
 from .safety import classify_mutation, is_write_request, origin_of
 from .snapshot import _ACCNAME_JS, _MUTATION_CTX_JS, _ROLEOF_JS, SCOPE_JS, hash_scope
@@ -333,12 +342,64 @@ def _coalesce_scrolls(steps: list[CachedStep]) -> list[CachedStep]:
     return out
 
 
+# (goal, [{action, name, text} per step]) -> [one concise intent per step, same order]. The captioner.
+Caption = Callable[[str, list], Awaitable[list]]
+
+_CAPTION_SYSTEM = (
+    "You label each recorded browser UI step with a CONCISE imperative intent — what the user was trying to "
+    "do — grounded in the GOAL. Use the verb a person would (e.g. 'place the order', 'tick the qux checkbox', "
+    "'choose Banana', 'search for blue widgets'). For a COMMIT step, mirror the GOAL's action word "
+    "(submit / place / save / delete / send / confirm) so a write reads as a write. Return EXACTLY one intent "
+    "per step, in the given order, via the `caption` tool — same count, no extra prose, no step omitted."
+)
+
+
+async def caption_intents(router, goal: str, steps: list, *, tier: str = "strong",
+                          max_tokens: int = 800) -> list:
+    """Best-effort: ONE off-replay-path LLM call labeling each recorded step with a concise intent. Runs at
+    RECORD time only (replay stays 0-LLM). `steps` is a list of `{action, name, text}` dicts. Returns one
+    intent per step (same order) or `[]` on ANY failure or a count mismatch — the caller keeps its placeholder
+    intents, so a captioner outage never breaks recording. The intent feeds self-heal hints, the inspect
+    output, and (write flows) the keyword side of `classify_mutation` — never the replay locator."""
+    if not steps:
+        return []
+    lines = []
+    for i, s in enumerate(steps):
+        bits = [f"{i}. {s.get('action')}"]
+        if s.get("name"):
+            bits.append(f"on {str(s['name'])[:60]!r}")
+        if s.get("text"):
+            bits.append(f"= {str(s['text'])[:60]!r}")
+        lines.append(" ".join(bits))
+    tool = ToolDef(
+        name="caption", description="Return one concise intent per step, in order.",
+        input_schema={"type": "object",
+                      "properties": {"intents": {"type": "array", "items": {"type": "string"}}},
+                      "required": ["intents"], "additionalProperties": False},
+        strict=False,
+    )
+    try:
+        req = LLMRequest(
+            system=_CAPTION_SYSTEM, tools=[tool], force_tool="caption",
+            messages=[Message("user", [TextBlock(f"GOAL: {goal}\n\nSTEPS:\n" + "\n".join(lines))])],
+            max_tokens=max_tokens,
+        )
+        resp = await router.complete(req, tier=tier)
+        tu = resp.tool_use("caption")
+        intents = list((tu.input.get("intents") if tu is not None else None) or [])
+    except Exception:  # noqa: BLE001 - best-effort; any failure -> keep placeholder intents
+        return []
+    if len(intents) != len(steps):
+        return []  # count mismatch -> don't risk misaligning intents to steps
+    return [str(x) for x in intents]
+
+
 async def record_demo(
     url: str, demo: Demo, *, goal: str, cache: FlowCache, scope: str = "default",
     headless: bool = True, settle_ms: int = 80,
     prepare: Optional[Callable[[BrowserSession], Awaitable[None]]] = None,
     storage_state: Optional[str] = None, extra_headers: Optional[dict] = None,
-    mutate: bool = False,
+    mutate: bool = False, caption: "Optional[Caption]" = None,
 ) -> "tuple[CachedFlow, bool, bool, int]":
     """Capture a demonstration of `goal` at `url` into a cached, replayable `CachedFlow`.
 
@@ -351,6 +412,11 @@ async def record_demo(
     and DRAINED post-navigation + at the end (no fixed-timeout flush). `settle_ms` only lets trailing
     DEBOUNCED events (a final scroll, an async `change`) flush before the last drain — it is no longer the
     correctness mechanism for the navigation race.
+
+    `caption` (optional) is a best-effort `(goal, [{action,name,text}]) -> [intent]` callable (see
+    `caption_intents`) run ONCE after capture to replace each placeholder intent with a concise, goal-grounded
+    label — for self-heal hints, the inspect output, and (write flows) the keyword side of `classify_mutation`.
+    It runs at RECORD time only, so replay stays 0-LLM; any failure leaves the placeholder intents.
 
     `mutate=True` marks this as a DECLARED write recording (the caller knows the demo writes and supplied a
     confirm check). It makes capture WRITE-GATE-SAFE: a form-submit click, an Enter-submit press, OR a
@@ -542,6 +608,37 @@ async def record_demo(
                 marker_urls[k] = marker_urls.get(k, 0) + 1
         for k, n_wire in xhr_urls.items():  # a url seen on the wire more than it was markered = worker write
             unattributed_writes += max(0, n_wire - marker_urls.get(k, 0))
+    # INTENT CAPTION (best-effort, OFF the replay path): replace each placeholder intent with a concise,
+    # goal-grounded label. `events`/`steps` are still 1:1 by index here (before scroll-coalescing), so each
+    # captioned intent and its event's scope/ctx line up. In a DECLARED write flow ONLY, a better intent may
+    # UPGRADE the keyword side of `classify_mutation` (the spike's backstop for a bland-named CLIENT-SIDE
+    # commit that fired no wire write, hence no attribution marker) — upgrade-only and gated on the step's own
+    # scope, never downgrading a gate and never re-classifying a READ flow (a caption that invents a 'submit'
+    # keyword must not false-refuse a benign read). The caption is cached, so the replay-time idempotency key
+    # (derived from intent) stays stable across runs.
+    if caption is not None and steps:
+        # REDACT a `type` step's value from the caption summary: it is the literal text the human typed,
+        # which can be a password / token / PII, and the captioner is an external LLM. The field's
+        # accessible name + the goal are enough to label it ("enter the search query"). select/press/scroll
+        # text (an option value / "Enter" / a scroll Y) is non-secret and kept for caption quality.
+        summ = [{"action": s.action, "name": (s.locator.name if s.locator else ""),
+                 "text": (None if s.action == "type" else s.text)} for s in steps]
+        try:
+            new_intents = await caption(goal, summ)
+        except Exception:  # noqa: BLE001 - best-effort
+            new_intents = None
+        if new_intents and len(new_intents) == len(steps):
+            for i, cap in enumerate(new_intents):
+                cap = (str(cap) if cap is not None else "").strip()
+                if not cap:
+                    continue
+                upd: dict = {"intent": cap}
+                if mutate and not steps[i].mutating and events[i].get("scope"):
+                    s = steps[i]
+                    if classify_mutation(s.action, cap, (s.locator.name if s.locator else ""),
+                                         events[i].get("ctx") or {}):
+                        upd.update(mutating=True, precond_scope=hash_scope(events[i]["scope"]))
+                steps[i] = steps[i].model_copy(update=upd)
     steps = _coalesce_scrolls(steps)
     flow = CachedFlow(key=flow_key(goal, url, scope), goal=goal, start_url=url,
                       steps=steps, created_ts=time.time())

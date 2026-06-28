@@ -1,3 +1,5 @@
+> HISTORICAL — original design plan (~#62, pre-recorder). The Phase 0-4 design still matches the code; see STATUS.md / ROADMAP.md for live status (recorder + Phases A-I shipped since).
+
 # ultracua — Implementation Plan
 
 A Computer Use Agent (CUA) that drives a web browser at **5–10× human speed**.
@@ -23,7 +25,7 @@ A Computer Use Agent (CUA) that drives a web browser at **5–10× human speed**
 > the model **auto-selects** them (validated live: Claude chose a WebMCP tool over DOM
 > scraping).
 > **Phases 0–4 complete.** Rust hot-kernel intentionally skipped (DOM work runs in-browser, so
-> Python is not the bottleneck). Deferred: action batching; live OpenAI/Gemini need their SDKs + keys.
+> Python is not the bottleneck). Deferred: action batching. The OpenAI/Gemini adapters are wired (behind the `providers` extra); only the API keys are user-supplied.
 >
 > **Realism layer (in progress).** WebArena-Verified **offline** path wired
 > (`benchmarks/webarena_env.py`): the deterministic evaluator is driven via an isolated

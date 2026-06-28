@@ -1,6 +1,8 @@
 # Phase-I recorder — scoping spike
 
-**Status:** spike / prototype (branch `spike/phase-i-recorder`). Prototype: [`src/ultracua/recorder.py`](../src/ultracua/recorder.py); proof: [`tests/test_recorder_spike.py`](../tests/test_recorder_spike.py); fixture: `benchmarks/fixtures/recorder_checkboxes.html`.
+**Status:** SHIPPED (#63–#72 + intent caption) — this is the original scoping doc, kept for the design
+rationale + verdict; the open questions below are resolved inline (see each ✅). Code:
+[`src/ultracua/recorder.py`](../src/ultracua/recorder.py); proof: [`tests/test_recorder_spike.py`](../tests/test_recorder_spike.py) (+ `test_recorder_fidelity.py`, `test_record.py`, `test_record_caption.py`); fixture: `benchmarks/fixtures/recorder_checkboxes.html`.
 
 ## Verdict
 
@@ -27,9 +29,9 @@ Two claims, held to different standards:
   caption), the honest boundary of a scripted oracle. The recorder routes around *grounding*, but the
   demonstration must still be *correct*.
 
-**Recommendation: proceed to a full build.** It's a **medium** build (front-end over the existing engine);
-the risk is concentrated in a few identified places — intent, **write capture (currently a no-op gate —
-see §2)**, capture fidelity, product UX — not in the core idea.
+**Recommendation: proceed to a full build. → DONE.** It was a **medium** build (a front-end over the existing
+engine), and it shipped: intent ✅ (caption pass), write capture ✅ (per-write attribution), capture fidelity
+✅ (nav/select/press/scroll), and the `flow record` product surface — none of the risk was in the core idea.
 
 ## Why (the lever)
 
@@ -75,14 +77,14 @@ the lever caveat in the Verdict.
 
 ## Open questions / risks (what the full build must resolve)
 
-1. **Intent assignment** *(medium — and on the trust path)*. The replay engine doesn't need `intent` (it
-   resolves by locator), but self-heal hints, the idempotency key, and **the keyword side of
-   `classify_mutation`** do — so intent isn't just UX, it feeds *write classification*. The spike derives a
+1. ✅ **Intent assignment** *(medium — on the trust path — BUILT)*. The replay engine doesn't need `intent`
+   (it resolves by locator), but self-heal hints, the idempotency key, and **the keyword side of
+   `classify_mutation`** do — so intent isn't just UX, it feeds *write classification*. The spike derived a
    placeholder from the element (`"click qux"`), so a real "Submit order" click could be mis-classified
-   **non-mutating** and replay ungated (compounds §2). Options: a one-line human label per step; a single
-   post-hoc LLM caption pass (cheap, one call, off the replay path); or infer from the element.
-   **Recommend** the post-hoc LLM caption — but it must run **before** `classify_mutation` (or classification
-   must move to a structural-only signal, see §2). Keeps replay 0-LLM.
+   **non-mutating** and replay ungated. **Done:** an intent-caption pass (`caption_intents` in `recorder.py`,
+   opt-in via the `flow record` CLI) makes a single best-effort post-hoc LLM call (off the replay path) that relabels
+   each step's intent, feeding self-heal hints, `inspect` output, and the keyword side of
+   `classify_mutation`; read flows are kept text-only to avoid false-refusal. **Replay stays 0-LLM.**
 2. ✅ **Write capture** *(medium, TRUST-CRITICAL — BUILT)*. Both gaps closed: (a) the capture now computes
    `mutation_context(el)` (form method) **and** `scope_fingerprint(el)` **inline** at record time — the same
    `_MUTATION_CTX_JS` + `SCOPE_JS` the learn path uses, hashed by the shared `hash_scope` for byte-identical
@@ -104,8 +106,12 @@ the lever caveat in the Verdict.
    synthetic submit-button click would *also* fire, so replay never double-submits); `scroll` (debounced +
    coalesced, a best-effort viewport restore). **Write-safe by construction:** a `<select>` or Enter that
    **submits/posts** in a declared-write flow is captured as a **gated** mutating step (the formless case via
-   a timestamp-correlated fallback that ties the gate to the actuated step which *caused* the wire write, not
-   an arbitrary trailing click) — so a select-/Enter-driven write can't replay ungated or double-submit. The
+   **per-write attribution** — the init-script instruments `fetch` / `XMLHttpRequest.send` /
+   `navigator.sendBeacon` and tags each non-idempotent request with the commit seq from its synchronous turn,
+   so the gate binds to the actuated step that *caused* the wire write, not an arbitrary trailing click; an
+   ambiguous/deferred request stays unattributed and the flow is **refused**, and an un-instrumentable
+   worker / service-worker / cross-realm write surfaces with no marker and is likewise **refused**, never
+   cached ungated) — so a select-/Enter-driven write can't replay ungated or double-submit. The
    **exfiltration-vs-navigation race is FIXED**: events are written **synchronously to `sessionStorage`**
    (survives same-origin navigation) and **drained post-navigation + at the end**, replacing the fixed
    `wait_for_timeout` flush; a test demonstrates a *navigating* click and asserts no step is dropped.
@@ -134,7 +140,7 @@ the lever caveat in the Verdict.
 | ✅ **MiniWoB ceiling validation (was GATING)** | done | **DONE + same-seed contrast measured** — recorder **9/9** garbled-label instances 0-LLM, id-free (role+name+css), gated in CI; vs **LLM authoring 4/9** (`--provider anthropic`, N=1) — the LLM misses every multi-target selection. |
 | ✅ **Capture core (nav handshake + select/press/scroll)** | done | sessionStorage store drained post-navigation (no fixed timeout); `select`/`press`/`scroll` captured + replayed, tested key-less. Deferred: shadow/iframe, hover/drag, non-Enter keys |
 | ✅ **`describe()` reuse** | done | capture imports the **one** `_SPECOF_JS` `describe()` uses — resolution parity + recorded steps gain the neighbor anchor; tested key-less. (Verify-by-replay already gates read flows.) |
-| Intent (post-hoc LLM caption) | S | one off-replay-path call; must run *before* `classify_mutation` |
+| ✅ **Intent (post-hoc LLM caption)** | done | `caption_intents` (recorder.py), opt-in via the `flow record` CLI (`record(caption=…)`) — one off-replay-path call relabels each step's intent; feeds self-heal + `inspect` + the keyword side of `classify_mutation`; read flows text-only (no false-refusal); replay stays 0-LLM; capture itself stays key-less |
 | ✅ **Write capture + gate integration** | done | trust-critical — `mutation_context` + `scope_fingerprint` captured inline (shared `hash_scope` parity); declared writes routed via approval+gate+idempotency; fail-closed guard; adversarial-reviewed |
 | `flow record` CLI + review/approve UX | M | headed browser, stop signal, inspect (`--confirm-*` now declares a write) |
 
@@ -147,6 +153,7 @@ Proceed. The gating MiniWoB ceiling validation is **done** (lever measured), the
 **write capture has landed** (§2: declared writes replay gated + approval-gated + idempotency-keyed,
 fail-closed; adversarial-reviewed), **capture fidelity is hardened** (§3: nav handshake via a sessionStorage
 store drained post-navigation, plus `select`/`press`/`scroll`, tested key-less), and **`describe()` reuse is
-done** (§4: capture shares the one `_SPECOF_JS` for resolution parity + neighbor-anchor on recorded steps).
-Remaining build order: **intent caption** (one post-hoc LLM pass, before `classify_mutation`) → deferred
-capture (shadow/iframe, hover/drag, multi-tab).
+done** (§4: capture shares the one `_SPECOF_JS` for resolution parity + neighbor-anchor on recorded steps),
+and **intent caption has landed** (§1: `caption_intents`, one off-replay-path LLM pass feeding self-heal +
+`classify_mutation`; replay stays 0-LLM). Remaining build order: **deferred capture** (shadow/iframe,
+hover/drag, multi-tab) → **web UI / service daemon**.

@@ -33,7 +33,7 @@ from .locators import resolve
 from .obs import get_logger
 from .pin import find_pin, read_pin
 from .providers import build_router, get_provider
-from .recorder import record_demo
+from .recorder import caption_intents, record_demo
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
@@ -349,6 +349,29 @@ def _default_cache() -> FlowCache:
 def _router(provider_name: str):
     provider = get_provider(provider_name)
     return provider, getattr(provider, "router", None) or build_router(provider_name)
+
+
+# Env vars whose presence means the configured provider's LLM is usable — so `record` can auto-caption step
+# intents. Absent (the key-less CI / test path) -> caption is skipped, never an LLM attempt (the router
+# retries with backoff, so a failed attempt per test would be slow + noisy).
+_KEY_ENV = {"anthropic": ("ANTHROPIC_API_KEY",), "openai": ("OPENAI_API_KEY",),
+            "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY")}
+
+
+def _llm_configured(provider_name: str) -> bool:
+    return any(os.getenv(e) for e in _KEY_ENV.get(provider_name, ("ANTHROPIC_API_KEY",)))
+
+
+def caption_for(provider_name: Optional[str] = None):
+    """Build the intent captioner to pass as `record(caption=...)` — or None when no LLM is configured (so
+    recording stays key-less). Used by the `flow record` CLI; the captioner is best-effort, so a failure
+    just leaves placeholder intents. NOT called by `record()` itself: caption is opt-in, never a surprise
+    LLM call on the key-less capture path."""
+    pname = provider_name or settings.provider
+    if not _llm_configured(pname):
+        return None
+    _, router = _router(pname)
+    return lambda g, s: caption_intents(router, g, s)  # noqa: E731
 
 
 async def _condition_present(
@@ -1013,7 +1036,8 @@ class RecordResult:
 
 async def record(
     spec: FlowSpec, *, demo: Callable[[Any], Awaitable[None]], headless: bool = False,
-    cache: Optional[FlowCache] = None,
+    cache: Optional[FlowCache] = None, caption: Optional[Callable[..., Any]] = None,
+    provider_name: Optional[str] = None,
 ) -> RecordResult:
     """Capture a human DEMONSTRATION of `spec` into a cached, replayable flow (Phase I recorder).
 
@@ -1041,10 +1065,15 @@ async def record(
     cache = cache or _default_cache()
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     declared_write = spec.mutate is not None
+    # Intent caption is OPT-IN (an explicit `caption` callable), never auto-wired here: capture itself is
+    # key-less, so `record()` must not make a surprise LLM call. The `flow record` CLI builds the real
+    # captioner (`caption_for`) and passes it; tests inject a fake. `provider_name` is unused here (kept for
+    # signature stability) — the CLI owns captioner construction.
     flow, wire_write, crossed_origin, unattributed_writes = await record_demo(
         spec.start_url, demo, goal=spec.goal, cache=cache, scope=spec.scope, headless=headless,
         storage_state=spec.storage_state, extra_headers=spec.headers,  # demo in the SAME context as verify
         mutate=declared_write,  # gate the demonstrated write step(s) at capture time
+        caption=caption,        # best-effort intent labels (off the replay path); None -> placeholder intents
     )
     detected_write = wire_write or any(s.mutating for s in flow.steps)
 

@@ -1,9 +1,11 @@
 # Discovery-reliability baselines
 
-Standing benchmark records captured with the variance harness
-([`benchmarks/variance.py`](../benchmarks/variance.py)) against a **real LLM** (Anthropic), so
-later changes — most immediately **best-of-N authoring** (Tier-2) — can be measured and gated against a
-fixed reference instead of a single noisy run.
+Standing benchmark records, so later changes — most immediately **best-of-N authoring** (Tier-2) — can
+be measured and gated against a fixed reference instead of a single noisy run. Only the **MiniWoB
+best-of-N** baselines come from the variance harness
+([`benchmarks/variance.py`](../benchmarks/variance.py)) against a **real LLM** (Anthropic); `drift.json`
+is produced by `drift_sandbox.py` (scripted/**key-less**) and `recorder_ceiling.json` by
+`recorder_ceiling.py`.
 
 | File | Bench | Captured | Headline |
 |---|---|---|---|
@@ -83,6 +85,14 @@ so it's the headroom best-of-N should close. The demo flow authors reliably (no 
 # Re-measure and FAIL (exit 1) if replay-success regressed beyond the error bars, or cost rose >25%:
 uv run --group bench python -m benchmarks.variance --bench miniwob --reps 5 --all --baseline baselines/miniwob.json
 uv run python -m benchmarks.variance --bench demo --reps 5 --baseline baselines/demo.json
+
+# Best-of-N variants (real LLM):
+uv run --group bench python -m benchmarks.variance --bench miniwob --reps 5 --samples 3 --all --baseline baselines/miniwob_bestof3.json
+uv run --group bench python -m benchmarks.variance --bench miniwob --reps 5 --samples 3 --reflect --all --baseline baselines/miniwob_reflect3.json
+
+# Key-less baselines (no API key):
+uv run python -m benchmarks.drift_sandbox --json --baseline baselines/drift.json
+uv run python -m benchmarks.recorder_ceiling --json baselines/recorder_ceiling.json
 ```
 
 Notes:
