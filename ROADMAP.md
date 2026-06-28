@@ -219,12 +219,25 @@ renamed-but-same-purpose elements.
 
 ### Phase G — Action breadth & multi-step writes ("real transactions, not just reads")
 
-Per-step action-completion verification + checkpointing/compensation for **multi-write** flows (Phase
-D's MVP was single-outcome); file upload/download, multi-tab, iframes, date pickers, autocomplete;
-mutation classification from the form method / declared `MutateSpec`, not just keywords.
+✅ **Multi-write completion barrier — shipped (thin slice).** A flow can now perform MULTIPLE writes, each with
+its own **per-write completion barrier** (`MutateSpec.step_confirms` → `CachedStep.confirm`, a `StepConfirm`):
+replay verifies each write the moment it actuates — as an **absent→present transition**, so an already-true
+confirm can't be a false pass — and **fails loud, NOT proceeding to the next write**, if one can't be confirmed
+(`flow.py` `_replay` loop; reuses the per-step mutation gate + idempotency key + the shared
+`conditions.condition_present`). Per-write checks bind by **commit order** (count-checked; `expects_intent`
+required for >1 write to anchor each confirm to its write) and refuse to cache on a mismatch; multi-write
+barriers are **record-only** (the recorder has per-write wire attribution; the LLM-learn classifier can miss a
+write). A multi-write flow is **not** auto-retried after auth-refresh (no per-write resume yet). Adversarially
+reviewed (a first cut was blocked for false-pass / double-submit holes; re-scoped to the barrier + the fixes).
 
-- *Enables:* "submit a multi-page application, place a multi-item order, file a ticket with an attachment."
-- *Closes:* single-outcome-write limit, keyword-heuristic gaps, missing action verbs.
+- *Enables:* "submit a multi-page application, place a multi-item order, approve N pending items each with its
+  own submit" — verified write-by-write, fail-loud, no silent run-past an unconfirmed write.
+- **Still open (later Phase-G PRs):** per-write one-shot **resume** (skip an already-landed write on a re-run —
+  deferred because a stateless page probe can't safely attribute prior page-state to a specific write); the
+  recorder `--confirm-*` per-write CLI flags (the engine + API + `record()` attach are done); a `{status,
+  writes:[...]}` summary; declarative **compensation/rollback**; **dynamic-N** writes; and the
+  **action-breadth** verbs — file upload/download, multi-tab, iframes, date pickers, autocomplete.
+- *Closes:* the single-outcome-write limit. Still open: resume, action verbs, compensation, dynamic-N.
 
 ### Phase H — Cost & latency floor ("cheap and fast at scale")
 
