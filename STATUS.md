@@ -143,8 +143,12 @@ locator-resilience benchmark; the **freshness canary** + daemon-contract docs; a
 **per-write attribution**, and the post-hoc intent caption, all via `flow record`. The recorder was
 measured against the exact MiniWoB capability ceiling and scored **9/9 vs the LLM's 4/9** (#64), so it
 **closed** that ~40% gap. Of the longer-term phases, **E fleet supervisor, F suffix-replan, H pinned
-reads, J CI, and the I recorder core** are landed — only **G (barrier-commit multi-write)** and the
-**Phase-I remainder (web UI / service daemon / registry)** remain open.
+reads, J CI, the I recorder core, and the G multi-write completion barrier** are landed — the last adds a
+**per-write barrier** (`MutateSpec.step_confirms`): replay verifies each write as it actuates (an absent→present
+transition) and fails loud without proceeding to the next write; multi-write barriers are record-only and not
+auto-retried after auth-refresh. Still open: the **Phase-I remainder** (web UI / service daemon / registry) and
+**Phase-G** per-write one-shot resume, action breadth (file upload / multi-tab / iframes), compensation/rollback,
+and dynamic-N writes.
 
 See [ROADMAP.md → *Beyond Phase D*](ROADMAP.md) for the longer-term phases (E–J) with the concrete
 use cases each unlocks and the gap each closes.

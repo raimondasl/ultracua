@@ -25,7 +25,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Union
 
 from .browser import BrowserSession
-from .cache import CachedStep, FlowCache, flow_key
+from .cache import CachedStep, FlowCache, StepConfirm, flow_key
+from .conditions import condition_present
 from .config import settings
 from .extract import extract
 from .flow import run_cached
@@ -94,12 +95,24 @@ class MutateSpec:
     precheck_selector: Optional[str] = None
     precheck_text_contains: Optional[str] = None
     precheck_url_contains: Optional[str] = None    # already-done state distinguishable only by URL
+    # Phase G — MULTI-WRITE: per-write completion barriers, in COMMIT ORDER (one `StepConfirm` per write).
+    # When set, each is attached at record time to the Nth mutating step (count-checked; `expects_intent` is
+    # required when >1 write to anchor the binding), and replay verifies each write the moment it actuates —
+    # an absent->present transition — failing loud and NOT proceeding if one can't be confirmed. `confirm_*`
+    # above stays the WHOLE-FLOW / overall check; leave `step_confirms` unset for a single-outcome (Phase-D)
+    # write. (Per-write one-shot RESUME is a separate deferred slice — see StepConfirm; until then a
+    # multi-write flow re-fires its writes on a re-run and is not auto-retried after auth-refresh.)
+    step_confirms: Optional[list[StepConfirm]] = None
 
     def has_confirm(self) -> bool:
         return any((self.confirm_selector, self.confirm_text_contains, self.confirm_url_contains))
 
     def has_precheck(self) -> bool:
         return any((self.precheck_selector, self.precheck_text_contains, self.precheck_url_contains))
+
+    def is_multiwrite(self) -> bool:
+        """True iff this flow declares more than one per-write barrier (a true multi-write transaction)."""
+        return bool(self.step_confirms) and len(self.step_confirms) > 1
 
 
 @dataclass
@@ -374,38 +387,6 @@ def caption_for(provider_name: Optional[str] = None):
     return lambda g, s: caption_intents(router, g, s)  # noqa: E731
 
 
-async def _condition_present(
-    page, *, selector=None, text_contains=None, url_contains=None, timeout_ms=None
-) -> bool:
-    """ANY-of presence check (shared by the mutate confirm + precheck): True if any set condition
-    holds. Polls up to `timeout_ms` (default 5000) so a confirmation that renders a beat late isn't
-    missed; pass `timeout_ms=0` for a single immediate check (the precheck wants a fast decision)."""
-    budget = 5000 if timeout_ms is None else timeout_ms
-    interval = 200
-    waited = 0
-    while True:
-        if url_contains and url_contains in page.url:
-            return True
-        if text_contains:
-            try:
-                body = await page.inner_text("body")
-            except Exception:  # noqa: BLE001
-                body = ""
-            if text_contains.lower() in body.lower():
-                return True
-        if selector:
-            try:
-                await page.wait_for_selector(selector, timeout=interval)  # this consumes ~interval
-                return True
-            except Exception:  # noqa: BLE001
-                pass
-        waited += interval
-        if waited >= budget:
-            return False
-        if not selector:  # selector branch already waited; otherwise pace the poll
-            await asyncio.sleep(interval / 1000.0)
-
-
 def _make_finalize(spec: FlowSpec, router, out: dict, pin: Optional[dict] = None):
     async def _finalize(session):
         if spec.mutate is not None:
@@ -416,7 +397,7 @@ def _make_finalize(spec: FlowSpec, router, out: dict, pin: Optional[dict] = None
                 await session.page.wait_for_load_state("networkidle", timeout=8000)
             except Exception:  # noqa: BLE001
                 pass
-            confirmed = await _condition_present(
+            confirmed = await condition_present(
                 session.page, selector=m.confirm_selector,
                 text_contains=m.confirm_text_contains, url_contains=m.confirm_url_contains,
                 timeout_ms=m.timeout_ms,
@@ -529,7 +510,7 @@ async def _already_committed(spec: FlowSpec) -> bool:
         if spec.headers:
             await session.set_extra_http_headers(spec.headers)
         await session.goto(m.precheck_url or spec.start_url)
-        return await _condition_present(
+        return await condition_present(
             session.page, selector=m.precheck_selector, text_contains=m.precheck_text_contains,
             url_contains=m.precheck_url_contains, timeout_ms=0,  # a fast skip decision, not a wait
         )
@@ -639,6 +620,26 @@ async def _learn_once(
     )
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     cached = cache.get(key)
+    # Phase G: attach per-write completion barriers (in commit order) to the LLM-authored mutating steps.
+    # A mismatch refuses the flow (delete + cached=False) — never a half/mis-confirmed multi-write flow.
+    if cached is not None and spec.mutate is not None and spec.mutate.step_confirms:
+        if spec.mutate.is_multiwrite():
+            # The LLM-learn path classifies writes by `classify_mutation` alone, which can MISS a formless
+            # write (so the 1:1 count check would falsely pass with an unbarriered write). The recorder has
+            # per-write wire attribution, so a MULTI-write barrier must be authored via `record()`. (A single
+            # per-write barrier is fine — a missed lone write fails the count check.)
+            cache.delete(key)
+            return LearnResult(spec=spec, cached=False, steps=list(cached.steps), data=out.get("data"),
+                               found=False, note="a multi-write flow's per-write barriers must be recorded "
+                                                 "via `flow record` (the LLM-learn path can't reliably attribute "
+                                                 "each write); learn the reads, record the writes.")
+        attached, reason = _attach_step_confirms(cached, spec.mutate.step_confirms)
+        if attached is None:
+            cache.delete(key)
+            return LearnResult(spec=spec, cached=False, steps=list(cached.steps), data=out.get("data"),
+                               found=False, note=f"per-write confirm checks could not be attached: {reason}")
+        cache.put(attached)
+        cached = attached
     data, found = out.get("data"), bool(out.get("found"))
     pinned = False
     approved = False
@@ -805,7 +806,13 @@ async def replay(
         # NOT retried unless it has an idempotency precheck: a first attempt may have committed the
         # write before failing its confirm check, and a blind retry would double-submit. With a
         # precheck we re-check first and skip if the write already landed.
-        retry_ok = auth_refresh and spec.login is not None and (not is_mutate or spec.mutate.has_precheck())
+        # A write flow is retried after auth-refresh only if a re-run can't double-submit: a SINGLE-write flow
+        # with a whole-flow precheck (re-check first, skip if already landed). A MULTI-WRITE flow is NEVER
+        # auto-retried — a whole-flow precheck only models the LAST write, so a retry would re-fire an
+        # already-landed earlier write (per-write resume that would make this safe is a deferred slice). It
+        # fails loud instead, exactly as a single write without a precheck.
+        retry_ok = auth_refresh and spec.login is not None and (
+            not is_mutate or (spec.mutate.has_precheck() and not spec.mutate.is_multiwrite()))
         if retry_ok:
             try:
                 await refresh_auth(spec, headless=spec.headless)
@@ -819,9 +826,11 @@ async def replay(
             except Exception as exc:  # noqa: BLE001 - any refresh failure -> fall through to relearn/raise
                 reason = f"{reason}; auth refresh failed: {type(exc).__name__}: {exc}"
         elif is_mutate and auth_refresh and spec.login is not None:
-            reason = (f"{reason}; not retrying a write after auth refresh without an idempotency "
-                      f"precheck (would risk a double-submit) — add mutate.precheck_* or run "
-                      f"`flow login` then replay")
+            reason = (f"{reason}; not retrying a MULTI-WRITE flow after auth refresh (a re-run would re-fire "
+                      f"an already-landed earlier write; per-write resume is not yet supported) — run "
+                      f"`flow login` then replay" if spec.mutate.is_multiwrite() else
+                      f"{reason}; not retrying a write after auth refresh without an idempotency precheck "
+                      f"(would risk a double-submit) — add mutate.precheck_* or run `flow login` then replay")
         if on_drift == "relearn":  # (refused above for write flows)
             # The flow has drifted, so a previously-learned pin (anchored to the OLD final page) is no
             # longer trustworthy — drop it BEFORE we repair, and persist that first. The repair re-caches
@@ -879,7 +888,12 @@ def save_spec(spec: FlowSpec) -> Path:
     d = _specs_dir()
     d.mkdir(parents=True, exist_ok=True)
     p = d / f"{spec.name}.json"
-    p.write_text(json.dumps(asdict(spec), indent=2), encoding="utf-8")
+    body = asdict(spec)
+    # `asdict` doesn't recurse into the pydantic StepConfirm objects in mutate.step_confirms (they'd make
+    # json.dumps raise) — serialize them explicitly.
+    if spec.mutate is not None and spec.mutate.step_confirms:
+        body["mutate"]["step_confirms"] = [sc.model_dump() for sc in spec.mutate.step_confirms]
+    p.write_text(json.dumps(body, indent=2), encoding="utf-8")
     return p
 
 
@@ -891,7 +905,10 @@ def load_spec(name: str) -> FlowSpec:
     if isinstance(data.get("login"), dict):
         data["login"] = LoginSpec(**_only_known(data["login"], LoginSpec))
     if isinstance(data.get("mutate"), dict):
-        data["mutate"] = MutateSpec(**_only_known(data["mutate"], MutateSpec))
+        m = _only_known(data["mutate"], MutateSpec)
+        if isinstance(m.get("step_confirms"), list):  # rebuild the pydantic StepConfirm objects from dicts
+            m["step_confirms"] = [StepConfirm(**sc) if isinstance(sc, dict) else sc for sc in m["step_confirms"]]
+        data["mutate"] = MutateSpec(**m)
     return FlowSpec(**data)
 
 
@@ -1034,6 +1051,41 @@ class RecordResult:
     note: str = ""
 
 
+def _attach_step_confirms(flow, step_confirms: "list[StepConfirm]"):
+    """Phase G: bind each `StepConfirm` (in COMMIT ORDER) to the cached flow's mutating steps and return
+    `(new_flow, "")` — or `(None, reason)` on a mismatch so the caller fails loud (never caches a half- or
+    mis-confirmed multi-write flow). Binding is by ORDINAL among mutating steps (the Nth confirm -> the Nth
+    write, in list order), with a strict count check. `expects_intent` (a substring of the bound step's intent
+    or accessible name) is REQUIRED when there is >1 write — it anchors each confirm to its write, so a
+    mis-ordered or count-padded list (e.g. a benign keyword-classified control inflating the write count)
+    fails loud here rather than silently binding a confirm to the wrong write. The binding is FROZEN into the
+    cached steps, so replay never re-pairs under later classifier drift; a human still reviews before `approve`."""
+    writes = [(i, s) for i, s in enumerate(flow.steps) if s.mutating]
+    if len(step_confirms) != len(writes):
+        return None, (f"{len(step_confirms)} per-write confirm(s) declared but the flow has {len(writes)} "
+                      f"gated write step(s) — they must match 1:1 in commit order")
+    multi = len(writes) > 1
+    seen_anchors: set = set()
+    steps = list(flow.steps)
+    for sc, (i, s) in zip(step_confirms, writes):
+        if not sc.has_confirm():
+            return None, f"a per-write confirm for write step {i} ({s.intent!r}) has no confirm_* check set"
+        if multi and not sc.expects_intent:
+            return None, (f"a multi-write flow requires expects_intent on every per-write confirm (write "
+                          f"step {i}, intent {s.intent!r}) so each confirm is anchored to its write")
+        if sc.expects_intent:
+            key = sc.expects_intent.lower()
+            if multi and key in seen_anchors:
+                return None, f"duplicate expects_intent {sc.expects_intent!r} — each must identify ONE write"
+            seen_anchors.add(key)
+            hay = f"{s.intent} {s.locator.name if s.locator else ''}".lower()
+            if key not in hay:
+                return None, (f"per-write confirm expects_intent {sc.expects_intent!r} does not match write "
+                              f"step {i} (intent {s.intent!r}) — confirms may be out of commit order")
+        steps[i] = s.model_copy(update={"confirm": sc})
+    return flow.model_copy(update={"steps": steps}), ""
+
+
 async def record(
     spec: FlowSpec, *, demo: Callable[[Any], Awaitable[None]], headless: bool = False,
     cache: Optional[FlowCache] = None, caption: Optional[Callable[..., Any]] = None,
@@ -1145,6 +1197,27 @@ async def record(
                                      "from a nested/forwarded click, or was deferred past another action, or "
                                      "its precondition wasn't captured) — not cached, to never replay a write "
                                      "ungated. Re-record so each write fires directly from one action.")
+        # Phase G: a flow with MORE THAN ONE write but no per-write barriers checks only the whole-flow
+        # confirm (the last write); an intermediate write that silently fails wouldn't be caught. Warn loud
+        # (and the GUIDE documents declaring `step_confirms`). Not refused, to keep a multi-step single-commit
+        # flow (e.g. fill-then-submit) working — only the final commit is a write there.
+        n_writes = sum(1 for s in flow.steps if s.mutating)
+        if n_writes > 1 and not spec.mutate.step_confirms:
+            _log.warning("flow %r: %d write steps but no per-write barriers (mutate.step_confirms) — only the "
+                         "whole-flow confirm is checked; an intermediate write failure won't be caught",
+                         spec.name, n_writes)
+        # Attach per-write completion barriers (in commit order) to the gated write steps. A mismatch (count
+        # or expects_intent) refuses to cache — never a half/mis-confirmed multi-write flow.
+        if spec.mutate.step_confirms:
+            attached, reason = _attach_step_confirms(flow, spec.mutate.step_confirms)
+            if attached is None:
+                cache.delete(key)
+                return RecordResult(spec, cached=False, reproduced=False, performed_write=wire_write,
+                                    is_write=True, steps=list(flow.steps),
+                                    note=f"per-write confirm checks could not be attached: {reason}.")
+            cache.put(attached)
+            return RecordResult(spec, cached=True, reproduced=False, performed_write=wire_write, is_write=True,
+                                steps=list(attached.steps), note="")
         return RecordResult(spec, cached=True, reproduced=False, performed_write=wire_write, is_write=True,
                             steps=list(flow.steps), note="")
 

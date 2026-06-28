@@ -29,6 +29,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from .browser import BrowserSession
 from .cache import CachedFlow, CachedStep, FlowCache, flow_key
+from .conditions import condition_present
 from .config import settings
 from .locators import describe, focused_ref, resolve
 from .providers.base import Provider
@@ -641,11 +642,47 @@ async def _replay(
             tr = StepTrace(index=i)
             tr.meta["intent"] = step.intent
             tr.meta["action"] = step.action
+            wc = step.confirm if (step.mutating and step.confirm is not None) else None  # Phase G barrier
             if step.mutating:
                 tr.meta["mutating"] = True
+            # COMMIT-BARRIER BASELINE (Phase G): snapshot whether the per-write confirm ALREADY holds BEFORE
+            # the write actuates. The barrier requires an absent->present TRANSITION, so a confirm that is
+            # already satisfied (a persistent/shared status region, residual text from an earlier write, a
+            # URL that doesn't change) can't be a false PASS — and a write that fires nothing leaves the
+            # confirm absent, so the barrier fails loud. (timeout_ms=0: a single immediate check.)
+            pre_confirm = False
+            if wc is not None and wc.has_confirm():
+                pre_confirm = await condition_present(
+                    session.page, selector=wc.confirm_selector,
+                    text_contains=wc.confirm_text_contains, url_contains=wc.confirm_url_contains,
+                    timeout_ms=0,
+                )
             ok, note, did_heal = await _replay_step(
                 session, step, provider, tr, goal, governor, scope, i
             )
+            # COMMIT BARRIER: a write with a per-step confirm must show its completion signal TRANSITION to
+            # present before we proceed. A failure flips `ok` to False and falls into the existing fail-loud
+            # path below — and since the step is `mutating`, suffix-replan is skipped, so replay STOPS here
+            # (never silently running the next write). If the confirm was already true pre-write, this write's
+            # completion can't be distinguished from prior state -> fail loud (the author must pick a confirm
+            # unique to this write's outcome). Reuses the same `condition_present` the whole-flow confirm uses.
+            if ok and wc is not None and wc.has_confirm():
+                with tr.measure("confirm"):
+                    try:
+                        await session.page.wait_for_load_state("networkidle", timeout=wc.timeout_ms)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    landed = (not pre_confirm) and await condition_present(
+                        session.page, selector=wc.confirm_selector,
+                        text_contains=wc.confirm_text_contains, url_contains=wc.confirm_url_contains,
+                        timeout_ms=wc.timeout_ms,
+                    )
+                if not landed:
+                    ok = False
+                    note = (f"write step {i} did not confirm (commit barrier) — "
+                            + ("its confirm was already true before the write (not unique to this write's "
+                               "outcome)" if pre_confirm else "no completion signal appeared")
+                            + "; not proceeding to the next write")
             if did_heal:
                 healed += 1
                 llm += 1

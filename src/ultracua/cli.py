@@ -318,6 +318,10 @@ def _flow_record(args: argparse.Namespace) -> None:
     for s in res.steps:
         name = (s.locator.name if s.locator else "") or (s.locator.tag if s.locator else "")
         marker = "  [write — gated]" if s.mutating else ""
+        if getattr(s, "confirm", None) is not None:  # Phase G: show the per-write barrier bound to this write
+            c = s.confirm
+            sig = c.confirm_selector or c.confirm_text_contains or c.confirm_url_contains
+            marker += f" → confirm: {sig!r}"
         print(f"  {s.action} {name!r}" + (f" = {s.text!r}" if s.text else "") + marker)
     if res.cached:
         from .flows import save_spec

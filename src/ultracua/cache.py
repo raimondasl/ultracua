@@ -28,6 +28,35 @@ from .types import ActionType
 SCHEMA_VERSION = 4  # v4: reading-order snapshot (changes ref order + fingerprint basis) + AccName names
 
 
+class StepConfirm(BaseModel):
+    """Per-write action-completion check (Phase G multi-write) — the per-step echo of `MutateSpec.confirm_*`.
+
+    Set ONLY on a mutating commit step. On replay the engine verifies the `confirm_*` condition the moment
+    that write actuates, BEFORE proceeding to the next step — a sequential commit barrier, so a multi-write
+    flow never silently runs past a write whose completion can't be verified. The check is a TRANSITION
+    (absent-before -> present-after the write), so a confirm that was already true can't be a false pass.
+    `expects_intent` (required when there is >1 write) anchors each confirm to its write by an intent /
+    accessible-name substring, so a mis-ordered list fails loud at attach time.
+
+    (Per-write one-shot RESUME — skip an already-landed write on a re-run — is a separate, deferred slice: a
+    stateless page probe can't safely attribute prior page-state to a specific write, so until that's designed
+    a multi-write flow re-fires its writes on a manual re-run, like a recurring single write, and is never
+    auto-retried after auth-refresh.)"""
+
+    # action-completion (ANY-of, like MutateSpec.confirm_*) — at least one is required.
+    confirm_selector: Optional[str] = None
+    confirm_text_contains: Optional[str] = None
+    confirm_url_contains: Optional[str] = None
+    timeout_ms: int = 8000
+    # Authoring guard: a substring that must appear in the bound step's intent or accessible name. REQUIRED
+    # when a flow has >1 write (so each confirm is anchored to its write, not just ordinally placed); optional
+    # for a single write. Catches a mis-ordered / mis-counted step_confirms list loud at attach time.
+    expects_intent: str = ""
+
+    def has_confirm(self) -> bool:
+        return any((self.confirm_selector, self.confirm_text_contains, self.confirm_url_contains))
+
+
 class CachedStep(BaseModel):
     intent: str
     action: ActionType
@@ -44,6 +73,9 @@ class CachedStep(BaseModel):
     # Empty on older flows / non-mutating steps -> the gate falls back to precond_fingerprint.
     precond_scope: str = ""
     mutating: bool = False  # irreversible side effect -> never blind-replay
+    # Phase G: per-write completion barrier (set only on a mutating commit step). Defaulted None -> older
+    # flows + non-multi-write flows deserialize unchanged (NO schema bump needed).
+    confirm: Optional[StepConfirm] = None
 
 
 class CachedFlow(BaseModel):

@@ -232,6 +232,45 @@ Write semantics:
 CLI: `ultracua flow learn --confirm-text-contains "Order placed" …`, or `flow set-mutate --name …
 --confirm-*`.
 
+### Multi-write transactions (Phase G)
+
+A flow that performs **several writes** (a multi-page application, a multi-item order, approving N pending
+items) declares a **per-write completion barrier** for each, in **commit order**, via
+`MutateSpec.step_confirms`. Replay verifies each write *the moment it actuates* — as an **absent→present
+transition** — and **fails loud, without proceeding to the next write**, if one can't be confirmed (so a later
+write never fires after an earlier one silently failed). `confirm_*` stays the whole-flow/overall check.
+
+```python
+from ultracua import FlowSpec, MutateSpec
+from ultracua.cache import StepConfirm
+
+spec = FlowSpec(name="checkout", start_url=…, goal="add the item then place the order",
+    mutate=MutateSpec(
+        confirm_text_contains="Order placed",                 # overall / last-write signal
+        step_confirms=[                                        # one per write, in commit order
+            StepConfirm(confirm_text_contains="Added to cart", expects_intent="Add to cart"),
+            StepConfirm(confirm_text_contains="Order placed",  expects_intent="Place order"),
+        ]))
+```
+
+- **Authoring:** **record** a multi-write flow (`record(spec, demo=…)` with `spec.mutate.step_confirms`) — the
+  recorder's per-write attribution gives each write a real, gated commit. The LLM-learn path refuses multi-write
+  barriers (its keyword classifier can miss a write); learn the reads, record the writes.
+- **Binding:** each `StepConfirm` attaches to the Nth gated write in commit order, **count-checked**, and for a
+  multi-write flow `expects_intent` (a substring of that write's button label / intent) is **required** to anchor
+  each confirm to its write. A count mismatch, a missing/duplicate anchor, or an `expects_intent` that doesn't
+  match its write **refuses to cache** — never a half- or mis-confirmed write flow. The CLI prints the
+  confirm bound to each write; review it before `approve`.
+- **Distinct confirms (important):** give each write a confirm **unique to its outcome** (prefer a write-specific
+  `confirm_selector` / `confirm_url_contains` over shared text). The barrier requires an absent→present
+  transition, so a confirm that's already true before the write (a leftover "Saved" banner from the previous
+  write) **fails loud** rather than waving the write through.
+- **Re-runs:** a multi-write flow's writes are treated as **recurring** — a re-run re-fires them (and a
+  multi-write flow is **not** auto-retried after auth-refresh, to avoid re-firing an already-landed earlier
+  write). Per-write one-shot **resume** (skip a write that already landed) and declarative
+  **compensation/rollback** + **dynamic-N** ("approve however many items exist today") are deferred to later
+  Phase-G PRs; the recorder `--confirm-*` CLI flags too (use the Python API for now).
+
 ## Run a fleet
 
 Once you have several saved flows, **`ultracua flow run-all`** is the supervisor: it replays every
