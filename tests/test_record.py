@@ -1112,6 +1112,572 @@ async def test_record_write_flow_type_autosave_is_refused(tmp_path) -> None:
         httpd.server_close()
 
 
+# WORKER / cross-realm write reconciliation. The init-script can't instrument a web worker, so a POST issued
+# from a worker emits NO `__wirewrite` marker — but it still surfaces to Playwright's request watcher as a
+# fetch/xhr request. record_demo reconciles the fetch/xhr requests seen on the wire against the fetch/xhr
+# markers: a shortfall = an un-gateable worker write -> fail loud. This catches the worker write EVEN WHEN
+# another step is gated (the offset the old `wire_write and not gated` existence guard let through).
+def _serve_worker_plus_fetch(counter: dict):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def _send(self, body: str, code: int = 200) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.split("?")[0] == "/":
+                self._send(
+                    "<h1>Cart</h1>"
+                    "<section id='a'><button type=button id='save'>Save</button></section>"
+                    "<section id='b'><button type=button id='sync'>Sync</button></section><div id=out></div>"
+                    "<script>"
+                    " document.getElementById('save').addEventListener('click', function(){"
+                    "   fetch('/save',{method:'POST'}).then(r=>r.text()).then(t=>{"
+                    "     document.getElementById('out').textContent=t;}); });"  # MAIN-realm fetch -> markered + gated
+                    " document.getElementById('sync').addEventListener('click', function(){"
+                    "   var code=\"fetch('\"+location.origin+\"/wsave',{method:'POST'}).then(function(){self.postMessage('x');});\";"
+                    "   var w=new Worker(URL.createObjectURL(new Blob([code],{type:'application/javascript'})));"
+                    "   w.onmessage=function(){document.getElementById('out').textContent='WORKER-DONE';}; });"  # WORKER fetch -> no marker
+                    "</script>")
+            else:
+                self._send("not found", 404)
+
+        def do_POST(self) -> None:  # noqa: N802
+            p = self.path.split("?")[0]
+            if p == "/save":
+                counter["saves"] = counter.get("saves", 0) + 1
+                self._send("SAVED")
+            elif p == "/wsave":
+                counter["wsaves"] = counter.get("wsaves", 0) + 1
+                self._send("ok")
+            else:
+                self._send("not found", 404)
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_record_write_worker_write_offsetting_a_gated_write_is_refused(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_worker_plus_fetch(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="worker", start_url=f"{base}/", goal="save then sync",
+                        mutate=MutateSpec(confirm_text_contains="WORKER-DONE"))
+
+        async def _demo(page) -> None:
+            await page.get_by_role("button", name="Save").click()    # MAIN-realm fetch POST — gated by its marker
+            await page.get_by_text("SAVED").wait_for()
+            await page.get_by_role("button", name="Sync").click()    # WORKER fetch POST — no marker
+            await page.get_by_text("WORKER-DONE").wait_for()         # the worker POST landed during the demo
+
+        res = await record(spec, demo=_demo, headless=True, cache=cache)
+        # The worker write fired on the wire (fetch) with NO marker, while the Save fetch IS gated. The old
+        # `wire_write and not gated` guard would be disarmed by the gated Save; the count reconciliation
+        # (1 fetch/xhr marker < 2 fetch/xhr requests) catches the unaccounted worker write -> REFUSE.
+        assert res.cached is False and "action" in res.note
+        assert cache.get(flow_key(spec.goal, spec.start_url, spec.scope)) is None
+        assert counter["saves"] == 1 and counter.get("wsaves") == 1   # demo only; not cached -> never re-fired
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_record_write_lone_worker_write_is_refused(tmp_path) -> None:
+    # A single worker write with NOTHING else gated: already refused by the `wire_write and not gated` guard;
+    # the reconciliation ALSO refuses it (1 fetch/xhr request, 0 markers). Keeps the existing behavior green.
+    counter: dict = {}
+    httpd, base = _serve_worker_plus_fetch(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="loneworker", start_url=f"{base}/", goal="just sync",
+                        mutate=MutateSpec(confirm_text_contains="WORKER-DONE"))
+
+        async def _demo(page) -> None:
+            await page.get_by_role("button", name="Sync").click()    # WORKER fetch POST only — no marker
+            await page.get_by_text("WORKER-DONE").wait_for()
+
+        res = await record(spec, demo=_demo, headless=True, cache=cache)
+        assert res.cached is False
+        assert cache.get(flow_key(spec.goal, spec.start_url, spec.scope)) is None
+        assert counter.get("wsaves") == 1                            # demo only; not cached -> never re-fired
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# A NORMAL form submit + a NORMAL formless fetch — both gated (the form submit by the method classifier, the
+# fetch by its marker), no worker write — must still CACHE. Guards against the reconciliation FALSE-refusing a
+# legitimate form submit: a native form POST is a navigation (resource_type "document"), excluded from the
+# fetch/xhr count, so it never offsets the marker tally.
+def _serve_form_plus_fetch(counter: dict):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def _send(self, body: str, code: int = 200) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.split("?")[0] == "/":
+                self._send(
+                    "<h1>Cart</h1>"
+                    "<section id='a'><button type=button id='save'>Save</button></section>"
+                    "<form action='/order' method='post'><button>Place order</button></form><div id=out></div>"
+                    "<script>document.getElementById('save').addEventListener('click', function(){"
+                    " fetch('/save',{method:'POST'}).then(r=>r.text()).then(t=>{"
+                    " document.getElementById('out').textContent=t;}); });</script>")
+            elif self.path.split("?")[0] == "/order":
+                self._send("<h1>Order placed</h1>")
+            else:
+                self._send("not found", 404)
+
+        def do_POST(self) -> None:  # noqa: N802
+            p = self.path.split("?")[0]
+            if p == "/save":
+                counter["saves"] = counter.get("saves", 0) + 1
+                self._send("SAVED")
+            elif p == "/order":
+                counter["orders"] = counter.get("orders", 0) + 1
+                length = int(self.headers.get("Content-Length") or 0)
+                if length:
+                    self.rfile.read(length)
+                self._send("<h1>Order placed</h1>")
+            else:
+                self._send("not found", 404)
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_record_write_form_submit_plus_formless_fetch_caches(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_form_plus_fetch(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="formfetch", start_url=f"{base}/", goal="save then order",
+                        mutate=MutateSpec(confirm_text_contains="Order placed"))
+
+        async def _demo(page) -> None:
+            await page.get_by_role("button", name="Save").click()         # formless fetch POST — gated by marker
+            await page.get_by_text("SAVED").wait_for()
+            await page.get_by_role("button", name="Place order").click()  # POST-form submit (nav) — classifier-gated
+            await page.get_by_role("heading", name="Order placed").wait_for()
+
+        res = await record(spec, demo=_demo, headless=True, cache=cache)
+        # No false refusal: the form POST is a navigation (excluded from the fetch/xhr count), so it does not
+        # offset the Save marker. Both writes are gated; the flow caches.
+        assert res.is_write is True and res.cached is True
+        assert counter["saves"] == 1 and counter["orders"] == 1
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        writes = sorted((s.locator.name for s in flow.steps if s.mutating and s.precond_scope and s.locator))
+        assert writes == ["Place order", "Save"]   # both gated, neither masked nor falsely refused
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# GHOST MARKER must NOT offset a worker write. A main-realm fetch that is ABORTED before it hits the wire (a
+# pre-aborted AbortController) still emits a `__wirewrite` marker but produces NO network request. With a
+# GLOBAL count that ghost marker would offset a real worker write 1:1; the PER-(method,url) reconciliation
+# keys them apart (ghost at /ghost, worker at /wsave) so the worker write's shortfall still refuses.
+def _serve_ghost_plus_worker(counter: dict):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def _send(self, body: str, code: int = 200) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.split("?")[0] == "/":
+                self._send(
+                    "<h1>Pay</h1>"
+                    "<section id='a'><button type=button id='pay'>Pay</button></section>"
+                    "<section id='b'><button type=button id='sync'>Sync</button></section><div id=out></div>"
+                    "<script>"
+                    " document.getElementById('pay').addEventListener('click', function(){"
+                    "   var c=new AbortController(); c.abort();"                      # pre-aborted -> never hits the wire
+                    "   fetch('/ghost',{method:'POST',signal:c.signal}).catch(function(){});"  # emits a marker, no request
+                    "   document.getElementById('out').textContent='PAID'; });"
+                    " document.getElementById('sync').addEventListener('click', function(){"
+                    "   var code=\"fetch('\"+location.origin+\"/wsave',{method:'POST'}).then(function(){self.postMessage('x');});\";"
+                    "   var w=new Worker(URL.createObjectURL(new Blob([code],{type:'application/javascript'})));"
+                    "   w.onmessage=function(){document.getElementById('out').textContent='WORKER-DONE';}; });"
+                    "</script>")
+            else:
+                self._send("not found", 404)
+
+        def do_POST(self) -> None:  # noqa: N802
+            p = self.path.split("?")[0]
+            if p == "/ghost":
+                counter["ghost"] = counter.get("ghost", 0) + 1   # should NEVER be hit (fetch was aborted)
+                self._send("ghost")
+            elif p == "/wsave":
+                counter["wsaves"] = counter.get("wsaves", 0) + 1
+                self._send("ok")
+            else:
+                self._send("not found", 404)
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_record_write_ghost_marker_does_not_offset_a_worker_write(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_ghost_plus_worker(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="ghost", start_url=f"{base}/", goal="pay then sync",
+                        mutate=MutateSpec(confirm_text_contains="WORKER-DONE"))
+
+        async def _demo(page) -> None:
+            await page.get_by_role("button", name="Pay").click()    # aborted fetch -> ghost marker, no request
+            await page.get_by_text("PAID").wait_for()
+            await page.get_by_role("button", name="Sync").click()   # worker fetch /wsave -> request, no marker
+            await page.get_by_text("WORKER-DONE").wait_for()
+
+        res = await record(spec, demo=_demo, headless=True, cache=cache)
+        # The ghost marker (POST /ghost, never on the wire) must NOT credit the worker write (POST /wsave) —
+        # they key apart by url, so /wsave's shortfall still refuses. A global count would cache (fail-open).
+        assert res.cached is False
+        assert cache.get(flow_key(spec.goal, spec.start_url, spec.scope)) is None
+        assert counter.get("ghost") is None and counter.get("wsaves") == 1  # ghost aborted; worker fired once
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# METHOD-PRESERVING REDIRECT must NOT false-refuse. A single formless fetch POST that 307-redirects surfaces
+# TWO POST requests on the wire (the initial + the redirect hop) but the page's single fetch() emits ONE
+# marker. Excluding redirect HOPS (redirected_from set) from the wire count keeps the reconciliation balanced
+# so this common POST-redirect-to-result pattern caches instead of being spuriously refused.
+def _serve_redirect_write(counter: dict):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.split("?")[0] == "/":
+                body = ("<h1>Pay</h1><section id='s'><button type=button id='pay'>Pay</button></section>"
+                        "<div id=out></div>"
+                        "<script>document.getElementById('pay').addEventListener('click', function(){"
+                        " fetch('/redir',{method:'POST'}).then(r=>r.text()).then(t=>{"
+                        " document.getElementById('out').textContent=t;}); });</script>")
+                self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers()
+                self.wfile.write(body.encode())
+            else:
+                self.send_response(404); self.end_headers()
+
+        def do_POST(self) -> None:  # noqa: N802
+            p = self.path.split("?")[0]
+            length = int(self.headers.get("Content-Length") or 0)
+            if length:
+                self.rfile.read(length)
+            if p == "/redir":
+                self.send_response(307); self.send_header("Location", "/done"); self.end_headers()  # preserves POST
+            elif p == "/done":
+                counter["pays"] = counter.get("pays", 0) + 1   # the real write lands here (the redirect target)
+                counter["idem"] = self.headers.get("Idempotency-Key")
+                self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers()
+                self.wfile.write(b"DONE-OK")
+            else:
+                self.send_response(404); self.end_headers()
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_record_write_method_preserving_redirect_caches(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_redirect_write(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="redir", start_url=f"{base}/", goal="pay via redirect",
+                        mutate=MutateSpec(confirm_text_contains="DONE-OK"))
+
+        async def _demo(page) -> None:
+            await page.get_by_role("button", name="Pay").click()   # fetch /redir -> 307 -> POST /done (one marker)
+            await page.get_by_text("DONE-OK").wait_for()
+
+        res = await record(spec, demo=_demo, headless=True, cache=cache)
+        # No false refusal: the redirect HOP (POST /done, redirected_from set) is excluded from the wire count,
+        # so the single fetch marker reconciles cleanly. The Pay click is gated.
+        assert res.is_write is True and res.cached is True
+        assert counter["pays"] == 1
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        pay = [s for s in flow.steps if s.action == "click" and s.locator and s.locator.name == "Pay"]
+        assert len(pay) == 1 and pay[0].mutating and pay[0].precond_scope   # gated to the Pay click
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# URL-MATCHING false-refuse guards. The per-(method,url) reconciliation only works if the marker's url equals
+# the wire url for the SAME request. Two ways the marker url used to diverge (both FALSE-REFUSED a legit,
+# fully-gated single-realm write): (1) a <base href> sub-path — the browser resolves a relative fetch against
+# document.baseURI, not location.href; (2) a URL-object fetch input — fetch(new URL(...)) has no `.url`, so it
+# collapsed to the page root. Both must CACHE.
+def _serve_base_relative_write(counter: dict):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.split("?")[0] == "/":
+                body = ("<head><base href='/app/'></head><h1>App</h1>"
+                        "<section id='s'><button type=button id='save'>Save</button></section><div id=out></div>"
+                        "<script>document.getElementById('save').addEventListener('click', function(){"
+                        " fetch('save-item',{method:'POST'}).then(r=>r.text()).then(t=>{"  # relative -> /app/save-item
+                        " document.getElementById('out').textContent=t;}); });</script>")
+                self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers()
+                self.wfile.write(body.encode())
+            else:
+                self.send_response(404); self.end_headers()
+
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path.split("?")[0] == "/app/save-item":
+                counter["saves"] = counter.get("saves", 0) + 1
+                self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers()
+                self.wfile.write(b"SAVED")
+            else:
+                self.send_response(404); self.end_headers()
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_record_write_base_tag_relative_fetch_caches(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_base_relative_write(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="basetag", start_url=f"{base}/", goal="save via base-relative fetch",
+                        mutate=MutateSpec(confirm_text_contains="SAVED"))
+
+        async def _demo(page) -> None:
+            await page.get_by_role("button", name="Save").click()  # fetch('save-item') -> /app/save-item via <base>
+            await page.get_by_text("SAVED").wait_for()
+
+        res = await record(spec, demo=_demo, headless=True, cache=cache)
+        # No false refusal: the marker url (resolved against document.baseURI) matches the wire url /app/save-item.
+        assert res.is_write is True and res.cached is True
+        assert counter["saves"] == 1
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        save = [s for s in flow.steps if s.action == "click" and s.locator and s.locator.name == "Save"]
+        assert len(save) == 1 and save[0].mutating and save[0].precond_scope
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def _serve_url_object_write(counter: dict):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.split("?")[0] == "/":
+                body = ("<h1>App</h1><section id='s'><button type=button id='save'>Save</button></section>"
+                        "<div id=out></div>"
+                        "<script>document.getElementById('save').addEventListener('click', function(){"
+                        " fetch(new URL('/save', location.href),{method:'POST'}).then(r=>r.text()).then(t=>{"
+                        " document.getElementById('out').textContent=t;}); });</script>")
+                self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers()
+                self.wfile.write(body.encode())
+            else:
+                self.send_response(404); self.end_headers()
+
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path.split("?")[0] == "/save":
+                counter["saves"] = counter.get("saves", 0) + 1
+                self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers()
+                self.wfile.write(b"SAVED")
+            else:
+                self.send_response(404); self.end_headers()
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_record_write_url_object_fetch_caches(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_url_object_write(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="urlobj", start_url=f"{base}/", goal="save via URL-object fetch",
+                        mutate=MutateSpec(confirm_text_contains="SAVED"))
+
+        async def _demo(page) -> None:
+            await page.get_by_role("button", name="Save").click()  # fetch(new URL('/save', location.href), ...)
+            await page.get_by_text("SAVED").wait_for()
+
+        res = await record(spec, demo=_demo, headless=True, cache=cache)
+        # No false refusal: a URL-object input is String()-coerced to its href, matching the wire url /save.
+        assert res.is_write is True and res.cached is True
+        assert counter["saves"] == 1
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        save = [s for s in flow.steps if s.action == "click" and s.locator and s.locator.name == "Save"]
+        assert len(save) == 1 and save[0].mutating and save[0].precond_scope
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# SERVICE-WORKER write -> FAIL LOUD. A Service Worker's fetch is surfaced at the CONTEXT scope, not the page,
+# so a page-scoped request watcher would MISS it entirely (no marker either, since the init-script doesn't run
+# in the SW) -> cached UNGATED (fail-open). Watching at context scope brings the SW write into the per-url
+# reconciliation: it has no marker -> a shortfall -> refuse.
+def _serve_service_worker_write(counter: dict):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def do_GET(self) -> None:  # noqa: N802
+            path = self.path.split("?")[0]
+            if path == "/sw.js":
+                body = ("self.addEventListener('message', function(e){"
+                        " fetch('/swwrite',{method:'POST'}).then(function(){ e.source.postMessage('done'); }); });")
+                self.send_response(200); self.send_header("Content-Type", "application/javascript"); self.end_headers()
+                self.wfile.write(body.encode())
+            elif path == "/":
+                body = ("<h1>SW</h1><button type=button id='go'>Go</button>"
+                        "<div id=ready>...</div><div id=out></div>"
+                        "<script>"
+                        " var reg;"
+                        " navigator.serviceWorker.register('/sw.js')"
+                        "   .then(function(){ return navigator.serviceWorker.ready; })"
+                        "   .then(function(r){ reg=r; document.getElementById('ready').textContent='SW-READY'; });"
+                        " navigator.serviceWorker.addEventListener('message', function(){"
+                        "   document.getElementById('out').textContent='SW-DONE'; });"
+                        " document.getElementById('go').addEventListener('click', function(){"
+                        "   reg.active.postMessage('go'); });"
+                        "</script>")
+                self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers()
+                self.wfile.write(body.encode())
+            else:
+                self.send_response(404); self.end_headers()
+
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path.split("?")[0] == "/swwrite":
+                counter["sw"] = counter.get("sw", 0) + 1
+                self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers()
+                self.wfile.write(b"ok")
+            else:
+                self.send_response(404); self.end_headers()
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_record_write_service_worker_write_is_refused(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_service_worker_write(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="sw", start_url=f"{base}/", goal="trigger the service worker",
+                        mutate=MutateSpec(confirm_text_contains="SW-DONE"))
+
+        async def _demo(page) -> None:
+            await page.get_by_text("SW-READY").wait_for()        # SW registered + active
+            await page.get_by_role("button", name="Go").click()  # message the SW -> SW fetch POST /swwrite
+            await page.get_by_text("SW-DONE").wait_for()         # the SW write landed during the demo
+
+        res = await record(spec, demo=_demo, headless=True, cache=cache)
+        # The SW write surfaces at context scope with no marker -> a per-url shortfall -> REFUSE (fail loud).
+        assert res.cached is False
+        assert cache.get(flow_key(spec.goal, spec.start_url, spec.scope)) is None
+        assert counter.get("sw") == 1                            # the SW wrote once during the demo; not cached
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# IFRAME write must NOT false-refuse the main flow. Watching requests at CONTEXT scope (needed for Service
+# Workers) also surfaces SUB-FRAME requests — but the init-script bails in sub-frames, so an iframe emits no
+# marker. Counting an iframe POST would spuriously refuse any page with a 3rd-party iframe (chat/ad/analytics)
+# that POSTs. The watcher excludes sub-frame requests, so a legit main-realm write still caches.
+def _serve_iframe_write(counter: dict):
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a) -> None:
+            pass
+
+        def do_GET(self) -> None:  # noqa: N802
+            path = self.path.split("?")[0]
+            if path == "/":
+                body = ("<h1>App</h1><section id='s'><button type=button id='save'>Save</button></section>"
+                        "<iframe src='/widget'></iframe><div id=out></div>"
+                        "<script>document.getElementById('save').addEventListener('click', function(){"
+                        " fetch('/save',{method:'POST'}).then(r=>r.text()).then(t=>{"
+                        " document.getElementById('out').textContent=t;}); });</script>")
+            elif path == "/widget":
+                body = ("<button>w</button>"
+                        "<script>fetch('/widgetwrite',{method:'POST'});</script>")  # 3rd-party iframe POST (no marker)
+            else:
+                self.send_response(404); self.end_headers(); return
+            self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers()
+            self.wfile.write(body.encode())
+
+        def do_POST(self) -> None:  # noqa: N802
+            p = self.path.split("?")[0]
+            if p == "/save":
+                counter["saves"] = counter.get("saves", 0) + 1
+                self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers()
+                self.wfile.write(b"SAVED")
+            elif p == "/widgetwrite":
+                counter["widget"] = counter.get("widget", 0) + 1
+                self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers()
+                self.wfile.write(b"ok")
+            else:
+                self.send_response(404); self.end_headers()
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_record_write_iframe_post_does_not_false_refuse(tmp_path) -> None:
+    counter: dict = {}
+    httpd, base = _serve_iframe_write(counter)
+    try:
+        cache = FlowCache(root=tmp_path)
+        spec = FlowSpec(name="iframe", start_url=f"{base}/", goal="save with a noisy iframe",
+                        mutate=MutateSpec(confirm_text_contains="SAVED"))
+
+        async def _demo(page) -> None:
+            await page.get_by_role("button", name="Save").click()  # main-realm fetch POST — gated by its marker
+            await page.get_by_text("SAVED").wait_for()
+
+        res = await record(spec, demo=_demo, headless=True, cache=cache)
+        # The iframe's POST (a sub-frame request, no marker) is EXCLUDED from the wire count, so it does not
+        # false-refuse. The main Save write is gated and the flow caches.
+        assert res.is_write is True and res.cached is True
+        assert counter["saves"] == 1 and counter.get("widget") == 1   # the iframe DID POST, but didn't refuse
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        save = [s for s in flow.steps if s.action == "click" and s.locator and s.locator.name == "Save"]
+        assert len(save) == 1 and save[0].mutating and save[0].precond_scope
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
 # CROSS-ORIGIN refusal: a demo that navigates to a DIFFERENT origin orphans the prior origin's not-yet-drained
 # events (incl. the navigating click) — the recording could be silently truncated, and a flow isn't always
 # verify-by-replayed to catch it. `record` must FAIL LOUD rather than cache a possibly-incomplete flow.

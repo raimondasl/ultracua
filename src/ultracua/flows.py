@@ -1094,15 +1094,14 @@ async def record(
         # slip through, all refused here:
         #   - a mutating step with no precondition (empty precond_scope; the recorder never sets a whole-page
         #     precond_fingerprint, so the replay gate would be a no-op and the step fires blind / under drift);
-        #   - `unattributed_writes` > 0: a genuine wire write (fetch/XHR/sendBeacon) that could be tied to NO
-        #     single commit — any DEFERRED write (timer / awaited round-trip / load-or-interval handler, whose
-        #     cause isn't provable in-page), a nested synthetic commit's turn, or one orphaned by a cross-origin
-        #     hop — so it would replay ungated on whichever step re-triggers it (a load-armed write even fires
-        #     on page load, outside any step's gate). Checked PER WRITE, independent of whether OTHER steps are
-        #     gated (the masking class the old all-or-nothing check let through: one unrelated gated step
-        #     disarmed the refusal); or
-        #   - a write provably fired ON THE WIRE but NOTHING could be gated at all (belt-and-suspenders for a
-        #     write with no marker — e.g. a web-worker fetch the init-script can't instrument).
+        #   - `unattributed_writes` > 0: a genuine wire write that could be tied to NO single gated commit —
+        #     a DEFERRED write (timer / awaited round-trip / load-or-interval handler), a nested synthetic
+        #     commit's turn, or one orphaned by a cross-origin hop (all marker seq=null); OR a WORKER /
+        #     cross-realm fetch/xhr write the init-script can't instrument (it surfaces on the wire but emits
+        #     no marker — caught by reconciling fetch/xhr requests against fetch/xhr markers). Checked PER WRITE
+        #     by COUNT, independent of whether OTHER steps are gated — the masking class the old all-or-nothing
+        #     check let through (`wire_write and not gated` is disarmed by any one gated step); or
+        #   - a write provably fired ON THE WIRE but NOTHING could be gated at all (belt-and-suspenders).
         # Only a write fired SYNCHRONOUSLY from its own single action is gated; a refusal here means a write
         # couldn't be tied to one action — re-record so each write fires directly from a single action. (A
         # GET-write with NO wire signal and no mutating step is the acknowledged undetectable residual: cached
