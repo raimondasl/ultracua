@@ -1,4 +1,4 @@
-# ultracua — status & observations (2026-06-28)
+# ultracua — status & observations (2026-07-01)
 
 A dated, honest snapshot covering through the recorder arc: what's shipped, how proven it is, what the
 latest benchmark runs measured, the known fragilities (with `file:line`), and the prioritized path forward. The
@@ -13,8 +13,8 @@ engine is the moat, and it is not yet hardened for unattended production.** Phas
 engine), A–C (the Flow API: define → learn → approve → replay → auth-refresh → health), and D
 (write flows) are shipped and merged, and the ops layer has since hardened (logging, CI,
 retry/backoff, fleet supervisor + freshness canary, a cross-process meta lock, and a standing
-locator-resilience benchmark). **284 tests**, all key-less (real headless Chromium against local
-fixtures, run in CI on Linux + Windows); version **0.42.0**. Secrets handling is a real strength:
+locator-resilience benchmark). **304 tests**, all key-less (real headless Chromium against local
+fixtures, run in CI on Linux + Windows); version **0.44.1**. Secrets handling is a real strength:
 credentials are env-sourced at runtime and **never persisted** — only the resulting `storage_state`
 cookies are saved (atomically).
 
@@ -116,7 +116,7 @@ multi-step/auth pages, and (3) operability — *not* in making replay faster (it
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
 phases have kept landing since: **#33–#35 CI (Phase J), #36 pinned 0-LLM reads (Phase H), #37 fleet
 supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 → **145** tests
-(key-less); version **0.22.0** *at the time* — it has since grown to **284 tests / 0.42.0** as the
+(key-less); version **0.22.0** *at the time* — it has since grown to **304 tests / 0.44.1** as the
 trust-hardening below landed. Original near-term list with the PR that landed each:
 
 1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`
@@ -146,7 +146,9 @@ measured against the exact MiniWoB capability ceiling and scored **9/9 vs the LL
 reads, J CI, the I recorder core, and the G multi-write completion barrier** are landed — the last adds a
 **per-write barrier** (`MutateSpec.step_confirms`): replay verifies each write as it actuates (an absent→present
 transition) and fails loud without proceeding to the next write; multi-write barriers are record-only and not
-auto-retried after auth-refresh. Still open: the **Phase-I remainder** (web UI / service daemon / registry) and
+auto-retried after auth-refresh. A small ops nicety also landed post-#74: **`BrowserSession(window_size=…)`** +
+the `ULTRACUA_WINDOW_SIZE` env, which sizes the headed/demo browser window so the page fills it (headless
+renders at that size; unset = Playwright's default 1280×720) (#75). Still open: the **Phase-I remainder** (web UI / service daemon / registry) and
 **Phase-G** per-write one-shot resume, action breadth (file upload / multi-tab / iframes), compensation/rollback,
 and dynamic-N writes.
 

@@ -91,7 +91,7 @@ uv run --group bench python -m benchmarks.variance --bench miniwob --reps 5 --sa
 uv run --group bench python -m benchmarks.variance --bench miniwob --reps 5 --samples 3 --reflect --all --baseline baselines/miniwob_reflect3.json
 
 # Key-less baselines (no API key):
-uv run python -m benchmarks.drift_sandbox --json --baseline baselines/drift.json
+uv run python -m benchmarks.drift_sandbox --json baselines/drift.json
 uv run python -m benchmarks.recorder_ceiling --json baselines/recorder_ceiling.json
 ```
 
