@@ -33,6 +33,9 @@ Flags: `--mode auto|learn|replay`, `--fresh` (clear the cached flow first),
 `--provider anthropic|openai|gemini|mock`, `--tier fast|strong`, `--scope <name>`. Learned flows
 live under `.ultracua/flows/`. Env: `ULTRACUA_FAST_MODEL` (default `claude-haiku-4-5`),
 `ULTRACUA_MODEL` (strong, default `claude-opus-4-8`), `ULTRACUA_TIER` (default `strong`).
+`ULTRACUA_WINDOW_SIZE` (e.g. `1600x1000`) sizes the browser window — headed opens the OS window that
+size and the page fills it, headless renders at that size; unset uses Playwright's default 1280×720.
+(Programmatically: `BrowserSession(window_size=(1600, 1000))`.)
 
 For *recurring* tasks, use the Flow API below — it adds named specs, structured extraction,
 approval, drift handling, and health.
@@ -83,7 +86,8 @@ reading the answer is one cheap extraction call (set `extract=None` for navigate
 
 When the LLM can't reliably *author* a flow — the grounding-hard tasks where it picks the wrong element
 (measured: a recorder cracks **9/9** such MiniWoB tasks vs LLM authoring **4/9** on the same seeds) — you
-can **demonstrate** it instead. `flow record` opens a headed browser; you click through the task, press
+can **demonstrate** it instead. `flow record` opens a headed browser (size it with
+`ULTRACUA_WINDOW_SIZE`, e.g. `1600x1000`); you click through the task, press
 Enter, and it captures your interactions into the **same cached flow** the engine replays — then **verify-
 by-replays** it (cached only if it reproduces 0-LLM) so it's trustworthy from the start.
 

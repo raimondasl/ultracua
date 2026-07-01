@@ -25,31 +25,32 @@ never silently returns garbage.
 | Learn → replay → self-heal → auto-relearn | ✅ `flow.run_cached` |
 | Persisted flows | ✅ `FlowCache` (keyed JSON) |
 | Safety: mutation gate, idempotency, interstitial, pacing | ✅ `safety.py` |
-| Auth headers / pre-nav setup | ✅ `BrowserSession(extra_headers=…)` |
-| Answer extraction → structured data | ⚠️ exists but **buried in the WebArena runner's `finalize`** |
+| Auth headers / pre-nav setup | ✅ `FlowSpec.headers` / `BrowserSession.set_extra_http_headers()` (+ `storage_state`) |
+| Answer extraction → structured data | ✅ core `ultracua.extract` (`extract` / `Extraction`), used by the Flow API **and** the benchmark runner |
 | Cross-language invocation | ✅ JSON-RPC daemon + Node client |
 | Multi-provider LLM | ✅ |
 
-The gaps are a thin **flow API**, **verify-before-trust**, and **fail-loud replay** — plus pulling
-extraction and auth out of the benchmark runner into reusable core.
+The gaps *were* a thin **flow API**, **verify-before-trust**, and **fail-loud replay** — plus pulling
+extraction and auth out of the benchmark runner into reusable core. **All shipped in Phase A (below).**
 
 ## The path (thinnest first)
 
 ### Phase A — "define a flow, run it, get data back" (the MVP)
 
-Unlocks the core use case.
+Unlocks the core use case. **Done:**
 
-- A small **`Flow` spec**: `name`, `start_url`, `goal`, `auth` (storage_state / cookies / headers),
-  `extract` (a schema or instruction for what to pull).
-- Generalize the WebArena runner's two buried pieces into reusable core: **extraction** (run →
-  return structured data) and **auth** (beyond Magento's special header — storage_state + a login
-  sub-flow).
-- CLI / daemon verbs: `ultracua flow learn <name>` → returns `{steps, extracted_data}` to
+- ✅ A small **`Flow` spec** (`FlowSpec` in `flows.py`): `name`, `start_url`, `goal`, `auth`
+  (`storage_state` / cookies / `headers` / a `LoginSpec` sub-flow), `extract` (a schema or
+  instruction for what to pull).
+- ✅ Generalized the WebArena runner's two buried pieces into reusable core: **extraction** (core
+  `extract.py` → return structured data) and **auth** (beyond Magento's special header —
+  `storage_state` + a login sub-flow).
+- ✅ CLI / daemon verbs: `ultracua flow learn <name>` → returns `{steps, extracted_data}` to
   **inspect**; `flow approve <name>` → marks it trusted; `flow replay <name>` → 0-LLM nav +
-  extraction, **returns the data**, and **raises on fingerprint drift / unresolved locator**
-  instead of returning wrong data.
-- *Reuse:* `run_cached`, `FlowCache`, the daemon. *New:* the `Flow` spec, generalized extract /
-  auth, the `flow` verbs, replay-returns-data + raise-on-drift.
+  extraction, **returns the data**, and **raises `FlowReplayError` on fingerprint drift / unresolved
+  locator** instead of returning wrong data.
+- *Reuse:* `run_cached`, `FlowCache`, the daemon. *New (all landed):* the `Flow` spec, generalized
+  extract / auth, the `flow` verbs, replay-returns-data + raise-on-drift.
 
 ### Phase B — "trust it unattended" (reliability)
 
@@ -303,10 +304,10 @@ theirs (cron + handle the returned data). Everything else is polish.
 3. **How trusted is "approved"?** Pure human-approve (safe, manual) vs. an auto-verifier that
    approves when confidence is high. Start human-approve; add auto-approve later.
 
-## First step
+## First step — ✅ shipped (the foundation everything above builds on)
 
-**`Flow` spec + reusable extraction, decoupled from the WebArena runner:** lift `extract` and
-`auth` out of `benchmarks/webarena_run.py` into `src/ultracua/`, add a `Flow` dataclass +
-`flow.learn()` / `flow.replay()` that returns structured data and raises on drift, and a
-`ultracua flow` CLI. That single change makes ultracua usable for a real data-pull outside the
-benchmark — and everything else builds on it.
+**`Flow` spec + reusable extraction, decoupled from the WebArena runner** landed: `extract` moved
+into core `src/ultracua/extract.py`, the `FlowSpec` dataclass + `flow.learn()` / `flow.replay()`
+(returns structured data, raises `FlowReplayError` on drift) landed in `src/ultracua/flows.py`, and
+the `ultracua flow` CLI exists. That made ultracua usable for a real data-pull outside the
+benchmark — everything else above builds on it.

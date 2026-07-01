@@ -69,8 +69,8 @@ Two honest notes, both worth saying out loud in a demo rather than hiding:
 
 - **"0-LLM replay" means 0-LLM *navigation*.** The data flow's replay still makes **one** extraction
   call to read the answer off the final page — that's most of the 3.9 s. The navigation itself is
-  deterministic and LLM-free. A `navigate-only` flow (or a future pinned-selector read) replays with
-  *zero* LLM calls.
+  deterministic and LLM-free. A `navigate-only` flow (or a pinned-selector read — `pin_read` /
+  `--pin-read`, which pins a deterministic 0-LLM read of a scalar answer) replays with *zero* LLM calls.
 - **On a real site, replay is network-bound (~1–4 s), not the ~50× of local-fixture benchmarks.** The
   win here isn't raw milliseconds — it's that replay drops the **multi-step agent reasoning** (and its
   cost and flakiness) and reproduces the *exact* path every time, returning structured data you can

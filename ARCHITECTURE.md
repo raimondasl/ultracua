@@ -253,7 +253,7 @@ deferred for routine use. Working/eval data is kept off the system drive under `
 
 ```
 src/ultracua/
-  browser.py      warm Playwright/CDP session
+  browser.py      warm Playwright/CDP session; optional window_size=(w,h) / ULTRACUA_WINDOW_SIZE sizes the headed OS window (page fills it) or the headless viewport
   snapshot.py     scoped DOM/AX snapshot via injected JS + scope fingerprint
   locators.py     cross-run-stable resilient locators: describe() + resolve()
   cache.py        flow cache: keyed JSON store of CachedStep programs
