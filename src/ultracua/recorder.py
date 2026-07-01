@@ -400,6 +400,7 @@ async def record_demo(
     prepare: Optional[Callable[[BrowserSession], Awaitable[None]]] = None,
     storage_state: Optional[str] = None, extra_headers: Optional[dict] = None,
     mutate: bool = False, caption: "Optional[Caption]" = None,
+    window_size: Optional[tuple[int, int]] = None,
 ) -> "tuple[CachedFlow, bool, bool, int]":
     """Capture a demonstration of `goal` at `url` into a cached, replayable `CachedFlow`.
 
@@ -443,7 +444,9 @@ async def record_demo(
     no single commit (any deferred/nested/background write) — `record` refuses the flow when it is > 0 (a real
     write that would replay UNGATED), rather than cache it behind an unrelated gated step.
     """
-    session = await BrowserSession(headless=headless, storage_state=storage_state).start()
+    session = await BrowserSession(
+        headless=headless, storage_state=storage_state, window_size=window_size
+    ).start()
     events: list[dict] = []
     # `hit` drives performed_write + the un-gated guard. `xhr_urls` tallies non-idempotent fetch/xhr writes
     # seen on the wire, keyed by (method, url), reconciled against the in-page fetch/xhr markers (also keyed by

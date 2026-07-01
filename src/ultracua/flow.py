@@ -105,6 +105,7 @@ async def run_cached(
     verify_replay: bool = False,
     samples: int = 1,
     reflect: bool = False,
+    window_size: Optional[tuple[int, int]] = None,
 ) -> FlowReport:
     cache = cache or FlowCache()
     governor = governor or PacingGovernor()
@@ -120,7 +121,7 @@ async def run_cached(
         report = await _replay(
             url, key, cached, cache, heal_provider, headless, on_step,
             prepare, finalize, goal, governor, scope, browser, record_har_path, extra_headers,
-            storage_state,
+            storage_state, window_size=window_size,
         )
         if report.success or mode in ("replay", "repair") or report.mode == "escalate":
             return report
@@ -136,11 +137,13 @@ async def run_cached(
             url, goal, key, provider, cache, max_steps, headless, on_step,
             prepare, finalize, governor, scope, browser, verifier, grounding,
             record_har_path, extra_headers, storage_state, verify_replay, samples, reflect,
+            window_size=window_size,
         )
     return await _learn(
         url, goal, key, provider, cache, max_steps, headless, on_step,
         prepare, finalize, governor, scope, browser, verifier, grounding,
         record_har_path, extra_headers, storage_state, verify_replay,
+        window_size=window_size,
     )
 
 
@@ -399,13 +402,14 @@ async def _learn(
     storage_state: Optional[str] = None,
     verify_replay: bool = False,
     reflections: Optional[list] = None,
+    window_size: Optional[tuple[int, int]] = None,
 ) -> FlowReport:
     max_steps = max_steps or settings.max_steps
     _router = getattr(provider, "router", None)  # for per-run token/cost accounting, if available
     _usnap = _router.totals.snapshot() if _router is not None else None
     session = await BrowserSession(
         headless=headless, browser=browser, record_har_path=record_har_path,
-        storage_state=storage_state,
+        storage_state=storage_state, window_size=window_size,
     ).start()
     traces: list[StepTrace] = []
     try:
@@ -550,7 +554,7 @@ async def _learn_n(
     verifier: Optional[Verifier] = None, grounding: Optional[Any] = None,
     record_har_path: Optional[str] = None, extra_headers: Optional[dict] = None,
     storage_state: Optional[str] = None, verify_replay: bool = False, samples: int = 1,
-    reflect: bool = False,
+    reflect: bool = False, window_size: Optional[tuple[int, int]] = None,
 ) -> FlowReport:
     """Best-of-N authoring: re-author up to `samples` times and keep the FIRST sample the verify-by-replay
     oracle confirms. Each attempt is a fresh `_learn` (fresh session -> the LLM resamples at
@@ -574,7 +578,7 @@ async def _learn_n(
             last = await _learn(
                 url, goal, key, provider, cache, max_steps, headless, on_step, prepare, finalize,
                 governor, scope, browser, verifier, grounding, record_har_path, extra_headers,
-                storage_state, verify_replay, reflections or None,
+                storage_state, verify_replay, reflections or None, window_size,
             )
         except Exception:  # an attempt that raised mid-way may have fired a write — never silently retry
             _log.warning("best-of-N: attempt %d raised — stopping (a write may have fired)", used)
@@ -611,10 +615,11 @@ async def _replay(
     record_har_path: Optional[str] = None,
     extra_headers: Optional[dict] = None,
     storage_state: Optional[str] = None,
+    window_size: Optional[tuple[int, int]] = None,
 ) -> FlowReport:
     session = await BrowserSession(
         headless=headless, browser=browser, record_har_path=record_har_path,
-        storage_state=storage_state,
+        storage_state=storage_state, window_size=window_size,
     ).start()
     traces: list[StepTrace] = []
     llm = 0

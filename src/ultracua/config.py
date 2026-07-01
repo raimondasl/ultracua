@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -21,6 +22,25 @@ def _flag(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() not in ("0", "false", "no", "off", "")
+
+
+def _window_size() -> Optional[tuple[int, int]]:
+    """Parse ULTRACUA_WINDOW_SIZE ("1600x1000" or "1600,1000") into (width, height); None if unset,
+    blank, or malformed. A machine-level default for the browser window/viewport size that
+    BrowserSession uses when created without an explicit window_size — handy for making a headed /
+    demo run fill more of the screen. A bad value is ignored (falls back to Playwright's default)
+    rather than raising, so a typo in the env can't break every run."""
+    raw = os.getenv("ULTRACUA_WINDOW_SIZE")
+    if not raw or not raw.strip():
+        return None
+    parts = raw.strip().replace("X", "x").replace("x", ",").split(",")
+    if len(parts) < 2:
+        return None
+    try:
+        w, h = int(parts[0].strip()), int(parts[1].strip())
+    except ValueError:
+        return None
+    return (w, h) if w > 0 and h > 0 else None
 
 
 def _default_data_dir() -> str:
@@ -56,6 +76,10 @@ class Settings:
     # diverse attempts (the provider default isn't guaranteed non-zero across backends/proxies).
     authoring_temperature: float = float(os.getenv("ULTRACUA_TEMPERATURE", "1.0"))
     headless: bool = _flag("ULTRACUA_HEADLESS", True)
+    # Optional browser window/viewport size as (width, height); None -> Playwright's default. Read when
+    # a BrowserSession is created without an explicit window_size. Headed: sizes the OS window and lets
+    # the page fill it; headless: renders the page at this size. Env: ULTRACUA_WINDOW_SIZE="1600x1000".
+    window_size: Optional[tuple[int, int]] = _window_size()
     max_steps: int = int(os.getenv("ULTRACUA_MAX_STEPS", "8"))
     # Stop a discovery run after this many consecutive no-progress steps (anti-loop): when
     # the agent keeps acting without changing the page, it's stuck (or solved-but-not-aware),

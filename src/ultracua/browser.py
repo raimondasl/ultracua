@@ -29,8 +29,13 @@ class BrowserSession:
         browser: Browser | None = None,
         record_har_path: str | None = None,
         storage_state: str | None = None,
+        window_size: tuple[int, int] | None = None,
     ) -> None:
         self.headless = settings.headless if headless is None else headless
+        # Optional (width, height) for the browser window/viewport; falls back to the machine-level
+        # ULTRACUA_WINDOW_SIZE default. Headed: sizes the real OS window and lets the page fill it;
+        # headless: renders the page at this size. None -> Playwright's default (1280x720 viewport).
+        self._window_size = window_size if window_size is not None else settings.window_size
         self._pw: Playwright | None = None
         # If a browser is provided, run as a fresh CONTEXT inside it (parallelism) and don't
         # own its lifecycle; otherwise launch (and later close) our own browser.
@@ -51,13 +56,28 @@ class BrowserSession:
         try:
             if self._shared_browser is None:
                 self._pw = await async_playwright().start()
-                self.browser = await self._pw.chromium.launch(headless=self.headless)
+                launch_kwargs: dict = {"headless": self.headless}
+                if self._window_size is not None:
+                    w, h = self._window_size
+                    # Size the real OS window (headed; harmless headless) and pin it top-left so a
+                    # screen-recorded demo frames predictably.
+                    launch_kwargs["args"] = [f"--window-size={w},{h}", "--window-position=0,0"]
+                self.browser = await self._pw.chromium.launch(**launch_kwargs)
             context_kwargs: dict = {}
             if self._record_har_path:
                 context_kwargs["record_har_path"] = self._record_har_path
                 context_kwargs["record_har_content"] = "embed"
             if self._storage_state:
                 context_kwargs["storage_state"] = self._storage_state
+            if self._window_size is not None:
+                w, h = self._window_size
+                if self.headless:
+                    # No real window to fill -> render the page at the requested size directly.
+                    context_kwargs["viewport"] = {"width": w, "height": h}
+                else:
+                    # Let the page fill the actual window inner area (window minus browser chrome),
+                    # so content fills the headed window exactly instead of guessing the chrome height.
+                    context_kwargs["no_viewport"] = True
             self.context = await self.browser.new_context(**context_kwargs)
             self.context.set_default_timeout(settings.action_timeout_ms)
             self.context.set_default_navigation_timeout(settings.nav_timeout_ms)
