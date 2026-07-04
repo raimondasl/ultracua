@@ -271,6 +271,7 @@ src/ultracua/
   vision.py       vision fallback tier: screenshot -> grounding model -> click_xy
   webmcp.py       WebMCP tier: detect + call site-exposed structured tools
   daemon/         JSON-RPC server (stdio) exposing the core + Python client
+  mcpserver/      H2 flows-as-tools: a stdio MCP server exposing APPROVED READ flows as typed tools (dispatches to the gated flows.replay, never the raw engine; writes default-deny). Optional `mcp` SDK
   agent.py        the uncached agent loop (baseline)
   cli.py          `ultracua` entry point
 clients/node/     Node/JS client (@ultracua/client) for the daemon

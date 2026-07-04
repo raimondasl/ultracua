@@ -1,6 +1,6 @@
 [project]
 name = "ultracua"
-version = "0.45.1"
+version = "0.46.0"
 description = "A Computer Use Agent that drives a web browser at 5-10x human speed."
 readme = "README.md"
 license = "MIT"
@@ -37,4 +37,9 @@ dev = [
 providers = [
     "google-genai>=2.8.0",
     "openai>=2.42.0",
+]
+# H2 flows-as-tools: the MCP server (`ultracua flow serve-mcp`). Optional — the core package and the
+# mcpserver module import without it; only actually serving needs the SDK (`uv sync --group mcp`).
+mcp = [
+    "mcp>=1.28.0",
 ]

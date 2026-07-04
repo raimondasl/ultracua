@@ -132,6 +132,25 @@ auto-detected — **declare those as writes** (`--confirm-*`) and they're captur
 the same; don't rely on auto-detection for them. The Python API is `record(spec, demo=…)` (set
 `spec.mutate` for a write), returning a `RecordResult` (`is_write` flags a write flow).
 
+### Serve flows to any AI assistant (MCP)
+
+Expose your **approved read flows** as tools to any MCP client — Claude, Cursor, VS Code, ChatGPT — so
+the assistant makes **one deterministic, verified tool call** instead of driving a browser step by step:
+
+```bash
+uv sync --group mcp                 # one-time: install the optional MCP SDK
+uv run ultracua flow serve-mcp      # stdio MCP server; wire this command into your client's mcpServers
+```
+
+Each approved read flow becomes a **zero-argument tool** whose call dispatches to the safety-gated
+`replay()` (`require_approved=True`, `on_drift="raise"`, `check_shape=True`) — never the raw engine. So a
+tool call either returns today's verified data or **fails loud** with a typed error the assistant can act
+on (`DriftError` / `ShapeDriftError` / `AuthExpiredError` / `EscalateError`, each carrying a
+machine-readable `code` + `retryable` flag). **Write flows are never exposed** (default-deny), and
+`learn` / `approve` / `record` are never tools — a calling assistant can't author or self-approve a flow.
+Every flow is zero-argument for now (one tool per learned literal flow); typed inputs and write exposure
+are later stages. The Python entrypoint is `await flows.serve_mcp()`.
+
 ## Pinned 0-LLM reads
 
 By default a data flow's replay does 0-LLM *navigation* but still makes **one** LLM extraction call to
