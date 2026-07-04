@@ -1,6 +1,6 @@
 [project]
 name = "ultracua"
-version = "0.44.3"
+version = "0.44.4"
 description = "A Computer Use Agent that drives a web browser at 5-10x human speed."
 readme = "README.md"
 license = "MIT"

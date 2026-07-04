@@ -346,31 +346,44 @@ deterministic, auditable replayer is structurally the best-placed architecture t
 ## Cross-cutting prerequisites the sweep surfaced (fix once, deliberately)
 
 Several candidates independently collide with the same six codebase facts — each is a small,
-high-leverage fix that should land *before* (or as the first slice of) the features that need it:
+high-leverage fix that should land *before* (or as the first slice of) the features that need it.
 
-1. **`safety.py:idempotency_key` basis is run-invariant** — `sha256(scope|step_index|intent)`
-   mints the *same* dedupe key across runs. Parameterized slots, write-loops, and signed mandates
-   all need a redesigned basis (slot/row/mandate-aware, canonicalization test-pinned): today 500
+**Status (post-#78 / 0.44.3):** #2 and #3 were genuine standalone fixes and **shipped** in 0.44.3.
+The other four are *latent* constraints with no consumer to test them against yet — correct for
+today's behavior, wrong only once a specific feature exists — so each is **sequenced as the first
+slice of its feature** rather than built speculatively (this project's discipline: no trust-critical
+machinery without a real consumer to verify it).
+
+1. ⏳ **Sequenced with H3** — **`safety.py:idempotency_key` basis is run-invariant**:
+   `sha256(scope|step_index|intent)` mints the *same* dedupe key across runs. *Correct today* (a
+   retry of one input-frozen write dedupes), but parameterized slots, write-loops, and signed
+   mandates each need a redesigned basis (slot/row/mandate-aware, canonicalization test-pinned): 500
    distinct payloads would share ONE key (silent write suppression), and a naive per-run key would
-   double-write on retry. One deliberate redesign, not three ad-hoc patches.
-2. **`flows.py:_load_meta` resets `FlowMeta` on unknown keys** — a version-skew reader silently
-   wipes run history, and would wipe any new trust-bearing flag (quarantine, attestation). Fix
-   with an `_only_known`-style filter before ANY trust state lives in `FlowMeta`.
-3. **`extract.py`'s 12k-char `innerText` truncation is silent** — a truncated page can yield a
-   syntactically valid, silently incomplete extraction that passes shape checks. Must be reported /
-   fail-loud; three candidates (value contracts, MCP tools, monitoring) inherit this hole.
-4. **`webmcp.py` speaks a speculative interface** (`window.webmcp`/`listTools`) that no real site
-   exposes — the actual Chrome origin-trial API is `navigator.modelContext` (registration-side, no
-   page-visible enumeration; interception via init-script is required). Also: `webmcp_call` steps
-   get no mutation classification or precondition capture today, so a mutating tool call would slip
-   the write gate. Rewrite before building anything on WebMCP.
-5. **The perception stack is top-frame / light-DOM everywhere** (snapshot, locators, recorder,
-   mutation-gate scope hashing — zero `frame_locator`/shadow handling in `src/`). iframe/shadow
-   work is a whole-stack change that forces **one deliberate `SCHEMA_VERSION` bump** (= fleet-wide
-   relearn); batch every fingerprint-basis change into that single bump.
-6. **`CachedStep.text` persists typed values in plaintext** — a recurring dependency for secret
-   slots, evidence packs, telemetry export, and narration. A capture-time classification/redaction
-   pass pays off across five candidates.
+   double-write on retry. One deliberate redesign in H3 (reused by H7/H14), not three ad-hoc patches.
+2. ✅ **Done — 0.44.3 (PR #78)** — **`flows.py:_load_meta` reset `FlowMeta` on unknown keys**: a
+   version-skew reader silently wiped approval + run history (and would wipe any new trust flag).
+   Now drops unknown keys via `_only_known` and preserves the known fields (unknown-key warning
+   de-duped per key-set) — so any trust state a later feature adds to `FlowMeta` loads forward-compatibly.
+3. ✅ **Done — 0.44.3 (PR #78)** — **`extract.py`'s 12k-char truncation was silent**: a truncated
+   page could yield a syntactically valid, silently incomplete/absent extraction that passed shape
+   checks. Now `Extraction.truncated` is set + warned, and the read path **fails loud** on a "not
+   found" over a truncated page. *Still owed:* fail-loud on a count drop for a *found* short list —
+   that's H9's value-contracts job, which inherits the flag. (value contracts, MCP tools, monitoring
+   all consume the signal.)
+4. ⏳ **Sequenced with H13** — **`webmcp.py` speaks a speculative interface** (`window.webmcp`/
+   `listTools`) that no real site exposes, so *nothing uses it today*; the actual Chrome origin-trial
+   API is `navigator.modelContext` (registration-side, no page-visible enumeration; interception via
+   init-script is required). Also: `webmcp_call` steps get no mutation classification or precondition
+   capture, so a mutating tool call would slip the write gate. Rewrite as H13's WebMCP-pinning slice,
+   before building anything on WebMCP.
+5. ⏳ **Sequenced with H8** — **the perception stack is top-frame / light-DOM everywhere** (snapshot,
+   locators, recorder, mutation-gate scope hashing — zero `frame_locator`/shadow handling in `src/`).
+   iframe/shadow work *is* the H8 stage-4 whole-stack change and forces **one deliberate
+   `SCHEMA_VERSION` bump** (= fleet-wide relearn); batch every fingerprint-basis change into that bump.
+6. ⏳ **Sequenced with secret-slots (H3/H12)** — **`CachedStep.text` persists typed values in
+   plaintext**: a real fix needs replay-time secret resolution (env binding), which *is* the
+   secret-slots feature — you can't redact the value replay depends on without it. A recurring
+   dependency for evidence packs, telemetry export, and narration once it lands.
 
 ## Tier: achievable with focused effort
 
