@@ -28,3 +28,6 @@ node_modules/
 
 # Claude Code local settings (machine-specific permissions)
 .claude/settings.local.json
+
+# Manual eval suite outputs (evals/ is run manually, never CI)
+evals/results/

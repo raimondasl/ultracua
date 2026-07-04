@@ -14,7 +14,7 @@ engine), A–C (the Flow API: define → learn → approve → replay → auth-r
 (write flows) are shipped and merged, and the ops layer has since hardened (logging, CI,
 retry/backoff, fleet supervisor + freshness canary, a cross-process meta lock, and a standing
 locator-resilience benchmark). **307 tests**, all key-less (real headless Chromium against local
-fixtures, run in CI on Linux + Windows); version **0.44.4**. Secrets handling is a real strength:
+fixtures, run in CI on Linux + Windows); version **0.45.0**. Secrets handling is a real strength:
 credentials are env-sourced at runtime and **never persisted** — only the resulting `storage_state`
 cookies are saved (atomically).
 
@@ -116,7 +116,7 @@ multi-step/auth pages, and (3) operability — *not* in making replay faster (it
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
 phases have kept landing since: **#33–#35 CI (Phase J), #36 pinned 0-LLM reads (Phase H), #37 fleet
 supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 → **145** tests
-(key-less); version **0.22.0** *at the time* — it has since grown to **307 tests / 0.44.4** as the
+(key-less); version **0.22.0** *at the time* — it has since grown to **307 tests / 0.45.0** as the
 trust-hardening below landed. Original near-term list with the PR that landed each:
 
 1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`
@@ -152,7 +152,11 @@ renders at that size; unset = Playwright's default 1280×720) (#75). Two **Wave-
 innovation-horizons sweep also landed: `_load_meta` now drops **unknown** meta fields instead of resetting a
 flow's approval + run history (forward-compat, no silent trust wipe), and `extract` now **reports truncation**
 (a page longer than the extractor's window) — the read path fails loud when a value is "not found" on a
-truncated page, instead of treating it as a clean absence. Still open: the **Phase-I remainder** (web UI / service daemon / registry) and
+truncated page, instead of treating it as a clean absence. A **manual capability-eval suite** also landed
+([evals/](evals/README.md), 0.45.0): 107 scenarios / 419 checks covering the shipped core AND aspirational
+probes for every ROADMAP horizon (H1–H16), key-less by default ($0), with an LLM/live tier (~$1.35 full),
+partial-run filters, a `--budget` cap, and per-run cost estimates vs measured spend — run by hand, never CI.
+Still open: the **Phase-I remainder** (web UI / service daemon / registry) and
 **Phase-G** per-write one-shot resume, action breadth (file upload / multi-tab / iframes), compensation/rollback,
 and dynamic-N writes.
 

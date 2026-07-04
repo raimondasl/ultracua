@@ -82,6 +82,7 @@ Hacker News (read-only) and is built to record: `uv run python examples/hn_diges
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | how it works inside + how to contribute (engine, safety, tiers, benchmarks, layout) |
 | **[STATUS.md](STATUS.md)** | honest status, measured benchmarks, known fragilities |
 | **[ROADMAP.md](ROADMAP.md)** | what's next |
+| **[evals/README.md](evals/README.md)** | the manual capability-eval suite: shipped behavior + the H1–H16 horizons, with $ cost estimates and partial runs |
 | **[PLAN.md](PLAN.md)** | the original design + research basis |
 | **[docs/recorder-spike.md](docs/recorder-spike.md)** | the record-by-demonstration design (capture → gated cache → 0-LLM replay) |
 
