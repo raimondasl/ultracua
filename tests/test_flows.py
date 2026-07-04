@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import functools
 import http.server
+import json
 import threading
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from ultracua.flows import (
     LoginSpec,
     MutateSpec,
     _load_meta,
+    _meta_path,
     _save_meta,
     approve,
     health,
@@ -714,6 +716,47 @@ async def test_extract_handles_missing_tool_call() -> None:
     router = Router(fast=Tier(_NoTool(), "m"), strong=Tier(_NoTool(), "m"))
     ex = await extract(router, "anything", "some page text")
     assert not ex.found and "no tool call" in (ex.error or "")
+
+
+async def test_extract_flags_truncation() -> None:
+    # A page longer than the extractor's window must REPORT that it was cut (never silently), so a
+    # caller can fail loud on a false "not found" / a possibly-incomplete list.
+    long_page = "word " * 200  # ~1000 chars joined, well over the tiny window below
+    ex = await extract(_extract_router("v"), "anything", long_page, max_chars=50)
+    assert ex.truncated is True
+    short = await extract(_extract_router("v"), "anything", "short page", max_chars=50)
+    assert short.truncated is False
+
+
+async def test_extract_truncation_flag_survives_missing_tool_call() -> None:
+    from ultracua.llm.types import LLMResponse, Usage
+
+    class _NoTool:
+        async def complete(self, req):
+            return LLMResponse(blocks=[], model="m", stop_reason="end_turn",
+                               usage=Usage(input_tokens=1, output_tokens=1), ttft_ms=1.0)
+
+    router = Router(fast=Tier(_NoTool(), "m"), strong=Tier(_NoTool(), "m"))
+    ex = await extract(router, "anything", "word " * 200, max_chars=50)
+    assert not ex.found and ex.truncated is True  # the "no tool call" path still reports truncation
+
+
+def test_load_meta_ignores_unknown_future_fields(tmp_path) -> None:
+    # A meta written by a NEWER version carries a trust field this version doesn't know. Loading it must
+    # DROP the unknown field and PRESERVE approval + run history — never reset to defaults (a silent
+    # trust wipe: an approved, healthy flow would otherwise come back unapproved with 0 runs).
+    cache = FlowCache(root=tmp_path)
+    key = "deadbeef"
+    p = _meta_path(cache, key)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({
+        "approved": True, "runs": 9, "successes": 8, "consecutive_failures": 0,
+        "quarantined": True,  # a field from a future version this code doesn't have
+    }), encoding="utf-8")
+    meta = _load_meta(cache, key)
+    assert meta.approved is True                 # preserved, NOT wiped to default False
+    assert meta.runs == 9 and meta.successes == 8
+    assert not hasattr(meta, "quarantined")      # the unknown field is dropped, not carried
 
 
 # --- Phase D: write (MUTATE) flows ------------------------------------------------------------

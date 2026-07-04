@@ -12,6 +12,9 @@ from typing import Any, Optional
 
 from .llm.base import Router
 from .llm.types import LLMRequest, Message, TextBlock, ToolDef
+from .obs import get_logger
+
+_log = get_logger("extract")
 
 _SYSTEM = (
     "You extract structured data from a web page. Return exactly what the INSTRUCTION asks for "
@@ -26,6 +29,11 @@ class Extraction:
     found: bool
     data: Any = None
     error: Optional[str] = None
+    # The page text was longer than `max_chars` and was cut before the LLM saw it, so the answer (or
+    # tail list items) past the cut were invisible to the extractor. A truncated extraction is NOT a
+    # trustworthy result — a caller must treat it as suspect (fail loud on a false "not found", flag a
+    # possibly-short list), never as a clean read. Set here so truncation is reported, never silent.
+    truncated: bool = False
 
 
 def _input_schema(data_schema: Optional[dict]) -> dict:
@@ -71,9 +79,18 @@ async def extract(
     `schema` (optional JSON schema for the `data` field) constrains the output shape. Returns an
     `Extraction(found, data, error)` — `found=False` when the data isn't on the page.
     """
-    text = " ".join((page_text or "").split())[:max_chars]
+    joined = " ".join((page_text or "").split())
+    text = joined[:max_chars]
+    truncated = len(joined) > max_chars
     if not text:
         return Extraction(found=False, error="empty page")
+    if truncated:
+        # Not fatal here (a scalar answer near the top is still fine) — but never silent: surface it so
+        # the caller can fail loud / flag an incomplete list. See flows.py's finalize.
+        _log.warning(
+            "page text is %d chars (> max_chars=%d) — TRUNCATED before extraction; any answer or list "
+            "items past the cut are invisible to the extractor", len(joined), max_chars,
+        )
     tool = ToolDef(
         name="submit",
         description="Return the data extracted from the page.",
@@ -85,10 +102,10 @@ async def extract(
         user_text=f"INSTRUCTION: {instruction}\n\nPAGE TEXT:\n{text}", tier=tier,
     )
     if d is None:
-        return Extraction(found=False, error="extractor returned no tool call")
+        return Extraction(found=False, error="extractor returned no tool call", truncated=truncated)
     data = d.get("data")
     # Unwrap a spurious extra nesting level ([["x"]] -> ["x"]).
     if isinstance(data, list) and len(data) == 1 and isinstance(data[0], list):
         data = data[0]
     found = bool(d.get("found")) if "found" in d else (data not in (None, [], ""))
-    return Extraction(found=found, data=data, error=d.get("error"))
+    return Extraction(found=found, data=data, error=d.get("error"), truncated=truncated)

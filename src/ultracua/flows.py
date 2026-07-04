@@ -40,6 +40,10 @@ if TYPE_CHECKING:
     from playwright.async_api import Page
 
 _log = get_logger("flows")
+# De-dup for the forward-compat "unknown meta field" warning below: warn ONCE per distinct set of
+# dropped keys, not on every _load_meta — which runs on the replay / health / run_all / _update_meta
+# hot paths, so a legitimately-newer meta would otherwise spam the log several times per flow per cycle.
+_warned_unknown_meta_keys: set[frozenset[str]] = set()
 
 # login is either a declarative LoginSpec or an async callable that authenticates a page.
 LoginCallable = Callable[["Page"], Awaitable[None]]
@@ -318,9 +322,24 @@ def _load_meta(cache: FlowCache, key: str) -> FlowMeta:
     p = _meta_path(cache, key)
     if p.exists():
         try:
-            return FlowMeta(**json.loads(p.read_text(encoding="utf-8")))
-        except Exception:  # noqa: BLE001
-            pass
+            raw = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 — corrupt/torn file: treat as no meta
+            return FlowMeta()
+        if isinstance(raw, dict):
+            # Forward-compat: a meta written by a NEWER version may carry fields this version doesn't
+            # know. Drop only the unknown keys and keep the rest — NEVER let one unexpected key make
+            # `FlowMeta(**raw)` raise and reset approval + run history to defaults (a silent trust wipe).
+            unknown = [k for k in raw if k not in {f.name for f in dataclasses.fields(FlowMeta)}]
+            if unknown:
+                sig = frozenset(unknown)
+                if sig not in _warned_unknown_meta_keys:  # warn once per distinct key-set, not per load
+                    _warned_unknown_meta_keys.add(sig)
+                    _log.warning(
+                        "flow meta carries field(s) %s this version doesn't know — ignoring them and "
+                        "preserving approval + run history (metas with these keys won't be re-logged)",
+                        sorted(unknown),
+                    )
+            return FlowMeta(**_only_known(raw, FlowMeta))
     return FlowMeta()
 
 
@@ -433,7 +452,22 @@ def _make_finalize(spec: FlowSpec, router, out: dict, pin: Optional[dict] = None
         except Exception:  # noqa: BLE001
             text = ""
         ex = await extract(router, spec.extract, text, schema=spec.extract_schema)
+        if ex.truncated and not ex.found:
+            # The page was longer than the extractor's window AND the value wasn't in the visible portion:
+            # a "not found" here is INDETERMINATE (the answer may be past the cut), not a trustworthy
+            # absence a scheduler should treat as real. Fail loud instead of silently reporting a miss.
+            out["data"], out["found"], out["truncated"] = None, False, True
+            out["error"] = ("page too large to read fully — the extractor input was truncated and the "
+                            "value was not in the visible portion; narrow the page or pin the read")
+            return {"solved": False}
         out["data"], out["found"], out["error"] = ex.data, ex.found, ex.error
+        if ex.truncated:
+            # Found, but on a truncated page, so a list may be short. extract() already LOGGED a warning
+            # (the actual signal today); this records a breadcrumb, but NOTE: no caller consumes
+            # out["truncated"] yet, so replay()'s return can't distinguish a short list from a complete
+            # one. List-completeness (fail-loud on a count drop) is deferred to the H9 value-contracts
+            # feature — this branch is a warning + a marker, NOT a completeness guarantee.
+            out["truncated"] = True
         if spec.pin_read and ex.found:  # LEARN: try to pin a 0-LLM read of the answer for replays
             out["pin"] = await find_pin(session.page, ex.data)
         return {"solved": ex.found, "data": ex.data}
