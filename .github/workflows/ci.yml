@@ -40,6 +40,7 @@ jobs:
         run: uv run --group bench playwright install chromium
 
       - name: Run the test suite
-        # `--group providers` installs the OpenAI / Gemini SDKs so the provider live-path tests
-        # actually run here (they `importorskip` and would otherwise silently skip). Still key-less.
-        run: uv run --group bench --group providers pytest -q
+        # `--group providers` installs the OpenAI / Gemini SDKs and `--group mcp` the MCP SDK, so the
+        # provider live-path + MCP-server tests actually run here (they `importorskip` and would
+        # otherwise silently skip). Still key-less (no API keys, no network beyond localhost fixtures).
+        run: uv run --group bench --group providers --group mcp pytest -q

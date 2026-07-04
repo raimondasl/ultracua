@@ -1,8 +1,9 @@
 """H2 stage-1 MCP server — key-less tests (local fixture + scripted provider, real headless Chromium).
 
 Covers the pure SDK-free core (`list_flow_tools` / `call_flow_tool`) + the typed error taxonomy.
-The `mcp` SDK is a dev dependency here, so `build_server` is smoke-tested too; the module imports
-without the SDK by construction (mcp is lazy-imported only inside build_server/serve).
+The `mcp` SDK is an OPTIONAL dependency (group `mcp`), so the `build_server` smoke test skips when
+it's absent; the module itself imports without the SDK by construction (mcp is lazy-imported only
+inside build_server/serve). CI installs `--group mcp` so that smoke actually runs there.
 """
 
 from __future__ import annotations
@@ -163,6 +164,10 @@ async def test_call_dispatches_and_maps_errors(tmp_path, monkeypatch) -> None:
 
 # --- SDK wiring smoke (mcp is a dev dep here) -------------------------------------------------
 def test_build_server_constructs() -> None:
+    # The `mcp` SDK is an OPTIONAL dependency (group `mcp`). The pure-core tests above run without it;
+    # only this SDK-wiring smoke needs it, so skip cleanly when it's absent (CI installs `--group mcp`
+    # so it actually runs there — same pattern as the provider live-path tests).
+    pytest.importorskip("mcp")
     from ultracua.mcpserver.server import build_server
 
     server = build_server()  # lazy-imports mcp; must not raise with the SDK installed
