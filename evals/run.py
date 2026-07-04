@@ -145,7 +145,20 @@ def _summarize(rows: list[dict]) -> dict:
     return out
 
 
+def _harden_console() -> None:
+    """On a legacy Windows console (cp1252), a single non-cp1252 char in a scenario title/note/id
+    would crash a print() with UnicodeEncodeError and abort --estimate/--list/a run. Scenario text
+    is authored freely across 100+ scenarios, so degrade gracefully — replace the odd char with '?'
+    instead of dying. Only affects chars the console couldn't encode anyway; ASCII/cp1252 unchanged."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")  # keeps the encoding; only changes error handling
+        except (AttributeError, ValueError):  # redirected to a non-reconfigurable stream: fine
+            pass
+
+
 def main(argv=None) -> int:
+    _harden_console()
     ap = argparse.ArgumentParser(prog="evals.run", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--list", action="store_true", help="list selected scenarios and exit")
