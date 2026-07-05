@@ -308,7 +308,9 @@ async def audit_value_echo_refusal(ctx: Ctx):
             await lk.wait_for()
             await lk.click()                                   # click the VALUE-ECHOING element
 
-        res = await record(spec, demo=_demo, headless=True, cache=ctx.cache())
+        # mine_slots=True asks the recorder to templatize (auto-lift fill/select values into typed slots).
+        # The value-independence audit runs only under this opt-in — a plain record is never affected.
+        res = await record(spec, demo=_demo, headless=True, cache=ctx.cache(), mine_slots=True)
 
     # PARTIAL CREDIT (shipped): the capture itself — a multi-page same-origin demo lands as
     # [type, click, click] with the literal frozen. True whether or not a future audit refuses.

@@ -329,7 +329,9 @@ def _flow_record(args: argparse.Namespace) -> None:
     print(f"opening {args.url} — a browser window will appear; perform the flow, then return here.")
     # Opt-in intent caption: one best-effort post-hoc LLM call to label the steps (off the replay path).
     # None when no LLM is configured -> placeholder intents, recording stays key-less.
-    res = asyncio.run(record(spec, demo=_demo, headless=False, caption=caption_for(getattr(args, "provider", None))))
+    res = asyncio.run(record(spec, demo=_demo, headless=False,
+                             caption=caption_for(getattr(args, "provider", None)),
+                             mine_slots=getattr(args, "mine_slots", False)))
     print(f"\ncaptured {len(res.steps)} step(s):")
     for s in res.steps:
         name = (s.locator.name if s.locator else "") or (s.locator.tag if s.locator else "")
@@ -350,6 +352,9 @@ def _flow_record(args: argparse.Namespace) -> None:
             if res.note:
                 print(res.note)
         else:
+            if spec.slots:
+                print(f"\nmined {len(spec.slots)} typed slot(s): {', '.join(sorted(spec.slots))} — replay with "
+                      f"`params={{...}}` (e.g. `flows.replay(spec, params={{'{sorted(spec.slots)[0]}': '…'}})`).")
             print(f"\nrecorded + verified {spec.name!r} (replays 0-LLM). Approve it to run unattended:\n"
                   f"    ultracua flow approve --name {spec.name}")
     else:
@@ -499,6 +504,10 @@ def _flow_main(argv) -> None:
     prc.add_argument("--goal", required=True, help="a short description of the flow (forms the cache key).")
     prc.add_argument("--storage-state", dest="storage_state",
                      help="a Playwright storage_state JSON (cookies) to start authenticated.")
+    prc.add_argument("--mine-slots", dest="mine_slots", action="store_true",
+                     help="H3: auto-lift the typed/selected values into typed slots so the flow can be "
+                          "replayed with `params={...}` (read flows only). Refuses if a value echoes into a "
+                          "later step (a dead template).")
     _add_mutate_args(prc)  # set any --confirm-* to DECLARE + safely capture a WRITE flow
 
     pca = sub.add_parser("canary", help="Cheap freshness probe: does each flow still START (0-LLM, "

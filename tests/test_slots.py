@@ -168,3 +168,141 @@ def test_validate_params_secret_from_env(monkeypatch) -> None:
     monkeypatch.delenv("MY_TOKEN")
     with pytest.raises(FlowReplayError, match="needs env var"):
         validate_params(spec, {})
+
+
+# --- slice 1b: recorder auto-mining + the value-independence audit -----------------------------
+class _EchoLinkSite:
+    """Multi-page value-echo fixture: type a query, submit, then a results page renders that value
+    INSIDE the link the flow clicks (the dead-template shape the audit must catch)."""
+
+    PAGES = {
+        "/": ("<!doctype html><body><form action='/results' method='get'>"
+              "<label for='q'>query</label><input id='q' name='q'>"
+              "<button type='submit'>search</button></form></body>"),
+        "/results": "<!doctype html><body><a href='/detail'>open report X17</a></body>",
+        "/detail": "<!doctype html><body><h1>report X17</h1></body>",
+    }
+
+    def serve(self):
+        pages = self.PAGES
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a) -> None:
+                pass
+
+            def do_GET(self) -> None:
+                html = pages.get(self.path.split("?")[0])
+                if html is None:
+                    self.send_error(404)
+                    return
+                b = html.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_mine_slots_creates_typed_slot_and_replays(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    cache = FlowCache()
+    site = _EchoSite()   # input's accessible name is "code" (label for=q)
+    httpd, base = site.serve()
+    try:
+        spec = FlowSpec(name="mined", start_url=base + "/", goal="enter the tracking code", headless=True)
+
+        async def _demo(pg) -> None:
+            await pg.fill("#q", "alpha-7")
+            await pg.locator("#q").blur()
+
+        res = await flows.record(spec, demo=_demo, headless=True, cache=cache, mine_slots=True)
+        assert res.cached, res.note
+        # Mining auto-lifted the typed value into a named slot on the spec, and marked the step.
+        assert spec.slots and "code" in spec.slots and spec.slots["code"].type == "string"
+        key = flow_key(spec.goal, spec.start_url, spec.scope)
+        typed = next(s for s in cache.get(key).steps if s.action == "type")
+        assert typed.slot == "code"
+        # And the mined slot is immediately usable: replay(params) substitutes it into the live page.
+        flows.approve(spec, cache=cache)
+        site.gets.clear()
+        await flows.replay(spec, params={"code": "beta-9"}, cache=cache)
+        assert "/typed-beta-9" in site.gets and "/typed-alpha-7" not in site.gets
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_mine_slots_audit_refuses_value_echo(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    cache = FlowCache()
+    site = _EchoLinkSite()
+    httpd, base = site.serve()
+    try:
+        spec = FlowSpec(name="echo", start_url=base + "/", goal="open the flagged report", headless=True)
+
+        async def _demo(pg) -> None:
+            await pg.fill("#q", "X17")
+            await pg.locator("#q").blur()
+            await pg.click("button")                       # GET-form submit -> /results
+            lk = pg.get_by_role("link", name="open report X17")
+            await lk.wait_for()
+            await lk.click()                               # click the VALUE-ECHOING link
+
+        res = await flows.record(spec, demo=_demo, headless=True, cache=cache, mine_slots=True)
+        # The audit refuses to templatize a dead template: not cached, note names the value leak, and the
+        # finding is reported. (A non-mining record of the same flow would cache normally — mining is opt-in.)
+        assert not res.cached, "audit should have refused the value-echo template"
+        assert "value-independence audit" in res.note and "echoes" in res.note
+        assert any(f["value_leak"] for f in res.slot_findings)
+        assert cache.get(flow_key(spec.goal, spec.start_url, spec.scope)) is None  # nothing cached
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_value_leaks_scans_content_fields_not_structural_css() -> None:
+    # The audit scans the CONTENT-bearing fields resolve() binds on (name/text/anchor/testid/placeholder/
+    # elem_id) — a value echoed into any of them is a dead template. It does NOT scan the structural css
+    # path (tag names + nth-of-type), so a value that's a mere substring of a tag name isn't a false leak.
+    from ultracua.cache import CachedStep
+    from ultracua.flows import _value_leaks
+    from ultracua.locators import LocatorSpec
+
+    def step(**loc) -> CachedStep:
+        base = {"role": "link", "name": "", "tag": "a"}
+        base.update(loc)
+        return CachedStep(intent="x", action="click", locator=LocatorSpec(**base))
+
+    assert _value_leaks("X17", [step(name="open report X17")])          # role+name
+    assert _value_leaks("X17", [step(placeholder="Re-enter code X17")])  # placeholder (Tier-1 binder)
+    assert _value_leaks("X17", [step(testid="report-X17")])              # data-testid
+    assert _value_leaks("X17", [step(elem_id="row-X17")])                # element id
+    # A tag-name-like value that only appears in a later STRUCTURAL css path is NOT a leak.
+    assert _value_leaks("form", [step(name="results", css="main > form > a:nth-of-type(2)")]) is None
+
+
+async def test_mine_slots_refuses_when_slots_predeclared(tmp_path, monkeypatch) -> None:
+    # Opting into mining AND pre-declaring a typed slot table is a conflict — mining would clobber the
+    # author's enum/pattern/range with bare string slots. Refuse loud rather than silently drop the domain.
+    monkeypatch.chdir(tmp_path)
+    cache = FlowCache()
+    site = _EchoSite()
+    httpd, base = site.serve()
+    try:
+        spec = FlowSpec(name="conflict", start_url=base + "/", goal="enter the code", headless=True,
+                        slots={"code": SlotSpec(type="string", enum=["a", "b"])})
+
+        async def _demo(pg) -> None:
+            await pg.fill("#q", "a")
+            await pg.locator("#q").blur()
+
+        res = await flows.record(spec, demo=_demo, headless=True, cache=cache, mine_slots=True)
+        assert not res.cached and "won't overwrite" in res.note
+        assert spec.slots["code"].enum == ["a", "b"]   # the declared domain is untouched
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

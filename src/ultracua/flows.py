@@ -21,7 +21,7 @@ import json
 import os
 import re
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Union
 
@@ -1267,6 +1267,11 @@ class RecordResult:
     steps: list[CachedStep]
     is_write: bool = False  # is this a WRITE flow (approval-gated, idempotency-keyed on replay)?
     note: str = ""
+    # H3 slice 1b: per-slot audit findings from opt-in `mine_slots` — one entry per mined slot candidate,
+    # each {slot, step, value_leak}. `value_leak` is set (a "where" string) for a slot whose demo value
+    # echoes into a LATER locator/precondition/URL (a dead template) — the audit refuses to cache such a
+    # flow (fail loud). Empty when `mine_slots` is off.
+    slot_findings: list = field(default_factory=list)
 
 
 def _attach_step_confirms(flow, step_confirms: "list[StepConfirm]"):
@@ -1304,10 +1309,73 @@ def _attach_step_confirms(flow, step_confirms: "list[StepConfirm]"):
     return flow.model_copy(update={"steps": steps}), ""
 
 
+def _slot_name_for(step: CachedStep, taken: set) -> str:
+    """A stable, readable slot name for a value-bearing step — from its field's accessible name, else a
+    per-action default. Sanitized to a lower_snake identifier and de-duplicated against `taken`."""
+    base = (step.locator.name if step.locator is not None else "") or ""
+    base = re.sub(r"[^a-z0-9]+", "_", base.strip().lower()).strip("_")
+    base = base or {"select": "choice"}.get(step.action, "value")
+    name = base
+    n = 2
+    while name in taken:
+        name, n = f"{base}_{n}", n + 1
+    taken.add(name)
+    return name
+
+
+def _value_leaks(value: str, later_steps: list) -> Optional[str]:
+    """Does the demo `value` echo into a LATER step's locator / precondition / navigate target? If so the
+    step would become a dead template (every non-demo value changes that later basis and replay fails), so
+    the audit refuses. Returns a short 'where' string, or None. Values under 2 chars are skipped (too short
+    to attribute a real echo — avoids dropping a slot on a coincidental '1')."""
+    if not value or len(value) < 2:
+        return None
+    for s in later_steps:
+        loc = s.locator
+        if loc is not None:
+            # Scan the CONTENT-bearing fields resolve() binds on (role+name, text, neighbor anchor, and the
+            # Tier-1 testid / placeholder / id) — a demo value echoed into any of these makes a non-demo value
+            # fail to resolve. Deliberately NOT `css`: it's a machine-built STRUCTURAL path (tag names +
+            # nth-of-type), so a value that's merely a substring of a tag name ("form", "input") would
+            # false-positive without ever being a real value-echo (the id part is covered by elem_id).
+            for fname, v in (("name", loc.name), ("text", loc.text), ("anchor", loc.anchor),
+                             ("testid", loc.testid), ("placeholder", loc.placeholder), ("elem_id", loc.elem_id)):
+                if v and value in v:
+                    return f"a later {s.action!r} step's locator.{fname}"
+        if s.precond_scope and value in s.precond_scope:
+            return f"a later {s.action!r} step's precondition"
+        if s.action == "navigate" and s.text and value in s.text:
+            return f"a later navigate URL"
+    return None
+
+
+def _mine_and_audit_slots(flow: "CachedFlow", spec: FlowSpec) -> "tuple[CachedFlow, dict, list]":
+    """H3 slice 1b: auto-mine each value-bearing step (`type`/`select`) into a typed string slot (a `press`
+    carries a KEY, never a value), running the value-independence audit as it goes. Returns
+    `(marked_flow, slots, findings)` — `findings` has one entry per candidate; any with `value_leak` set
+    means a dead template, and the CALLER refuses to cache. Domain capture (enum/pattern from site metadata)
+    is a later slice, so mined slots are typed `string` for now."""
+    steps = list(flow.steps)
+    slots: dict = {}
+    findings: list = []
+    taken: set = set()
+    for i, step in enumerate(steps):
+        if step.action not in ("type", "select"):
+            continue
+        name = _slot_name_for(step, taken)
+        leak = _value_leaks(step.text or "", steps[i + 1:])
+        findings.append({"slot": name, "step": i, "value_leak": leak})
+        if leak is not None:
+            continue  # dead template — don't mark it; the caller refuses the whole flow
+        steps[i] = step.model_copy(update={"slot": name})
+        slots[name] = SlotSpec(type="string")
+    return flow.model_copy(update={"steps": steps}), slots, findings
+
+
 async def record(
     spec: FlowSpec, *, demo: Callable[[Any], Awaitable[None]], headless: bool = False,
     cache: Optional[FlowCache] = None, caption: Optional[Callable[..., Any]] = None,
-    provider_name: Optional[str] = None,
+    provider_name: Optional[str] = None, mine_slots: bool = False,
 ) -> RecordResult:
     """Capture a human DEMONSTRATION of `spec` into a cached, replayable flow (Phase I recorder).
 
@@ -1449,7 +1517,39 @@ async def record(
     reproduced = report.success
     if not reproduced:
         cache.delete(key)
-    return RecordResult(spec, cached=reproduced, reproduced=reproduced, performed_write=False, is_write=False,
-                        steps=list(flow.steps),
-                        note="" if reproduced else "the recorded flow did NOT reproduce on a fresh 0-LLM "
-                             "replay — not cached. Re-record (the page may depend on record-time state).")
+        return RecordResult(spec, cached=False, reproduced=False, performed_write=False, is_write=False,
+                            steps=list(flow.steps),
+                            note="the recorded flow did NOT reproduce on a fresh 0-LLM replay — not cached. "
+                                 "Re-record (the page may depend on record-time state).")
+
+    # H3 slice 1b (opt-in): auto-mine typed slots + run the value-independence audit. Runs AFTER
+    # verify-by-replay (the slot markers are inert for a no-params replay, so the reproduced flow is
+    # unchanged). If any mined slot's demo value echoes into a later step, refuse to templatize (fail loud);
+    # otherwise mark the steps, publish spec.slots, and re-cache. (Read-side only — a write flow returned above.)
+    slot_findings: list = []
+    if mine_slots:
+        if spec.slots:
+            # Never clobber an author-declared typed domain (enum/pattern/range) with bare mined string
+            # slots — the two creation paths are mutually exclusive. Fail loud so the caller picks one.
+            cache.delete(key)
+            return RecordResult(spec, cached=False, reproduced=True, performed_write=False, is_write=False,
+                                steps=list(flow.steps),
+                                note="mine_slots won't overwrite an author-declared slot table — drop "
+                                     "mine_slots to keep your typed slots, or clear spec.slots to let mining "
+                                     "derive them.")
+        marked, mined_slots, slot_findings = _mine_and_audit_slots(flow, spec)
+        leaks = [f for f in slot_findings if f["value_leak"]]
+        if leaks:
+            cache.delete(key)
+            return RecordResult(spec, cached=False, reproduced=True, performed_write=False, is_write=False,
+                                steps=list(flow.steps), slot_findings=slot_findings,
+                                note=f"value-independence audit refused to templatize: slot(s) "
+                                     f"{[f['slot'] for f in leaks]} — the demo value echoes into "
+                                     f"{leaks[0]['value_leak']}, so a non-demo value would break replay (a dead "
+                                     f"template). Re-record without that field varying, or drop mine_slots.")
+        spec.slots = mined_slots or None
+        flow = marked
+        cache.put(flow)   # persist the slot markers alongside the verified flow
+
+    return RecordResult(spec, cached=True, reproduced=True, performed_write=False, is_write=False,
+                        steps=list(flow.steps), slot_findings=slot_findings)
