@@ -190,7 +190,58 @@ class FlowHealth:
 
 
 class FlowReplayError(RuntimeError):
-    """Replay could not be trusted: no cached flow, page drift, data not found, or shape change."""
+    """Replay could not be trusted: no cached flow, page drift, data not found, or shape change.
+
+    Base of a small TYPED taxonomy so a caller (esp. the H2 MCP server) can react to a failure by
+    KIND without string-parsing the message: `.code` is a stable machine-readable slug and
+    `.retryable` says whether re-running as-is could plausibly succeed. Every subclass still IS a
+    `FlowReplayError`, so existing `except FlowReplayError` keeps catching all of them (the change is
+    additive — the base is still raised for config refusals like not-approved / no-confirm-check)."""
+
+    code = "replay_error"
+    retryable = False
+
+
+class DriftError(FlowReplayError):
+    """The page or a locator drifted — the learned path no longer matches. Do NOT retry as-is;
+    re-learn (or use `on_drift='relearn'`) after a human checks what changed."""
+
+    code = "drift"
+    retryable = False
+
+
+class ShapeDriftError(FlowReplayError):
+    """The extracted data's STRUCTURE changed vs the learned run (a field vanished, a scalar became a
+    list). Do NOT retry — returning it would be silently-wrong data; the flow needs review."""
+
+    code = "shape_drift"
+    retryable = False
+
+
+class AuthExpiredError(FlowReplayError):
+    """The login session expired. Safe to retry AFTER refreshing auth (`flow login` / a `login` spec).
+    (Raised only when expiry is unambiguous; the heuristic auth-refresh path inside `replay` can't
+    confidently attribute a generic drift to expiry, so that path raises `DriftError`.)"""
+
+    code = "auth_expired"
+    retryable = True
+
+
+class EscalateError(FlowReplayError):
+    """An interstitial / CAPTCHA / human-verification wall blocks replay. A machine cannot proceed —
+    escalate to a human. Not retryable by the agent."""
+
+    code = "escalate"
+    retryable = False
+
+
+def _classify_replay_failure(kind: str) -> type[FlowReplayError]:
+    """Map an `_attempt_replay` failure `kind` to its taxonomy class (default: DriftError)."""
+    return {
+        "shape": ShapeDriftError,
+        "escalate": EscalateError,
+        "miss": FlowReplayError,  # no learned flow — an absence, not a drift
+    }.get(kind, DriftError)
 
 
 # --- data-shape signature (data-level drift detection) ----------------------------------------
@@ -740,7 +791,10 @@ def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Op
 
 
 async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="replay", provider=None):
-    """One replay attempt. Returns (ok, data, reason).
+    """One replay attempt. Returns (ok, data, reason, kind).
+
+    `kind` classifies a failure for the typed taxonomy: "" (ok) | "miss" | "escalate" | "shape" |
+    "drift" (page/locator/not-found — the do-not-retry default). See `_classify_replay_failure`.
 
     `mode="replay"` is a pure 0-LLM run. `mode="repair"` additionally lets the engine self-heal /
     suffix-replan a drifted step in place (re-authoring just the broken tail, preserving the working
@@ -757,16 +811,19 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="
         finalize=_make_finalize(spec, router, out, pin=pin),
     )
     if report.mode == "miss":
-        return False, None, "no learned flow — run learn first"
+        return False, None, "no learned flow — run learn first", "miss"
     if not report.success:
-        return False, None, f"replay failed (page drift?): {report.note or report.mode}"
+        # An interstitial/CAPTCHA wall comes back as mode="escalate" — a distinct KIND (human needed),
+        # not ordinary locator drift.
+        kind = "escalate" if report.mode == "escalate" else "drift"
+        return False, None, f"replay failed (page drift?): {report.note or report.mode}", kind
     if (spec.extract is not None or spec.mutate is not None) and not out.get("found"):
         # a write flow gates `found` on the confirm check, so an unconfirmed write fails here
-        return False, None, f"data not found / write not confirmed on replay: {out.get('error')}"
+        return False, None, f"data not found / write not confirmed on replay: {out.get('error')}", "drift"
     data = out.get("data")
     if check_shape and meta.shape is not None and not _shape_matches(meta.shape, _shape_of(data)):
-        return False, None, f"data shape changed vs the learned flow (expected {meta.shape})"
-    return True, data, ""
+        return False, None, f"data shape changed vs the learned flow (expected {meta.shape})", "shape"
+    return True, data, "", ""
 
 
 async def replay(
@@ -833,7 +890,7 @@ async def replay(
         return {"status": "confirmed", "data": data} if is_mutate else data
 
     try:
-        ok, data, reason = await _attempt_replay(spec, router, cache, key, meta, check_shape)
+        ok, data, reason, kind = await _attempt_replay(spec, router, cache, key, meta, check_shape)
         if ok:
             return _ok(data)
         # The session may have expired — re-login (refresh cookies) and retry once. A WRITE flow is
@@ -853,10 +910,11 @@ async def replay(
                 if await _precheck_done(spec):  # the first attempt's write may have landed
                     _record_run(cache, key, ok=True)
                     return {"status": "already-done", "data": None}
-                ok, data, reason2 = await _attempt_replay(spec, router, cache, key, meta, check_shape)
+                ok, data, reason2, kind2 = await _attempt_replay(spec, router, cache, key, meta, check_shape)
                 if ok:
                     return _ok(data)
                 reason = f"{reason}; after auth refresh: {reason2}"
+                kind = kind2  # the post-refresh failure kind is the operative one now
             except Exception as exc:  # noqa: BLE001 - any refresh failure -> fall through to relearn/raise
                 reason = f"{reason}; auth refresh failed: {type(exc).__name__}: {exc}"
         elif is_mutate and auth_refresh and spec.login is not None:
@@ -878,7 +936,7 @@ async def replay(
             # Cheapest repair first: re-author ONLY the broken tail from the current page, keeping the
             # working prefix (suffix-replan). This fixes locator/path drift without re-running the whole
             # flow. It can't fix data-SHAPE drift (the steps still replay) — that falls to a full relearn.
-            ok, data, reason3 = await _attempt_replay(
+            ok, data, reason3, _kind3 = await _attempt_replay(
                 spec, router, cache, key, meta, check_shape, mode="repair", provider=provider
             )
             if ok:
@@ -891,7 +949,7 @@ async def replay(
             reason = f"replay drifted ({reason}); suffix-replan failed ({reason3}); re-learn failed ({res.note})"
         _record_run(cache, key, ok=False, error=reason)
         _log.warning("flow %r: replay FAILED — %s", spec.name, reason)
-        raise FlowReplayError(f"{spec.name!r}: {reason}")
+        raise _classify_replay_failure(kind)(f"{spec.name!r}: {reason}")
     except FlowReplayError:
         raise  # the failure above is already recorded in health
     except Exception as exc:  # noqa: BLE001 - an unexpected crash (browser/extract) is still a failed run
@@ -949,6 +1007,17 @@ def load_spec(name: str) -> FlowSpec:
 def list_specs() -> list[str]:
     d = _specs_dir()
     return sorted(p.stem for p in d.glob("*.json")) if d.exists() else []
+
+
+async def serve_mcp(cache: Optional[FlowCache] = None, *, name: str = "ultracua") -> None:
+    """H2 stage 1: run a stdio MCP server exposing every APPROVED READ flow as one deterministic,
+    zero-argument tool (write flows are default-deny). Each tool call dispatches to `replay(...)` —
+    the safety-gated path — so an MCP client (Claude, Cursor, VS Code, …) gets one verified result
+    instead of LLM-driving a browser step by step. Needs the optional `mcp` SDK (`uv sync --group
+    mcp`). Blocks until the client disconnects."""
+    from .mcpserver import serve
+
+    await serve(cache, name=name)
 
 
 # --- fleet supervisor (Phase E) ---------------------------------------------------------------

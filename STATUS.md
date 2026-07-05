@@ -13,8 +13,8 @@ engine is the moat, and it is not yet hardened for unattended production.** Phas
 engine), A–C (the Flow API: define → learn → approve → replay → auth-refresh → health), and D
 (write flows) are shipped and merged, and the ops layer has since hardened (logging, CI,
 retry/backoff, fleet supervisor + freshness canary, a cross-process meta lock, and a standing
-locator-resilience benchmark). **307 tests**, all key-less (real headless Chromium against local
-fixtures, run in CI on Linux + Windows); version **0.45.1**. Secrets handling is a real strength:
+locator-resilience benchmark). **311 tests**, all key-less (real headless Chromium against local
+fixtures, run in CI on Linux + Windows); version **0.46.0**. Secrets handling is a real strength:
 credentials are env-sourced at runtime and **never persisted** — only the resulting `storage_state`
 cookies are saved (atomically).
 
@@ -116,7 +116,7 @@ multi-step/auth pages, and (3) operability — *not* in making replay faster (it
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
 phases have kept landing since: **#33–#35 CI (Phase J), #36 pinned 0-LLM reads (Phase H), #37 fleet
 supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 → **145** tests
-(key-less); version **0.22.0** *at the time* — it has since grown to **307 tests / 0.45.1** as the
+(key-less); version **0.22.0** *at the time* — it has since grown to **311 tests / 0.46.0** as the
 trust-hardening below landed. Original near-term list with the PR that landed each:
 
 1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`
@@ -156,6 +156,14 @@ truncated page, instead of treating it as a clean absence. A **manual capability
 ([evals/](evals/README.md), 0.45.0): 107 scenarios / 419 checks covering the shipped core AND aspirational
 probes for every ROADMAP horizon (H1–H16), key-less by default ($0), with an LLM/live tier (~$1.35 full),
 partial-run filters, a `--budget` cap, and per-run cost estimates vs measured spend — run by hand, never CI.
+The first **innovation-horizon feature** then shipped — **H2 flows-as-tools, stage 1** (0.46.0): an
+`ultracua flow serve-mcp` **MCP server** ([`mcpserver/`](src/ultracua/mcpserver/)) that exposes every
+**approved READ** flow as one deterministic, zero-argument tool to any MCP client (Claude / Cursor / VS
+Code / …), dispatching to the safety-gated `replay()` (never the raw engine); **writes are default-deny**,
+learn/approve/record are never tools (no self-approval), and a new **typed `FlowReplayError` taxonomy**
+(`DriftError` / `ShapeDriftError` / `AuthExpiredError` / `EscalateError`, each with a machine-readable
+`code` + `retryable`) lets a caller react to a failure by kind. Stage 2 (HTTP transport, opt-in write
+exposure behind a completed-run ledger) and stage 3 (typed slot inputs) remain open.
 Still open: the **Phase-I remainder** (web UI / service daemon / registry) and
 **Phase-G** per-write one-shot resume, action breadth (file upload / multi-tab / iframes), compensation/rollback,
 and dynamic-N writes.

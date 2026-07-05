@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 from dataclasses import asdict
 
 from .cache import FlowCache, flow_key
@@ -218,6 +219,21 @@ def _flow_list() -> None:
 
     names = list_specs()
     print("\n".join(names) if names else "(no saved flows)")
+
+
+def _flow_serve_mcp(args: argparse.Namespace) -> None:
+    from .mcpserver import list_flow_tools, serve
+
+    tools = list_flow_tools()  # preview before we block on stdio (goes to stderr; stdout is the protocol)
+    print(f"ultracua MCP server: exposing {len(tools)} approved read-flow tool(s) over stdio "
+          f"(writes not exposed): {', '.join(t.name for t in tools) or '(none)'}", file=sys.stderr)
+    try:
+        asyncio.run(serve())
+    except RuntimeError as exc:  # the mcp SDK isn't installed -> a clear, actionable message
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+    except KeyboardInterrupt:
+        pass
 
 
 def _ago(ts: float) -> str:
@@ -493,6 +509,8 @@ def _flow_main(argv) -> None:
                      help="max flows probed at once (default ULTRACUA_CONCURRENCY).")
 
     sub.add_parser("list", help="List saved flows.")
+    sub.add_parser("serve-mcp", help="Serve APPROVED READ flows as MCP tools over stdio (H2; needs "
+                                     "`uv sync --group mcp`). Writes are not exposed.")
 
     args = p.parse_args(argv)
     from .obs import configure_logging
@@ -521,11 +539,11 @@ def _flow_main(argv) -> None:
         _flow_canary(args)
     elif args.cmd == "list":
         _flow_list()
+    elif args.cmd == "serve-mcp":
+        _flow_serve_mcp(args)
 
 
 def main() -> None:
-    import sys
-
     argv = sys.argv[1:]
     if argv and argv[0] == "flow":  # `ultracua flow ...` — recurring-flow management
         return _flow_main(argv[1:])
