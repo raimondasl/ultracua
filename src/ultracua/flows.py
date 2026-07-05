@@ -19,6 +19,7 @@ import contextlib
 import dataclasses
 import json
 import os
+import re
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -120,6 +121,28 @@ class MutateSpec:
 
 
 @dataclass
+class SlotSpec:
+    """H3 typed templates: one parameterizable input on a flow. The typed contract a `params={...}` value
+    is validated against (0-LLM pre-flight) before any browser action. `type` is a JSON-Schema scalar
+    ("string" | "number" | "integer" | "boolean"). `enum` closes the domain (e.g. a <select>'s options);
+    `pattern` is a full-match regex; `min`/`max` bound a number; `max_length` bounds a string. `required`
+    (default) rejects a missing value; a non-required slot falls back to the step's frozen literal. A
+    `secret` slot's value is resolved from the env var named by `secret_env` at replay and is NEVER passed
+    in `params`, logged, or serialized (mirrors LoginSpec's env-only credential rule)."""
+
+    type: str = "string"
+    enum: Optional[list] = None
+    pattern: Optional[str] = None
+    required: bool = True
+    min: Optional[float] = None
+    max: Optional[float] = None
+    max_length: Optional[int] = None
+    secret: bool = False
+    secret_env: Optional[str] = None   # env var holding a secret slot's value (required iff secret)
+    description: str = ""
+
+
+@dataclass
 class FlowSpec:
     """A named, reusable recurring task."""
 
@@ -133,6 +156,7 @@ class FlowSpec:
     storage_state: Optional[str] = None    # auth via a Playwright storage_state JSON (cookies)
     login: Optional[Union[LoginSpec, LoginCallable]] = None  # how to (re)authenticate on expiry
     mutate: Optional[MutateSpec] = None    # set -> this is a WRITE flow (Phase D)
+    slots: Optional[dict] = None           # H3: {slot_name: SlotSpec} — the typed input contract
     max_steps: Optional[int] = None
     headless: Optional[bool] = None
 
@@ -790,7 +814,8 @@ def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Op
     )
 
 
-async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="replay", provider=None):
+async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="replay", provider=None,
+                          params=None):
     """One replay attempt. Returns (ok, data, reason, kind).
 
     `kind` classifies a failure for the typed taxonomy: "" (ok) | "miss" | "escalate" | "shape" |
@@ -799,6 +824,7 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="
     `mode="replay"` is a pure 0-LLM run. `mode="repair"` additionally lets the engine self-heal /
     suffix-replan a drifted step in place (re-authoring just the broken tail, preserving the working
     prefix) using `provider` — used as a cheaper step before a full re-learn on `on_drift="relearn"`.
+    `params` (H3) are the pre-validated per-run slot values substituted at the fill/type/select sites.
     """
     out: dict = {}
     # A learned pin anchors the OLD final page; a repaired flow may end elsewhere, so only trust the
@@ -807,7 +833,7 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="
     report = await run_cached(
         url=spec.start_url, goal=spec.goal, provider=provider, cache=cache, mode=mode,
         max_steps=spec.max_steps, headless=spec.headless, scope=spec.scope,
-        extra_headers=spec.headers, storage_state=spec.storage_state,
+        extra_headers=spec.headers, storage_state=spec.storage_state, params=params,
         finalize=_make_finalize(spec, router, out, pin=pin),
     )
     if report.mode == "miss":
@@ -826,10 +852,81 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="
     return True, data, "", ""
 
 
+def _validate_one(spec: FlowSpec, name: str, slot: SlotSpec, value: Any) -> Any:
+    """Validate one non-secret param value against its SlotSpec (pure, 0-LLM). Raises FlowReplayError."""
+    def bad(why: str):
+        return FlowReplayError(f"{spec.name!r}: param {name!r} {why} (got {value!r})")
+
+    t = slot.type
+    if t in ("number", "integer"):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise bad(f"must be a {t}")
+        if t == "integer" and not float(value).is_integer():
+            raise bad("must be an integer")
+        if slot.min is not None and value < slot.min:
+            raise bad(f"must be >= {slot.min}")
+        if slot.max is not None and value > slot.max:
+            raise bad(f"must be <= {slot.max}")
+    elif t == "boolean":
+        if not isinstance(value, bool):
+            raise bad("must be a boolean")
+    else:  # string (default)
+        if not isinstance(value, str):
+            raise bad("must be a string")
+        if slot.max_length is not None and len(value) > slot.max_length:
+            raise bad(f"must be at most {slot.max_length} chars")
+        if slot.pattern is not None and re.fullmatch(slot.pattern, value) is None:
+            raise bad(f"must match pattern {slot.pattern!r}")
+    if slot.enum is not None and value not in slot.enum:
+        raise bad(f"must be one of {slot.enum}")
+    return value
+
+
+def validate_params(spec: FlowSpec, params: Optional[dict]) -> dict:
+    """H3 pre-flight (pure, 0-LLM): validate `params` against `spec.slots`, resolve secret slots from the
+    env, and return the RESOLVED value dict to substitute at replay. Raises `FlowReplayError` on any
+    violation BEFORE the browser opens — an out-of-domain value is a loud refusal, never a silent wrong
+    value. Unknown param names (typo / stale schema) are refused; a required slot with no value refused; a
+    secret slot's value must come from `$secret_env`, never `params`, and is never returned to a caller-
+    visible surface beyond the substitution dict.
+
+    `required` is enforced only when the caller is actually parameterizing (`params` is a dict, even
+    empty). `params is None` means "replay the frozen flow" — no required check, non-secret slots keep
+    their frozen literals — but SECRET slots always resolve from the env (a demo secret must never
+    replay as a frozen plaintext literal)."""
+    parameterizing = params is not None
+    params = params or {}
+    slots = spec.slots or {}
+    unknown = [k for k in params if k not in slots]
+    if unknown:
+        raise FlowReplayError(
+            f"{spec.name!r}: unknown param(s) {unknown} — the flow's slots are {sorted(slots)}")
+    resolved: dict = {}
+    for name, slot in slots.items():
+        if slot.secret:
+            if name in params:
+                raise FlowReplayError(
+                    f"{spec.name!r}: secret slot {name!r} must not be passed in params — it is read from "
+                    f"${slot.secret_env}")
+            val = os.environ.get(slot.secret_env or "")
+            if val is None:
+                if slot.required:
+                    raise FlowReplayError(
+                        f"{spec.name!r}: secret slot {name!r} needs env var {slot.secret_env!r} set")
+                continue
+            resolved[name] = val
+        elif name in params:
+            resolved[name] = _validate_one(spec, name, slot, params[name])
+        elif parameterizing and slot.required:
+            raise FlowReplayError(f"{spec.name!r}: missing required param {name!r}")
+        # else (frozen replay, or a non-required slot with no value) -> the step keeps its frozen literal
+    return resolved
+
+
 async def replay(
     spec: FlowSpec, *, require_approved: bool = False, on_drift: str = "raise",
     check_shape: bool = True, auth_refresh: bool = True, provider_name: Optional[str] = None,
-    provider=None, router=None, cache: Optional[FlowCache] = None,
+    provider=None, router=None, cache: Optional[FlowCache] = None, params: Optional[dict] = None,
 ) -> Any:
     """Replay the learned flow at 0-LLM navigation and return the extracted data.
 
@@ -845,11 +942,24 @@ async def replay(
     (a write is human-verified before unattended runs), refuse `on_drift="relearn"` (re-authoring
     a write would re-perform it), verify the write landed (fail loud if not), and return a dict
     `{"status": "confirmed" | "already-done", "data": <optional extracted data>}`.
+
+    `params={slot: value}` (H3 typed templates) substitutes validated per-run values into the flow's
+    slot-marked fill/type/select/press steps (0-LLM pre-flight validation; `flow_key` unchanged, so
+    values never enter identity). Read flows only in this slice — parameterizing a WRITE flow is
+    refused (write templates + row-keyed idempotency are the next slice).
     """
     cache = cache or _default_cache()
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     meta = _load_meta(cache, key)
     is_mutate = spec.mutate is not None
+    if is_mutate and params:
+        # Read-side only for now: substituting into a write needs the row-keyed idempotency + write
+        # re-verification of the next slice, or a wrong/duplicated write could slip through.
+        raise FlowReplayError(
+            f"{spec.name!r}: parameterized WRITE flows aren't supported yet — this slice is read-only "
+            f"(write templates + row-keyed idempotency are the next slice). Drop `params` to replay the "
+            f"frozen write, or template a READ flow.")
+    params = validate_params(spec, params)  # 0-LLM pre-flight: raises on any out-of-domain value
     if is_mutate:
         if not spec.mutate.has_confirm():
             raise FlowReplayError(
@@ -890,7 +1000,8 @@ async def replay(
         return {"status": "confirmed", "data": data} if is_mutate else data
 
     try:
-        ok, data, reason, kind = await _attempt_replay(spec, router, cache, key, meta, check_shape)
+        ok, data, reason, kind = await _attempt_replay(spec, router, cache, key, meta, check_shape,
+                                                        params=params)
         if ok:
             return _ok(data)
         # The session may have expired — re-login (refresh cookies) and retry once. A WRITE flow is
@@ -910,7 +1021,8 @@ async def replay(
                 if await _precheck_done(spec):  # the first attempt's write may have landed
                     _record_run(cache, key, ok=True)
                     return {"status": "already-done", "data": None}
-                ok, data, reason2, kind2 = await _attempt_replay(spec, router, cache, key, meta, check_shape)
+                ok, data, reason2, kind2 = await _attempt_replay(spec, router, cache, key, meta,
+                                                                 check_shape, params=params)
                 if ok:
                     return _ok(data)
                 reason = f"{reason}; after auth refresh: {reason2}"
@@ -937,7 +1049,7 @@ async def replay(
             # working prefix (suffix-replan). This fixes locator/path drift without re-running the whole
             # flow. It can't fix data-SHAPE drift (the steps still replay) — that falls to a full relearn.
             ok, data, reason3, _kind3 = await _attempt_replay(
-                spec, router, cache, key, meta, check_shape, mode="repair", provider=provider
+                spec, router, cache, key, meta, check_shape, mode="repair", provider=provider, params=params
             )
             if ok:
                 _log.info("flow %r: drift repaired by suffix-replan (prefix preserved)", spec.name)
@@ -1001,6 +1113,9 @@ def load_spec(name: str) -> FlowSpec:
         if isinstance(m.get("step_confirms"), list):  # rebuild the pydantic StepConfirm objects from dicts
             m["step_confirms"] = [StepConfirm(**sc) if isinstance(sc, dict) else sc for sc in m["step_confirms"]]
         data["mutate"] = MutateSpec(**m)
+    if isinstance(data.get("slots"), dict):  # H3: rebuild SlotSpec objects from their serialized dicts
+        data["slots"] = {k: SlotSpec(**_only_known(v, SlotSpec)) if isinstance(v, dict) else v
+                         for k, v in data["slots"].items()}
     return FlowSpec(**data)
 
 

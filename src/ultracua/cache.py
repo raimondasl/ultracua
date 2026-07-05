@@ -76,6 +76,11 @@ class CachedStep(BaseModel):
     # Phase G: per-write completion barrier (set only on a mutating commit step). Defaulted None -> older
     # flows + non-multi-write flows deserialize unchanged (NO schema bump needed).
     confirm: Optional[StepConfirm] = None
+    # H3 typed templates: the name of the FlowSpec slot this step's value comes from. When set AND a
+    # `params={slot: value}` is passed to replay, the validated `value` is substituted for `text` at the
+    # fill/type/select/press site; otherwise the frozen `text` is used (so a no-params replay is unchanged).
+    # Additive, defaulted None -> older flows deserialize unchanged (NO schema bump needed).
+    slot: Optional[str] = None
 
 
 class CachedFlow(BaseModel):

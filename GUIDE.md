@@ -151,6 +151,31 @@ machine-readable `code` + `retryable` flag). **Write flows are never exposed** (
 Every flow is zero-argument for now (one tool per learned literal flow); typed inputs and write exposure
 are later stages. The Python entrypoint is `await flows.serve_mcp()`.
 
+### Parameterized replay — typed slots (H3, read flows)
+
+A recorded flow's typed/selected values can be turned into **typed slots** so one flow runs with
+different per-run inputs, instead of recording it once per value:
+
+```python
+from ultracua import flows, FlowSpec, SlotSpec
+
+spec = FlowSpec(name="daily-search", start_url="https://…", goal="search the catalog",
+                slots={"query": SlotSpec(type="string", max_length=64),
+                       "region": SlotSpec(type="string", enum=["us", "eu", "apac"])})
+# (mark which cached steps a slot fills, then:)
+await flows.replay(spec, params={"query": "blue widget", "region": "eu"})
+```
+
+Each `params` value is **validated 0-LLM before the browser opens** (type, `enum`, `pattern`, `min`/`max`,
+`max_length`, `required`); an out-of-domain value **fails loud** — it never types a wrong value onto the
+page. Values are substituted at the flow's slot-marked fill/select steps; `flow_key` is unchanged, so
+values never enter the flow's identity, and a **`replay()` with no `params` replays the frozen literals
+unchanged**. A `secret=True` slot resolves from its `secret_env` environment variable (never passed in
+`params`, never serialized). This slice is **read-only** — parameterizing a WRITE flow is refused (write
+templates + row-keyed idempotency are a later slice). Recorder auto-mining of slots + capturing each
+field's legal domain from site metadata is also a later slice; for now, declare `FlowSpec.slots` and mark
+the target steps' `slot`.
+
 ## Pinned 0-LLM reads
 
 By default a data flow's replay does 0-LLM *navigation* but still makes **one** LLM extraction call to

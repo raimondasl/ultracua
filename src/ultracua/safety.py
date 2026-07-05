@@ -100,8 +100,17 @@ def is_mutating(action: str, intent: str = "", name: str = "") -> bool:
     return classify_mutation(action, intent, name, None)
 
 
-def idempotency_key(scope: str, step_index: int, intent: str) -> str:
+def idempotency_key(scope: str, step_index: int, intent: str, *, slot_values: Optional[dict] = None) -> str:
+    """Stable dedupe key for a write. The base (scope, step_index, intent) is run-INVARIANT so a retry of
+    the SAME write dedupes. `slot_values` (H3 typed templates) adds a payload channel: two rows of a
+    parameterized write with DIFFERENT values mint DIFFERENT keys (so a backend dedupe layer can't
+    silently drop rows 2..N), while the SAME row on retry mints the SAME key — canonicalized (sorted keys,
+    str() values) so the digest can't wobble across runs and double-write. None/{} => the base key,
+    byte-identical to before (existing single-write flows are unchanged)."""
     basis = f"{scope}|{step_index}|{intent}"
+    if slot_values:
+        canon = "|".join(f"{k}={slot_values[k]}" for k in sorted(slot_values))
+        basis = f"{basis}|slots:{canon}"
     return "uca-" + hashlib.sha256(basis.encode("utf-8")).hexdigest()[:24]
 
 

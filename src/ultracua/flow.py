@@ -106,6 +106,7 @@ async def run_cached(
     samples: int = 1,
     reflect: bool = False,
     window_size: Optional[tuple[int, int]] = None,
+    params: Optional[dict] = None,
 ) -> FlowReport:
     cache = cache or FlowCache()
     governor = governor or PacingGovernor()
@@ -121,7 +122,7 @@ async def run_cached(
         report = await _replay(
             url, key, cached, cache, heal_provider, headless, on_step,
             prepare, finalize, goal, governor, scope, browser, record_har_path, extra_headers,
-            storage_state, window_size=window_size,
+            storage_state, window_size=window_size, params=params,
         )
         if report.success or mode in ("replay", "repair") or report.mode == "escalate":
             return report
@@ -616,6 +617,7 @@ async def _replay(
     extra_headers: Optional[dict] = None,
     storage_state: Optional[str] = None,
     window_size: Optional[tuple[int, int]] = None,
+    params: Optional[dict] = None,
 ) -> FlowReport:
     session = await BrowserSession(
         headless=headless, browser=browser, record_har_path=record_har_path,
@@ -663,7 +665,7 @@ async def _replay(
                     timeout_ms=0,
                 )
             ok, note, did_heal = await _replay_step(
-                session, step, provider, tr, goal, governor, scope, i
+                session, step, provider, tr, goal, governor, scope, i, params=params
             )
             # COMMIT BARRIER: a write with a per-step confirm must show its completion signal TRANSITION to
             # present before we proceed. A failure flips `ok` to False and falls into the existing fail-loud
@@ -781,11 +783,20 @@ async def _replay_step(
     governor: PacingGovernor,
     scope: str,
     idx: int,
+    params: Optional[dict] = None,
 ) -> tuple[bool, str, bool]:
     """Replay one cached step. Returns (ok, note, did_heal)."""
     page = session.page
     assert page is not None
     origin = origin_of(page.url)
+
+    # H3 typed templates: substitute a validated per-run value for this step's frozen literal when it's a
+    # slot site (`step.slot`) and the caller supplied a value. Restricted to value-bearing type/select
+    # actions (a `press` carries a KEY like "Enter", never a slot value). Pre-validated in
+    # flows.validate_params; here we only stringify for the fill/select. No slot / no param -> frozen text.
+    text = step.text
+    if step.slot and params and step.slot in params and step.action in ("type", "select"):
+        text = str(params[step.slot])
 
     # MUTATION GATE — never blind-replay an irreversible action under page drift, and never let
     # an LLM re-drive a write under uncertainty: on drift a mutating step FAILS LOUD (it is not
@@ -846,7 +857,7 @@ async def _replay_step(
                     except Exception:  # noqa: BLE001 - couldn't focus -> press whatever's focused
                         pass
             act = Action(
-                action=step.action, intent=step.intent, text=step.text,
+                action=step.action, intent=step.intent, text=text,
                 coords=step.coords, tool=step.tool, args=step.args,
             )
             async with governor.gate(origin):
@@ -894,9 +905,9 @@ async def _replay_step(
                 if step.action == "click":
                     await loc.click(timeout=settings.action_timeout_ms)
                 elif step.action == "select":  # recorder: re-select the recorded option(s) by value
-                    await loc.select_option(_select_values(step.text), timeout=settings.action_timeout_ms)
+                    await loc.select_option(_select_values(text), timeout=settings.action_timeout_ms)
                 else:
-                    await loc.fill(step.text or "", timeout=settings.action_timeout_ms)
+                    await loc.fill(text or "", timeout=settings.action_timeout_ms)
 
             async with governor.gate(origin):
                 with tr.measure("act"):
