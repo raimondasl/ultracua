@@ -13,8 +13,8 @@ engine is the moat, and it is not yet hardened for unattended production.** Phas
 engine), A–C (the Flow API: define → learn → approve → replay → auth-refresh → health), and D
 (write flows) are shipped and merged, and the ops layer has since hardened (logging, CI,
 retry/backoff, fleet supervisor + freshness canary, a cross-process meta lock, and a standing
-locator-resilience benchmark). **311 tests**, all key-less (real headless Chromium against local
-fixtures, run in CI on Linux + Windows); version **0.46.0**. Secrets handling is a real strength:
+locator-resilience benchmark). **317 tests**, all key-less (real headless Chromium against local
+fixtures, run in CI on Linux + Windows); version **0.47.0**. Secrets handling is a real strength:
 credentials are env-sourced at runtime and **never persisted** — only the resulting `storage_state`
 cookies are saved (atomically).
 
@@ -116,7 +116,7 @@ multi-step/auth pages, and (3) operability — *not* in making replay faster (it
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
 phases have kept landing since: **#33–#35 CI (Phase J), #36 pinned 0-LLM reads (Phase H), #37 fleet
 supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 → **145** tests
-(key-less); version **0.22.0** *at the time* — it has since grown to **311 tests / 0.46.0** as the
+(key-less); version **0.22.0** *at the time* — it has since grown to **317 tests / 0.47.0** as the
 trust-hardening below landed. Original near-term list with the PR that landed each:
 
 1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`
@@ -164,6 +164,15 @@ learn/approve/record are never tools (no self-approval), and a new **typed `Flow
 (`DriftError` / `ShapeDriftError` / `AuthExpiredError` / `EscalateError`, each with a machine-readable
 `code` + `retryable`) lets a caller react to a failure by kind. Stage 2 (HTTP transport, opt-in write
 exposure behind a completed-run ledger) and stage 3 (typed slot inputs) remain open.
+Then **H3 typed templates, slice 1** shipped (0.47.0): flows stop being input-frozen — a `SlotSpec` +
+`FlowSpec.slots` typed input contract, a 0-LLM **pre-flight validator** (`validate_params`: type / enum /
+pattern / min-max / required / env-resolved secrets — an out-of-domain value fails loud before the browser
+opens), and **`replay(spec, params={…})`** that substitutes validated per-run values at a flow's
+slot-marked fill/select steps (`flow_key` unchanged — values never enter identity; a no-params replay is
+byte-identical to before). READ-side only: parameterizing a WRITE flow is refused, and `idempotency_key`
+grew an additive slot-value channel ready for it. Slice 1b (recorder auto-mining + site-metadata domain
+capture + the value-independence audit) and slice 2 (write templates + `run_batch` + row-keyed idempotency)
+remain open.
 Still open: the **Phase-I remainder** (web UI / service daemon / registry) and
 **Phase-G** per-write one-shot resume, action breadth (file upload / multi-tab / iframes), compensation/rollback,
 and dynamic-N writes.
