@@ -172,9 +172,21 @@ page. Values are substituted at the flow's slot-marked fill/select steps; `flow_
 values never enter the flow's identity, and a **`replay()` with no `params` replays the frozen literals
 unchanged**. A `secret=True` slot resolves from its `secret_env` environment variable (never passed in
 `params`, never serialized). This slice is **read-only** — parameterizing a WRITE flow is refused (write
-templates + row-keyed idempotency are a later slice). Recorder auto-mining of slots + capturing each
-field's legal domain from site metadata is also a later slice; for now, declare `FlowSpec.slots` and mark
-the target steps' `slot`.
+templates + row-keyed idempotency are a later slice).
+
+**Auto-mining the slots.** Instead of declaring `FlowSpec.slots` by hand, let the recorder lift them:
+
+```bash
+uv run ultracua flow record --name daily-search --url … --goal "search the catalog" --mine-slots
+```
+
+`--mine-slots` (library: `record(spec, demo, mine_slots=True)`) turns each typed/selected value into a
+typed slot named from the field, and runs a **value-independence audit**: if a demo value **echoes into a
+later step's locator, precondition, or navigate URL** — which would make any other value break replay (a
+dead template) — recording **fails loud** and reports the offending slot (`RecordResult.slot_findings`)
+rather than shipping a template that only works for the demo value. Mining is opt-in and read-only, so a
+normal record is unaffected; capturing each field's legal *domain* (a `<select>`'s options, an input's
+`pattern`/`maxlength`) is a later slice.
 
 ## Pinned 0-LLM reads
 
