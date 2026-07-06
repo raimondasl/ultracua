@@ -94,7 +94,38 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
     try { sessionStorage.setItem('__ucseq', String(n)); } catch (e) {}
     return n;
   };
-  const store = (action, el, value, ctx, scope) => {
+  // H3 slice 1c: a value-bearing field's LEGAL DOMAIN from site metadata (inert unless the step is later
+  // mined into a slot). Fail-safe (a recorder read must never alter page behaviour): a <select>'s option
+  // values, an <input>/<textarea>'s pattern/required/max_length/min/max, and any <datalist> suggestions.
+  const domainOf = (el) => {
+    try {
+      if (!el || el.nodeType !== 1) return null;
+      if (el.tagName === 'SELECT') {
+        const d = {};
+        if (el.multiple) d.multiple = true;   // a multi-select's value is a JSON array, not one option
+        // Cap the option list: a closed enum over hundreds of options is useless, and serializing a huge
+        // list into the durable sessionStorage capture buffer could trip its quota and drop this event.
+        if (el.options.length <= 200) d.options = Array.prototype.map.call(el.options, (o) => o.value);
+        return Object.keys(d).length ? d : null;
+      }
+      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+        const d = {};
+        if (el.pattern) d.pattern = el.pattern;
+        if (el.required) d.required = true;
+        if (typeof el.maxLength === 'number' && el.maxLength >= 0) d.max_length = el.maxLength;
+        if (el.min !== '' && el.min != null) d.min = el.min;
+        if (el.max !== '' && el.max != null) d.max = el.max;
+        const listId = el.getAttribute && el.getAttribute('list');
+        if (listId) {
+          const dl = document.getElementById(listId);
+          if (dl && dl.tagName === 'DATALIST') d.datalist = Array.prototype.map.call(dl.options, (o) => o.value);
+        }
+        return Object.keys(d).length ? d : null;
+      }
+    } catch (e) {}
+    return null;
+  };
+  const store = (action, el, value, ctx, scope, domain) => {
     if (el && el.nodeType !== 1) return;
     try {
       const seq = nextSeq();
@@ -107,7 +138,7 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
         setTimeout(() => { __ucturn = 0; }, 0);
       }
       const arr = JSON.parse(sessionStorage.getItem(KEY) || '[]');
-      arr.push({ action, spec: el ? specOf(el) : null, value, ctx, scope, seq });
+      arr.push({ action, spec: el ? specOf(el) : null, value, ctx, scope, seq, domain: domain || null });
       sessionStorage.setItem(KEY, JSON.stringify(arr));
     } catch (e) {}
   };
@@ -237,7 +268,7 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
       const val = el.multiple
         ? JSON.stringify(Array.prototype.map.call(el.selectedOptions, (o) => o.value))
         : el.value;
-      store('select', el, val, ctx, scope);
+      store('select', el, val, ctx, scope, domainOf(el));
     } else if ((el.tagName === 'INPUT' && t !== 'checkbox' && t !== 'radio') || el.tagName === 'TEXTAREA') {
       // Suppress the `change` that an Enter-submit fires for a value we already captured on keydown (below),
       // so the field isn't typed twice.
@@ -245,7 +276,7 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
       // A `type` is NOT a commit for per-write attribution (COMMIT = click/press/select), so an autosave-on-
       // change write fires in a turn with no commit (__ucturn===0) -> it is DEFERRED -> unattributed -> the
       // flow fails loud. No ctx/scope is needed on a `type`.
-      store('type', el, el.value, null, null);  // checkbox/radio are captured by their click above
+      store('type', el, el.value, null, null, domainOf(el));  // checkbox/radio are captured by their click above
     }
   }, true);
   // Enter-submit on a TEXT input: the "type then Enter" pattern. We capture it ONLY when no synthetic
@@ -276,7 +307,7 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
     // cached order would be [press, type] and replay would submit an EMPTY field; for a formless input
     // `change` never fires at all, losing the value entirely.) Mark the element so the change listener above
     // doesn't duplicate the type. The PRESS carries the ctx+scope (it is the commit); the type does not.
-    store('type', el, el.value, null, null);
+    store('type', el, el.value, null, null, domainOf(el));
     enterCaptured.set(el, el.value);
     store('press', el, 'Enter', ctx, scope);
   }, true);
@@ -327,7 +358,7 @@ def _step_from_event(ev: dict, *, write_flow: bool = False) -> CachedStep:
     precond_scope = hash_scope(ev.get("scope")) if (mutating and (write_flow or is_form_submit)) else ""
     text = ev.get("value") if action in ("type", "select", "press", "scroll") else None
     return CachedStep(intent=intent, action=action, locator=spec, text=text,
-                      mutating=mutating, precond_scope=precond_scope)
+                      mutating=mutating, precond_scope=precond_scope, slot_domain=ev.get("domain"))
 
 
 def _coalesce_scrolls(steps: list[CachedStep]) -> list[CachedStep]:

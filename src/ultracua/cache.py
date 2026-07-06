@@ -81,6 +81,11 @@ class CachedStep(BaseModel):
     # fill/type/select/press site; otherwise the frozen `text` is used (so a no-params replay is unchanged).
     # Additive, defaulted None -> older flows deserialize unchanged (NO schema bump needed).
     slot: Optional[str] = None
+    # H3 slice 1c: the field's LEGAL DOMAIN captured from site metadata at record time (inert unless the
+    # step is mined into a slot): a <select>'s option values, an input's pattern/required/max_length/min/
+    # max/datalist. Recorder auto-mining turns this into a typed SlotSpec (enum/pattern/range) so pre-flight
+    # validation checks against the real domain. Additive, defaulted None (NO schema bump needed).
+    slot_domain: Optional[dict] = None
 
 
 class CachedFlow(BaseModel):

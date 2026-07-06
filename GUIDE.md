@@ -181,12 +181,13 @@ uv run ultracua flow record --name daily-search --url … --goal "search the cat
 ```
 
 `--mine-slots` (library: `record(spec, demo, mine_slots=True)`) turns each typed/selected value into a
-typed slot named from the field, and runs a **value-independence audit**: if a demo value **echoes into a
-later step's locator, precondition, or navigate URL** — which would make any other value break replay (a
-dead template) — recording **fails loud** and reports the offending slot (`RecordResult.slot_findings`)
-rather than shipping a template that only works for the demo value. Mining is opt-in and read-only, so a
-normal record is unaffected; capturing each field's legal *domain* (a `<select>`'s options, an input's
-`pattern`/`maxlength`) is a later slice.
+**typed** slot named from the field, capturing its legal **domain** from the page: a `<select>`'s options
+become a closed `enum`, an input's `pattern`/`maxlength`/`required` carry over, a numeric range becomes a
+`number` slot — so a later `replay(params=…)` is validated against the real site domain. It also runs a
+**value-independence audit**: if a demo value **echoes into a later step's locator, precondition, or
+navigate URL** — which would make any other value break replay (a dead template) — recording **fails loud**
+and reports the offending slot (`RecordResult.slot_findings`) rather than shipping a template that only
+works for the demo value. Mining is opt-in and read-only, so a normal record is unaffected.
 
 ## Pinned 0-LLM reads
 

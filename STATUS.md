@@ -13,8 +13,8 @@ engine is the moat, and it is not yet hardened for unattended production.** Phas
 engine), A–C (the Flow API: define → learn → approve → replay → auth-refresh → health), and D
 (write flows) are shipped and merged, and the ops layer has since hardened (logging, CI,
 retry/backoff, fleet supervisor + freshness canary, a cross-process meta lock, and a standing
-locator-resilience benchmark). **321 tests**, all key-less (real headless Chromium against local
-fixtures, run in CI on Linux + Windows); version **0.48.0**. Secrets handling is a real strength:
+locator-resilience benchmark). **324 tests**, all key-less (real headless Chromium against local
+fixtures, run in CI on Linux + Windows); version **0.49.0**. Secrets handling is a real strength:
 credentials are env-sourced at runtime and **never persisted** — only the resulting `storage_state`
 cookies are saved (atomically).
 
@@ -116,7 +116,7 @@ multi-step/auth pages, and (3) operability — *not* in making replay faster (it
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
 phases have kept landing since: **#33–#35 CI (Phase J), #36 pinned 0-LLM reads (Phase H), #37 fleet
 supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 → **145** tests
-(key-less); version **0.22.0** *at the time* — it has since grown to **321 tests / 0.48.0** as the
+(key-less); version **0.22.0** *at the time* — it has since grown to **324 tests / 0.49.0** as the
 trust-hardening below landed. Original near-term list with the PR that landed each:
 
 1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`
@@ -174,8 +174,11 @@ grew an additive slot-value channel ready for it. **Slice 1b** then added **reco
 `flow record --mine-slots` / `record(mine_slots=True)` auto-lifts a read flow's typed/selected values into
 typed slots) and the **value-independence audit** — if a mined value echoes into a later
 locator/precondition/URL (a dead template) it **refuses to templatize, fail loud** (`RecordResult.slot_findings`
-reports it). Still open: slice 1c (site-metadata domain capture — enum/pattern from `<select>` options +
-input constraints) and slice 2 (write templates + `run_batch` + row-keyed idempotency).
+reports it). **Slice 1c** then added **site-metadata domain capture**: the recorder captures each field's
+legal domain (a `<select>`'s options, an input's `pattern`/`required`/`max_length`/`min`/`max`/`datalist`)
+onto `CachedStep.slot_domain`, and mining types each slot from it — a `<select>`'s options become a closed
+`enum`, input constraints carry over — so pre-flight validates against the real site domain. Still open:
+slice 2 (write templates + `run_batch` + row-keyed idempotency).
 Still open: the **Phase-I remainder** (web UI / service daemon / registry) and
 **Phase-G** per-write one-shot resume, action breadth (file upload / multi-tab / iframes), compensation/rollback,
 and dynamic-N writes.

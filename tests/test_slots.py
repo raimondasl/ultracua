@@ -306,3 +306,123 @@ async def test_mine_slots_refuses_when_slots_predeclared(tmp_path, monkeypatch) 
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+class _FormSite:
+    """A select (closed option domain) + a constrained text input — the site metadata slice-1c mines
+    into typed slot domains (enum from the options; pattern/max_length/required from the input)."""
+
+    BODY = ("<!doctype html><body>"
+            "<label for='color'>color</label>"
+            "<select id='color'><option value='red'>Red</option><option value='green'>Green</option>"
+            "<option value='blue'>Blue</option></select> "
+            "<label for='qty'>qty</label>"
+            "<input id='qty' type='text' pattern='[0-9]{1,3}' required maxlength='3'></body>")
+
+    def serve(self):
+        body = self.BODY
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a) -> None:
+                pass
+
+            def do_GET(self) -> None:
+                b = body.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_mine_slots_captures_site_metadata_domain(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    cache = FlowCache()
+    site = _FormSite()
+    httpd, base = site.serve()
+    try:
+        spec = FlowSpec(name="form", start_url=base + "/", goal="pick color and quantity", headless=True)
+
+        async def _demo(pg) -> None:
+            await pg.select_option("#color", "green")
+            await pg.fill("#qty", "42")
+            await pg.locator("#qty").blur()
+
+        res = await flows.record(spec, demo=_demo, headless=True, cache=cache, mine_slots=True)
+        assert res.cached, res.note
+        # The <select>'s legal option domain became a closed enum on the mined slot.
+        assert spec.slots["color"].enum == ["red", "green", "blue"]
+        # The input's constraints (pattern / maxlength / required) carried onto its slot.
+        qty = spec.slots["qty"]
+        assert qty.pattern == "[0-9]{1,3}" and qty.max_length == 3 and qty.required is True
+        # And pre-flight now validates against the captured domain: an out-of-enum color fails loud.
+        flows.approve(spec, cache=cache)
+        with pytest.raises(FlowReplayError, match="one of"):
+            await flows.replay(spec, params={"color": "purple"}, cache=cache)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_slotspec_from_domain_multiselect_is_not_a_strict_enum() -> None:
+    # A single <select> -> a closed enum; a <select multiple> (value is a JSON-array string) must NOT
+    # become a strict per-option enum, or it would reject its own demonstrated value.
+    from ultracua.flows import _slotspec_from_domain
+
+    assert _slotspec_from_domain({"options": ["a", "b"]}).enum == ["a", "b"]
+    ms = _slotspec_from_domain({"options": ["a", "b"], "multiple": True})
+    assert ms.enum is None and ms.type == "string"
+
+
+class _MultiSelectSite:
+    BODY = ("<!doctype html><body><label for='colors'>colors</label>"
+            "<select id='colors' multiple>"
+            "<option value='red'>Red</option><option value='green'>Green</option>"
+            "<option value='blue'>Blue</option></select></body>")
+
+    def serve(self):
+        body = self.BODY
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a) -> None:
+                pass
+
+            def do_GET(self) -> None:
+                b = body.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def test_mine_slots_multiselect_param_validates_and_actuates(tmp_path, monkeypatch) -> None:
+    # A mined <select multiple> slot must accept its JSON-array value on the params path (the 1b regression
+    # the strict individual-option enum caused). No strict enum + the array value replays without raising.
+    monkeypatch.chdir(tmp_path)
+    cache = FlowCache()
+    site = _MultiSelectSite()
+    httpd, base = site.serve()
+    try:
+        spec = FlowSpec(name="multi", start_url=base + "/", goal="pick the colors", headless=True)
+
+        async def _demo(pg) -> None:
+            await pg.select_option("#colors", ["green", "blue"])
+
+        res = await flows.record(spec, demo=_demo, headless=True, cache=cache, mine_slots=True)
+        assert res.cached, res.note
+        assert spec.slots["colors"].enum is None   # multi-select isn't a strict per-option enum
+        flows.approve(spec, cache=cache)
+        # the JSON-array param validates (string slot) and actuates both options — no FlowReplayError.
+        await flows.replay(spec, params={"colors": '["red", "green"]'}, cache=cache)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
