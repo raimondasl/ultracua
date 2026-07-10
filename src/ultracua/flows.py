@@ -1349,12 +1349,40 @@ def _value_leaks(value: str, later_steps: list) -> Optional[str]:
     return None
 
 
+def _slotspec_from_domain(domain: Optional[dict]) -> SlotSpec:
+    """H3 slice 1c: build a typed SlotSpec from a step's captured site-metadata domain. A <select>'s
+    options become a closed `enum`; an input's `pattern` / `max_length` / `required` carry over; a numeric
+    range (min/max present) makes it a `number` slot. A `datalist` is a SUGGESTION list (free text is still
+    allowed), so it does NOT become a strict enum. No domain -> a plain string slot."""
+    d = domain or {}
+    if d.get("options") and not d.get("multiple"):
+        return SlotSpec(type="string", enum=list(d["options"]))
+    # (A <select multiple>'s value is a JSON-ARRAY string, not a single option, so its individual-option
+    # list can't be a strict enum — that would reject the flow's own demonstrated value. Keep it a string
+    # slot; a very large single <select> similarly captures no options and stays a plain string slot.)
+    kw: dict = {"type": "string"}
+    if d.get("pattern"):
+        kw["pattern"] = d["pattern"]
+    if isinstance(d.get("max_length"), int) and d["max_length"] >= 0:
+        kw["max_length"] = d["max_length"]
+    if d.get("required") is not None:
+        kw["required"] = bool(d["required"])
+    if d.get("min") not in (None, "") or d.get("max") not in (None, ""):
+        try:
+            lo = float(d["min"]) if d.get("min") not in (None, "") else None
+            hi = float(d["max"]) if d.get("max") not in (None, "") else None
+            kw.update(type="number", min=lo, max=hi)
+        except (TypeError, ValueError):
+            pass  # non-numeric min/max attr -> keep it a string slot
+    return SlotSpec(**kw)
+
+
 def _mine_and_audit_slots(flow: "CachedFlow", spec: FlowSpec) -> "tuple[CachedFlow, dict, list]":
-    """H3 slice 1b: auto-mine each value-bearing step (`type`/`select`) into a typed string slot (a `press`
-    carries a KEY, never a value), running the value-independence audit as it goes. Returns
-    `(marked_flow, slots, findings)` — `findings` has one entry per candidate; any with `value_leak` set
-    means a dead template, and the CALLER refuses to cache. Domain capture (enum/pattern from site metadata)
-    is a later slice, so mined slots are typed `string` for now."""
+    """H3 slice 1b/1c: auto-mine each value-bearing step (`type`/`select`) into a typed slot (a `press`
+    carries a KEY, never a value), running the value-independence audit as it goes and typing each slot from
+    the field's captured site-metadata domain (enum from <select> options, pattern/max_length/range from
+    input constraints — slice 1c). Returns `(marked_flow, slots, findings)`; any finding with `value_leak`
+    set means a dead template, and the CALLER refuses to cache."""
     steps = list(flow.steps)
     slots: dict = {}
     findings: list = []
@@ -1368,7 +1396,7 @@ def _mine_and_audit_slots(flow: "CachedFlow", spec: FlowSpec) -> "tuple[CachedFl
         if leak is not None:
             continue  # dead template — don't mark it; the caller refuses the whole flow
         steps[i] = step.model_copy(update={"slot": name})
-        slots[name] = SlotSpec(type="string")
+        slots[name] = _slotspec_from_domain(step.slot_domain)
     return flow.model_copy(update={"steps": steps}), slots, findings
 
 

@@ -31,7 +31,7 @@ One JSON object per line, request → response:
 
 ```
 --> {"jsonrpc":"2.0","id":1,"method":"health","params":{}}
-<-- {"jsonrpc":"2.0","id":1,"result":{"status":"ok","version":"0.48.0"}}
+<-- {"jsonrpc":"2.0","id":1,"result":{"status":"ok","version":"0.49.0"}}
 ```
 
 Methods: `health`, `run`, `cache.delete`. See `index.d.ts` for parameter/return types.
