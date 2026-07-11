@@ -27,6 +27,10 @@ class WriteRecord:
     method: str
     path: str
     body: str
+    # Request headers the write arrived with (lower-cased keys) — lets a risk eval assert the write's
+    # `idempotency-key` (distinct per row, stable per row on retry) actually reached the server, which is
+    # the double-write / suppressed-write oracle for parameterized writes.
+    headers: dict = field(default_factory=dict)
 
 
 class Fixture:
@@ -66,7 +70,9 @@ class Fixture:
             def _write(self) -> None:
                 path = self.path.split("?")[0]
                 n = int(self.headers.get("Content-Length") or 0)
-                fx.writes.append(WriteRecord(self.command, path, self.rfile.read(n).decode("utf-8", "replace")))
+                hdrs = {k.lower(): v for k, v in self.headers.items()}
+                fx.writes.append(WriteRecord(self.command, path,
+                                             self.rfile.read(n).decode("utf-8", "replace"), headers=hdrs))
                 if path in fx.post_responses:
                     status, html = fx.post_responses[path]
                     body = html.encode("utf-8")
