@@ -312,6 +312,89 @@ def _flow_run_all(args: argparse.Namespace) -> None:
     raise SystemExit(1 if failed else 0)  # cron alerts on a non-zero exit
 
 
+def _coerce_cell(value, slot):
+    """Coerce a CSV string cell to its slot's type (a CSV is all-strings; `validate_params` is strict). An
+    un-coercible value is left as-is so `validate_params` raises a typed, per-slot error rather than a
+    silent wrong coercion."""
+    if value is None or slot is None or not isinstance(value, str):
+        return value
+    if slot.type == "integer":
+        try:
+            return int(value)
+        except ValueError:
+            return value
+    if slot.type == "number":
+        try:
+            return float(value)
+        except ValueError:
+            return value
+    if slot.type == "boolean":
+        low = value.strip().lower()
+        if low in ("true", "1", "yes", "on"):
+            return True
+        if low in ("false", "0", "no", "off"):
+            return False
+        return value
+    return value  # string
+
+
+def _load_batch_rows(path: str, spec) -> list:
+    """Load `run-batch` rows from a JSON array of `{slot: value}` objects (typed, preferred) or a CSV whose
+    header row names the slots (cells coerced per `spec.slots[name].type`). A secret-slot column is refused
+    up front — secrets come from `$secret_env`, never a row file."""
+    from pathlib import Path
+
+    p = Path(path)
+    text = p.read_text(encoding="utf-8")
+    slots = spec.slots or {}
+    if p.suffix.lower() == ".json":
+        rows = json.loads(text)
+        if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+            raise SystemExit("run-batch: --rows JSON must be a list of {slot: value} objects")
+    else:  # CSV: header = slot names, cells coerced per slot type
+        import csv
+        import io
+
+        rows = [{k: _coerce_cell(v, slots.get(k)) for k, v in raw.items() if k is not None}
+                for raw in csv.DictReader(io.StringIO(text))]
+    secret_names = {n for n, s in slots.items() if s.secret}
+    for i, row in enumerate(rows):
+        leaked = secret_names & set(row)
+        if leaked:
+            raise SystemExit(
+                f"run-batch: row {i} carries secret slot(s) {sorted(leaked)} — a secret comes from its "
+                f"$secret_env, never a row file. Remove those columns.")
+    return rows
+
+
+def _flow_run_batch(args: argparse.Namespace) -> None:
+    import dataclasses as _dc
+    from pathlib import Path
+
+    from .flows import load_spec, run_batch
+
+    spec = load_spec(args.name)
+    rows = _load_batch_rows(args.rows, spec)
+    dry_run = not args.commit  # DRY-RUN by default — the CLI analog of the approval bound
+    report = asyncio.run(run_batch(
+        spec, rows, max_rows=args.max_rows, on_row_error=args.on_row_error, dry_run=dry_run,
+        provider_name=args.provider))
+    mark = {"ok": "OK", "failed": "FAIL", "skipped": "SKIP", "invalid": "BAD", "planned": "PLAN"}
+    for r in report.rows:
+        keys = (" " + ",".join(r.idempotency_keys)) if r.idempotency_keys else ""
+        detail = r.error or (json.dumps(r.data, ensure_ascii=False)
+                             if r.status == "ok" and r.data is not None else "")
+        print(f"  [{mark.get(r.status, r.status.upper()):<4}] row {r.index:<4}{keys} {detail}")
+    head = "PLANNED (dry-run — pass --commit to actuate)" if dry_run else report.status.upper()
+    print(f"\n== {head}: {report.ok_count} ok, {report.failed} failed, {report.skipped} skipped, "
+          f"{report.invalid} invalid (of {report.total}) ==")
+    if args.json:
+        Path(args.json).write_text(json.dumps(_dc.asdict(report), indent=2), encoding="utf-8")
+        print(f"wrote {args.json}")
+    # non-zero exit on any invalid/failed batch (so cron / CI alerts); a clean dry-run plan exits 0.
+    raise SystemExit(1 if report.status in ("failed", "invalid") else 0)
+
+
 def _flow_record(args: argparse.Namespace) -> None:
     from .flows import FlowSpec, caption_for, record
 
@@ -496,6 +579,24 @@ def _flow_main(argv) -> None:
                      help="POST a JSON alert here if any flow fails (Slack/Discord/etc. incoming webhook).")
     pra.add_argument("--verbose", "-v", action="store_true", help="log each replay (INFO).")
 
+    prb = sub.add_parser("run-batch", help="H3 slice 2b: drive ONE parameterized flow once per ROW. "
+                                           "DRY-RUN by default (plan + preview each row's Idempotency-Key, "
+                                           "actuate NOTHING); pass --commit to run. A write batch needs "
+                                           "--max-rows. All rows are pre-validated before any actuation.")
+    prb.add_argument("--name", required=True, help="the saved flow to batch.")
+    prb.add_argument("--rows", required=True,
+                     help="rows file: a JSON array of {slot: value} objects (typed), or a CSV whose header "
+                          "names the slots (cells coerced per slot type). Secret columns are refused.")
+    prb.add_argument("--max-rows", dest="max_rows", type=int, default=None,
+                     help="approval bound: refuse if the batch exceeds this. REQUIRED for a write batch.")
+    prb.add_argument("--on-row-error", dest="on_row_error", default="stop", choices=["stop", "continue"],
+                     help="stop the batch on the first failed row (default), or continue and report each.")
+    prb.add_argument("--commit", action="store_true",
+                     help="ACTUATE the batch (default is a dry-run: plan + key preview, no side effects).")
+    prb.add_argument("--provider", **prov)
+    prb.add_argument("--json", dest="json", help="write the machine-readable BatchRun to this path.")
+    prb.add_argument("--verbose", "-v", action="store_true", help="log each replay (INFO).")
+
     prc = sub.add_parser("record", help="RECORD a flow by demonstrating it in a headed browser. Reads are "
                                         "verify-by-replayed; a WRITE needs a --confirm-* check (then it is "
                                         "gated + idempotency-keyed). Approve it to run unattended.")
@@ -542,6 +643,8 @@ def _flow_main(argv) -> None:
         _flow_status(args)
     elif args.cmd == "run-all":
         _flow_run_all(args)
+    elif args.cmd == "run-batch":
+        _flow_run_batch(args)
     elif args.cmd == "record":
         _flow_record(args)
     elif args.cmd == "canary":

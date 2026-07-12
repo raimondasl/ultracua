@@ -13,8 +13,8 @@ engine is the moat, and it is not yet hardened for unattended production.** Phas
 engine), A–C (the Flow API: define → learn → approve → replay → auth-refresh → health), and D
 (write flows) are shipped and merged, and the ops layer has since hardened (logging, CI,
 retry/backoff, fleet supervisor + freshness canary, a cross-process meta lock, and a standing
-locator-resilience benchmark). **331 tests**, all key-less (real headless Chromium against local
-fixtures, run in CI on Linux + Windows); version **0.50.0**. Secrets handling is a real strength:
+locator-resilience benchmark). **353 tests**, all key-less (real headless Chromium against local
+fixtures, run in CI on Linux + Windows); version **0.51.0**. Secrets handling is a real strength:
 credentials are env-sourced at runtime and **never persisted** — only the resulting `storage_state`
 cookies are saved (atomically).
 
@@ -116,7 +116,7 @@ multi-step/auth pages, and (3) operability — *not* in making replay faster (it
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
 phases have kept landing since: **#33–#35 CI (Phase J), #36 pinned 0-LLM reads (Phase H), #37 fleet
 supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 → **145** tests
-(key-less); version **0.22.0** *at the time* — it has since grown to **331 tests / 0.50.0** as the
+(key-less); version **0.22.0** *at the time* — it has since grown to **353 tests / 0.51.0** as the
 trust-hardening below landed. Original near-term list with the PR that landed each:
 
 1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`
@@ -192,9 +192,19 @@ merge: a param that would fold into the key without substituting at a recorded t
 loud (else the frozen value ships under a per-row key — a wrong + un-dedup-able double write); a parameterized
 write can't lean on the row-blind one-shot precheck (which could skip a distinct row as "already-done"); and
 the idempotency-key row canonicalization is **injective** (JSON, not a raw delimiter-join) so two free-text
-rows can't collide to one key. Still open: slice 2b (`run_batch` volume driver — per-row pre-flight + fail-loud isolation
-+ approval bounds), slice 2c (per-row resume ledger), and a public write-slot **binding** surface (a write
-slot is bound explicitly today — mining never auto-lifts a money field).
+rows can't collide to one key.
+Then **H3 slice 2b** shipped the **VOLUME driver** (0.51.0): **`run_batch(spec, rows)`** drives ONE
+parameterized flow once per row (a row-granular sibling of `run_all`), plus a `flow run-batch` CLI (dry-run by
+default; JSON/CSV rows). Its safety posture: **all-or-nothing pre-flight** (every row validated 0-LLM through
+the shared `_preflight_row` — the 2a guards extracted so `replay` and `run_batch` share one source of truth —
+before ANY actuation; one bad row refuses the whole batch, zero writes); **duplicate-row refusal** (two rows
+that would mint the same Idempotency-Key are refused — a backend dedupe would silently suppress the second);
+**`max_rows` required for a write batch** (one approval must not authorize unbounded writes); **fail-loud
+isolation** (`on_row_error="stop"` halts on the first failure and marks the rest skipped; `"continue"` reports
+each); and a **dry-run** that validates + previews each row's Idempotency-Key (byte-identical to the wire key)
+and actuates nothing. Sequential + secret-safe (rows carry no secrets; the report stores only indices + hashed
+keys). Still open: slice 2c (per-row resume ledger) and a public write-slot **binding** surface (a write slot
+is bound explicitly today — mining never auto-lifts a money field).
 Still open: the **Phase-I remainder** (web UI / service daemon / registry) and
 **Phase-G** per-write one-shot resume, action breadth (file upload / multi-tab / iframes), compensation/rollback,
 and dynamic-N writes.

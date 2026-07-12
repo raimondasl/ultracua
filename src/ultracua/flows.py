@@ -19,6 +19,7 @@ import contextlib
 import dataclasses
 import hashlib
 import json
+import math
 import os
 import re
 import time
@@ -27,7 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Union
 
 from .browser import BrowserSession
-from .cache import CachedStep, FlowCache, StepConfirm, flow_key
+from .cache import CachedFlow, CachedStep, FlowCache, StepConfirm, flow_key
 from .conditions import condition_present
 from .config import settings
 from .extract import extract
@@ -37,6 +38,7 @@ from .obs import get_logger
 from .pin import find_pin, read_pin
 from .providers import build_router, get_provider
 from .recorder import caption_intents, record_demo
+from .safety import idempotency_key
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
@@ -883,8 +885,21 @@ def _validate_one(spec: FlowSpec, name: str, slot: SlotSpec, value: Any) -> Any:
     if t in ("number", "integer"):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise bad(f"must be a {t}")
-        if t == "integer" and not float(value).is_integer():
+        # NaN/Inf slip past min/max (every ordering comparison with NaN is False; Inf beats any bound), so a
+        # bounded slot would silently accept them and type "nan"/"inf" onto the page — refuse loud. Guard on
+        # `float` ONLY: a Python int is always finite, and `math.isfinite(huge_int)` raises OverflowError
+        # (not a FlowReplayError) — that would crash a batch instead of reporting the row invalid.
+        if isinstance(value, float) and not math.isfinite(value):
+            raise bad(f"must be a finite {t}")
+        # An integer slot rejects a non-integer FLOAT; a Python int is always an integer (and `float(huge
+        # int)` would OverflowError), so never convert an int here.
+        if t == "integer" and isinstance(value, float) and not value.is_integer():
             raise bad("must be an integer")
+        # Normalize an integer-VALUED float (e.g. JSON parses 2.0 to a float) to int, for BOTH slot types,
+        # so two numerically-equal rows (2 and 2.0) fold to ONE idempotency key (no int-vs-float double-
+        # write) and substitution types "2", not "2.0".
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
         if slot.min is not None and value < slot.min:
             raise bad(f"must be >= {slot.min}")
         if slot.max is not None and value > slot.max:
@@ -945,6 +960,87 @@ def validate_params(spec: FlowSpec, params: Optional[dict]) -> dict:
     return resolved
 
 
+def _preflight_row(
+    spec: FlowSpec, params: Optional[dict], *, meta: "FlowMeta", cached_flow: Optional[CachedFlow],
+    require_approved: bool = False, on_drift: str = "raise",
+) -> dict:
+    """The 0-LLM, NO-BROWSER trust gate shared by `replay()` and `run_batch()`: resolve + validate one
+    row's params against the slot schema and run every guard with ZERO side effects, returning the
+    RESOLVED substitution dict (caller params + env-resolved secrets). Raises `FlowReplayError` on any
+    violation. Single source of truth — a batch validates every row through this BEFORE actuating any, and
+    each actuation re-runs it inside `replay()`, so a guard change lands once and both paths inherit it.
+
+    Guards, in order: 0-LLM pre-flight (`validate_params`); a write needs a confirm check; `on_drift=
+    'relearn'` is refused for a write and for any parameterized replay (a re-author drops params → frozen
+    defaults); the approval gate; the slot-schema approval gate (a domain widened since approve() must
+    re-approve); the binding guard (a supplied slot must bind a type/select step, else its value folds into
+    the idempotency key without being typed); the precheck refusal (a parameterized write can't lean on a
+    row-blind one-shot precheck)."""
+    is_mutate = spec.mutate is not None
+    parameterizing = params is not None
+    resolved = validate_params(spec, params)  # 0-LLM pre-flight: raises on any out-of-domain value
+    if is_mutate:
+        if not spec.mutate.has_confirm():
+            raise FlowReplayError(
+                f"{spec.name!r}: a write flow needs a confirm check — set "
+                f"mutate.confirm_selector / confirm_text_contains / confirm_url_contains")
+        if on_drift == "relearn":
+            raise FlowReplayError(
+                f"{spec.name!r}: on_drift='relearn' is refused for a write flow (re-authoring would "
+                f"re-perform the write) — re-learn manually and re-approve instead")
+    # A relearn re-authors the flow from scratch, which does NOT carry `params` — the re-authored flow has
+    # no slot-bound steps, so it would run the DEFAULT values and return data for them, silently ignoring the
+    # per-run params (a silently-wrong read, inviolable #2). Refuse the combination rather than mislead.
+    if parameterizing and on_drift == "relearn":
+        raise FlowReplayError(
+            f"{spec.name!r}: on_drift='relearn' can't be combined with params — a re-author ignores the "
+            f"per-run values and would return data for the frozen defaults. Use on_drift='fail' (the "
+            f"default) with params, or drop params to relearn the frozen flow.")
+    # A write defaults to approval-gated even without require_approved (stronger trust for writes).
+    if (require_approved or is_mutate) and not meta.approved:
+        raise FlowReplayError(f"{spec.name!r}: flow not approved — learn it, verify it, then approve")
+    # The approval is bound to the slot schema. A slotted flow whose domain changed since approve() (e.g. a
+    # payee enum loosened to any string) must refuse until re-approved — a stale approval must never
+    # authorize a WIDER contract than the human reviewed (an injection surface, worst on a write).
+    if meta.approved and spec.slots and _slots_hash(spec) != meta.slots_hash:
+        raise FlowReplayError(
+            f"{spec.name!r}: the slot schema changed since approval — re-approve the flow before replaying "
+            f"it (a widened/edited slot domain must not run under a stale approval)")
+    # BINDING SAFETY: a resolved slot value only substitutes at a step whose `.slot` names it. If a supplied
+    # slot binds to NO recorded type/select step, its value would fold into the flow's identity — and, at a
+    # write, into the Idempotency-Key on the wire — WITHOUT being typed onto the page: the frozen literal is
+    # submitted while the key varies per value (a silent wrong write + an un-dedup-able double write; for a
+    # read, silently wrong data). Count only type/select bindings — a `press` carries a KEY, never a value,
+    # so a slot bound to a press/click/navigate step would satisfy a looser check yet never substitute.
+    if resolved and cached_flow is not None:
+        bound = {s.slot for s in cached_flow.steps if s.slot and s.action in ("type", "select")}
+        unbound = sorted(k for k in resolved if k not in bound)
+        if unbound:
+            raise FlowReplayError(
+                f"{spec.name!r}: slot(s) {unbound} were supplied but aren't bound to any recorded "
+                f"type/select step — the value would change the flow's idempotency key without being "
+                f"entered on the page (a silent wrong/duplicate action). Bind each slot to the step it "
+                f"fills before replaying.")
+    # PRECHECK SAFETY: the one-shot idempotency precheck (`mutate.precheck_*`) probes a FIXED url/marker with
+    # NO row awareness. On a PARAMETERIZED write a generic end-state left by one row would make a DIFFERENT
+    # row's write skip as "already-done" — a silently suppressed write. Its retry-safety is the row-keyed key.
+    if is_mutate and parameterizing and spec.mutate.has_precheck():
+        raise FlowReplayError(
+            f"{spec.name!r}: a parameterized write can't use a one-shot precheck (mutate.precheck_*) — the "
+            f"precheck is row-blind and could skip a distinct row's write as already-done. Remove the precheck "
+            f"(the row-keyed Idempotency-Key gives retry-dedup safety), or replay this row without params.")
+    return resolved
+
+
+def _plan_idempotency_keys(spec: FlowSpec, resolved: dict, cached_flow: CachedFlow) -> list[str]:
+    """The Idempotency-Key(s) a parameterized WRITE row WOULD mint at actuation — computed with the SAME
+    four inputs as `flow._replay_step` (scope=`spec.scope`, idx=the `enumerate` index, intent=`step.intent`,
+    slot_values=`resolved`), so a dry-run preview is byte-identical to the wire key. Empty for a read (no
+    mutating step)."""
+    return [idempotency_key(spec.scope, i, s.intent, slot_values=resolved)
+            for i, s in enumerate(cached_flow.steps) if s.mutating]
+
+
 async def replay(
     spec: FlowSpec, *, require_approved: bool = False, on_drift: str = "raise",
     check_shape: bool = True, auth_refresh: bool = True, provider_name: Optional[str] = None,
@@ -975,74 +1071,15 @@ async def replay(
     meta = _load_meta(cache, key)
     is_mutate = spec.mutate is not None
     parameterizing = params is not None  # caller opted into the param path (vs a frozen replay)
-    # H3 slice 2a: parameterized WRITE flows ARE supported. Each write actuation folds the run's slot
-    # values into its Idempotency-Key (row-keyed: distinct rows -> distinct keys; a retry of one row ->
-    # the SAME key, so a backend dedupe drops the retry rather than double-writing). The mutation gate +
-    # confirm barrier still guard every write, and the schema-hash approval gate below refuses a domain
-    # widened since approval. A write is still never verify-by-replayed (re-firing = double-submit).
-    params = validate_params(spec, params)  # 0-LLM pre-flight: raises on any out-of-domain value
-    if is_mutate:
-        if not spec.mutate.has_confirm():
-            raise FlowReplayError(
-                f"{spec.name!r}: a write flow needs a confirm check — set "
-                f"mutate.confirm_selector / confirm_text_contains / confirm_url_contains"
-            )
-        if on_drift == "relearn":
-            raise FlowReplayError(
-                f"{spec.name!r}: on_drift='relearn' is refused for a write flow (re-authoring would "
-                f"re-perform the write) — re-learn manually and re-approve instead"
-            )
-    # A relearn re-authors the flow from scratch, which does NOT carry `params` — the re-authored flow has
-    # no slot-bound steps, so it would run the DEFAULT values and return data for them, silently ignoring the
-    # per-run params (a silently-wrong read, inviolable #2). Refuse the combination rather than mislead.
-    if parameterizing and on_drift == "relearn":
-        raise FlowReplayError(
-            f"{spec.name!r}: on_drift='relearn' can't be combined with params — a re-author ignores the "
-            f"per-run values and would return data for the frozen defaults. Use on_drift='fail' (the "
-            f"default) with params, or drop params to relearn the frozen flow.")
-    # A write defaults to approval-gated even without require_approved (stronger trust for writes).
-    if (require_approved or is_mutate) and not meta.approved:
-        raise FlowReplayError(f"{spec.name!r}: flow not approved — learn it, verify it, then approve")
-    # H3 slice 2a: the approval is bound to the slot schema. A slotted flow whose domain changed since
-    # approve() (e.g. a payee enum loosened to any string) must refuse until re-approved — a stale
-    # approval must never authorize a WIDER contract than the human reviewed (an injection surface,
-    # worst on a write). Non-slotted flows (slots_hash None on both sides) are unaffected.
-    if meta.approved and spec.slots and _slots_hash(spec) != meta.slots_hash:
-        raise FlowReplayError(
-            f"{spec.name!r}: the slot schema changed since approval — re-approve the flow before replaying "
-            f"it (a widened/edited slot domain must not run under a stale approval)")
-    # H3 slice 2a — BINDING SAFETY: a resolved slot value only substitutes at a step whose `.slot` names it
-    # (flow._replay_step). If a supplied/declared slot binds to NO recorded step, its value would fold into
-    # the flow's identity — and, at a write, into the Idempotency-Key on the wire — WITHOUT ever being typed
-    # onto the page: the frozen literal is submitted while the key varies per value. For a write that is a
-    # silent WRONG write plus an un-dedup-able DOUBLE write (two byte-identical writes under different keys);
-    # for a read it silently returns data for the wrong value. Refuse loud. (Write slots have no public
-    # binding surface yet — mining never lifts a write field — so a write slot is bound explicitly today;
-    # the ergonomic `writable_slots` surface is a follow-up.)
-    if params:
-        cached_flow = cache.get(key)
-        if cached_flow is not None:
-            # A slot only SUBSTITUTES at a value-bearing type/select step (flow._replay_step restricts to
-            # those — a `press` carries a KEY, not a value). The binding set must match that predicate
-            # EXACTLY: a slot bound to a press/click/navigate step would satisfy a looser check yet never
-            # substitute, re-opening the fold-without-typing defect. So count only type/select bindings.
-            bound = {s.slot for s in cached_flow.steps if s.slot and s.action in ("type", "select")}
-            unbound = sorted(k for k in params if k not in bound)
-            if unbound:
-                raise FlowReplayError(
-                    f"{spec.name!r}: slot(s) {unbound} were supplied but aren't bound to any recorded "
-                    f"type/select step — the value would change the flow's idempotency key without being "
-                    f"entered on the page (a silent wrong/duplicate action). Bind each slot to the step it "
-                    f"fills before replaying.")
-    # H3 slice 2a — PRECHECK SAFETY: the one-shot idempotency precheck (`mutate.precheck_*`) probes a FIXED
-    # url/marker with NO row awareness. On a PARAMETERIZED write, a generic end-state left by one row would
-    # make a DIFFERENT row's write skip as "already-done" — a silently suppressed write. A parameterized
-    # write's retry-safety comes from its row-keyed Idempotency-Key instead, so refuse the row-blind combo.
-    if is_mutate and parameterizing and spec.mutate.has_precheck():
-        raise FlowReplayError(
-            f"{spec.name!r}: a parameterized write can't use a one-shot precheck (mutate.precheck_*) — the "
-            f"precheck is row-blind and could skip a distinct row's write as already-done. Remove the precheck "
-            f"(the row-keyed Idempotency-Key gives retry-dedup safety), or replay this row without params.")
+    # H3 slice 2a/2b: run the shared 0-LLM, NO-BROWSER preflight gate — resolve + validate this row's params
+    # and run every trust guard (confirm-required, relearn-incompatibility, approval, schema-hash, slot
+    # binding, precheck-refusal) with ZERO side effects, returning the resolved substitution dict.
+    # `run_batch` calls the SAME `_preflight_row` per row before actuating any, so a guard change lands once
+    # and both paths inherit it. (Parameterized WRITE flows ARE supported: each actuation folds the run's
+    # slot values into a row-keyed Idempotency-Key — distinct rows -> distinct keys, a retry -> the same key.)
+    cached_flow = cache.get(key)
+    params = _preflight_row(spec, params, meta=meta, cached_flow=cached_flow,
+                            require_approved=require_approved, on_drift=on_drift)
 
     # Idempotency precheck (opt-in, one-shot writes): if the end-state already holds, skip the write.
     if await _precheck_done(spec):
@@ -1266,6 +1303,174 @@ async def run_all(
                                 ms=(time.perf_counter() - t0) * 1000.0, error=str(exc))
 
     return await asyncio.gather(*[_one(n) for n in names])
+
+
+# --- row batch driver (H3 slice 2b) -----------------------------------------------------------
+@dataclass
+class BatchRowResult:
+    """One row's outcome in a `run_batch`. Identified by its INPUT INDEX only — the row's values are
+    NEVER stored (a value may be a secret; `repr(BatchRun)` is provably plaintext-secret-free)."""
+
+    index: int                       # position in the input `rows` list — the row's identity
+    status: str                      # "ok" | "failed" | "skipped" | "invalid" | "planned"
+    ok: bool
+    ms: float = 0.0
+    data: Any = None                 # replay()'s return (read data, or {"status","data"} for a write)
+    error: Optional[str] = None
+    idempotency_keys: list = field(default_factory=list)  # sha256 write-key PREVIEW (secret-safe)
+
+
+@dataclass
+class BatchRun:
+    """The outcome of a `run_batch`: per-row results + a roll-up."""
+
+    status: str                      # "ok" | "failed" | "invalid" | "planned"
+    rows: list                       # list[BatchRowResult]
+    total: int = 0
+    ok_count: int = 0
+    failed: int = 0
+    skipped: int = 0
+    invalid: int = 0
+    dry_run: bool = False
+
+
+async def run_batch(
+    spec: Optional[FlowSpec], rows: list, *, max_rows: Optional[int] = None,
+    on_row_error: str = "stop", dry_run: bool = False, require_approved: bool = True,
+    check_shape: bool = True, provider_name: Optional[str] = None, cache: Optional[FlowCache] = None,
+) -> BatchRun:
+    """Drive ONE parameterized flow once per row — the H3 slice-2b VOLUME verb ("record once, run for N
+    rows"). A ROW-granular sibling of `run_all` (which is flow-granular). Each row goes through the full
+    safety-gated `replay(spec, params=row)`, inheriting 2a's row-keyed Idempotency-Key (distinct rows ->
+    distinct keys; a retry of one row -> the same key).
+
+    Safety posture:
+      - **All-or-nothing pre-flight**: every row is validated 0-LLM (no browser) via `_preflight_row`
+        BEFORE any actuation; ANY invalid row -> `status="invalid"`, ALL bad rows reported, ZERO writes.
+      - **Duplicate-row refusal (writes)**: two rows that would mint the SAME Idempotency-Key are refused
+        pre-flight — a backend dedupe would silently suppress the second (add a disambiguating slot).
+      - **Approval bound**: `max_rows` is REQUIRED for a write batch (one approval must not authorize
+        unbounded writes) and refuses when exceeded.
+      - **Fail-loud isolation**: `on_row_error="stop"` (default) halts on the first failed row and marks the
+        rest `skipped`; `"continue"` runs every row and reports each. A non-`FlowReplayError` crash always
+        hard-stops (page state is suspect) but is fully recorded.
+      - **Dry-run**: `dry_run=True` validates + plans + previews each row's Idempotency-Key and actuates
+        NOTHING (no browser, no health) — review the plan before committing writes.
+
+    Rows must be secret-free (a secret slot resolves from `$env`, never a row value). The report stores
+    only indices + hashed key previews. Sequential, in input order (a deterministic committed prefix — the
+    invariant a future per-row resume ledger, slice 2c, will checkpoint)."""
+    if not rows:
+        # An empty batch did nothing — a clean, honest roll-up. (Also makes the `run_batch(None, [])`
+        # capability probe return a valid shape without dereferencing `spec`.)
+        return BatchRun(status="ok", rows=[], total=0, dry_run=dry_run)
+    if spec is None:
+        raise FlowReplayError("run_batch: a non-empty batch needs a spec")
+    if on_row_error not in ("stop", "continue"):
+        raise FlowReplayError(f"run_batch: on_row_error must be 'stop' or 'continue', not {on_row_error!r}")
+
+    cache = cache or _default_cache()
+    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    meta = _load_meta(cache, key)
+    cached_flow = cache.get(key)
+    if cached_flow is None:
+        raise FlowReplayError(f"{spec.name!r}: nothing to batch — learn and approve the flow first")
+    # Key the write guards off the ACTUAL mutating signal, not just the declaration. A flow learned as a
+    # "read" (spec.mutate=None) whose steps in fact POST is cached with `step.mutating=True` and, on replay,
+    # STILL fires the write (flow._replay_step gates on `step.mutating`). Trusting spec.mutate alone would
+    # let such a flow skip run_batch's max_rows blast-radius bound AND its duplicate-row (suppressed-write)
+    # refusal while the wire writes — so ANY mutating step makes this a write batch.
+    is_mutate = spec.mutate is not None or any(s.mutating for s in cached_flow.steps)
+
+    # Approval bound: a write batch MUST declare its blast radius (one approval now authorizes N writes).
+    if is_mutate and max_rows is None:
+        raise FlowReplayError(
+            f"{spec.name!r}: a write batch requires max_rows — one approval must not authorize unbounded "
+            f"writes. Pass max_rows=N (>= the row count) after reviewing the input.")
+    if max_rows is not None and len(rows) > max_rows:
+        raise FlowReplayError(
+            f"{spec.name!r}: batch has {len(rows)} rows but max_rows={max_rows} — refuse. Raise max_rows only "
+            f"after reviewing the extra rows.")
+
+    # ALL-OR-NOTHING PRE-FLIGHT (0-LLM, no browser): validate every row + compute its write-key preview.
+    resolved_rows: list[Optional[dict]] = []
+    preview_keys: list[list] = []
+    invalid: list[BatchRowResult] = []
+    for i, row in enumerate(rows):
+        try:
+            resolved = _preflight_row(spec, row, meta=meta, cached_flow=cached_flow,
+                                      require_approved=require_approved, on_drift="raise")
+        except FlowReplayError as exc:
+            invalid.append(BatchRowResult(index=i, status="invalid", ok=False, error=str(exc)))
+            resolved_rows.append(None)
+            preview_keys.append([])
+            continue
+        resolved_rows.append(resolved)
+        preview_keys.append(_plan_idempotency_keys(spec, resolved, cached_flow) if is_mutate else [])
+
+    # DUPLICATE-ROW REFUSAL (writes only): two rows that mint the SAME key(s) would let a backend dedupe
+    # silently suppress the second — a silent suppressed write. Reads are exempt (identical reads are inert).
+    if is_mutate:
+        seen: dict = {}
+        for i, keys in enumerate(preview_keys):
+            if resolved_rows[i] is None:
+                continue
+            kt = tuple(keys)
+            if kt in seen:
+                invalid.append(BatchRowResult(
+                    index=i, status="invalid", ok=False,
+                    error=f"duplicate of row {seen[kt]} — an identical write would mint the same "
+                          f"Idempotency-Key, so a backend dedupe would silently suppress it. Add a "
+                          f"disambiguating slot (e.g. a reference/nonce) if these are distinct writes."))
+                resolved_rows[i] = None
+            else:
+                seen[kt] = i
+
+    if invalid:
+        report = sorted(invalid, key=lambda r: r.index)
+        return BatchRun(status="invalid", rows=report, total=len(rows), invalid=len(report), dry_run=dry_run)
+
+    # DRY-RUN: the plan is valid and complete; actuate nothing (no browser, no health).
+    if dry_run:
+        report = [BatchRowResult(index=i, status="planned", ok=True, idempotency_keys=preview_keys[i])
+                  for i in range(len(rows))]
+        return BatchRun(status="planned", rows=report, total=len(rows), dry_run=True)
+
+    # EXECUTE sequentially, in input order, applying the failure policy.
+    report = []
+    stopped = False
+    for i, row in enumerate(rows):
+        if stopped:
+            report.append(BatchRowResult(index=i, status="skipped", ok=False,
+                                         error="skipped — an earlier row failed (on_row_error='stop')"))
+            continue
+        t0 = time.perf_counter()
+        try:
+            data = await replay(spec, params=row, require_approved=require_approved, on_drift="raise",
+                                check_shape=check_shape, provider_name=provider_name, cache=cache)
+            report.append(BatchRowResult(index=i, status="ok", ok=True,
+                                         ms=(time.perf_counter() - t0) * 1000.0, data=data,
+                                         idempotency_keys=preview_keys[i]))
+        except FlowReplayError as exc:
+            report.append(BatchRowResult(index=i, status="failed", ok=False,
+                                         ms=(time.perf_counter() - t0) * 1000.0, error=str(exc),
+                                         idempotency_keys=preview_keys[i]))
+            if on_row_error == "stop":
+                stopped = True
+        except Exception as exc:  # noqa: BLE001 - a crash (browser/unexpected) hard-stops (page state is
+            #                       suspect — firing more writes into it is the silent-continue danger), but
+            #                       is fully recorded, never swallowed.
+            report.append(BatchRowResult(index=i, status="failed", ok=False,
+                                         ms=(time.perf_counter() - t0) * 1000.0,
+                                         error=f"{type(exc).__name__}: {exc}",
+                                         idempotency_keys=preview_keys[i]))
+            stopped = True
+
+    ok_count = sum(1 for r in report if r.status == "ok")
+    failed = sum(1 for r in report if r.status == "failed")
+    skipped = sum(1 for r in report if r.status == "skipped")
+    return BatchRun(status="ok" if (failed == 0 and skipped == 0) else "failed", rows=report,
+                    total=len(rows), ok_count=ok_count, failed=failed, skipped=skipped, dry_run=False)
 
 
 @dataclass

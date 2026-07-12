@@ -203,8 +203,26 @@ step explicitly. The approval is **bound to the slot schema**: if you widen a sl
 approval must never authorize a wider contract than you reviewed. And every write still passes the
 **mutation gate** (value-independent: a changed input value never shifts the form fingerprint, but page
 *drift* refuses to re-drive), the **confirm barrier** (the completion signal must appear, or the flow fails
-loud), and the 0-LLM pre-flight; a write is **never** verify-by-replayed (re-firing = double-submit). A
-volume `run_batch` driver and a per-row resume ledger are later slices (2b/2c).
+loud), and the 0-LLM pre-flight; a write is **never** verify-by-replayed (re-firing = double-submit).
+
+**Running a batch of rows.** `run_batch(spec, rows)` drives one parameterized replay per row — "record once,
+run for N rows" — and on the CLI, `ultracua flow run-batch --name <flow> --rows rows.csv` (JSON array or CSV):
+
+```python
+from ultracua import flows
+report = await flows.run_batch(spec, [{"qty": "9"}, {"qty": "8"}], max_rows=100)
+# report.rows[i] -> BatchRowResult(index, status, idempotency_keys, error, …)
+```
+
+Every row is **validated 0-LLM before any browser opens** (the same `_preflight_row` gate `replay` uses); if
+**any** row is out-of-domain the whole batch is refused with **zero** writes (no half-run on malformed input).
+Two rows that would mint the **same** `Idempotency-Key` are refused (a backend dedupe would silently drop the
+second — add a disambiguating slot). A **write** batch requires **`max_rows`** (one approval must not authorize
+unbounded writes). Rows run **sequentially**; `on_row_error="stop"` (default) halts on the first failure and
+marks the rest `skipped`, `"continue"` runs and reports each. **`dry_run=True`** (the CLI default, until you
+pass `--commit`) validates + previews every row's Idempotency-Key and **actuates nothing** — review the plan
+before committing writes. Rows carry no secrets (those resolve from `$env`); the report stores only indices +
+hashed keys. A per-row **resume ledger** (skip already-landed rows on a re-run) is the next slice (2c).
 
 ## Pinned 0-LLM reads
 
