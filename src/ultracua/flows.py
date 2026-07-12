@@ -33,6 +33,7 @@ from .conditions import condition_present
 from .config import settings
 from .extract import extract
 from .flow import run_cached
+from .ledger import LedgerError, RunLedger
 from .locators import resolve
 from .obs import get_logger
 from .pin import find_pin, read_pin
@@ -1312,7 +1313,7 @@ class BatchRowResult:
     NEVER stored (a value may be a secret; `repr(BatchRun)` is provably plaintext-secret-free)."""
 
     index: int                       # position in the input `rows` list — the row's identity
-    status: str                      # "ok" | "failed" | "skipped" | "invalid" | "planned"
+    status: str                      # "ok" | "failed" | "skipped" | "invalid" | "planned" | "resumed"
     ok: bool
     ms: float = 0.0
     data: Any = None                 # replay()'s return (read data, or {"status","data"} for a write)
@@ -1327,17 +1328,20 @@ class BatchRun:
     status: str                      # "ok" | "failed" | "invalid" | "planned"
     rows: list                       # list[BatchRowResult]
     total: int = 0
-    ok_count: int = 0
+    ok_count: int = 0                # rows freshly actuated this run (NOT resume-skipped)
     failed: int = 0
-    skipped: int = 0
+    skipped: int = 0                 # halt-skips (an earlier row failed under on_row_error="stop")
     invalid: int = 0
+    resumed: int = 0                 # rows already committed on a prior run (resume) — skipped, not re-fired
     dry_run: bool = False
+    job_id: Optional[str] = None     # the resume token this run keyed its ledger on (None = no ledger)
 
 
 async def run_batch(
     spec: Optional[FlowSpec], rows: list, *, max_rows: Optional[int] = None,
     on_row_error: str = "stop", dry_run: bool = False, require_approved: bool = True,
     check_shape: bool = True, provider_name: Optional[str] = None, cache: Optional[FlowCache] = None,
+    resume: Optional[str] = None,
 ) -> BatchRun:
     """Drive ONE parameterized flow once per row — the H3 slice-2b VOLUME verb ("record once, run for N
     rows"). A ROW-granular sibling of `run_all` (which is flow-granular). Each row goes through the full
@@ -1356,10 +1360,15 @@ async def run_batch(
         hard-stops (page state is suspect) but is fully recorded.
       - **Dry-run**: `dry_run=True` validates + plans + previews each row's Idempotency-Key and actuates
         NOTHING (no browser, no health) — review the plan before committing writes.
+      - **Resume (slice 2c)**: `resume="<job-id>"` keys a durable per-row ledger. A re-run under the SAME
+        job-id SKIPS rows that already committed (status `"resumed"`) rather than re-firing their writes — so
+        a batch that died at row 300 finishes rows 300.. instead of re-writing 1..299. A fresh/absent id is
+        an independent run (recurrence-safe). The Idempotency-Key remains the correctness floor: a row lost
+        to a crash-window re-fires with the SAME key and the backend dedupes it (see `ledger.RunLedger`).
 
     Rows must be secret-free (a secret slot resolves from `$env`, never a row value). The report stores
     only indices + hashed key previews. Sequential, in input order (a deterministic committed prefix — the
-    invariant a future per-row resume ledger, slice 2c, will checkpoint)."""
+    invariant the resume ledger checkpoints)."""
     if not rows:
         # An empty batch did nothing — a clean, honest roll-up. (Also makes the `run_batch(None, [])`
         # capability probe return a valid shape without dereferencing `spec`.)
@@ -1381,6 +1390,29 @@ async def run_batch(
     # let such a flow skip run_batch's max_rows blast-radius bound AND its duplicate-row (suppressed-write)
     # refusal while the wire writes — so ANY mutating step makes this a write batch.
     is_mutate = spec.mutate is not None or any(s.mutating for s in cached_flow.steps)
+
+    # A batched write MUST be a DECLARED write. A flow learned as a "read" (spec.mutate=None) whose steps in
+    # fact POST still FIRES the write on replay, but replay does NO write-landed confirm for it (its confirm
+    # barrier keys off spec.mutate) — so its writes are unverified fire-and-hope, and the resume ledger below
+    # would record a row off a page-controlled status field it can't trust (a false skip = a silently-lost
+    # write). Refuse loud: declare the write + a confirm check so each row's landing is verified. (Matches the
+    # recorder, which refuses to cache an undeclared write.)
+    if is_mutate and spec.mutate is None:
+        raise FlowReplayError(
+            f"{spec.name!r}: this flow performs a write (a mutating step) but isn't declared as a write — so "
+            f"replay can't verify each row's write LANDED, which a batch (and its resume ledger) requires. "
+            f"Declare it via `mutate` with a confirm check (e.g. `flow set-mutate`) and re-approve, then batch it.")
+
+    # RESUME LEDGER (slice 2c): only a WRITE batch with an explicit `resume` job-id keys a durable ledger; a
+    # re-run under the SAME id skips rows that already committed. A read batch (idempotent) or no id -> no
+    # ledger. Validate the id + load the committed set up front (fail fast on a bad/foreign ledger).
+    ledger = None
+    if resume is not None and is_mutate:
+        try:
+            ledger = RunLedger.open(cache, key, resume, spec.scope)
+            ledger.committed()
+        except LedgerError as exc:
+            raise FlowReplayError(f"{spec.name!r}: {exc}") from exc
 
     # Approval bound: a write batch MUST declare its blast radius (one approval now authorizes N writes).
     if is_mutate and max_rows is None:
@@ -1428,49 +1460,74 @@ async def run_batch(
 
     if invalid:
         report = sorted(invalid, key=lambda r: r.index)
-        return BatchRun(status="invalid", rows=report, total=len(rows), invalid=len(report), dry_run=dry_run)
+        return BatchRun(status="invalid", rows=report, total=len(rows), invalid=len(report),
+                        dry_run=dry_run, job_id=resume)
 
-    # DRY-RUN: the plan is valid and complete; actuate nothing (no browser, no health).
+    # DRY-RUN: the plan is valid and complete; actuate nothing (no browser, no health). Under `resume`, a row
+    # already committed on a prior run previews as "resumed" (it would be skipped) rather than "planned".
     if dry_run:
-        report = [BatchRowResult(index=i, status="planned", ok=True, idempotency_keys=preview_keys[i])
-                  for i in range(len(rows))]
-        return BatchRun(status="planned", rows=report, total=len(rows), dry_run=True)
+        report = [BatchRowResult(
+            index=i, ok=True, idempotency_keys=preview_keys[i],
+            status="resumed" if (ledger and ledger.is_committed(preview_keys[i])) else "planned")
+            for i in range(len(rows))]
+        resumed = sum(1 for r in report if r.status == "resumed")
+        return BatchRun(status="planned", rows=report, total=len(rows), resumed=resumed,
+                        dry_run=True, job_id=resume)
 
     # EXECUTE sequentially, in input order, applying the failure policy.
     report = []
     stopped = False
-    for i, row in enumerate(rows):
-        if stopped:
-            report.append(BatchRowResult(index=i, status="skipped", ok=False,
-                                         error="skipped — an earlier row failed (on_row_error='stop')"))
-            continue
-        t0 = time.perf_counter()
-        try:
-            data = await replay(spec, params=row, require_approved=require_approved, on_drift="raise",
-                                check_shape=check_shape, provider_name=provider_name, cache=cache)
-            report.append(BatchRowResult(index=i, status="ok", ok=True,
-                                         ms=(time.perf_counter() - t0) * 1000.0, data=data,
-                                         idempotency_keys=preview_keys[i]))
-        except FlowReplayError as exc:
-            report.append(BatchRowResult(index=i, status="failed", ok=False,
-                                         ms=(time.perf_counter() - t0) * 1000.0, error=str(exc),
-                                         idempotency_keys=preview_keys[i]))
-            if on_row_error == "stop":
+    try:
+        for i, row in enumerate(rows):
+            if stopped:
+                report.append(BatchRowResult(index=i, status="skipped", ok=False,
+                                             error="skipped — an earlier row failed (on_row_error='stop')"))
+                continue
+            # RESUME: a row already committed under this job-id is SKIPPED, not re-fired (no browser). It does
+            # NOT consume the stop budget — its write landed on a prior run, so it satisfies "committed once".
+            if ledger is not None and ledger.is_committed(preview_keys[i]):
+                report.append(BatchRowResult(index=i, status="resumed", ok=True,
+                                             idempotency_keys=preview_keys[i],
+                                             error="already committed on a prior run (resume) — not re-fired"))
+                continue
+            t0 = time.perf_counter()
+            try:
+                data = await replay(spec, params=row, require_approved=require_approved, on_drift="raise",
+                                    check_shape=check_shape, provider_name=provider_name, cache=cache)
+                report.append(BatchRowResult(index=i, status="ok", ok=True,
+                                             ms=(time.perf_counter() - t0) * 1000.0, data=data,
+                                             idempotency_keys=preview_keys[i]))
+                # Record STRICTLY AFTER the write confirmed (durable before the next row fires). A crash
+                # before this leaves the row unrecorded -> a re-run re-fires it with the SAME key -> the
+                # backend dedupes (never a silent double-write).
+                if (ledger is not None and preview_keys[i] and isinstance(data, dict)
+                        and data.get("status") in ("confirmed", "already-done")):
+                    ledger.record(i, preview_keys[i], data["status"])
+            except FlowReplayError as exc:
+                report.append(BatchRowResult(index=i, status="failed", ok=False,
+                                             ms=(time.perf_counter() - t0) * 1000.0, error=str(exc),
+                                             idempotency_keys=preview_keys[i]))
+                if on_row_error == "stop":
+                    stopped = True
+            except Exception as exc:  # noqa: BLE001 - a crash (browser/unexpected) hard-stops (page state is
+                #                       suspect — firing more writes into it is the silent-continue danger),
+                #                       but is fully recorded, never swallowed.
+                report.append(BatchRowResult(index=i, status="failed", ok=False,
+                                             ms=(time.perf_counter() - t0) * 1000.0,
+                                             error=f"{type(exc).__name__}: {exc}",
+                                             idempotency_keys=preview_keys[i]))
                 stopped = True
-        except Exception as exc:  # noqa: BLE001 - a crash (browser/unexpected) hard-stops (page state is
-            #                       suspect — firing more writes into it is the silent-continue danger), but
-            #                       is fully recorded, never swallowed.
-            report.append(BatchRowResult(index=i, status="failed", ok=False,
-                                         ms=(time.perf_counter() - t0) * 1000.0,
-                                         error=f"{type(exc).__name__}: {exc}",
-                                         idempotency_keys=preview_keys[i]))
-            stopped = True
+    finally:
+        if ledger is not None:
+            ledger.close()
 
     ok_count = sum(1 for r in report if r.status == "ok")
     failed = sum(1 for r in report if r.status == "failed")
     skipped = sum(1 for r in report if r.status == "skipped")
+    resumed = sum(1 for r in report if r.status == "resumed")
     return BatchRun(status="ok" if (failed == 0 and skipped == 0) else "failed", rows=report,
-                    total=len(rows), ok_count=ok_count, failed=failed, skipped=skipped, dry_run=False)
+                    total=len(rows), ok_count=ok_count, failed=failed, skipped=skipped, resumed=resumed,
+                    dry_run=False, job_id=resume)
 
 
 @dataclass

@@ -371,28 +371,44 @@ def _flow_run_batch(args: argparse.Namespace) -> None:
     import dataclasses as _dc
     from pathlib import Path
 
-    from .flows import load_spec, run_batch
+    from .flows import FlowReplayError, load_spec, run_batch
+    from .ledger import RunLedger
 
     spec = load_spec(args.name)
     rows = _load_batch_rows(args.rows, spec)
     dry_run = not args.commit  # DRY-RUN by default — the CLI analog of the approval bound
-    report = asyncio.run(run_batch(
-        spec, rows, max_rows=args.max_rows, on_row_error=args.on_row_error, dry_run=dry_run,
-        provider_name=args.provider))
-    mark = {"ok": "OK", "failed": "FAIL", "skipped": "SKIP", "invalid": "BAD", "planned": "PLAN"}
+    # Resume: reuse the operator's --resume id; else, on a COMMITTED WRITE batch, auto-mint one so even the
+    # FIRST run is resumable (the unplanned-crash case) and print it as the resume contract.
+    resume = args.resume
+    if resume is None and args.commit and spec.mutate is not None:
+        resume = RunLedger.mint_job_id()
+        print(f"batch job {resume} — re-run with `--resume {resume}` to resume (skips committed rows)\n")
+    try:
+        report = asyncio.run(run_batch(
+            spec, rows, max_rows=args.max_rows, on_row_error=args.on_row_error, dry_run=dry_run,
+            provider_name=args.provider, resume=resume))
+    except FlowReplayError as exc:  # a pre-flight refusal (unapproved, no max_rows, undeclared write, …)
+        raise SystemExit(f"BATCH REFUSED: {exc}")
+    mark = {"ok": "OK", "failed": "FAIL", "skipped": "SKIP", "invalid": "BAD", "planned": "PLAN",
+            "resumed": "RSMD"}
     for r in report.rows:
         keys = (" " + ",".join(r.idempotency_keys)) if r.idempotency_keys else ""
         detail = r.error or (json.dumps(r.data, ensure_ascii=False)
                              if r.status == "ok" and r.data is not None else "")
         print(f"  [{mark.get(r.status, r.status.upper()):<4}] row {r.index:<4}{keys} {detail}")
     head = "PLANNED (dry-run — pass --commit to actuate)" if dry_run else report.status.upper()
-    print(f"\n== {head}: {report.ok_count} ok, {report.failed} failed, {report.skipped} skipped, "
-          f"{report.invalid} invalid (of {report.total}) ==")
+    print(f"\n== {head}: {report.ok_count} ok, {report.resumed} resumed, {report.failed} failed, "
+          f"{report.skipped} skipped, {report.invalid} invalid (of {report.total}) ==")
     if args.json:
         Path(args.json).write_text(json.dumps(_dc.asdict(report), indent=2), encoding="utf-8")
         print(f"wrote {args.json}")
+    bad = report.status in ("failed", "invalid")
+    if bad and report.job_id:  # tell the operator how to finish a partial batch
+        print(f"\nto resume the rows that DIDN'T commit: "
+              f"`ultracua flow run-batch --name {args.name} --rows {args.rows} --commit "
+              f"--max-rows {args.max_rows} --resume {report.job_id}`")
     # non-zero exit on any invalid/failed batch (so cron / CI alerts); a clean dry-run plan exits 0.
-    raise SystemExit(1 if report.status in ("failed", "invalid") else 0)
+    raise SystemExit(1 if bad else 0)
 
 
 def _flow_record(args: argparse.Namespace) -> None:
@@ -593,6 +609,10 @@ def _flow_main(argv) -> None:
                      help="stop the batch on the first failed row (default), or continue and report each.")
     prb.add_argument("--commit", action="store_true",
                      help="ACTUATE the batch (default is a dry-run: plan + key preview, no side effects).")
+    prb.add_argument("--resume", dest="resume", default=None,
+                     help="job id: resume a prior run — rows already committed under this id are SKIPPED "
+                          "(not re-fired). A fresh/absent id is an independent run. A committed write batch "
+                          "auto-mints + prints an id so its first run is resumable.")
     prb.add_argument("--provider", **prov)
     prb.add_argument("--json", dest="json", help="write the machine-readable BatchRun to this path.")
     prb.add_argument("--verbose", "-v", action="store_true", help="log each replay (INFO).")

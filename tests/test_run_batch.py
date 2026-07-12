@@ -528,10 +528,12 @@ def test_number_slot_int_and_float_fold_to_one_key() -> None:
     assert validate_params(spec, {"n": 2.5})["n"] == 2.5
 
 
-async def test_run_batch_undeclared_write_flow_trips_write_guards(tmp_path, monkeypatch) -> None:
-    # Review finding: a flow learned as a READ (spec.mutate=None) whose cached steps in fact MUTATE (an
-    # undeclared write) still FIRES the write on replay — so run_batch must key its write guards off the
-    # ACTUAL mutating steps, not spec.mutate. Here: max_rows must be required despite mutate being None.
+async def test_run_batch_refuses_undeclared_write_flow(tmp_path, monkeypatch) -> None:
+    # Review finding (2c): a flow learned as a READ (spec.mutate=None) whose cached steps in fact MUTATE (an
+    # undeclared write) still FIRES the write on replay, but replay does NO write-landed confirm for it (its
+    # confirm barrier keys off spec.mutate) — so its writes are unverified and the resume ledger could false-
+    # skip a row. run_batch must REFUSE such a flow (a batched write must be a declared write), before any
+    # actuation or ledger.
     import time as _t
 
     from ultracua.cache import CachedFlow, CachedStep
@@ -549,6 +551,8 @@ async def test_run_batch_undeclared_write_flow_trips_write_guards(tmp_path, monk
                    locator=LocatorSpec(role="button", name="Place the order", tag="button")),
     ]))
     flows.approve(spec, cache=cache)
-    # is_mutate is derived from the mutating step -> a write batch -> max_rows is required (blast-radius bound).
-    with pytest.raises(FlowReplayError, match="requires max_rows"):
-        await run_batch(spec, [{"qty": "9"}], cache=cache)
+    with pytest.raises(FlowReplayError, match="isn't declared as a write"):
+        await run_batch(spec, [{"qty": "9"}], max_rows=10, cache=cache)
+    # ...and it's refused even with a resume id (no ledger built for an unverifiable write).
+    with pytest.raises(FlowReplayError, match="isn't declared as a write"):
+        await run_batch(spec, [{"qty": "9"}], max_rows=10, resume="job1", cache=cache)

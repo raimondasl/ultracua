@@ -222,7 +222,17 @@ unbounded writes). Rows run **sequentially**; `on_row_error="stop"` (default) ha
 marks the rest `skipped`, `"continue"` runs and reports each. **`dry_run=True`** (the CLI default, until you
 pass `--commit`) validates + previews every row's Idempotency-Key and **actuates nothing** — review the plan
 before committing writes. Rows carry no secrets (those resolve from `$env`); the report stores only indices +
-hashed keys. A per-row **resume ledger** (skip already-landed rows on a re-run) is the next slice (2c).
+hashed keys.
+
+**Resuming a batch that died partway.** Pass **`resume="<job-id>"`** (CLI: `--resume <id>`) to key a durable
+per-row ledger: a re-run under the **same** job-id **skips** the rows that already committed (`status="resumed"`)
+instead of re-firing their writes — so a batch that failed at row 300 of 500 finishes rows 300.. rather than
+re-writing 1..299. A **fresh** job-id is an independent run (a legitimate recurrence — the token, not the
+run-invariant key, states your intent). The Idempotency-Key stays the safety floor: a row lost to a crash
+between the write landing and the ledger write re-fires with the *same* key and the backend dedupes it. The
+CLI auto-mints + prints a job-id on the first `--commit` write batch, so even an unplanned crash is resumable.
+(Per-write resume *within* one multi-write flow stays deferred — a stateless probe can't attribute page-state
+to a specific write; such a row re-fires all its writes on resume, each key-deduped.)
 
 ## Pinned 0-LLM reads
 
