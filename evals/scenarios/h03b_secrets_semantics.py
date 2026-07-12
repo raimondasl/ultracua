@@ -1,17 +1,17 @@
 """H3 slice-2 RISK evals — secret write slots + row-key semantics + subtle correctness (group h03b).
 
-Slice 2 is the WRITE side of H3 typed templates: it will lift today's blanket refusal of a
-parameterized write and must do so WITHOUT ever double-submitting, suppressing, mis-canonicalizing,
-or leaking a secret. This module probes that danger surface. It is deliberately pure-logic
-(idempotency-key math, validate_params, save_spec serialization, source inspection, the replay
-refusal) — no browser, deterministic, $0 — because the risks here live in the KEY DERIVATION and
-the INPUT CONTRACT, not on a page.
+Slice 2a is the WRITE side of H3 typed templates: it LIFTED the blanket refusal of a parameterized
+write and had to do so WITHOUT ever double-submitting, suppressing, mis-canonicalizing, or leaking a
+secret. This module probes that danger surface. It is deliberately pure-logic (idempotency-key math,
+validate_params, save_spec serialization, source inspection, the approval gate) — no browser,
+deterministic, $0 — because the risks here live in the KEY DERIVATION and the INPUT CONTRACT, not on
+a page.
 
-Scoring convention (see evals/run.py): `missing` = the slice-2 capability isn't built yet (the
-target — flips to pass as it ships); `fail` = a SHIPPED write-safety property misbehaved (a real
-regression — reserved, loud). PARTIAL CREDIT goes to the slice-1 building blocks slice 2 rides on:
-the additive `slot_values` channel on `idempotency_key`, `validate_params`' secret handling, and
-`save_spec`'s never-serialize-a-secret rule.
+Scoring convention (see evals/run.py): `missing` = a still-aspirational slice-2b/2c capability isn't
+built yet (type-aware canonicalization, a per-run recurring-vs-retry nonce — flips to pass as it
+ships); `fail` = a SHIPPED write-safety property misbehaved (a real regression — reserved, loud).
+PARTIAL CREDIT goes to the building blocks the write side rides on: the additive `slot_values` channel
+on `idempotency_key`, `validate_params`' secret handling, and `save_spec`'s never-serialize-a-secret rule.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import inspect
 import os
 import re
 
-from evals.core import Ctx, expect, fail, missing, ok, probe, scenario
+from evals.core import Ctx, expect, fail, scenario
 
 # A secret substring used across the secret-leak checks. If any of these ever appears in a minted
 # key, a serialized spec, or a resolved-but-visible surface, that is a real leak (fail loud).
@@ -135,19 +135,18 @@ async def secret_never_leaks_into_key(ctx: Ctx):
                          "key width is constant (the secret's length never leaks either)",
                          f"len_short={len(short)} len_long={len(long)}"))
 
-    # ASPIRATIONAL: the WRITE GATE (flow._replay_step, ~flow.py:833) must fold the run's slot values
-    # into the key it mints so a per-row write carries a per-row Idempotency-Key — and route a SECRET
-    # slot through this same hashed channel (never a header/log plaintext). Today the gate mints
-    # `idempotency_key(scope, idx, step.intent)` with NO slot channel: every parameterized row would
-    # share ONE key (silent suppressed-write) and no secret path exists. Source-inspected so it flips
-    # deterministically the day the wiring lands.
+    # SHIPPED (2a): the WRITE GATE (flow._replay_step) folds the run's slot values into the key it mints,
+    # so a per-row write carries a per-row Idempotency-Key — and a SECRET slot routes through this SAME
+    # hashed channel (never a header/log plaintext). The gate now mints
+    # `idempotency_key(scope, idx, step.intent, slot_values=params)`. DANGER guarded: the pre-2a shape
+    # (no slot channel) meant every parameterized row shared ONE key (silent suppressed-write) and a
+    # secret would have had no one-way path — this going RED is a real regression.
     src = inspect.getsource(flow_mod._replay_step)
     m = re.search(r"idempotency_key\((.*?)\)", src, re.S)
     gate_folds = bool(m and ("slot" in m.group(1) or "param" in m.group(1)))
     checks.append(expect(gate_folds,
                          "the write gate folds the run's slot values into the minted key (hashed channel)",
-                         f"gate mints idempotency_key({m.group(1).strip() if m else '?'}) — no per-row / secret channel",
-                         aspirational=True))
+                         f"gate mints idempotency_key({m.group(1).strip() if m else '?'}) — no per-row / secret channel"))
     return checks
 
 
@@ -237,6 +236,15 @@ async def key_canonicalization(ctx: Ctx):
     checks.append(expect(coerce_int == coerce_str,
                          "int 1 and str '1' canonicalize to ONE key (stable str() coercion, no wobble)",
                          f"{coerce_int} vs {coerce_str}"))
+    # (d) INJECTIVITY: the encoding must be one-to-one across the '|'/'=' delimiters. A naive
+    #     "|".join(f"{k}={v}") collides two DISTINCT free-text rows (a memo/note slot admits '|' and '='),
+    #     minting ONE key for two rows -> a backend dedupe silently DROPS the second (a suppressed write).
+    #     DANGER guarded: this is the canonicalization-collision suppressed-write vector.
+    collide_a = idempotency_key("flow:pay", 2, "pay", slot_values={"memo": "a|payee=b", "payee": "c"})
+    collide_b = idempotency_key("flow:pay", 2, "pay", slot_values={"memo": "a", "payee": "b|payee=c"})
+    checks.append(expect(collide_a != collide_b,
+                         "delimiter-bearing distinct rows mint DISTINCT keys (injective, no collision-suppress)",
+                         f"two distinct rows collided to one key: {collide_a} vs {collide_b}"))
 
     # ASPIRATIONAL (the flip side of (c)): str() coercion kills the wobble but COLLAPSES type-distinct
     # values — 1 and "1" are indistinguishable. A slice-2 row-key layer folding multiple slots must
@@ -250,14 +258,14 @@ async def key_canonicalization(ctx: Ctx):
     return checks
 
 
-# --- (5) a parameterized WRITE is refused today (frozen-only baseline); slice-2 lift probed -------
+# --- (5) SHIPPED (2a): the blanket parameterized-WRITE refusal is LIFTED; approval now guards ------
 @scenario(
-    id="h03b.sem.parameterized_write_refused",
-    title="a parameterized WRITE replay is refused LOUD today (no money-field auto-lift); lift probed",
+    id="h03b.sem.parameterized_write_no_blanket_refusal",
+    title="the blanket parameterized-WRITE refusal is lifted (2a); a declared write row validates, approval gates",
     group="h03b", tags=("slots", "writes", "fail-loud"),
 )
-async def parameterized_write_refused(ctx: Ctx):
-    from ultracua.flows import FlowSpec, MutateSpec, SlotSpec, FlowReplayError, replay
+async def parameterized_write_no_blanket_refusal(ctx: Ctx):
+    from ultracua.flows import FlowSpec, MutateSpec, SlotSpec, FlowReplayError, replay, validate_params
 
     checks = []
     cache = ctx.cache()
@@ -266,42 +274,46 @@ async def parameterized_write_refused(ctx: Ctx):
         mutate=MutateSpec(confirm_text_contains="Sent"),
         slots={"amount": SlotSpec(type="number", min=0)})
 
-    # SHIPPED write-safety baseline: substituting a per-run value into a WRITE is refused LOUD until
-    # the row-keyed-idempotency + write-re-verification slice exists. DANGER guarded: auto-lifting a
-    # money field into a param before per-row keys exist means every row shares one Idempotency-Key
-    # (double/suppressed write). Refusal today = PASS; SILENT acceptance pre-slice-2 = a real
-    # write-safety regression = fail loud. (When slice 2 legitimately ships, this guard is retired.)
-    refused = None
-    err = ""
+    # SHIPPED (2a): the slice-1 BLANKET refusal of a parameterized write is LIFTED. A well-formed row for
+    # a DECLARED write slot resolves through the pure 0-LLM pre-flight — there is no "writes aren't
+    # supported" ban any more. DANGER guarded: the lift must be REAL (this is the write side going live),
+    # not a silent no-op.
+    resolved = validate_params(wspec, {"amount": 250})
+    checks.append(expect(resolved == {"amount": 250},
+                         "a declared write row validates 0-LLM (no blanket parameterized-write refusal)",
+                         f"resolved={resolved!r}"))
+
+    # SHIPPED (2a): what actually gates THIS unlearned flow is the standard APPROVAL gate (a write is
+    # human-verified before an unattended run) — NOT a param ban. DANGER guarded: lifting the param
+    # refusal must not open an UNAPPROVED write path; the write still cannot run un-approved.
+    raised = "NONE"
     try:
         await replay(wspec, params={"amount": 250}, cache=cache)
-        refused, err = False, "replay did not raise"
     except FlowReplayError as e:
-        err = str(e)
-        refused = ("write" in err.lower() and "next slice" in err.lower())
-    if refused:
-        checks.append(ok("frozen-only baseline: a parameterized WRITE is refused LOUD (no auto-lift)"))
-    else:
-        checks.append(fail("frozen-only baseline: a parameterized WRITE is refused LOUD (no auto-lift)",
-                           f"a parameterized write was NOT refused as expected — {err}"))
+        raised = str(e)
+    except Exception as e:  # noqa: BLE001 — a WRONG exception type is itself a regression
+        raised = f"__WRONG__ {type(e).__name__}: {e}"
+    lo = raised.lower()
+    checks.append(expect("not approved" in lo,
+                         "an unlearned/unapproved parameterized write is refused by the APPROVAL gate (not a param ban)",
+                         f"expected the approval gate, got: {raised[:180]}"))
+    # DANGER guarded: the refusal must NOT be the retired blanket 'writes aren't supported' message — its
+    # resurfacing would mean the lift silently regressed.
+    checks.append(expect("aren't supported" not in lo and "next slice" not in lo,
+                         "the refusal is the approval gate, not the retired blanket param-write ban",
+                         f"a stale blanket-refusal message resurfaced: {raised[:180]}"))
 
-    # ASPIRATIONAL: slice 2 lifts that refusal SAFELY (write templates + per-row idempotency). Today
-    # it's refused, so the capability is `missing`; it flips to pass when a parameterized write runs.
-    checks.append(expect(refused is False,
-                         "slice-2 runs a parameterized WRITE (per-row keys, write re-verification)",
-                         "parameterized writes are refused today — the target capability", aspirational=True))
-
-    # SHIPPED: the refusal is WRITE-SCOPED — a READ flow with the same slot + params is NOT blocked by
-    # it (it fails later for its own reason, e.g. no learned flow). DANGER guarded: an over-broad
-    # refusal would also freeze legitimate READ templates (already shipped in slice 1).
+    # SHIPPED: a READ template with params is likewise not blocked by any phantom write refusal (it fails
+    # later for its own reason — no learned flow). DANGER guarded: an over-broad refusal would freeze the
+    # legitimate slice-1 READ templates.
     rspec = FlowSpec(name="rread", start_url="http://127.0.0.1:9/x", goal="read the total",
                      slots={"amount": SlotSpec(type="number")})
-    hit_write_refusal = False
+    hit_blanket = False
     try:
         await replay(rspec, params={"amount": 250}, cache=cache)
     except FlowReplayError as e:
-        hit_write_refusal = "next slice" in str(e).lower()
-    checks.append(expect(not hit_write_refusal,
-                         "the WRITE refusal is write-scoped (a READ template with params is not blocked)",
-                         "a read flow hit the parameterized-WRITE refusal — the gate is mis-scoped"))
+        hit_blanket = "aren't supported" in str(e).lower() or "next slice" in str(e).lower()
+    checks.append(expect(not hit_blanket,
+                         "a READ template with params hits no phantom write refusal (slice-1 reads unaffected)",
+                         "a read flow hit a parameterized-WRITE blanket refusal — a stale ban resurfaced"))
     return checks

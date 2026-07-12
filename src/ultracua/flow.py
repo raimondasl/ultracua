@@ -830,7 +830,11 @@ async def _replay_step(
         if drifted:
             tr.meta["gate"] = "drift"
             return False, reason, False
-        key = idempotency_key(scope, idx, step.intent)
+        # H3 slice 2a: fold the run's slot values (the "row") into the write's Idempotency-Key. A
+        # parameterized write thus mints a DISTINCT key per distinct row (so a backend dedupe can't
+        # silently drop rows 2..N) and the SAME key on a retry of one row (so a retry dedupes instead of
+        # double-writing). None/{} params -> byte-identical to the pre-2a key (frozen writes unchanged).
+        key = idempotency_key(scope, idx, step.intent, slot_values=params)
         tr.meta["idempotency_key"] = key
         await session.set_extra_http_headers({"Idempotency-Key": key})
 

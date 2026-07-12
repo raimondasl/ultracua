@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import random
 import time
 from contextlib import asynccontextmanager
@@ -109,7 +110,13 @@ def idempotency_key(scope: str, step_index: int, intent: str, *, slot_values: Op
     byte-identical to before (existing single-write flows are unchanged)."""
     basis = f"{scope}|{step_index}|{intent}"
     if slot_values:
-        canon = "|".join(f"{k}={slot_values[k]}" for k in sorted(slot_values))
+        # INJECTIVE serialization: JSON-encode the sorted (name, str(value)) pairs. A naive
+        # "|".join(f"{k}={v}") is many-to-one when a free-text value contains the '|'/'=' delimiters —
+        # two DISTINCT rows could then collapse to ONE basis and mint ONE key, so a backend dedupe would
+        # silently drop the second (a suppressed write). JSON escapes the delimiters inside strings, so the
+        # row -> basis map is one-to-one. str() keeps the canonicalization stable (2 and "2" agree).
+        canon = json.dumps([[k, str(slot_values[k])] for k in sorted(slot_values)],
+                           separators=(",", ":"), ensure_ascii=True)
         basis = f"{basis}|slots:{canon}"
     return "uca-" + hashlib.sha256(basis.encode("utf-8")).hexdigest()[:24]
 

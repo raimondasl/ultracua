@@ -5,16 +5,17 @@ building blocks slice 2 rides on earn PARTIAL CREDIT (`pass`). A `fail` here is 
 SHIPPED write-safety property that MISBEHAVES — a real regression must fail loud.
 
 The write-lifecycle inviolables under test:
-- parameterizing a WRITE is REFUSED today (read-only guard) — a `params` write never opens a browser
-  (slice-2-not-built baseline; flips to a real run when write templates ship);
+- a DECLARED write slot runs (slice 2a lifted the blanket refusal), but an UNDECLARED param on a write
+  is refused pre-flight — you cannot inject a field a write template never declared, and the refusal
+  never opens a browser;
 - a write template's COMMIT step can NEVER be verify-by-replayed (re-firing = double-submit) — slice
   2 can only re-drive the pre-write PREFIX with a distinct value vector, so the commit's cross-value
-  generalization stays structurally UNPROVEN (the honest limit these notes must state);
+  generalization stays structurally UNPROVEN (the honest limit these notes must state) — still aspirational;
 - mining a WRITE flow must NEVER auto-lift a slot — a silently-parameterized payee/amount is a
   money-moving injection surface; a write field is templatized only with explicit human sign-off;
-- a slot-schema change since approve() must refuse replay until re-approved (a widened domain under a
-  stale approval is an injection surface) — the approval gate + write-refuses-relearn are shipped, the
-  schema-hash binding is not;
+- a slot-schema change since approve() refuses replay until re-approved (a widened domain under a stale
+  approval is an injection surface) — SHIPPED in slice 2a via the FlowMeta.slots_hash binding, on top of
+  the approval gate + write-refuses-relearn;
 - the value-independence audit that gates READ templates today must gate WRITE slots too once mining
   can lift them (a write slot echoing into a later locator = a dead AND dangerous template).
 """
@@ -24,7 +25,7 @@ from __future__ import annotations
 import dataclasses
 import inspect
 
-from evals.core import Ctx, expect, fail, missing, ok, probe, scenario
+from evals.core import Ctx, expect, fail, probe, scenario
 from evals.fixtures import Fixture, page
 
 # --- write-flow fixtures (a REAL method=post form so the submit click is classified mutating by the
@@ -48,20 +49,23 @@ async def _demo_transfer(pg) -> None:
 
 
 # =================================================================================================
-# (1) SHIPPED baseline: a parameterized WRITE replay is REFUSED, pre-flight, before any browser work.
+# (1) SHIPPED (2a): an UNDECLARED param on a write is refused pre-flight — no field injection into a write.
 # =================================================================================================
 @scenario(
-    id="h03b.write.param_gate_refused",
-    title="parameterized WRITE replay is refused pre-flight (read-only guard) — no browser dialed",
-    group="h03b", tags=("writes", "gate", "baseline"),
+    id="h03b.write.undeclared_param_refused_preflight",
+    title="an undeclared param on a WRITE is refused pre-flight (validate_params) — no browser dialed",
+    group="h03b", tags=("writes", "gate", "slots"),
 )
-async def param_gate_refused(ctx: Ctx):
+async def undeclared_param_refused_preflight(ctx: Ctx):
     from ultracua.flows import FlowReplayError, FlowSpec, MutateSpec, replay
 
     checks = []
-    # The fixture is SERVED and the write's start_url points at it — so `fx.gets == []` afterwards is a
-    # real oracle that the refusal short-circuits BEFORE any navigation (a live, dial-able URL never
-    # dialed), not merely that the port was closed.
+    # Slice 2a LIFTS the blanket parameterized-write refusal: a DECLARED write slot runs (see
+    # h03b.idem.parameterized_write_row_keyed). What must STILL be refused is a param the flow never
+    # DECLARED — you cannot inject an arbitrary field into a write. This spec has NO slots, so any param is
+    # undeclared and the 0-LLM pre-flight (validate_params) must refuse it BEFORE any browser work.
+    # The fixture is SERVED and the write's start_url points at it, so `fx.gets == []` is a real oracle
+    # that the refusal short-circuits BEFORE any navigation (a live, dial-able URL never dialed).
     fx = Fixture({"/checkout": _TRANSFER})
     with fx.serve() as base:
         cache = ctx.cache()
@@ -76,29 +80,96 @@ async def param_gate_refused(ctx: Ctx):
             raised = f"__WRONG__ {type(e).__name__}: {e}"
         lo = raised.lower()
         refused = raised != "NONE" and not raised.startswith("__WRONG__")
-        # DANGER: if this guard lapses, a `params` write would flow into the un-built row-keyed-write
-        # path and could double-submit / mishandle the write. It must stay frozen-only until slice 2.
+        # DANGER: if a param the write never declared reached the wire, an operator (or an injected row)
+        # could set a field the human never reviewed. It must be refused as a pure computation.
         checks.append(expect(refused,
-                             "parameterized WRITE replay raises FlowReplayError (shipped read-only guard)",
-                             f"a params-write was NOT refused — got: {raised[:180]}"))
-        # the refusal must NAME the gap (so an operator knows to drop params / wait for the next slice)
-        msg_ok = ("parameter" in lo and "write" in lo
-                  and ("read-only" in lo or "next slice" in lo or "supported yet" in lo))
-        checks.append(expect(msg_ok,
-                             "the refusal names parameterized writes as the next-slice gap",
-                             f"message doesn't identify the param-write gap: {raised[:200]}"))
-        # ORDERING: the write is refused WHOLESALE before per-slot validation. `spec` has no slots, so
-        # if validate_params ran first, params={amount} would come back as an "unknown param" error.
-        # DANGER: a write leaking through per-slot validation could let a mis-declared slot reach the
-        # wire; the write gate must fire first, unconditionally.
-        checks.append(expect(refused and "unknown param" not in lo,
-                             "the write refusal PRECEDES slot validation (refused wholesale, not per-slot)",
-                             f"got a per-slot validation error instead of the write gate: {raised[:200]}"))
-        # server-side truth: NO GET reached the fixture — the refusal happened before the browser opened
-        # DANGER: an unsupported write parameterization must never open a browser / touch the live site.
+                             "an undeclared param on a WRITE raises FlowReplayError (pre-flight validate_params)",
+                             f"an undeclared-param write was NOT refused — got: {raised[:180]}"))
+        # the refusal NAMES the offending param, so an operator sees exactly which field is undeclared.
+        checks.append(expect("unknown param" in lo and "amount" in lo,
+                             "the refusal names the undeclared param (unknown param(s) ['amount'])",
+                             f"message doesn't identify the undeclared param: {raised[:200]}"))
+        # server-side truth: NO GET reached the fixture — the refusal happened before the browser opened.
+        # DANGER: an undeclared-param write must never open a browser / touch the live site.
         checks.append(expect(fx.gets == [],
                              "no browser navigation dialed the start_url (refusal is pre-flight)",
                              f"the browser navigated before refusing: gets={fx.gets}"))
+    return checks
+
+
+# =================================================================================================
+# (1b) SHIPPED (2a): the two row-safety guards that lifting the write refusal REQUIRES — an unbound
+# declared slot, and a row-blind one-shot precheck, are each refused LOUD with ZERO writes.
+# =================================================================================================
+@scenario(
+    id="h03b.write.param_write_safety_guards",
+    title="parameterized-write guards: an unbound slot AND a row-blind precheck are each refused, ZERO writes",
+    group="h03b", tags=("writes", "gate", "slots", "fail-loud"),
+)
+async def param_write_safety_guards(ctx: Ctx):
+    from ultracua.cache import flow_key
+    from ultracua.flows import FlowReplayError, FlowSpec, MutateSpec, SlotSpec, approve, record, replay
+
+    checks = []
+    # (1) BINDING SAFETY: a declared+supplied slot bound to NO recorded step must be refused before any
+    # actuation — else the value folds into the write's Idempotency-Key (varying the wire dedupe key per
+    # value) while the FROZEN literal is submitted: a silent WRONG write + an un-dedup-able DOUBLE write.
+    # 'amount' is declared on the spec but never bound to a step (write mining never lifts a money field).
+    fx = Fixture({"/pay": _TRANSFER, "/done": _SENT}, post_redirect="/done")
+    with fx.serve() as base:
+        cache = ctx.cache()
+        spec = FlowSpec(name="wbind", start_url=f"{base}/pay", goal="send the transfer",
+                        mutate=MutateSpec(confirm_text_contains="Transfer complete"),
+                        slots={"amount": SlotSpec(type="string")}, headless=True)
+        await record(spec, demo=_demo_transfer, headless=True, cache=cache)
+        approve(spec, cache=cache)
+        writes_before = len(fx.writes)   # after the demo's one write; the refused replay must add ZERO
+        raised = "NONE"
+        try:
+            await replay(spec, params={"amount": "1.00"}, cache=cache)
+        except FlowReplayError as e:
+            raised = str(e)
+        except Exception as e:  # noqa: BLE001 — a WRONG exception type is itself a regression
+            raised = f"__WRONG__ {type(e).__name__}: {e}"
+        checks.append(expect("aren't bound to any recorded" in raised,
+                             "an unbound declared slot is refused (its value would key the wire without typing)",
+                             f"unbound-slot write was not refused: {raised[:180]}"))
+        checks.append(expect(len(fx.writes) == writes_before,
+                             "the unbound-slot refusal reached the server ZERO extra times (precedes actuation)",
+                             f"writes grew by {len(fx.writes) - writes_before}"))
+
+    # (2) PRECHECK SAFETY: a parameterized write must not lean on the row-blind one-shot precheck — a
+    # generic end-state left by one row could skip a DIFFERENT row's write as already-done (suppressed
+    # write). Here the 'amount' slot IS bound (so we pass the binding guard) and a precheck is attached.
+    fx2 = Fixture({"/pay": _TRANSFER, "/done": _SENT}, post_redirect="/done")
+    with fx2.serve() as base2:
+        cache2 = ctx.cache()
+        spec2 = FlowSpec(name="wprecheck", start_url=f"{base2}/pay", goal="send the transfer",
+                         mutate=MutateSpec(confirm_text_contains="Transfer complete",
+                                           precheck_text_contains="Transfer complete"),
+                         slots={"amount": SlotSpec(type="string")}, headless=True)
+        await record(spec2, demo=_demo_transfer, headless=True, cache=cache2)
+        flow = cache2.get(flow_key(spec2.goal, spec2.start_url, spec2.scope))
+        for s in flow.steps:                       # bind ONLY the amount fill step (demo value "100.00")
+            if s.action == "type" and s.text == "100.00":
+                s.slot = "amount"
+        cache2.put(flow)
+        approve(spec2, cache=cache2)
+        writes_before2 = len(fx2.writes)
+        raised2 = "NONE"
+        try:
+            await replay(spec2, params={"amount": "1.00"}, cache=cache2)
+        except FlowReplayError as e:
+            raised2 = str(e)
+        except Exception as e:  # noqa: BLE001
+            raised2 = f"__WRONG__ {type(e).__name__}: {e}"
+        lo = raised2.lower()
+        checks.append(expect("precheck" in lo and "row-blind" in lo,
+                             "a parameterized write with a one-shot precheck is refused (row-blind skip risk)",
+                             f"precheck-parameterized write was not refused: {raised2[:180]}"))
+        checks.append(expect(len(fx2.writes) == writes_before2,
+                             "the precheck refusal reached the server ZERO extra times (precedes actuation)",
+                             f"writes grew by {len(fx2.writes) - writes_before2}"))
     return checks
 
 
@@ -221,36 +292,36 @@ async def mining_never_lifts_money_field(ctx: Ctx):
 
 
 # =================================================================================================
-# (4) ASPIRATIONAL: a slot-schema change since approve() must refuse replay until re-approved.
+# (4) SHIPPED (2a): a slot-schema change since approve() refuses replay until re-approved (schema-hash bind).
 # =================================================================================================
 @scenario(
     id="h03b.write.slot_schema_approval_gate",
-    title="a slot-schema change since approve() must refuse replay until re-approved (schema-hash binding)",
-    group="h03b", aspirational=True, tags=("writes", "approval", "slots", "aspirational"),
+    title="a slot-schema change since approve() refuses replay until re-approved (schema-hash binding)",
+    group="h03b", tags=("writes", "approval", "slots"),
 )
 async def slot_schema_approval_gate(ctx: Ctx):
     import time
 
     from ultracua.cache import CachedFlow, CachedStep, flow_key
     from ultracua.flows import (FlowMeta, FlowReplayError, FlowSpec, MutateSpec, SlotSpec, _load_meta,
-                                approve, replay, unapprove)
+                                _slots_hash, approve, replay, unapprove)
 
     checks = []
     meta_fields = {f.name for f in dataclasses.fields(FlowMeta)}
-    # Capability: FlowMeta binds the APPROVED slot schema (a hash/fingerprint), so a later domain change
-    # can be detected and force re-approval.
-    # DANGER: without it, an operator who widens a slot domain AFTER approve() (e.g. drops a payee enum,
-    # loosening it to any string) leaves replay honoring the NEW, un-approved contract — a stale-approval
-    # injection surface, worst on a WRITE flow.
+    # SHIPPED: FlowMeta binds the APPROVED slot schema (a hash), so a later domain change is detected and
+    # forces re-approval. DANGER guarded: without it, an operator who widens a slot domain AFTER approve()
+    # (e.g. loosens a payee enum to any string) leaves replay honoring the NEW, un-approved contract — a
+    # stale-approval injection surface, worst on a WRITE flow.
     has_hash_field = any(k in meta_fields for k in
                          ("slots_hash", "slot_schema_hash", "schema_hash", "slots_fingerprint",
                           "approved_slots_hash"))
     checks.append(expect(has_hash_field,
                          "FlowMeta binds the approved slot-schema (a hash/fingerprint field)",
                          "FlowMeta has no slot-schema hash — a widened domain under a stale approval "
-                         "replays un-re-approved (stale-approval injection)", aspirational=True))
+                         "replays un-re-approved (stale-approval injection)"))
 
-    # Behavioral probe (no browser): approve a SLOTTED flow, then widen its domain and re-load meta.
+    # Behavioral (no browser: the schema gate fires before any navigation). Approve a SLOTTED flow, then
+    # narrow its domain in place — the bound approval is now STALE.
     cache = ctx.cache()
     goal, url = "search widgets", "http://127.0.0.1:9/app/"
     spec = FlowSpec(name="srch", start_url=url, goal=goal, slots={"query": SlotSpec(type="string")})
@@ -260,17 +331,32 @@ async def slot_schema_approval_gate(ctx: Ctx):
                          created_ts=time.time()))
     approve(spec, cache=cache)
     approved_after = _load_meta(cache, key).approved
-    # a real operator edit: close the domain to a single value AFTER approval
-    spec.slots["query"] = SlotSpec(type="string", enum=["only-this"])
-    meta_after_edit = _load_meta(cache, key)
-    # a schema-aware gate would flip approval off (or record a mismatching digest); today nothing changes.
-    detected = (not meta_after_edit.approved) or any(("slot" in f or "schema" in f) for f in meta_fields)
-    checks.append(expect(detected,
-                         "approval is bound to the slot schema (a post-approval domain change needs re-approval)",
-                         "approval survived a slot-domain change unchallenged — no digest recorded, "
-                         "meta.approved stayed True", aspirational=True))
+    approved_hash = _load_meta(cache, key).slots_hash
+    spec.slots["query"] = SlotSpec(type="string", enum=["only-this"])   # a post-approval operator edit
+    # SHIPPED: the approval recorded a schema hash, and the post-edit spec no longer matches it.
+    checks.append(expect(approved_hash is not None and _slots_hash(spec) != approved_hash,
+                         "approve() bound the slot-schema hash and the post-edit domain no longer matches it",
+                         f"approved_hash={approved_hash!r} current={_slots_hash(spec)!r}"))
+    # SHIPPED: replay REFUSES the stale approval LOUD. Note the value passed ("only-this") is VALID under
+    # the NEW domain — the gate keys on the SCHEMA, not the value, so a widened contract can't sneak a
+    # newly-legal value through a stale approval. It refuses before any browser navigation.
+    raised = "NONE"
+    try:
+        await replay(spec, params={"query": "only-this"}, cache=cache)
+    except FlowReplayError as e:
+        raised = str(e)
+    except Exception as e:  # noqa: BLE001 — a WRONG exception type is itself a regression
+        raised = f"__WRONG__ {type(e).__name__}: {e}"
+    checks.append(expect("schema changed since approval" in raised.lower(),
+                         "replay REFUSES a slotted flow whose domain changed since approval (re-approve required)",
+                         f"a stale-approval replay was not refused: {raised[:200]}"))
+    # SHIPPED: re-approving under the NEW schema re-binds the hash (the gate clears for the reviewed domain).
+    approve(spec, cache=cache)
+    checks.append(expect(_load_meta(cache, key).slots_hash == _slots_hash(spec),
+                         "re-approval re-binds the schema hash (the gate clears for the reviewed domain)",
+                         f"rebind failed: meta={_load_meta(cache, key).slots_hash!r} spec={_slots_hash(spec)!r}"))
 
-    # PARTIAL CREDIT (shipped): the approval gate itself toggles trust — the hook a schema-hash bolts onto.
+    # PARTIAL CREDIT (shipped): the approval gate itself toggles trust — the hook the schema-hash bolts onto.
     unapprove(spec, cache=cache)
     cleared = not _load_meta(cache, key).approved
     checks.append(expect(approved_after and cleared,

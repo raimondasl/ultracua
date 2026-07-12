@@ -1,22 +1,21 @@
 """H3 slice-2 RISK evals — the idempotency key as the double-write / suppressed-write safety core.
 
-Slice 2 (write templates + run_batch + row-keyed idempotency) is NOT built yet. When it ships, a
-parameterized WRITE flow will run N rows through one learned form-submit. The single load-bearing
-safety artifact is the per-write `Idempotency-Key` header:
+Slice 2a (write templates + row-keyed idempotency) IS shipped: a parameterized WRITE flow runs each
+row through one learned form-submit. The single load-bearing safety artifact is the per-write
+`Idempotency-Key` header:
 
   - DISTINCT rows must mint DISTINCT keys — else 500 rows share ONE key and a backend dedupe layer
     silently DROPS rows 2..N (a suppressed-write: the operator believes 500 landed; 1 did).
   - the SAME row on a retry must mint the SAME key — else a transient retry mints a fresh key and
     the backend can't dedupe it, DOUBLE-WRITING the row (charge twice, ship twice).
 
-The shipped building block that makes both possible is `safety.idempotency_key(..., slot_values=)`:
-an additive payload channel (slice 1) that canonicalizes a row into the dedupe basis. This module
-PASSES that channel's determinism/canonicalization and its no-op-when-None guarantee (existing
-single-write flows keep byte-identical keys), and probes ASPIRATIONALLY the two not-yet-built halves
-of the write side: (a) the write actuation gate folding the run's slot values into the minted key,
-and (b) `flows.replay(spec, params=...)` on a WRITE flow — refused today, so the probe reports
-`missing` while pinning the DESIGN INTENT that the fixture's recorded `Idempotency-Key` header must
-differ per row and repeat per retry.
+The shipped building block underneath is `safety.idempotency_key(..., slot_values=)`: an additive
+payload channel (slice 1) that canonicalizes a row into the dedupe basis, which the write actuation
+gate (`flow._replay_step`) now FOLDS the run's slot values into. This module PASSES that channel's
+determinism/canonicalization and its no-op-when-None guarantee (existing single-write flows keep
+byte-identical keys), and verifies END-TO-END that a parameterized WRITE reaches the fixture with an
+`Idempotency-Key` that DIFFERS per row and REPEATS per retry. (The batch driver `run_batch` and the
+per-row resume ledger — slices 2b/2c — remain aspirational; see h03b_batch.)
 
 Key-less: local `Fixture` (records each write's headers, lower-cased) + real headless Chromium, $0.
 The SERVER's recorded header is the oracle — never what the client believes it sent.
@@ -27,7 +26,7 @@ from __future__ import annotations
 import inspect
 import re
 
-from evals.core import Ctx, expect, fail, missing, ok, scenario
+from evals.core import Ctx, expect, scenario
 from evals.fixtures import Fixture, page
 
 # The shared checkout shape: a REAL method=post form so the submit is classified mutating by the
@@ -126,11 +125,11 @@ async def none_is_base_key(ctx: Ctx):
     return checks
 
 
-# --- (3) ASPIRATIONAL: the WRITE actuation gate folds the run's slot values into the minted key --
+# --- (3) SHIPPED (2a): the WRITE actuation gate folds the run's slot values into the minted key --
 @scenario(
     id="h03b.idem.gate_folds_slot_values",
-    title="write-gate idempotency key folds slot values (source-inspect): today it does NOT — the slice-2 gap",
-    group="h03b", aspirational=True, tags=("idempotency", "writes", "aspirational"),
+    title="write-gate idempotency key folds the run's slot values (source-inspect) — shipped in slice 2a",
+    group="h03b", tags=("idempotency", "writes"),
 )
 async def gate_folds_slot_values(ctx: Ctx):
     import ultracua.flow as flow_mod
@@ -138,16 +137,15 @@ async def gate_folds_slot_values(ctx: Ctx):
 
     checks = []
     src = inspect.getsource(flow_mod._replay_step)
-    # ASPIRATIONAL: does the write actuation gate fold the run's slot values into the key it mints?
-    # Today the call is `idempotency_key(scope, idx, step.intent)` — NO payload channel. Danger: with
-    # the flows.replay guard lifted but this NOT wired, 500 parameterized rows would mint ONE key and a
-    # backend dedupe would silently DROP rows 2..N (the suppressed-write core of slice 2).
+    # SHIPPED (2a): the write actuation gate folds the run's slot values into the key it mints — the call
+    # is now `idempotency_key(scope, idx, step.intent, slot_values=params)`. Danger guarded: without this
+    # fold (the pre-2a shape), 500 parameterized rows would mint ONE key and a backend dedupe would silently
+    # DROP rows 2..N (the suppressed-write core of the write side). This going RED is a real regression.
     calls = re.findall(r"idempotency_key\(([^)]*)\)", src)
     folds = any(("slot" in a) or ("params" in a) for a in calls)
     checks.append(expect(folds,
                          "the write-gate idempotency_key call folds slot_values/params (distinct rows -> distinct keys)",
-                         f"gate mints {calls!r} — no row-value channel, so parameterized rows would share ONE key",
-                         aspirational=True))
+                         f"gate mints {calls!r} — no row-value channel, so parameterized rows would share ONE key"))
     # PARTIAL CREDIT (shipped): the substitution machinery is already HALF-wired — _replay_step threads
     # `params` and substitutes a validated value at type/select sites. So the key-fold is a small
     # wire-up ALONGSIDE existing plumbing, not a rewrite (proves the gap is narrow, and that lifting the
@@ -171,13 +169,13 @@ async def gate_folds_slot_values(ctx: Ctx):
     return checks
 
 
-# --- (4) ASPIRATIONAL behavioral: parameterized WRITE replay is REFUSED today (fail-safe) -------
+# --- (4) SHIPPED behavioral (2a): parameterized WRITE runs row-keyed — per-row distinct, per-retry stable --
 @scenario(
-    id="h03b.idem.parameterized_write_refused",
-    title="parameterized WRITE replay refused today; DESIGN INTENT: per-row distinct + per-retry stable header",
-    group="h03b", aspirational=True, tags=("idempotency", "writes", "slots"),
+    id="h03b.idem.parameterized_write_row_keyed",
+    title="parameterized WRITE runs row-keyed: distinct rows -> distinct Idempotency-Key, retry -> same key",
+    group="h03b", tags=("idempotency", "writes", "slots"),
 )
-async def parameterized_write_refused(ctx: Ctx):
+async def parameterized_write_row_keyed(ctx: Ctx):
     from ultracua.cache import flow_key
     from ultracua.flows import (FlowReplayError, FlowSpec, MutateSpec, SlotSpec, approve,
                                 record, replay, validate_params)
@@ -225,48 +223,37 @@ async def parameterized_write_refused(ctx: Ctx):
                              "shipped: pre-flight validate_params accepts a valid row for the write spec (0-LLM)",
                              f"resolved={resolved}"))
 
-        writes_before = len(fx.writes)   # after the demo's one write; the refused replays must add ZERO
+        writes_before = len(fx.writes)   # after the demo's one write; each replay must add EXACTLY one
 
-        async def _attempt(row):
-            """Return the server-recorded idempotency-key ('once built') or the FlowReplayError (today)."""
-            try:
-                await replay(spec, params=row, cache=cache)
-                return fx.writes[-1].headers.get("idempotency-key")
-            except FlowReplayError as exc:
-                return exc
+        async def _row_key(row):
+            """Replay one row (2a: it RUNS) and return the SERVER-recorded Idempotency-Key for its write."""
+            await replay(spec, params=row, cache=cache)
+            return fx.writes[-1].headers.get("idempotency-key")
 
-        kA = await _attempt({"qty": "9"})
-        kB = await _attempt({"qty": "8"})
-        kA2 = await _attempt({"qty": "9"})   # a re-run of the SAME row
+        kA = await _row_key({"qty": "9"})
+        kB = await _row_key({"qty": "8"})
+        kA2 = await _row_key({"qty": "9"})   # a re-run of the SAME row
 
-        # ASPIRATIONAL — no SUPPRESSED write: distinct rows must reach the server with DISTINCT keys.
-        # Today all three are refused by the is_mutate+params guard -> report `missing`, pinning the intent.
-        if isinstance(kA, str) and isinstance(kB, str):
-            checks.append(expect(kA != kB,
-                                 "DISTINCT rows send DISTINCT Idempotency-Key headers (no suppressed write)",
-                                 f"rowA={kA} rowB={kB}", aspirational=True))
-        else:
-            checks.append(missing(
-                "DISTINCT rows send DISTINCT Idempotency-Key headers (no suppressed write)",
-                "parameterized WRITE refused today (is_mutate+params guard) — DESIGN INTENT once slice 2 "
-                "ships: fx.writes[-1].headers['idempotency-key'] for row {qty:9} must DIFFER from row {qty:8}, "
-                "so a backend dedupe cannot silently drop the distinct row"))
-        # ASPIRATIONAL — no DOUBLE write: a re-run of the SAME row must repeat the SAME key.
-        if isinstance(kA, str) and isinstance(kA2, str):
-            checks.append(expect(kA == kA2,
-                                 "a re-run of the SAME row repeats the SAME Idempotency-Key (no double-write)",
-                                 f"first={kA} rerun={kA2}", aspirational=True))
-        else:
-            checks.append(missing(
-                "a re-run of the SAME row repeats the SAME Idempotency-Key (no double-write)",
-                "refused today — DESIGN INTENT: a retry of row {qty:9} must mint the SAME key so the backend "
-                "dedupe drops the duplicate instead of writing the row twice"))
-        # SHIPPED SAFETY (must PASS): the refusal precedes actuation — a refused parameterized write reaches
-        # the server ZERO times. A half-built template that raised AFTER firing would be the worst outcome
-        # (a wrong/duplicated write already on the wire), so this stays a hard fail if it ever regresses.
-        checks.append(expect(len(fx.writes) == writes_before,
-                             "the refused parameterized write reached the server ZERO times (refusal precedes actuation)",
-                             f"writes grew by {len(fx.writes) - writes_before}"))
+        # SHIPPED (2a): every parameterized write reached the server carrying a uca- Idempotency-Key — the
+        # header a backend dedupe keys on. (The SERVER's recorded header is the oracle, not the client.)
+        checks.append(expect(all(isinstance(k, str) and k.startswith("uca-") for k in (kA, kB, kA2)),
+                             "each parameterized write reached the server with a uca- Idempotency-Key",
+                             f"kA={kA!r} kB={kB!r} kA2={kA2!r}"))
+        # SHIPPED — no SUPPRESSED write: DISTINCT rows send DISTINCT keys, so a backend dedupe layer cannot
+        # collapse them and silently drop the distinct row.
+        checks.append(expect(kA != kB,
+                             "DISTINCT rows send DISTINCT Idempotency-Key headers (no suppressed write)",
+                             f"rowA={kA} rowB={kB}"))
+        # SHIPPED — no DOUBLE write: a re-run of the SAME row repeats the SAME key, so a retry dedupes at
+        # the backend instead of writing the row a second time.
+        checks.append(expect(kA == kA2,
+                             "a re-run of the SAME row repeats the SAME Idempotency-Key (no double-write)",
+                             f"first={kA} rerun={kA2}"))
+        # SHIPPED — exactly ONE write per replay: the mutation gate never double-fires, and each row DID
+        # actuate (no silently-suppressed row). Three replays -> exactly three writes on the wire.
+        checks.append(expect(len(fx.writes) - writes_before == 3,
+                             "each of the 3 row replays sent exactly ONE write (no double-fire, no dropped row)",
+                             f"writes grew by {len(fx.writes) - writes_before}, expected 3"))
     return checks
 
 
