@@ -1,15 +1,17 @@
 """H3 slice 2 evals — the run_batch cluster: VOLUME + per-row FAIL-LOUD + RESUME (ROADMAP H3).
 
 The horizon this module probes: a `run_batch(spec, rows)` verb that takes N pre-validated rows and
-drives one parameterized flow per row on the `run_all` supervisor pattern — the WRITE side of typed
-templates. Slice 2 is NOT built yet, so the run_batch capability surfaces come out `missing` (the
-target); the shipped BUILDING BLOCKS it will ride on get partial credit (they PASS):
+drives one parameterized flow per row on the `run_all` supervisor pattern — the VOLUME side of typed
+templates. The batch DRIVER (slice 2b) + the per-row resume ledger (2c) are NOT built yet, so those
+run_batch surfaces come out `missing` (the target). Slice 2a (single parameterized write, row-keyed
+idempotency) IS shipped; the BUILDING BLOCKS run_batch will ride on get partial credit (they PASS):
   - `flows.run_all` — the fleet supervisor (safe defaults: approved-only + read-only);
   - `flows.validate_params` — the pure 0-LLM per-row validator (out-of-domain -> loud refusal, no I/O);
   - `safety.idempotency_key(..., slot_values=...)` — the row-value key channel (distinct rows ->
-    distinct keys; same row on retry -> same key; None/{} -> the base key byte-identical);
-  - the frozen-only WRITE baseline: `replay` REFUSES a parameterized write today, so run_batch's
-    per-row parameterized writes cannot silently ride the current engine.
+    distinct keys; same row on retry -> same key; None/{} -> the base key byte-identical), now folded
+    into the write gate (slice 2a);
+  - the APPROVAL floor: with the blanket param-write refusal lifted (2a), an unapproved parameterized
+    write is still refused by the approval gate — run_batch must not silently lower that floor.
 
 Each scenario names the DANGER a run_batch surface must guard: double-write (a re-run re-fires a
 landed row), suppressed-write (N rows share ONE dedupe key so a backend drops rows 2..N),
@@ -55,22 +57,23 @@ async def run_batch_verb(ctx: Ctx):
     checks.append(expect(safe_defaults,
                          "run_all defaults approved_only=True + include_writes=False (writes need explicit opt-in)",
                          f"unsafe defaults: {[(p.name, p.default) for p in sig.parameters.values()]}"))
-    # PARTIAL CREDIT (shipped safety baseline): today `replay` REFUSES a parameterized WRITE (flows.py
-    # ~955) — the write side stays FROZEN-ONLY until slice 2's row-keyed idempotency + write re-verify
-    # exist. So run_batch's per-row parameterized writes CANNOT leak through the current engine: the
-    # refusal fires before the browser opens. This check going RED would be a real write-safety regression.
-    spec = FlowSpec(name="h03b-refuse", start_url="http://127.0.0.1:9/checkout", goal="submit a row",
+    # PARTIAL CREDIT (shipped APPROVAL floor): slice 2a LIFTED the blanket parameterized-write refusal —
+    # a DECLARED write slot now runs through the normal gates. So run_batch's per-row parameterized writes
+    # are bounded by APPROVAL, not a blanket ban. This UNLEARNED flow is stopped by the approval gate (a
+    # write is human-verified before an unattended run), so a batch can't silently ride an unapproved
+    # write path. This check going RED (an unapproved write RUNNING) would be a real write-safety regression.
+    spec = FlowSpec(name="h03b-approval", start_url="http://127.0.0.1:9/checkout", goal="submit a row",
                     mutate=MutateSpec(confirm_text_contains="Saved"),
                     slots={"amount": SlotSpec(type="integer", min=1)})
     try:
         out = await replay(spec, params={"amount": 5}, cache=ctx.cache())
-        checks.append(fail("parameterized WRITE replay is refused today (writes stay frozen-only)",
-                           f"replay accepted params on a write flow: {out!r}"))
+        checks.append(fail("an unapproved parameterized WRITE is refused by the approval gate",
+                           f"replay RAN an unapproved parameterized write: {out!r}"))
     except FlowReplayError as exc:
         msg = str(exc).lower()
-        checks.append(expect(any(w in msg for w in ("aren't supported", "read-only", "next slice")),
-                             "parameterized WRITE replay is refused today (writes stay frozen-only)",
-                             f"raised FlowReplayError but not the frozen-write refusal: {exc}"))
+        checks.append(expect("not approved" in msg,
+                             "an unapproved parameterized WRITE is refused by the approval gate (writes need sign-off)",
+                             f"raised FlowReplayError but not the approval gate: {exc}"))
     return checks
 
 
@@ -181,8 +184,8 @@ async def per_row_fail_loud(ctx: Ctx):
 # --- H3 slice 2 step 6: ROW-KEYED idempotency — distinct rows distinct keys, retry same key ---------
 @scenario(
     id="h03b.batch.row_keyed_idempotency",
-    title="row-keyed idempotency: slot-value key channel (shipped) + the write gate must fold row values (missing)",
-    group="h03b", aspirational=True, tags=("batch", "idempotency", "writes"),
+    title="row-keyed idempotency: slot-value key channel + the write gate folds the run's row values (shipped 2a)",
+    group="h03b", tags=("batch", "idempotency", "writes"),
 )
 async def row_keyed_idempotency(ctx: Ctx):
     import ultracua.flow as flow_mod
@@ -212,10 +215,10 @@ async def row_keyed_idempotency(ctx: Ctx):
                          == idempotency_key(scope, idx, intent, slot_values={}),
                          "None/{} slot_values -> the base key byte-identical (single-write flows unchanged)",
                          f"base={base}"))
-    # ASPIRATIONAL: the write ACTUATION gate must FOLD the run's slot values into the key it mints.
-    # Today flow._replay_step mints idempotency_key(scope, idx, step.intent) with NO slot channel
-    # (flow.py ~833) — so at actuation all N rows of a parameterized write would mint the SAME key and a
-    # dedupe would drop rows 2..N. The shipped channel exists in safety.py; the gate doesn't feed it yet.
+    # SHIPPED (2a): the write ACTUATION gate FOLDS the run's slot values into the key it mints —
+    # flow._replay_step now mints idempotency_key(scope, idx, step.intent, slot_values=params). DANGER
+    # guarded: the pre-2a shape (no slot channel) meant all N rows of a parameterized write minted the SAME
+    # key at actuation and a dedupe would drop rows 2..N. This going RED is a real suppressed-write regression.
     fn = getattr(flow_mod, "_replay_step", None)
     try:
         gate_src = inspect.getsource(fn) if fn else ""
@@ -224,9 +227,8 @@ async def row_keyed_idempotency(ctx: Ctx):
     gate_folds = bool(gate_src) and "slot_values" in gate_src
     checks.append(expect(gate_folds,
                          "the write actuation gate folds the run's slot values into the idempotency key",
-                         "flow._replay_step still mints idempotency_key(scope, idx, intent) with no slot "
-                         "channel — every row would share ONE key at actuation (suppressed-write)",
-                         aspirational=True))
+                         "flow._replay_step mints idempotency_key(scope, idx, intent) with no slot "
+                         "channel — every row would share ONE key at actuation (suppressed-write)"))
     return checks
 
 

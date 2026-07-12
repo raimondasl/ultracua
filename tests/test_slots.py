@@ -1,8 +1,15 @@
-"""H3 typed templates, slice 1 — parameterized READ replay (key-less, local fixtures).
+"""H3 typed templates — parameterized replay (key-less, local fixtures).
 
-Records a read flow (types a value into an echoing input), marks that step as a slot, then replays
-with params={...} and asserts the SUBSTITUTED value reached the live page — plus the pre-flight
-validation, the read-only guard on write flows, the idempotency slot channel, and slot serialization.
+Slice 1 (READ): records a read flow (types a value into an echoing input), marks that step as a slot,
+then replays with params={...} and asserts the SUBSTITUTED value reached the live page — plus the
+pre-flight validation, the idempotency slot channel, and slot serialization. Slices 1b/1c: recorder
+slot auto-mining + the value-independence audit + site-metadata domain capture.
+
+Slice 2a (WRITE): the parameterized-WRITE refusal is LIFTED — a write template runs each row through
+one learned form-submit. The load-bearing safety artifact is the per-write `Idempotency-Key`: distinct
+rows mint distinct keys (no suppressed write), a retry of one row mints the same key (no double-write).
+A local `_CheckoutSite` records each POST's Idempotency-Key header + body (the double-write oracle), and
+the tests assert the mutation gate, the confirm barrier, and the slot-schema approval gate all still fire.
 """
 
 from __future__ import annotations
@@ -124,15 +131,268 @@ async def test_preflight_rejects_out_of_domain_before_browser(tmp_path, monkeypa
         httpd.server_close()
 
 
-async def test_parameterized_write_is_refused(tmp_path, monkeypatch) -> None:
-    # Read-only slice: passing params to a WRITE flow must fail loud (write templates are the next slice),
-    # and the refusal must precede any browser work (start_url is never dialed).
+class _CheckoutSite:
+    """A `method=post` checkout form (the submit is mutating by METHOD) + a confirmation page. Records
+    each write's (path, Idempotency-Key header, body) — the double-write / suppressed-write oracle: the
+    SERVER's recorded header, never what the client believes it sent. `checkout_html`/`confirm_html` are
+    swappable so a test can drift the form structure (mutation gate) or break the confirmation (barrier)."""
+
+    CHECKOUT = ("<!doctype html><html><body><h1>Checkout</h1>"
+                "<form method='post' action='/order'>"
+                "<label for='qty'>quantity</label><input id='qty' name='qty' value='1'>"
+                "<button type='submit'>Place the order</button></form></body></html>")
+    CONFIRM_OK = "<!doctype html><html><body><h1>Order placed</h1></body></html>"
+    CONFIRM_BAD = "<!doctype html><html><body><h1>Something went wrong</h1></body></html>"
+
+    def __init__(self) -> None:
+        self.writes: list[tuple[str, str, str]] = []  # (path, idempotency-key, body)
+        self.checkout_html = self.CHECKOUT
+        self.confirm_html = self.CONFIRM_OK
+
+    def serve(self):
+        site = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a) -> None:
+                pass
+
+            def _send(self, html: str) -> None:
+                b = html.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+
+            def do_GET(self) -> None:
+                path = self.path.split("?")[0]
+                self._send(site.confirm_html if path == "/confirm" else site.checkout_html)
+
+            def do_POST(self) -> None:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(n).decode("utf-8", "replace")
+                site.writes.append((self.path.split("?")[0],
+                                    self.headers.get("Idempotency-Key"), body))
+                self.send_response(303)
+                self.send_header("Location", "/confirm")
+                self.end_headers()
+
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+async def _record_write_flow(base, cache):
+    """Record a WRITE flow that fills #qty + submits, mark the fill as the `qty` slot, approve it."""
+    spec = FlowSpec(name="order", start_url=base + "/checkout", goal="place the order",
+                    mutate=MutateSpec(confirm_text_contains="Order placed"),
+                    slots={"qty": SlotSpec(type="string", pattern="[0-9]{1,3}")}, headless=True)
+
+    async def _demo(pg) -> None:
+        await pg.fill("#qty", "7")
+        await pg.locator("#qty").blur()                       # change fires on blur -> a `type` step
+        await pg.get_by_role("button", name="Place the order").click()
+        await pg.get_by_text("Order placed").wait_for()
+
+    res = await flows.record(spec, demo=_demo, headless=True, cache=cache)
+    assert res.cached and res.is_write, f"record: cached={res.cached} is_write={res.is_write} note={res.note!r}"
+    # Write-slot auto-mining is (correctly) refused, so mark the fill step as the `qty` slot explicitly.
+    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    flow = cache.get(key)
+    for s in flow.steps:
+        if s.action == "type":
+            s.slot = "qty"
+    cache.put(flow)
+    flows.approve(spec, cache=cache)
+    return spec
+
+
+async def test_parameterized_write_runs_with_row_keyed_idempotency(tmp_path, monkeypatch) -> None:
+    # H3 slice 2a: a parameterized WRITE flow RUNS (the slice-1 refusal is lifted). The substituted value
+    # reaches the POST body, and each write folds the run's row into the Idempotency-Key: DISTINCT rows ->
+    # DISTINCT keys (a backend dedupe can't silently drop rows 2..N), a retry of the SAME row -> the SAME
+    # key (a retry dedupes instead of double-writing). Exactly one write reaches the server per replay.
     monkeypatch.chdir(tmp_path)
-    spec = FlowSpec(name="w", start_url="http://127.0.0.1:9/", goal="submit it",
-                    mutate=MutateSpec(confirm_text_contains="Thanks"),
-                    slots={"amount": SlotSpec(type="string")})
-    with pytest.raises(FlowReplayError, match="WRITE flows aren't supported"):
-        await flows.replay(spec, params={"amount": "5"}, cache=FlowCache())
+    cache = FlowCache()
+    site = _CheckoutSite()
+    httpd, base = site.serve()
+    try:
+        spec = await _record_write_flow(base, cache)
+        del site.writes[:]   # drop the demo's write; the replays are the oracle
+
+        await flows.replay(spec, params={"qty": "9"}, cache=cache)
+        await flows.replay(spec, params={"qty": "8"}, cache=cache)
+        await flows.replay(spec, params={"qty": "9"}, cache=cache)   # a re-run of the SAME row
+
+        paths = [p for p, _, _ in site.writes]
+        keys = [k for _, k, _ in site.writes]
+        bodies = [b for _, _, b in site.writes]
+        # Exactly one POST per replay to /order — the mutation gate never double-fires a single-write flow.
+        assert paths == ["/order", "/order", "/order"], site.writes
+        # The SUBSTITUTED value actuated on the wire (not the frozen "7"): row 0/2 -> qty=9, row 1 -> qty=8.
+        assert "qty=9" in bodies[0] and "qty=8" in bodies[1] and "qty=9" in bodies[2], bodies
+        assert all(k and k.startswith("uca-") for k in keys), keys
+        kA, kB, kA2 = keys
+        assert kA != kB, f"distinct rows shared ONE Idempotency-Key (suppressed-write risk): {kA} vs {kB}"
+        assert kA == kA2, f"a retry of the SAME row minted a NEW key (double-write risk): {kA} vs {kA2}"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_write_schema_change_refused_until_reapproved(tmp_path, monkeypatch) -> None:
+    # H3 slice 2a stale-approval guard: widening a slot's domain AFTER approval must refuse replay until
+    # re-approval — an approval must never authorize a WIDER contract than the human reviewed (worst on a
+    # write). The refusal precedes actuation: ZERO extra writes reach the server while the approval is stale.
+    monkeypatch.chdir(tmp_path)
+    cache = FlowCache()
+    site = _CheckoutSite()
+    httpd, base = site.serve()
+    try:
+        spec = await _record_write_flow(base, cache)   # approved with qty pattern [0-9]{1,3}
+        del site.writes[:]
+        await flows.replay(spec, params={"qty": "5"}, cache=cache)   # matching approval -> runs
+        assert len(site.writes) == 1
+
+        # Widen the domain in place (pattern -> any string). The bound approval is now STALE.
+        spec.slots["qty"] = SlotSpec(type="string")
+        with pytest.raises(FlowReplayError, match="schema changed since approval"):
+            await flows.replay(spec, params={"qty": "9"}, cache=cache)
+        assert len(site.writes) == 1, "a stale-approval write actuated — the schema gate must precede the write"
+
+        # Re-approving under the new schema re-binds the hash; replay works again.
+        flows.approve(spec, cache=cache)
+        await flows.replay(spec, params={"qty": "12"}, cache=cache)
+        assert len(site.writes) == 2
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_write_confirm_barrier_fails_loud_when_unconfirmed(tmp_path, monkeypatch) -> None:
+    # H3 slice 2a must NOT weaken the confirm barrier: if the write's completion signal never appears, the
+    # flow fails LOUD (inviolable: never silently report a write as done). The write may actuate, but replay
+    # raises rather than returning "confirmed".
+    monkeypatch.chdir(tmp_path)
+    cache = FlowCache()
+    site = _CheckoutSite()
+    httpd, base = site.serve()
+    try:
+        spec = await _record_write_flow(base, cache)
+        del site.writes[:]
+        site.confirm_html = site.CONFIRM_BAD   # the confirmation page no longer says "Order placed"
+        with pytest.raises(FlowReplayError):
+            await flows.replay(spec, params={"qty": "9"}, cache=cache)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_write_mutation_gate_refuses_on_drift(tmp_path, monkeypatch) -> None:
+    # H3 slice 2a must NOT weaken the mutation gate: if the form's enclosing scope drifts (its interactables
+    # changed since record), the gate refuses to re-drive the write — ZERO writes reach the server, even with
+    # a valid param. A drifted write is a fail-loud, not a blind re-submit.
+    monkeypatch.chdir(tmp_path)
+    cache = FlowCache()
+    site = _CheckoutSite()
+    httpd, base = site.serve()
+    try:
+        spec = await _record_write_flow(base, cache)
+        del site.writes[:]
+        # Add a field to the same form -> the submit's precond_scope fingerprint changes -> drift.
+        site.checkout_html = site.CHECKOUT.replace(
+            "<button type='submit'>",
+            "<label for='coupon'>coupon</label><input id='coupon' name='coupon'><button type='submit'>")
+        with pytest.raises(FlowReplayError):
+            await flows.replay(spec, params={"qty": "9"}, cache=cache)
+        assert site.writes == [], "the mutation gate let a drifted write reach the server"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_unbound_slot_param_refused_before_write(tmp_path, monkeypatch) -> None:
+    # H3 slice 2a BINDING SAFETY (review finding): a declared+supplied slot that binds to NO recorded step
+    # must be refused LOUD before any actuation — otherwise its value folds into the write's Idempotency-Key
+    # (varying the key per value) while the FROZEN recorded literal is what's actually submitted: a silent
+    # WRONG write + an un-dedup-able DOUBLE write (two identical writes under different keys).
+    monkeypatch.chdir(tmp_path)
+    cache = FlowCache()
+    site = _CheckoutSite()
+    httpd, base = site.serve()
+    try:
+        spec = FlowSpec(name="order", start_url=base + "/checkout", goal="place the order",
+                        mutate=MutateSpec(confirm_text_contains="Order placed"),
+                        slots={"qty": SlotSpec(type="string", pattern="[0-9]{1,3}")}, headless=True)
+
+        async def _demo(pg) -> None:
+            await pg.fill("#qty", "7")
+            await pg.locator("#qty").blur()
+            await pg.get_by_role("button", name="Place the order").click()
+            await pg.get_by_text("Order placed").wait_for()
+
+        res = await flows.record(spec, demo=_demo, headless=True, cache=cache)
+        assert res.cached and res.is_write, res.note
+        # DELIBERATELY do NOT bind any step's `.slot` — "qty" is declared on the spec but bound to no step.
+        flows.approve(spec, cache=cache)
+        del site.writes[:]
+        with pytest.raises(FlowReplayError, match="aren't bound to any recorded"):
+            await flows.replay(spec, params={"qty": "9"}, cache=cache)
+        assert site.writes == [], "an unbound-slot write actuated — the binding guard must precede the write"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_parameterized_write_with_precheck_refused(tmp_path, monkeypatch) -> None:
+    # H3 slice 2a PRECHECK SAFETY (review finding): a parameterized write must not lean on the one-shot
+    # idempotency precheck — it probes a FIXED marker with no row awareness, so a generic end-state left by
+    # one row could skip a DIFFERENT row's write as "already-done" (a silently suppressed write).
+    monkeypatch.chdir(tmp_path)
+    cache = FlowCache()
+    site = _CheckoutSite()
+    httpd, base = site.serve()
+    try:
+        spec = await _record_write_flow(base, cache)   # bound qty slot, approved
+        # Attach a one-shot precheck AFTER approval (does not change the slot-schema hash — that keys on
+        # spec.slots, not mutate), so we get past the binding guard to the precheck refusal.
+        spec.mutate = MutateSpec(confirm_text_contains="Order placed", precheck_text_contains="Order placed")
+        del site.writes[:]
+        with pytest.raises(FlowReplayError, match="row-blind|precheck"):
+            await flows.replay(spec, params={"qty": "9"}, cache=cache)
+        assert site.writes == [], "a row-blind-precheck parameterized write actuated"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_idempotency_key_canonicalization_is_injective() -> None:
+    # H3 slice 2a (review finding): the row canonicalization must be INJECTIVE. A naive "|".join(f"{k}={v}")
+    # collides two DISTINCT rows whose free-text values carry the '|'/'=' delimiters — which would mint ONE
+    # key for two rows so a backend dedupe silently drops row 2 (a suppressed write). These two distinct rows
+    # must mint DISTINCT keys.
+    kA = idempotency_key("flow:pay", 2, "pay", slot_values={"memo": "a|payee=b", "payee": "c"})
+    kB = idempotency_key("flow:pay", 2, "pay", slot_values={"memo": "a", "payee": "b|payee=c"})
+    assert kA != kB, "delimiter-bearing distinct rows collided to one Idempotency-Key (suppressed-write risk)"
+    # and the shipped canonicalization guarantees still hold under the injective encoding.
+    base = idempotency_key("flow:pay", 2, "pay")
+    assert idempotency_key("flow:pay", 2, "pay", slot_values=None) == base       # frozen unchanged
+    assert idempotency_key("flow:pay", 2, "pay", slot_values={}) == base         # empty is not a new row
+    assert (idempotency_key("flow:pay", 2, "pay", slot_values={"q": 2})
+            == idempotency_key("flow:pay", 2, "pay", slot_values={"q": "2"}))    # str() coercion stable
+    assert (idempotency_key("flow:pay", 2, "pay", slot_values={"a": "1", "b": "2"})
+            == idempotency_key("flow:pay", 2, "pay", slot_values={"b": "2", "a": "1"}))  # order-independent
+
+
+async def test_relearn_with_params_refused(tmp_path, monkeypatch) -> None:
+    # H3 slice 2a (review follow-up): on_drift='relearn' + params is refused LOUD — a re-author re-builds
+    # the flow WITHOUT the params, so it would run the frozen defaults and silently return data for the
+    # wrong value (inviolable #2). The refusal precedes any browser work (the dead URL is never dialed).
+    monkeypatch.chdir(tmp_path)
+    spec = FlowSpec(name="r", start_url="http://127.0.0.1:9/", goal="read the total",
+                    slots={"q": SlotSpec(type="string")})
+    with pytest.raises(FlowReplayError, match="can't be combined with params"):
+        await flows.replay(spec, params={"q": "x"}, on_drift="relearn", cache=FlowCache())
 
 
 def test_idempotency_key_slot_channel() -> None:

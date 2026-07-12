@@ -78,8 +78,10 @@ class CachedStep(BaseModel):
     confirm: Optional[StepConfirm] = None
     # H3 typed templates: the name of the FlowSpec slot this step's value comes from. When set AND a
     # `params={slot: value}` is passed to replay, the validated `value` is substituted for `text` at the
-    # fill/type/select/press site; otherwise the frozen `text` is used (so a no-params replay is unchanged).
-    # Additive, defaulted None -> older flows deserialize unchanged (NO schema bump needed).
+    # fill/type/select site ONLY (a `press` carries a KEY like "Enter", never a slot value, so it never
+    # substitutes and must never be marked — replay's binding guard counts only type/select bindings);
+    # otherwise the frozen `text` is used (so a no-params replay is unchanged). Additive, defaulted None ->
+    # older flows deserialize unchanged (NO schema bump needed).
     slot: Optional[str] = None
     # H3 slice 1c: the field's LEGAL DOMAIN captured from site metadata at record time (inert unless the
     # step is mined into a slot): a <select>'s option values, an input's pattern/required/max_length/min/

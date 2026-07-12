@@ -171,8 +171,7 @@ Each `params` value is **validated 0-LLM before the browser opens** (type, `enum
 page. Values are substituted at the flow's slot-marked fill/select steps; `flow_key` is unchanged, so
 values never enter the flow's identity, and a **`replay()` with no `params` replays the frozen literals
 unchanged**. A `secret=True` slot resolves from its `secret_env` environment variable (never passed in
-`params`, never serialized). This slice is **read-only** — parameterizing a WRITE flow is refused (write
-templates + row-keyed idempotency are a later slice).
+`params`, never serialized). Parameterizing a **WRITE** flow works too — see *Write templates* below.
 
 **Auto-mining the slots.** Instead of declaring `FlowSpec.slots` by hand, let the recorder lift them:
 
@@ -188,6 +187,24 @@ become a closed `enum`, an input's `pattern`/`maxlength`/`required` carry over, 
 navigate URL** — which would make any other value break replay (a dead template) — recording **fails loud**
 and reports the offending slot (`RecordResult.slot_findings`) rather than shipping a template that only
 works for the demo value. Mining is opt-in and read-only, so a normal record is unaffected.
+
+**Write templates.** A `params={…}` replay of a **WRITE** flow (one whose `spec.mutate` is set) runs each
+row through the one learned form-submit, substituting the validated value at the write's fill/select steps.
+The load-bearing safety artifact is the per-write **`Idempotency-Key`** header: the write actuation gate
+folds the run's slot values into it, so **distinct rows mint distinct keys** (a backend dedupe can't
+silently drop rows 2..N — the *suppressed-write* risk) and a **retry of the same row mints the same key**
+(the backend dedupes it instead of writing twice — the *double-write* risk). A `params=None` replay keeps
+the pre-2a key byte-identical, so an existing frozen single-write flow is unchanged.
+
+Because a write is the highest-trust action, it carries extra gates. Auto-mining **never** lifts a write
+field (a silently-parameterized payee/amount is a money-moving injection surface) — mark a write's slot
+step explicitly. The approval is **bound to the slot schema**: if you widen a slot's domain after
+`approve()` (e.g. loosen a `pattern` to any string), replay **refuses until you re-approve** — a stale
+approval must never authorize a wider contract than you reviewed. And every write still passes the
+**mutation gate** (value-independent: a changed input value never shifts the form fingerprint, but page
+*drift* refuses to re-drive), the **confirm barrier** (the completion signal must appear, or the flow fails
+loud), and the 0-LLM pre-flight; a write is **never** verify-by-replayed (re-firing = double-submit). A
+volume `run_batch` driver and a per-row resume ledger are later slices (2b/2c).
 
 ## Pinned 0-LLM reads
 
