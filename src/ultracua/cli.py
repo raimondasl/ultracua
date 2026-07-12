@@ -419,6 +419,15 @@ def _flow_record(args: argparse.Namespace) -> None:
     mutate = _mutate_from_args(args) if _has_confirm_args(args) else None
     spec = FlowSpec(name=args.name, start_url=args.url, goal=args.goal,
                     storage_state=args.storage_state, mutate=mutate)
+    # H3: comma-separated WRITE field names to bind as parameters (explicit sign-off). CLI pre-checks
+    # mirror the library guards for a friendly message before a browser opens.
+    ws = set(filter(None, (getattr(args, "writable_slots", None) or "").split(","))) or None
+    if ws is not None:
+        if not _has_confirm_args(args):
+            raise SystemExit("--writable-slots binds WRITE fields and needs a --confirm-* (it declares the "
+                             "write); a read flow uses --mine-slots.")
+        if getattr(args, "mine_slots", False):
+            raise SystemExit("pass --mine-slots (read auto-lift) OR --writable-slots (write sign-off), not both.")
 
     async def _demo(page) -> None:  # the "stop signal": the human demos in the browser, then presses Enter
         loop = asyncio.get_event_loop()
@@ -430,7 +439,7 @@ def _flow_record(args: argparse.Namespace) -> None:
     # None when no LLM is configured -> placeholder intents, recording stays key-less.
     res = asyncio.run(record(spec, demo=_demo, headless=False,
                              caption=caption_for(getattr(args, "provider", None)),
-                             mine_slots=getattr(args, "mine_slots", False)))
+                             mine_slots=getattr(args, "mine_slots", False), writable_slots=ws))
     print(f"\ncaptured {len(res.steps)} step(s):")
     for s in res.steps:
         name = (s.locator.name if s.locator else "") or (s.locator.tag if s.locator else "")
@@ -629,6 +638,10 @@ def _flow_main(argv) -> None:
                      help="H3: auto-lift the typed/selected values into typed slots so the flow can be "
                           "replayed with `params={...}` (read flows only). Refuses if a value echoes into a "
                           "later step (a dead template).")
+    prc.add_argument("--writable-slots", dest="writable_slots", default=None,
+                     help="H3: comma-separated demonstrated WRITE field names to bind as parameters (the "
+                          "explicit sign-off; requires --confirm-*). Each names a field by its accessible "
+                          "name; a name matching 0 or >1 fields refuses so a money field is never mis-bound.")
     _add_mutate_args(prc)  # set any --confirm-* to DECLARE + safely capture a WRITE flow
 
     pca = sub.add_parser("canary", help="Cheap freshness probe: does each flow still START (0-LLM, "

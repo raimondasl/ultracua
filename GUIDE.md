@@ -197,8 +197,14 @@ silently drop rows 2..N — the *suppressed-write* risk) and a **retry of the sa
 the pre-2a key byte-identical, so an existing frozen single-write flow is unchanged.
 
 Because a write is the highest-trust action, it carries extra gates. Auto-mining **never** lifts a write
-field (a silently-parameterized payee/amount is a money-moving injection surface) — mark a write's slot
-step explicitly. The approval is **bound to the slot schema**: if you widen a slot's domain after
+field (a silently-parameterized payee/amount is a money-moving injection surface); instead you give **explicit
+sign-off** by NAMING the fields to parameterize — `record(spec, demo, writable_slots={"amount"})` (CLI:
+`flow record --writable-slots amount,qty`). Each name binds its **one** demonstrated field; a name matching
+zero or more-than-one field is **refused** (so a money field is never bound to the wrong step), the
+value-independence audit runs on it (a demo value echoing into a later locator → refuse), a pre-declared
+typed `SlotSpec` (enum/pattern/range) is used when present, a secret field's plaintext is scrubbed from the
+cache, and any field you *don't* name stays **frozen**. The approval is **bound to the slot schema**: if you
+widen a slot's domain after
 `approve()` (e.g. loosen a `pattern` to any string), replay **refuses until you re-approve** — a stale
 approval must never authorize a wider contract than you reviewed. And every write still passes the
 **mutation gate** (value-independent: a changed input value never shifts the form fingerprint, but page
