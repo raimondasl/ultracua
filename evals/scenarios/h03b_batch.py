@@ -1,23 +1,23 @@
 """H3 slice 2 evals — the run_batch cluster: VOLUME + per-row FAIL-LOUD + RESUME (ROADMAP H3).
 
-The horizon this module probes: a `run_batch(spec, rows)` verb that takes N pre-validated rows and
-drives one parameterized flow per row on the `run_all` supervisor pattern — the VOLUME side of typed
-templates. The batch DRIVER (slice 2b) + the per-row resume ledger (2c) are NOT built yet, so those
-run_batch surfaces come out `missing` (the target). Slice 2a (single parameterized write, row-keyed
-idempotency) IS shipped; the BUILDING BLOCKS run_batch will ride on get partial credit (they PASS):
+The `run_batch(spec, rows)` verb takes N pre-validated rows and drives ONE parameterized flow per row —
+the VOLUME side of typed templates, a ROW-granular sibling of `run_all`. Slice 2b (the driver: all-or-
+nothing pre-flight, duplicate-row refusal, max_rows approval bound, fail-loud isolation, dry-run) IS
+shipped. Only the per-row RESUME ledger (slice 2c) remains — a durable row-keyed completed-run ledger
++ a resume entry point come out `missing` (the target). The BUILDING BLOCKS run_batch rides on:
   - `flows.run_all` — the fleet supervisor (safe defaults: approved-only + read-only);
-  - `flows.validate_params` — the pure 0-LLM per-row validator (out-of-domain -> loud refusal, no I/O);
+  - `flows.validate_params` / `_preflight_row` — the pure 0-LLM per-row gate (out-of-domain -> loud, no I/O);
   - `safety.idempotency_key(..., slot_values=...)` — the row-value key channel (distinct rows ->
-    distinct keys; same row on retry -> same key; None/{} -> the base key byte-identical), now folded
-    into the write gate (slice 2a);
-  - the APPROVAL floor: with the blanket param-write refusal lifted (2a), an unapproved parameterized
-    write is still refused by the approval gate — run_batch must not silently lower that floor.
+    distinct keys; same row on retry -> same key; None/{} -> the base key byte-identical), folded
+    into the write gate (2a);
+  - the APPROVAL floor: an unapproved parameterized write is refused by the approval gate — run_batch
+    does not lower that floor.
 
 Each scenario names the DANGER a run_batch surface must guard: double-write (a re-run re-fires a
 landed row), suppressed-write (N rows share ONE dedupe key so a backend drops rows 2..N),
 silent-batch-continue (row k fails but rows k+1.. proceed into a wrong state), and the volume trust
-surface (ONE approval authorizing 500 distinct writes). As slice 2 lands these must flip
-missing -> pass; any regression on the shipped safety blocks must fail LOUD.
+surface (ONE approval authorizing 500 distinct writes). Any regression on the shipped safety blocks
+must fail LOUD; the 2c resume probes stay `missing` until that ledger ships.
 """
 
 from __future__ import annotations
@@ -26,26 +26,32 @@ import dataclasses
 import inspect
 
 from evals.core import Ctx, expect, fail, import_probe, missing, ok, probe, scenario
+from evals.fixtures import Fixture, page
+
+# A parameterized-write checkout: a REAL method=post form (mutating by STRUCTURE) with a typed qty slot.
+_CONFIRM = page("<h1>Order placed</h1>", title="confirm")
+_QTY_CHECKOUT = page('<h1>Checkout</h1>'
+                     '<form method="post" action="/order">'
+                     '<label for="qty">quantity</label><input id="qty" name="qty" value="1">'
+                     '<button type="submit">Place the order</button></form>')
 
 
-# --- H3 slice 2 step 5: the run_batch verb + the safe supervisor posture it inherits -------------
+# --- H3 slice 2b step 5: the run_batch verb + the safe supervisor posture it inherits ------------
 @scenario(
     id="h03b.batch.run_batch_verb",
-    title="run_batch verb exists (N rows on run_all) + the safe read-only/approved-only posture it inherits",
-    group="h03b", aspirational=True, tags=("batch", "writes", "slots"),
+    title="run_batch verb exists (N rows, row-granular) + the safe read-only/approved-only posture it inherits",
+    group="h03b", tags=("batch", "writes", "slots"),
 )
 async def run_batch_verb(ctx: Ctx):
     import ultracua.flows as flows_mod
     from ultracua.flows import FlowReplayError, FlowSpec, MutateSpec, SlotSpec, replay
 
     checks = []
-    # ASPIRATIONAL: the headline verb. A dedicated N-row driver is where per-row bounds + resume live;
-    # without it a volume write batch gets bolted onto run_all (one run per flow), which has no notion
-    # of a row and no per-row failure isolation. Not built -> missing.
+    # SHIPPED (2b): the headline verb. A dedicated N-row driver is where per-row bounds + resume live —
+    # run_batch is a ROW-granular sibling of run_all (one run per flow), with per-row failure isolation.
     checks.append(expect(callable(getattr(flows_mod, "run_batch", None)),
                          "flows.run_batch exists (N pre-validated rows -> one parameterized run each)",
-                         "no run_batch verb — a volume batch has no home but run_all (flow-granular)",
-                         aspirational=True))
+                         "no run_batch verb — a volume batch has no home but run_all (flow-granular)"))
     # PARTIAL CREDIT (shipped): the supervisor run_batch is planned on top of.
     checks.append(expect(callable(getattr(flows_mod, "run_all", None)),
                          "run_all supervisor exists (the fleet pattern run_batch builds on)"))
@@ -77,11 +83,93 @@ async def run_batch_verb(ctx: Ctx):
     return checks
 
 
+# --- H3 slice 2b BEHAVIORAL: run_batch drives a write batch SAFELY (server-side write oracle) ------
+@scenario(
+    id="h03b.batch.run_batch_write_safety",
+    title="run_batch write batch: dry-run actuates nothing, bad/duplicate rows refuse ZERO writes, valid rows key distinctly",
+    group="h03b", tags=("batch", "writes", "slots", "fail-loud"),
+)
+async def run_batch_write_safety(ctx: Ctx):
+    from ultracua.cache import flow_key
+    from ultracua.flows import (FlowReplayError, FlowSpec, MutateSpec, SlotSpec, approve, record,
+                                run_batch)
+
+    checks = []
+    fx = Fixture({"/checkout": _QTY_CHECKOUT, "/confirm": _CONFIRM}, post_redirect="/confirm")
+    with fx.serve() as base:
+        cache = ctx.cache()
+        spec = FlowSpec(name="batchorder", start_url=f"{base}/checkout", goal="place the order",
+                        mutate=MutateSpec(confirm_text_contains="Order placed"),
+                        slots={"qty": SlotSpec(type="string", pattern="[0-9]{1,3}")}, headless=True)
+
+        async def _demo(pw_page) -> None:
+            await pw_page.fill("#qty", "7")
+            await pw_page.locator("#qty").blur()
+            await pw_page.get_by_role("button", name="Place the order").click()
+            await pw_page.get_by_text("Order placed").wait_for()
+
+        res = await record(spec, demo=_demo, headless=True, cache=cache)
+        # Bind the qty fill step explicitly (write mining never lifts a money field).
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        for s in flow.steps:
+            if s.action == "type":
+                s.slot = "qty"
+        cache.put(flow)
+        approve(spec, cache=cache)
+        checks.append(expect(res.cached and res.is_write, "recorded a gated write flow to batch",
+                             f"cached={res.cached} is_write={res.is_write}"))
+
+        n0 = len(fx.writes)  # after the demo's one write; every refusal/dry-run below must add ZERO
+
+        # DRY-RUN over 3 rows: plan + preview each key, actuate NOTHING.
+        plan = await run_batch(spec, [{"qty": "9"}, {"qty": "8"}, {"qty": "7"}],
+                               max_rows=10, dry_run=True, cache=cache)
+        distinct = len({tuple(r.idempotency_keys) for r in plan.rows}) == 3
+        checks.append(expect(plan.status == "planned" and len(fx.writes) == n0 and distinct,
+                             "dry-run plans 3 rows with DISTINCT key previews and actuates NOTHING",
+                             f"status={plan.status} writes_added={len(fx.writes) - n0} distinct={distinct}"))
+
+        # ALL-OR-NOTHING pre-flight: one out-of-domain row refuses the WHOLE batch, zero writes.
+        bad = await run_batch(spec, [{"qty": "9"}, {"qty": "NaN"}, {"qty": "8"}], max_rows=10, cache=cache)
+        checks.append(expect(bad.status == "invalid" and len(fx.writes) == n0,
+                             "a single invalid row refuses the batch pre-flight (good rows never actuate)",
+                             f"status={bad.status} writes_added={len(fx.writes) - n0}"))
+
+        # DUPLICATE-ROW refusal: two identical rows would mint one key -> a dedupe suppresses the 2nd.
+        dup = await run_batch(spec, [{"qty": "9"}, {"qty": "9"}], max_rows=10, cache=cache)
+        checks.append(expect(dup.status == "invalid" and len(fx.writes) == n0,
+                             "duplicate rows are refused pre-flight (no silently-suppressed write), zero writes",
+                             f"status={dup.status} writes_added={len(fx.writes) - n0}"))
+
+        # APPROVAL BOUND: a write batch with no max_rows, and one that exceeds it, both refuse before acting.
+        async def _refused(rows, **kw):
+            try:
+                await run_batch(spec, rows, cache=cache, **kw)
+                return False
+            except FlowReplayError:
+                return True
+
+        no_bound = await _refused([{"qty": "9"}])                        # max_rows omitted -> refuse
+        over = await _refused([{"qty": "9"}, {"qty": "8"}], max_rows=1)   # exceeds the cap -> refuse
+        checks.append(expect(no_bound and over and len(fx.writes) == n0,
+                             "max_rows is required for a write batch AND enforced — both refuse, zero writes",
+                             f"no_bound={no_bound} over={over} writes_added={len(fx.writes) - n0}"))
+
+        # A VALID committed batch: 2 rows -> 2 writes, each carrying a DISTINCT wire Idempotency-Key.
+        good = await run_batch(spec, [{"qty": "9"}, {"qty": "8"}], max_rows=10, cache=cache)
+        wire_keys = [w.headers.get("idempotency-key") for w in fx.writes[n0:]]
+        checks.append(expect(good.status == "ok" and good.ok_count == 2 and len(wire_keys) == 2
+                             and wire_keys[0] != wire_keys[1] and all(k for k in wire_keys),
+                             "a valid batch commits each row once with DISTINCT Idempotency-Key headers",
+                             f"status={good.status} ok={good.ok_count} wire_keys={wire_keys}"))
+    return checks
+
+
 # --- H3 slice 2: per-row PRE-FLIGHT — validate every row against the slot schema before any action --
 @scenario(
     id="h03b.batch.per_row_preflight",
     title="per-row pre-flight: validate_params is the pure 0-LLM per-row validator (good row PASS, bad row LOUD)",
-    group="h03b", aspirational=True, tags=("batch", "slots", "preflight", "fail-loud"),
+    group="h03b", tags=("batch", "slots", "preflight", "fail-loud"),
 )
 async def per_row_preflight(ctx: Ctx):
     import ultracua.flows as flows_mod
@@ -117,22 +205,22 @@ async def per_row_preflight(ctx: Ctx):
                            "validate_params accepted an unknown param 'regionn'"))
     except FlowReplayError:
         checks.append(ok("an unknown param name is refused (typo / stale schema)"))
-    # ASPIRATIONAL: run_batch must call this validator PER ROW, up front — a bad row at position k
-    # should fail the batch (or that row) without ANY row's browser action. Probed as: does run_batch
-    # accept a `rows` list to pre-validate? Not built -> missing.
+    # SHIPPED (2b): run_batch calls this validator PER ROW, up front — a bad row at position k fails the
+    # batch (all-or-nothing pre-flight) without ANY row's browser action. Probed as: does run_batch accept
+    # a `rows` list to pre-validate?
     rb = getattr(flows_mod, "run_batch", None)
     has_rows = callable(rb) and "rows" in inspect.signature(rb).parameters
     checks.append(expect(has_rows,
                          "run_batch takes a rows=[...] list it pre-validates per row before acting",
-                         "no run_batch verb to feed rows through validate_params", aspirational=True))
+                         "no run_batch verb to feed rows through validate_params"))
     return checks
 
 
 # --- H3 slice 2: per-row FAIL-LOUD isolation — row k's failure is its own report, no silent continue -
 @scenario(
     id="h03b.batch.per_row_fail_loud",
-    title="per-row fail-loud: run_batch returns {status, rows:[...]} so row k's failure is isolated, not silent",
-    group="h03b", aspirational=True, tags=("batch", "fail-loud", "writes"),
+    title="per-row fail-loud: run_batch returns a per-row {status, rows:[...]} so row k's failure is isolated",
+    group="h03b", tags=("batch", "fail-loud", "writes"),
 )
 async def per_row_fail_loud(ctx: Ctx):
     import inspect as _inspect
@@ -141,27 +229,26 @@ async def per_row_fail_loud(ctx: Ctx):
     from ultracua.flows import FleetRun, run_all
 
     checks = []
-    # ASPIRATIONAL: the per-row result shape. DANGER: if row k throws, run_batch must record THAT row
-    # as a failure and never silently roll on into rows k+1.. (each a real side effect) as if nothing
-    # broke. Probe the {status, rows:[per-row outcome]} shape — call it once built, else missing.
+    # SHIPPED (2b): the per-row result shape. If a row fails, run_batch records THAT row as failed and (in
+    # stop mode) never silently rolls on into rows k+1.. as if nothing broke. run_batch returns a typed
+    # BatchRun dataclass with a `.rows` list of per-row outcomes.
     rb = getattr(flows_mod, "run_batch", None)
     if not callable(rb):
         checks.append(missing("run_batch returns a per-row result {status, rows:[...]} (row k isolated)",
                               "no run_batch verb — no per-row result surface to inspect"))
     else:
         st, out = await probe(rb, None, [])
-        shaped = st == "ok" and isinstance(out, dict) and isinstance(out.get("rows"), list)
-        checks.append(expect(shaped, "run_batch returns a per-row result {status, rows:[...]} (row k isolated)",
-                             f"got {st}: {out!r}", aspirational=True))
-    # ASPIRATIONAL: an EXPLICIT per-row isolation policy (stop-the-batch vs continue-and-report). A
-    # write batch must not default to blindly continuing past a failed row; the policy has to be a
-    # first-class, visible knob. Probe run_batch for a stop_on_error / on_row_error surface -> missing.
+        shaped = st == "ok" and dataclasses.is_dataclass(out) and isinstance(getattr(out, "rows", None), list)
+        checks.append(expect(shaped, "run_batch returns a per-row result (BatchRun.rows list, row k isolated)",
+                             f"got {st}: {out!r}"))
+    # SHIPPED (2b): an EXPLICIT per-row isolation policy (stop-the-batch vs continue-and-report). A write
+    # batch must not default to blindly continuing past a failed row; the policy is a first-class knob
+    # (`on_row_error`, default "stop"). Probe run_batch for it.
     knobs = {"stop_on_error", "on_row_error", "isolate", "continue_on_error"}
     has_policy = callable(rb) and bool(knobs & set(_inspect.signature(rb).parameters))
     checks.append(expect(has_policy,
                          "run_batch exposes an explicit per-row failure policy (stop vs continue, never silent)",
-                         "no per-row failure-policy knob (a failed row must not silently continue the batch)",
-                         aspirational=True))
+                         "no per-row failure-policy knob (a failed row must not silently continue the batch)"))
     # PARTIAL CREDIT (shipped): the per-UNIT outcome record run_batch's per-row entries would mirror —
     # FleetRun already carries (name, ok, status, error), a self-contained pass/fail per unit.
     fr_fields = {f.name for f in dataclasses.fields(FleetRun)}
@@ -283,8 +370,8 @@ async def resume_ledger(ctx: Ctx):
 # --- H3 slice 2: the VOLUME trust surface — one approval authorizing N writes needs per-row bounds ---
 @scenario(
     id="h03b.batch.approval_bounds",
-    title="volume trust surface: run_all is flow-granular; a 500-row single-flow write batch needs per-row bounds",
-    group="h03b", aspirational=True, tags=("batch", "writes", "approval"),
+    title="volume trust surface: run_batch bounds a single-flow write batch (max_rows required) + a dry-run preview",
+    group="h03b", tags=("batch", "writes", "approval"),
 )
 async def approval_bounds(ctx: Ctx):
     import ultracua.flows as flows_mod
@@ -306,22 +393,20 @@ async def approval_bounds(ctx: Ctx):
                          and sig.parameters["approved_only"].default is True,
                          "run_all keeps writes opt-in + approved-only (the floor a batch must not lower)",
                          f"defaults drifted: {[(p.name, p.default) for p in sig.parameters.values()]}"))
-    # ASPIRATIONAL: run_batch must BOUND how much one approval authorizes — a per-row cap / max_rows /
-    # explicit approved-row-count so a single stale approval can't authorize arbitrarily many writes.
-    # Not built -> missing.
+    # SHIPPED (2b): run_batch BOUNDS how much one approval authorizes — `max_rows` is REQUIRED for a write
+    # batch (refuse if absent) and refuses when exceeded, so a single stale approval + a huge file can't
+    # fan out unbounded writes.
     rb = getattr(flows_mod, "run_batch", None)
     bound_kw = {"max_rows", "approve_bound", "max_writes", "row_cap", "limit"}
     has_bound = callable(rb) and bool(bound_kw & set(inspect.signature(rb).parameters))
     checks.append(expect(has_bound,
                          "run_batch bounds how many writes one approval authorizes (per-row cap / max_rows)",
-                         "no per-row approval bound — one approval could authorize unbounded writes",
-                         aspirational=True))
-    # ASPIRATIONAL: a DRY-RUN / preview — validate + plan all N rows and actuate NONE — so an operator
-    # can review the full batch (and its row-keys) before a single write fires. Not built -> missing.
+                         "no per-row approval bound — one approval could authorize unbounded writes"))
+    # SHIPPED (2b): a DRY-RUN / preview — validate + plan all N rows and actuate NONE — so an operator can
+    # review the full batch (and its row-keys) before a single write fires.
     dry_kw = {"dry_run", "preview", "plan_only", "plan"}
     has_dry = callable(rb) and bool(dry_kw & set(inspect.signature(rb).parameters))
     checks.append(expect(has_dry,
                          "run_batch supports a dry-run/preview (plan all rows, actuate none) before approval",
-                         "no dry-run — an operator can't preview 500 rows before the first write fires",
-                         aspirational=True))
+                         "no dry-run — an operator can't preview 500 rows before the first write fires"))
     return checks
