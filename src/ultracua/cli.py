@@ -224,11 +224,21 @@ def _flow_list() -> None:
 def _flow_serve_mcp(args: argparse.Namespace) -> None:
     from .mcpserver import list_flow_tools, serve
 
-    tools = list_flow_tools()  # preview before we block on stdio (goes to stderr; stdout is the protocol)
-    print(f"ultracua MCP server: exposing {len(tools)} approved read-flow tool(s) over stdio "
-          f"(writes not exposed): {', '.join(t.name for t in tools) or '(none)'}", file=sys.stderr)
+    expose_writes = getattr(args, "expose_writes", False)
+    tools = list_flow_tools(expose_writes=expose_writes)  # preview to stderr; stdout is the MCP protocol
+    reads = [t.name for t in tools if not t.is_write]
+    writes = [t.name for t in tools if t.is_write]
+    print(f"ultracua MCP server: exposing {len(reads)} approved read-flow tool(s) over stdio: "
+          f"{', '.join(reads) or '(none)'}", file=sys.stderr)
+    if expose_writes:
+        print(f"  + {len(writes)} WRITE tool(s): {', '.join(writes) or '(none)'}", file=sys.stderr)
+        print("  CAVEAT: write tools perform real, irreversible actions, require an interactive confirm per "
+              "call, and run under YOUR (the operator's) identity — every caller rides your identity until "
+              "per-caller auth (Phase I) lands. Only expose writes to a client you trust.", file=sys.stderr)
+    else:
+        print("  (writes not exposed — pass --expose-writes to also serve approved write flows)", file=sys.stderr)
     try:
-        asyncio.run(serve())
+        asyncio.run(serve(expose_writes=expose_writes))
     except RuntimeError as exc:  # the mcp SDK isn't installed -> a clear, actionable message
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(2)
@@ -652,8 +662,12 @@ def _flow_main(argv) -> None:
                      help="max flows probed at once (default ULTRACUA_CONCURRENCY).")
 
     sub.add_parser("list", help="List saved flows.")
-    sub.add_parser("serve-mcp", help="Serve APPROVED READ flows as MCP tools over stdio (H2; needs "
-                                     "`uv sync --group mcp`). Writes are not exposed.")
+    psm = sub.add_parser("serve-mcp", help="Serve APPROVED READ flows as MCP tools over stdio (H2; needs "
+                                           "`uv sync --group mcp`). Writes are not exposed by default.")
+    psm.add_argument("--expose-writes", dest="expose_writes", action="store_true",
+                     help="Also expose APPROVED, DECLARED write flows as tools. Each call requires an "
+                          "interactive elicitation confirm (a client without elicitation is refused); a "
+                          "retry of the same args is deduped, and calls run under the OPERATOR's identity.")
 
     args = p.parse_args(argv)
     from .obs import configure_logging
