@@ -148,8 +148,15 @@ tool call either returns today's verified data or **fails loud** with a typed er
 on (`DriftError` / `ShapeDriftError` / `AuthExpiredError` / `EscalateError`, each carrying a
 machine-readable `code` + `retryable` flag). **Write flows are never exposed** (default-deny), and
 `learn` / `approve` / `record` are never tools — a calling assistant can't author or self-approve a flow.
-Every flow is zero-argument for now (one tool per learned literal flow); typed inputs and write exposure
-are later stages. The Python entrypoint is `await flows.serve_mcp()`.
+
+An approved read flow that has **typed slots** (see below) is exposed as a **parameterized** tool: its MCP
+`inputSchema` is built from the flow's slots (type / `enum` / `pattern` / range / `required`), and the
+assistant's arguments are validated against that closed domain by the *same* `validate_params` the flow uses
+— a bad argument comes back as a typed **`invalid_params`** (fix the args, don't retry) *before any browser
+opens*, never a wrong-but-plausible result. **Secret** slots stay `$env`-resolved and are never tool
+arguments (the tool description notes which env vars it reads). A flow with no slots stays a zero-argument
+tool. **Write flows are never exposed** (default-deny); write exposure is a later stage. The Python
+entrypoint is `await flows.serve_mcp()`.
 
 ### Parameterized replay — typed slots (H3, read flows)
 

@@ -267,6 +267,17 @@ class EscalateError(FlowReplayError):
     retryable = False
 
 
+class ParamValidationError(FlowReplayError):
+    """A supplied param violated the slot contract (out-of-domain / unknown name / missing-required / a
+    secret passed in params). CALLER-FIXABLE: fix the arguments, do not retry as-is. Raised pre-browser by
+    `validate_params`, so it's never confused with a replay-time drift/auth failure or an operator-config gap
+    (a secret's env being UNSET, or a stale approval, keep the base `replay_error` — those aren't the
+    caller's arguments to fix)."""
+
+    code = "invalid_params"
+    retryable = False
+
+
 def _classify_replay_failure(kind: str) -> type[FlowReplayError]:
     """Map an `_attempt_replay` failure `kind` to its taxonomy class (default: DriftError)."""
     return {
@@ -880,7 +891,7 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="
 def _validate_one(spec: FlowSpec, name: str, slot: SlotSpec, value: Any) -> Any:
     """Validate one non-secret param value against its SlotSpec (pure, 0-LLM). Raises FlowReplayError."""
     def bad(why: str):
-        return FlowReplayError(f"{spec.name!r}: param {name!r} {why} (got {value!r})")
+        return ParamValidationError(f"{spec.name!r}: param {name!r} {why} (got {value!r})")
 
     t = slot.type
     if t in ("number", "integer"):
@@ -937,18 +948,20 @@ def validate_params(spec: FlowSpec, params: Optional[dict]) -> dict:
     slots = spec.slots or {}
     unknown = [k for k in params if k not in slots]
     if unknown:
-        raise FlowReplayError(
+        raise ParamValidationError(
             f"{spec.name!r}: unknown param(s) {unknown} — the flow's slots are {sorted(slots)}")
     resolved: dict = {}
     for name, slot in slots.items():
         if slot.secret:
             if name in params:
-                raise FlowReplayError(
+                raise ParamValidationError(
                     f"{spec.name!r}: secret slot {name!r} must not be passed in params — it is read from "
                     f"${slot.secret_env}")
             val = os.environ.get(slot.secret_env or "")
             if val is None:
                 if slot.required:
+                    # An UNSET env var is an operator-config gap, NOT a caller-fixable argument -> base
+                    # replay_error (the caller can't fix it by changing arguments).
                     raise FlowReplayError(
                         f"{spec.name!r}: secret slot {name!r} needs env var {slot.secret_env!r} set")
                 continue
@@ -956,7 +969,7 @@ def validate_params(spec: FlowSpec, params: Optional[dict]) -> dict:
         elif name in params:
             resolved[name] = _validate_one(spec, name, slot, params[name])
         elif parameterizing and slot.required:
-            raise FlowReplayError(f"{spec.name!r}: missing required param {name!r}")
+            raise ParamValidationError(f"{spec.name!r}: missing required param {name!r}")
         # else (frozen replay, or a non-required slot with no value) -> the step keeps its frozen literal
     return resolved
 
