@@ -13,8 +13,8 @@ engine is the moat, and it is not yet hardened for unattended production.** Phas
 engine), A–C (the Flow API: define → learn → approve → replay → auth-refresh → health), and D
 (write flows) are shipped and merged, and the ops layer has since hardened (logging, CI,
 retry/backoff, fleet supervisor + freshness canary, a cross-process meta lock, and a standing
-locator-resilience benchmark). **367 tests**, all key-less (real headless Chromium against local
-fixtures, run in CI on Linux + Windows); version **0.52.0**. Secrets handling is a real strength:
+locator-resilience benchmark). **379 tests**, all key-less (real headless Chromium against local
+fixtures, run in CI on Linux + Windows); version **0.53.0**. Secrets handling is a real strength:
 credentials are env-sourced at runtime and **never persisted** — only the resulting `storage_state`
 cookies are saved (atomically).
 
@@ -116,7 +116,7 @@ multi-step/auth pages, and (3) operability — *not* in making replay faster (it
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
 phases have kept landing since: **#33–#35 CI (Phase J), #36 pinned 0-LLM reads (Phase H), #37 fleet
 supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 → **145** tests
-(key-less); version **0.22.0** *at the time* — it has since grown to **367 tests / 0.52.0** as the
+(key-less); version **0.22.0** *at the time* — it has since grown to **379 tests / 0.53.0** as the
 trust-hardening below landed. Original near-term list with the PR that landed each:
 
 1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`
@@ -215,9 +215,17 @@ every crash window biases toward a harmless deduped re-fire, never a false skip 
 **resume token resolves the recurring-vs-retry ambiguity** (a run-invariant key can't: same token = resume,
 fresh token = independent run — the operator's statement of intent). A torn last line is tolerated; the CLI
 `flow run-batch` auto-mints + prints a job-id so even the first run is resumable. Per-write resume *within* a
-multi-write flow stays deliberately deferred (a stateless probe can't attribute page-state to a specific
-write). **H3 slice 2 (the write side) is now complete**; the remaining H3 follow-up is a public write-slot
-**binding** surface (a write slot is bound explicitly today — mining never auto-lifts a money field).
+multi-write flow stays deliberately deferred (a stateless probe can't attribute page-state to a specific write).
+Finally, the **write-slot binding surface** shipped (0.53.0), making write templates fully usable through the
+PUBLIC API (no cache surgery): **`record(spec, demo, writable_slots={"amount"})`** (CLI `flow record
+--writable-slots amount,qty`) — the **explicit human sign-off** that turns a demonstrated write field into a
+parameter. A write field is *never* auto-lifted (mining stays read-only — a silently-parameterized payee/amount
+is a money-moving injection surface); the author NAMES the fields, each binding its ONE demonstrated
+type/select step (a name matching 0 or >1 fields **refuses** so a money field is never mis-bound). A pre-declared
+typed `SlotSpec` (enum/pattern/range) wins over mining; the value-independence audit gates write slots too (a
+demo value echoing into a later locator = a dead+dangerous template → refuse); a secret slot's plaintext is
+scrubbed from the cache; a not-named field stays frozen. **H3 typed templates are now complete end-to-end** —
+record a write once, run it for N rows via `run_batch` with row-keyed idempotency + resume.
 Still open: the **Phase-I remainder** (web UI / service daemon / registry) and
 **Phase-G** per-write one-shot resume, action breadth (file upload / multi-tab / iframes), compensation/rollback,
 and dynamic-N writes.

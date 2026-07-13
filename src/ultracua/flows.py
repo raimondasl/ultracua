@@ -25,7 +25,7 @@ import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Union
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Optional, Union
 
 from .browser import BrowserSession
 from .cache import CachedFlow, CachedStep, FlowCache, StepConfirm, flow_key
@@ -1649,13 +1649,20 @@ def _attach_step_confirms(flow, step_confirms: "list[StepConfirm]"):
     return flow.model_copy(update={"steps": steps}), ""
 
 
-def _slot_name_for(step: CachedStep, taken: set) -> str:
-    """A stable, readable slot name for a value-bearing step — from its field's accessible name, else a
-    per-action default. Sanitized to a lower_snake identifier and de-duplicated against `taken`."""
+def _slot_base(step: CachedStep) -> str:
+    """The PRE-DEDUP slot-name token for a value-bearing step — its field's accessible name sanitized to a
+    lower_snake identifier, else a per-action default. `writable_slots` matches an author-supplied name
+    against this RAW token (un-deduped): two identically-named fields collide here, so binding surfaces a
+    loud ambiguity refusal rather than a silent `amount`/`amount_2` split onto the wrong step."""
     base = (step.locator.name if step.locator is not None else "") or ""
     base = re.sub(r"[^a-z0-9]+", "_", base.strip().lower()).strip("_")
-    base = base or {"select": "choice"}.get(step.action, "value")
-    name = base
+    return base or {"select": "choice"}.get(step.action, "value")
+
+
+def _slot_name_for(step: CachedStep, taken: set) -> str:
+    """A stable, readable slot name for a value-bearing step — the `_slot_base` token, de-duplicated against
+    `taken` (the read-side auto-mining path, where every field becomes a distinct slot)."""
+    name = base = _slot_base(step)
     n = 2
     while name in taken:
         name, n = f"{base}_{n}", n + 1
@@ -1717,6 +1724,64 @@ def _slotspec_from_domain(domain: Optional[dict]) -> SlotSpec:
     return SlotSpec(**kw)
 
 
+def _bind_writable_slots(
+    flow: "CachedFlow", spec: FlowSpec, names: set,
+) -> "tuple[Optional[CachedFlow], dict, list, str]":
+    """H3 write-slot binding: bind each author-NAMED write field to its ONE demonstrated `type`/`select`
+    step — the EXPLICIT human sign-off that turns a frozen write literal into a parameter (a write field is
+    NEVER auto-lifted; mining is read-only). Returns `(marked_flow, mined_slots, findings, reason)`; a
+    non-empty `reason` means the caller must refuse to cache (fail loud) and `marked_flow` is None. Reuses
+    `_value_leaks` (the value-independence audit) + `_slotspec_from_domain` (site-metadata typing) verbatim."""
+    steps = list(flow.steps)
+    declared = spec.slots or {}
+    by_name: dict = {}                         # RAW (pre-dedup) _slot_base -> [step indices]
+    for i, s in enumerate(steps):
+        if s.action in ("type", "select"):     # a `press` carries a KEY, never a value
+            by_name.setdefault(_slot_base(s), []).append(i)
+    # PASS 1 — resolve every named field to EXACTLY ONE step; a structural miss refuses loud (no mis-bind).
+    bound: dict = {}
+    for name in sorted(names):
+        hits = by_name.get(name, [])
+        if not hits:
+            return None, {}, [], (f"writable_slots names {name!r} but no demonstrated type/select field "
+                                  f"derives that slot name (available: {sorted(by_name)}).")
+        if len(hits) > 1:
+            return None, {}, [], (f"writable_slots name {name!r} is AMBIGUOUS — {len(hits)} demonstrated "
+                                  f"fields derive it; give the fields distinct labels so a money field is "
+                                  f"never bound to the wrong step.")
+        bound[name] = hits[0]
+    # PASS 2 — value-independence audit on EVERY bound step; report ALL leaks, refuse if any (a write slot
+    # whose demo value echoes into a later locator/precond would retarget the WRONG element — dead + unsafe).
+    findings = [{"slot": n, "step": bound[n],
+                 "value_leak": _value_leaks(steps[bound[n]].text or "", steps[bound[n] + 1:])}
+                for n in sorted(bound)]
+    leaks = [f for f in findings if f["value_leak"]]
+    if leaks:
+        return None, {}, findings, (f"value-independence audit refused writable slot(s) "
+                                    f"{[f['slot'] for f in leaks]} — the demo value echoes into "
+                                    f"{leaks[0]['value_leak']}, so a non-demo value would target the WRONG "
+                                    f"element (a dead AND dangerous write template).")
+    # PASS 3 — mark + type. A pre-declared, human-reviewed `spec.slots[name]` WINS (its enum/pattern/range is
+    # the tightest contract, and what `approve()`'s slots_hash binds); else mine the type from the field's
+    # captured site domain. A secret slot's plaintext demo value is scrubbed from the cache.
+    mined: dict = {}
+    for name in sorted(bound):
+        i = bound[name]
+        step = steps[i]
+        slot = declared.get(name)
+        if slot is None:
+            slot = _slotspec_from_domain(step.slot_domain)
+            mined[name] = slot
+        if slot.secret and not slot.required:
+            return None, {}, findings, (f"writable slot {name!r} is secret but not required — a missing "
+                                        f"$env would type a blank secret onto the page; mark it required.")
+        upd = {"slot": name}
+        if slot.secret:
+            upd["text"] = ""   # never persist the demo's plaintext secret to the cache (resolved from $env)
+        steps[i] = step.model_copy(update=upd)
+    return flow.model_copy(update={"steps": steps}), mined, findings, ""
+
+
 def _mine_and_audit_slots(flow: "CachedFlow", spec: FlowSpec) -> "tuple[CachedFlow, dict, list]":
     """H3 slice 1b/1c: auto-mine each value-bearing step (`type`/`select`) into a typed slot (a `press`
     carries a KEY, never a value), running the value-independence audit as it goes and typing each slot from
@@ -1744,6 +1809,7 @@ async def record(
     spec: FlowSpec, *, demo: Callable[[Any], Awaitable[None]], headless: bool = False,
     cache: Optional[FlowCache] = None, caption: Optional[Callable[..., Any]] = None,
     provider_name: Optional[str] = None, mine_slots: bool = False,
+    writable_slots: Optional[Iterable[str]] = None,
 ) -> RecordResult:
     """Capture a human DEMONSTRATION of `spec` into a cached, replayable flow (Phase I recorder).
 
@@ -1771,6 +1837,20 @@ async def record(
     cache = cache or _default_cache()
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     declared_write = spec.mutate is not None
+    # H3 write-slot binding: `writable_slots` is the EXPLICIT sign-off to parameterize named WRITE fields.
+    # Refuse the mis-configurations BEFORE any browser opens (config errors should never dial the site):
+    # it needs a declared write (a read uses `mine_slots`), and it's mutually exclusive with `mine_slots`
+    # (read auto-lift vs write explicit sign-off — pick one).
+    ws = {str(n) for n in writable_slots} if writable_slots else None
+    if ws is not None:
+        if not declared_write:
+            return RecordResult(spec, cached=False, reproduced=False, performed_write=False, is_write=False,
+                                steps=[], note="writable_slots binds WRITE fields and needs a declared write "
+                                               "(spec.mutate / --confirm-*); a read flow uses mine_slots.")
+        if mine_slots:
+            return RecordResult(spec, cached=False, reproduced=False, performed_write=False, is_write=True,
+                                steps=[], note="pass mine_slots (read auto-lift) OR writable_slots (write "
+                                               "explicit sign-off), not both.")
     # Intent caption is OPT-IN (an explicit `caption` callable), never auto-wired here: capture itself is
     # key-less, so `record()` must not make a surprise LLM call. The `flow record` CLI builds the real
     # captioner (`caption_for`) and passes it; tests inject a fake. `provider_name` is unused here (kept for
@@ -1860,20 +1940,43 @@ async def record(
             _log.warning("flow %r: %d write steps but no per-write barriers (mutate.step_confirms) — only the "
                          "whole-flow confirm is checked; an intermediate write failure won't be caught",
                          spec.name, n_writes)
-        # Attach per-write completion barriers (in commit order) to the gated write steps. A mismatch (count
-        # or expects_intent) refuses to cache — never a half/mis-confirmed multi-write flow.
+        # UNIFIED write-cache exit. `record_demo` already `cache.put` the BASE flow, so we only re-put when
+        # we CHANGE it (attach per-write confirms and/or bind writable slots). `step_confirms` marks mutating
+        # commit steps by ordinal; `writable_slots` marks non-mutating type/select fills — disjoint index
+        # sets, so both markers coexist on the one cached flow.
+        final = flow
+        # Attach per-write completion barriers (in commit order). A mismatch refuses — never a half/mis-
+        # confirmed multi-write flow.
         if spec.mutate.step_confirms:
-            attached, reason = _attach_step_confirms(flow, spec.mutate.step_confirms)
+            attached, reason = _attach_step_confirms(final, spec.mutate.step_confirms)
             if attached is None:
                 cache.delete(key)
                 return RecordResult(spec, cached=False, reproduced=False, performed_write=wire_write,
                                     is_write=True, steps=list(flow.steps),
                                     note=f"per-write confirm checks could not be attached: {reason}.")
-            cache.put(attached)
-            return RecordResult(spec, cached=True, reproduced=False, performed_write=wire_write, is_write=True,
-                                steps=list(attached.steps), note="")
+            final = attached
+        # Bind author-NAMED write fields as parameters (the explicit sign-off). A no-match / ambiguous name /
+        # value-echo audit leak refuses to cache (fail loud).
+        slot_findings: list = []
+        if ws:
+            marked, mined, slot_findings, reason = _bind_writable_slots(final, spec, ws)
+            if marked is None:
+                cache.delete(key)
+                return RecordResult(spec, cached=False, reproduced=False, performed_write=wire_write,
+                                    is_write=True, steps=list(final.steps), slot_findings=slot_findings,
+                                    note=f"writable_slots binding refused: {reason}")
+            final = marked
+            spec.slots = {**(spec.slots or {}), **mined} or None
+            # A declared slot the author did NOT bind is WARNED (not refused) — the replay binding guard
+            # (`_preflight_row`) is the hard stop that refuses a param for an unbound slot.
+            for n in set(spec.slots or ()) - ws:
+                if not any(s.slot == n for s in final.steps):
+                    _log.warning("flow %r: slot %r is declared but not in writable_slots — a param for it is "
+                                 "refused at replay; add it to writable_slots to bind it", spec.name, n)
+        if final is not flow:
+            cache.put(final)   # re-put ONLY when we changed the base flow (else record_demo's put stands)
         return RecordResult(spec, cached=True, reproduced=False, performed_write=wire_write, is_write=True,
-                            steps=list(flow.steps), note="")
+                            steps=list(final.steps), slot_findings=slot_findings, note="")
 
     # READ flow: verify-by-replay — only trust a recorded flow that reproduces 0-LLM on a fresh session.
     # (The caller persists the spec — e.g. the `flow record` CLI calls save_spec — so record() stays
