@@ -146,8 +146,9 @@ Each approved read flow becomes a **zero-argument tool** whose call dispatches t
 `replay()` (`require_approved=True`, `on_drift="raise"`, `check_shape=True`) — never the raw engine. So a
 tool call either returns today's verified data or **fails loud** with a typed error the assistant can act
 on (`DriftError` / `ShapeDriftError` / `AuthExpiredError` / `EscalateError`, each carrying a
-machine-readable `code` + `retryable` flag). **Write flows are never exposed** (default-deny), and
-`learn` / `approve` / `record` are never tools — a calling assistant can't author or self-approve a flow.
+machine-readable `code` + `retryable` flag). **Write flows are default-deny** (opt in with
+`--expose-writes`, below), and `learn` / `approve` / `record` are never tools — a calling assistant can't
+author or self-approve a flow.
 
 An approved read flow that has **typed slots** (see below) is exposed as a **parameterized** tool: its MCP
 `inputSchema` is built from the flow's slots (type / `enum` / `pattern` / range / `required`), and the
@@ -155,8 +156,37 @@ assistant's arguments are validated against that closed domain by the *same* `va
 — a bad argument comes back as a typed **`invalid_params`** (fix the args, don't retry) *before any browser
 opens*, never a wrong-but-plausible result. **Secret** slots stay `$env`-resolved and are never tool
 arguments (the tool description notes which env vars it reads). A flow with no slots stays a zero-argument
-tool. **Write flows are never exposed** (default-deny); write exposure is a later stage. The Python
-entrypoint is `await flows.serve_mcp()`.
+tool. The Python entrypoint is `await flows.serve_mcp()`.
+
+#### Exposing write flows (opt-in, H2 stage 2)
+
+Writes are **default-deny**. Add `--expose-writes` to also serve approved **declared** write flows —
+each becomes a tool annotated **destructive** and prefixed `[WRITE — …]`:
+
+```bash
+uv run ultracua flow serve-mcp --expose-writes   # reads + approved declared writes; each write needs a confirm
+```
+
+A write is exposed **only** if it is a *declared* write (`spec.mutate` with a confirm barrier); an
+**undeclared** write (mutating steps but `spec.mutate is None`) is *never* exposed on any surface — its
+writes can't be verified, so replay would fire them unconfirmed. Every write call runs the **write rail**,
+all inside a per-flow single-flight mutex:
+
+1. **pre-flight** (0-LLM, no browser) — validate the args, then compute the write's Idempotency-Key(s);
+2. **retry-dedupe** — if this *exact* write (same args → same key) already committed on a prior call, return
+   `already_done` and **never re-fire** (a client-timeout retry can't double-write);
+3. **elicit a human confirm** — the client is asked to confirm before anything fires; **no elicitation
+   capability, a decline, or a transport error all mean refuse — a write never fires unconfirmed**;
+4. **fire** via the safety-gated `replay()`, which verifies the write *landed* via the declared confirm
+   barrier (a write is never verify-by-replayed — that would double-submit);
+5. **record** to the durable resume ledger **strictly after** the write confirms.
+
+The dedupe is **at-most-once per argument set**: an outer agent can't assert "this is a genuine repeat, not a
+retry", so a re-run of identical args is refused (`already_done`) rather than risk a double-fire — a real
+recurring write must vary a disambiguating slot. Secret slots stay `$env`-resolved and never appear in a tool
+argument, the confirm preview, or the ledger. **Caveat:** until the Phase-I auth daemon lands, a calling
+assistant rides the **operator's identity** (a confused-deputy gap) — expose writes only to a client you
+trust; the CLI prints this loudly. HTTP transport stays stdio-only for now.
 
 ### Parameterized replay — typed slots (H3, read flows)
 

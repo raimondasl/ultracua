@@ -13,8 +13,8 @@ engine is the moat, and it is not yet hardened for unattended production.** Phas
 engine), A–C (the Flow API: define → learn → approve → replay → auth-refresh → health), and D
 (write flows) are shipped and merged, and the ops layer has since hardened (logging, CI,
 retry/backoff, fleet supervisor + freshness canary, a cross-process meta lock, and a standing
-locator-resilience benchmark). **387 tests**, all key-less (real headless Chromium against local
-fixtures, run in CI on Linux + Windows); version **0.54.0**. Secrets handling is a real strength:
+locator-resilience benchmark). **402 tests**, all key-less (real headless Chromium against local
+fixtures, run in CI on Linux + Windows); version **0.55.0**. Secrets handling is a real strength:
 credentials are env-sourced at runtime and **never persisted** — only the resulting `storage_state`
 cookies are saved (atomically).
 
@@ -116,7 +116,7 @@ multi-step/auth pages, and (3) operability — *not* in making replay faster (it
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
 phases have kept landing since: **#33–#35 CI (Phase J), #36 pinned 0-LLM reads (Phase H), #37 fleet
 supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 → **145** tests
-(key-less); version **0.22.0** *at the time* — it has since grown to **387 tests / 0.54.0** as the
+(key-less); version **0.22.0** *at the time* — it has since grown to **402 tests / 0.55.0** as the
 trust-hardening below landed. Original near-term list with the PR that landed each:
 
 1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`
@@ -169,9 +169,19 @@ secrets stay `$env`-resolved and out of the schema; `additionalProperties:false`
 through `replay(spec, params=…)` so every argument is validated against the closed slot domain by the SAME
 `validate_params` the flow uses — a bad arg is a typed **`invalid_params`** (caller-fixable, non-retryable)
 raised *before any browser opens*, cleanly distinct from an operator-config gap (`replay_error`) or a
-replay-time drift/auth failure. A no-slot flow stays a zero-argument tool (byte-identical to stage 1). Stage 2
-(HTTP transport, opt-in **write** exposure behind the completed-run ledger + a per-flow mutex) is next; stage
-3's per-caller credentials stay deferred to the Phase-I auth daemon.
+replay-time drift/auth failure. A no-slot flow stays a zero-argument tool (byte-identical to stage 1).
+**H2 stage 2 (opt-in write exposure)** then shipped (0.55.0): behind a `serve-mcp --expose-writes` opt-in
+(default-deny), an approved **DECLARED** write flow (a `spec.mutate` with a confirm barrier) becomes a
+tool annotated **destructive**, and every call runs the **write rail** — entirely inside a per-flow
+single-flight `asyncio` mutex: 0-LLM pre-flight → **retry-dedupe** against the durable `RunLedger` (a repeat
+of the same args returns `already_done`, never re-fires) → **elicit a human confirm** (MCP `elicit_form`;
+no capability / decline / transport-error ⇒ refuse, never fire) → fire via the safety-gated `replay()` →
+record **strictly after** the write confirms. An **undeclared** write (mutating steps but no `spec.mutate`)
+is *never* exposed on any surface; secret slots stay `$env`-resolved and out of the confirm preview; the
+Idempotency-Key is the correctness floor, the ledger/mutex/confirm are the rails. A 3-lens adversarial
+review (double-fire/race, elicit-bypass, exposure/secret) came back clean. **HTTP transport** and stage 3's
+**per-caller credentials** stay deferred to a later slice + the Phase-I auth daemon (until then a caller
+rides the operator's identity — a documented confused-deputy cap, loud in the tool description + CLI).
 Then **H3 typed templates, slice 1** shipped (0.47.0): flows stop being input-frozen — a `SlotSpec` +
 `FlowSpec.slots` typed input contract, a 0-LLM **pre-flight validator** (`validate_params`: type / enum /
 pattern / min-max / required / env-resolved secrets — an out-of-domain value fails loud before the browser

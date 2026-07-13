@@ -1055,6 +1055,22 @@ def _plan_idempotency_keys(spec: FlowSpec, resolved: dict, cached_flow: CachedFl
             for i, s in enumerate(cached_flow.steps) if s.mutating]
 
 
+def preflight_keys(
+    spec: FlowSpec, params: Optional[dict], *, cache: FlowCache, require_approved: bool = True,
+) -> "tuple[dict, list[str]]":
+    """Pure, 0-LLM, ZERO side-effect pre-flight: resolve + validate one row's `params` through EVERY trust
+    guard (`_preflight_row`: approval, schema-hash, slot binding, precheck-refusal, …) and return
+    `(resolved, the write's Idempotency-Key(s))`. Raises `FlowReplayError` (incl. `ParamValidationError`) on
+    any violation. `keys == []` for a read. The public entrypoint the MCP write surface uses to check the
+    dedupe ledger + build a confirm preview BEFORE actuating — without reaching into the private helpers."""
+    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    meta = _load_meta(cache, key)
+    cached = cache.get(key)
+    resolved = _preflight_row(spec, params, meta=meta, cached_flow=cached,
+                              require_approved=require_approved, on_drift="raise")
+    return resolved, (_plan_idempotency_keys(spec, resolved, cached) if spec.mutate is not None else [])
+
+
 async def replay(
     spec: FlowSpec, *, require_approved: bool = False, on_drift: str = "raise",
     check_shape: bool = True, auth_refresh: bool = True, provider_name: Optional[str] = None,
