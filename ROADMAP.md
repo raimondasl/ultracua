@@ -348,13 +348,13 @@ deterministic, auditable replayer is structurally the best-placed architecture t
 Several candidates independently collide with the same six codebase facts — each is a small,
 high-leverage fix that should land *before* (or as the first slice of) the features that need it.
 
-**Status (post-#78 / 0.44.3):** #2 and #3 were genuine standalone fixes and **shipped** in 0.44.3.
-The other four are *latent* constraints with no consumer to test them against yet — correct for
-today's behavior, wrong only once a specific feature exists — so each is **sequenced as the first
-slice of its feature** rather than built speculatively (this project's discipline: no trust-critical
-machinery without a real consumer to verify it).
+**Status (as of 0.55.0):** #2 and #3 shipped in 0.44.3; **#1 and #6 shipped with H3** (row-keyed
+idempotency; env-resolved secret slots). **#4 (WebMCP) and #5 (iframe/shadow) remain** — still latent,
+each sequenced as the first slice of its feature (H13 / H8 stage 4) rather than built speculatively
+(this project's discipline: no trust-critical machinery without a real consumer to verify it).
 
-1. ⏳ **Sequenced with H3** — **`safety.py:idempotency_key` basis is run-invariant**:
+1. ✅ **Done — H3 (0.50.0, PR #87)** — **`safety.py:idempotency_key` basis is now slot/row-aware**:
+   was run-invariant —
    `sha256(scope|step_index|intent)` mints the *same* dedupe key across runs. *Correct today* (a
    retry of one input-frozen write dedupes), but parameterized slots, write-loops, and signed
    mandates each need a redesigned basis (slot/row/mandate-aware, canonicalization test-pinned): 500
@@ -380,10 +380,10 @@ machinery without a real consumer to verify it).
    locators, recorder, mutation-gate scope hashing — zero `frame_locator`/shadow handling in `src/`).
    iframe/shadow work *is* the H8 stage-4 whole-stack change and forces **one deliberate
    `SCHEMA_VERSION` bump** (= fleet-wide relearn); batch every fingerprint-basis change into that bump.
-6. ⏳ **Sequenced with secret-slots (H3/H12)** — **`CachedStep.text` persists typed values in
-   plaintext**: a real fix needs replay-time secret resolution (env binding), which *is* the
-   secret-slots feature — you can't redact the value replay depends on without it. A recurring
-   dependency for evidence packs, telemetry export, and narration once it lands.
+6. ✅ **Done — H3 secret slots (0.47.0+)** — **`CachedStep.text` no longer needs to persist a secret**:
+   secret slots resolve from `$env` at replay time (env binding) and are never serialized — the
+   secret-slots feature is exactly the fix. Evidence packs, telemetry export, and narration inherit it.
+   *(Still owed for non-secret typed values: capture-time masking when a value is later reclassified.)*
 
 ## Tier: achievable with focused effort
 
@@ -428,6 +428,12 @@ write attribution as ready evidence streams.*
 
 ### H2. Flows-as-tools everywhere (MCP server first)
 
+> ✅ **Shipped — stage 1 (0.46.0), stage 3 (0.54.0), stage 2 (0.55.0).** The stdio MCP server, the
+> typed error taxonomy, parameterized (typed-slot) tool inputs, and opt-in WRITE exposure behind an
+> elicitation-confirm + per-flow single-flight mutex + retry-dedupe ledger all landed. **Still deferred:**
+> streamable HTTP transport and per-caller credentials (the latter waits on the Phase-I auth daemon). The
+> description below is retained as the original design record.
+
 **What.** Staged. Stage 1: an MCP server (official Python SDK, stdio) that registers every
 **approved READ flow** as a typed tool (output schema from `FlowSpec.extract_schema`/`FlowMeta.shape`)
 dispatching to `flows.replay(require_approved=True, on_drift="raise", check_shape=True)` — never the
@@ -462,6 +468,12 @@ whole-verified-flows-as-tools is the empty quadrant. *Certainly-achievable core:
 read-flow server.*
 
 ### H3. Typed flow templates (auto-parameterization)
+
+> ✅ **Shipped (0.47.0 → 0.53.0).** Typed slots + 0-LLM pre-flight validation + parameterized
+> `replay(spec, params=…)`, the value-independence audit, recorder slot auto-mining + site-metadata
+> domain capture, `writable_slots` explicit write-binding, row-keyed idempotency, and the `run_batch`
+> volume verb + per-row resume ledger all landed. This candidate is DONE (it was the #1 gap); the
+> description below is retained as the original design record.
 
 **What.** Slots for recorded/learned flows: the recorder mines candidate variables from
 fill/select/press steps on native controls and captures their **legal domains** from live site
@@ -1033,10 +1045,12 @@ scarcest training commodity — ultracua's recorder captures them natively.
 
 ## Suggested sequencing (horizons)
 
-**Wave 0 — the six cross-cutting prerequisites** (small, deliberate, unblock everything).
-**Wave 1 — leverage:** H3 typed templates (the #1 gap) + H2 stage-1 MCP server (the widest
-distribution surface) + H9 layer-1 value contracts + H8 stages 1–2 (files + volatile-ID blocklist —
-the cheap certain wins). **Wave 2 — the trust wedge:** H5 dry-run, H1 attested replay, H6
+**Wave 0 — the six cross-cutting prerequisites** (small, deliberate, unblock everything). *Status:
+#1/#2/#3/#6 done; #4/#5 remain.*
+**Wave 1 — leverage:** ✅ **H3 typed templates** (the #1 gap) and ✅ **H2 MCP server** (all three
+stages — the widest distribution surface) both **SHIPPED** (0.46 → 0.55). Remaining Wave-1: **H9 layer-1
+value contracts** (⏳ *in progress — 0.56* — the next fail-loud gap) + **H8 stages 1–2** (files +
+volatile-ID blocklist — the cheap certain wins). **Wave 2 — the trust wedge:** H5 dry-run, H1 attested replay, H6
 drift-repair tier 1, H10 Drift-Watch — these four compound: the same evidence/verification
 machinery sells enterprise trust. **Wave 3 — reach:** H4 in-profile recorder, H7 control flow, H12
 talk-through, H11 bot-auth identity. **Frontier (spike-gated, parallel):** H13 lanes (markdown
