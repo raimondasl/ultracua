@@ -275,6 +275,68 @@ def _flow_status(args: argparse.Namespace) -> None:
             print(f"    last error: {h.last_error}")
 
 
+def _flow_release(args: argparse.Namespace) -> None:
+    from .flows import health, load_spec, release
+
+    spec = load_spec(args.name)
+    h = health(spec)
+    if h.status != "quarantined":
+        print(f"{spec.name!r} is not quarantined (status: {h.status}) — nothing to release")
+        return
+    release(spec)
+    print(f"released {spec.name!r} — the next run RE-ARMS the same contracts (it re-quarantines if the value "
+          f"is still wrong). Fix the upstream value, or relax the contract via `flow contracts --set`.")
+
+
+def _coerce_contract_value(v: str):
+    """Coerce a CLI string to the JSON scalar a contract attr expects (bool / int / float / str)."""
+    low = v.strip().lower()
+    if low in ("true", "false"):
+        return low == "true"
+    try:
+        return int(v)
+    except ValueError:
+        pass
+    try:
+        return float(v)
+    except ValueError:
+        return v
+
+
+def _flow_contracts(args: argparse.Namespace) -> None:
+    from .contracts import CONTRACT_ATTRS
+    from .flows import contracts_for, load_spec, save_spec
+
+    spec = load_spec(args.name)
+    if args.set or args.disable or args.enable:
+        overlay = {k: dict(v) for k, v in (spec.contracts or {}).items()}
+        for item in args.set or []:
+            path_attr, sep, value = item.partition("=")
+            if not sep:
+                raise SystemExit(f"--set expects PATH:ATTR=VALUE, got {item!r}")
+            path, _, attr = path_attr.rpartition(":")
+            if attr not in CONTRACT_ATTRS:
+                raise SystemExit(f"unknown contract attr {attr!r}; allowed: {sorted(CONTRACT_ATTRS)}")
+            overlay.setdefault(path, {})[attr] = _coerce_contract_value(value)
+        for path in args.disable or []:
+            overlay.setdefault(path, {})["enabled"] = False
+        for path in args.enable or []:
+            overlay.setdefault(path, {})["enabled"] = True
+        spec.contracts = overlay
+        save_spec(spec)
+        print(f"updated the value-contract overlay on {spec.name!r} — RE-APPROVE before replay "
+              f"(`flow approve --name {spec.name}`): a changed contract must be re-blessed.")
+    eff, quar = contracts_for(spec)
+    if quar:
+        print(f"QUARANTINED: {quar.get('reason')}   (`flow release --name {spec.name}` to clear)")
+    if not eff:
+        print("(no value contracts yet — re-learn to auto-seed them, or add one with --set)")
+        return
+    print(f"value contracts for {spec.name!r} (field: predicates):")
+    for path in sorted(eff):
+        print(f"  {path or '<root>'}: {eff[path]}")
+
+
 def _post_alert(url: str, failed: list) -> None:
     import urllib.request
 
@@ -599,6 +661,17 @@ def _flow_main(argv) -> None:
     pst.add_argument("--stale-after", dest="stale_after", type=float,
                      help="hours since last success after which a healthy flow counts as 'stale'.")
 
+    prl = sub.add_parser("release", help="Clear an H9 value-contract QUARANTINE after investigating the value.")
+    prl.add_argument("--name", required=True)
+
+    pct = sub.add_parser("contracts", help="View / edit a flow's H9 VALUE contracts (fail-loud value guards).")
+    pct.add_argument("--name", required=True)
+    pct.add_argument("--set", action="append", metavar="PATH:ATTR=VALUE",
+                     help="tighten/relax one predicate, e.g. price:positive=false or :min_count=250 (repeatable).")
+    pct.add_argument("--disable", action="append", metavar="PATH",
+                     help="disable the contract on a field, e.g. price (root = empty PATH) (repeatable).")
+    pct.add_argument("--enable", action="append", metavar="PATH", help="re-enable a disabled field (repeatable).")
+
     pra = sub.add_parser("run-all", help="Replay every saved flow (read + approved by default); "
                                          "report + alert; exits non-zero if any fails. Point cron at this.")
     pra.add_argument("--provider", **prov)
@@ -688,6 +761,10 @@ def _flow_main(argv) -> None:
         _flow_inspect(args)
     elif args.cmd == "status":
         _flow_status(args)
+    elif args.cmd == "release":
+        _flow_release(args)
+    elif args.cmd == "contracts":
+        _flow_contracts(args)
     elif args.cmd == "run-all":
         _flow_run_all(args)
     elif args.cmd == "run-batch":
