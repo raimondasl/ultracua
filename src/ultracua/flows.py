@@ -31,7 +31,11 @@ from .browser import BrowserSession
 from .cache import CachedFlow, CachedStep, FlowCache, StepConfirm, flow_key
 from .conditions import condition_present
 from .config import settings
-from .contracts import CONTRACT_ATTRS, check_contracts, effective_contracts, seed_contracts
+from .contracts import (
+    CONTRACT_ATTRS, DELTA_WARMUP, accrue_ring, check_contracts, check_magnitude, effective_contracts,
+    magnitude_fields, seed_contracts,
+)
+from .history import history_path, load_history, save_history
 from .extract import extract
 from .flow import run_cached
 from .ledger import LedgerError, RunLedger
@@ -809,6 +813,9 @@ async def _learn_once(
             approved = meta.approved
 
         _update_meta(cache, key, _apply)
+        # H9 layer 2: a re-authored extraction restarts the magnitude baseline (learn-bound like `shape` +
+        # the seed) — a fresh window re-warms rather than comparing a new-normal value to the old baseline.
+        _reset_history(cache, key)
     else:
         approved = _load_meta(cache, key).approved
     return LearnResult(
@@ -863,23 +870,33 @@ def unapprove(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> None:
     _update_meta(cache, key, lambda m: setattr(m, "approved", False))
 
 
-def release(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> None:
+def release(spec: FlowSpec, *, cache: Optional[FlowCache] = None, rebaseline: bool = False) -> None:
     """Clear a flow's H9 quarantine after a human has investigated the wrong value. Re-arms under the SAME
     contracts — if the value is still wrong the next run re-quarantines (no silent habituation; a sticky
     release means fixing the upstream value, relaxing the contract via `spec.contracts` + re-approve, or
-    disabling that field). Resets the failure streak so a clean next run reports healthy."""
+    disabling that field). Resets the failure streak so a clean next run reports healthy.
+
+    `rebaseline=True` (H9 layer 2): ALSO clears the rolling magnitude baseline, so a scalar-number field
+    re-warms at the NEW normal instead of re-quarantining against the old one. Use ONLY for a genuine,
+    permanent level shift (a price that really did move) — it does NOT inject the suspect value (which would
+    leave a bimodal baseline and habituate); the field re-warms (advisory) from subsequent clean runs."""
     cache = cache or _default_cache()
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     meta = _load_meta(cache, key)
     if meta.quarantine is None:
+        if rebaseline:
+            _reset_history(cache, key)   # allow a pre-emptive re-baseline even when not currently quarantined
         return
-    _log.info("flow %r: releasing quarantine (was: %s)", spec.name, meta.quarantine.get("reason"))
+    _log.info("flow %r: releasing quarantine (was: %s)%s", spec.name, meta.quarantine.get("reason"),
+              " + rebaseline" if rebaseline else "")
 
     def _apply(m: FlowMeta) -> None:
         m.quarantine = None
         m.consecutive_failures = 0
 
     _update_meta(cache, key, _apply)
+    if rebaseline:
+        _reset_history(cache, key)
 
 
 def _quarantine(cache: FlowCache, key: str, *, reason: str) -> None:
@@ -896,6 +913,51 @@ def contracts_for(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> "tupl
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     meta = _load_meta(cache, key)
     return effective_contracts(spec.contracts, meta.contracts), meta.quarantine
+
+
+# --- H9 layer 2: rolling numeric history + the magnitude gate ---------------------------------
+def _update_history(cache: FlowCache, key: str, mutate: Callable[[dict], None]) -> None:
+    """Locked read-modify-write of the magnitude history sidecar (reuses `_meta_lock`; the append and any
+    meta write are strictly sequential, never nested, so the non-reentrant lock is never re-acquired held)."""
+    with _meta_lock(cache, key):
+        doc = load_history(cache, key)
+        mutate(doc)
+        save_history(cache, key, doc)
+
+
+def _reset_history(cache: FlowCache, key: str) -> None:
+    """Drop a flow's magnitude baseline (learn/relearn re-seed, or `release(rebaseline=True)`), under the lock."""
+    with _meta_lock(cache, key):
+        history_path(cache, key).unlink(missing_ok=True)
+
+
+def _accrue_all(doc: dict, mfields: dict) -> None:
+    fields = doc.setdefault("fields", {})
+    for path, value in mfields.items():
+        fields[path] = accrue_ring(fields.get(path, []), value)
+
+
+def _magnitude_gate(cache: FlowCache, key: str, eff: dict, data: Any, spec_name: str) -> Optional[str]:
+    """H9 layer 2 (pure replay only): for each in-scope scalar-number field, check the new value against its
+    rolling baseline. An ENFORCED violation (baseline warmed AND not advisory) returns a value-free reason (the
+    caller quarantines) and does NOT accrue — so a wrong value never poisons the baseline. A clean OR still-
+    advisory run accrues every field. Returns the first enforced-violation reason, else None."""
+    mfields = magnitude_fields(eff, data)
+    if not mfields:
+        return None
+    rings = load_history(cache, key).get("fields", {})
+    for path, value in mfields.items():
+        c = eff.get(path, {})
+        reason = check_magnitude(c, value, rings.get(path, []))
+        if reason is None:
+            continue
+        n = len(rings.get(path, []))
+        warmup = DELTA_WARMUP if c.get("warmup_runs") is None else c["warmup_runs"]
+        if n >= warmup and not c.get("delta_advisory"):
+            return f"field {path!r}: {reason}" if path else reason   # enforced -> quarantine; do NOT accrue
+        _log.info("flow %r: magnitude ADVISORY (%s, n=%d) — %s", spec_name, path or "<root>", n, reason)
+    _update_history(cache, key, lambda doc: _accrue_all(doc, mfields))
+    return None
 
 
 def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Optional[float] = None) -> FlowHealth:
@@ -961,14 +1023,22 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="
     data = out.get("data")
     if check_shape and meta.shape is not None and not _shape_matches(meta.shape, _shape_of(data)):
         return False, None, f"data shape changed vs the learned flow (expected {meta.shape})", "shape"
-    # H9 layer 1: same-shape VALUE check (deterministic, 0-LLM). READ flows only (a write flow's meta.contracts
-    # stays None), gated on the same `check_shape` trust switch as the shape gate. A violation is a QUARANTINE
-    # kind — replay() persists it and fails loud; the reason is value-free (safe to log/persist).
-    if check_shape and spec.mutate is None and (meta.contracts or spec.contracts):
+    # H9 VALUE checks (deterministic, 0-LLM). READ flows only (a write flow's meta.contracts stays None),
+    # gated on the same `check_shape` trust switch as the shape gate. Both layers quarantine identically.
+    if check_shape and spec.mutate is None:
         eff = effective_contracts(spec.contracts, meta.contracts)
-        reason = check_contracts(eff, data, truncated=bool(out.get("truncated")))
-        if reason is not None:
-            return False, None, reason, "quarantine"
+        # Layer 1: same-shape VALUE check (type / null / sign / format / count-floor / null-rate).
+        if eff:
+            reason = check_contracts(eff, data, truncated=bool(out.get("truncated")))
+            if reason is not None:
+                return False, None, reason, "quarantine"
+        # Layer 2: deterministic MAGNITUDE defense (scalar numbers vs a rolling baseline) — catches a wrong-but-
+        # same-sign move like 129→40. PURE replay ONLY: a mode=="repair" suffix-replan intermediate never
+        # accrues or fires (a re-authored baseline is reset on learn/relearn). Runs after layer 1.
+        if mode == "replay":
+            reason = _magnitude_gate(cache, key, eff, data, spec.name)
+            if reason is not None:
+                return False, None, reason, "quarantine"
     return True, data, "", ""
 
 

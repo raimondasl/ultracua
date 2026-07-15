@@ -361,9 +361,21 @@ uv run ultracua flow release  --name daily-orders                  # clear a qua
 ```
 
 The Python API mirrors it: a violating `replay()` raises `FlowQuarantineError`; `release_flow(spec)`
-clears it; `flows.contracts_for(spec)` returns the effective contracts + any quarantine. **Known limit:**
-a wrong-but-same-sign, above-floor scalar (`129 → 40`) needs a human `min`/`max` today — an automatic
-rolling-median delta + a sampled-LLM judge are the next slice.
+clears it; `flows.contracts_for(spec)` returns the effective contracts + any quarantine.
+
+**Magnitude defense (layer 2).** Layer 1 catches a value that flips sign, goes null, or a list that
+collapses — but not a wrong-but-*same-sign*, above-floor scalar number (a price that silently went
+`129 → 40`). So each scalar-number field also accrues a bounded, **numbers-only** rolling history over
+clean replays, and — once warmed (≥5 samples) — a value too far from that baseline quarantines the same
+way. The band is **self-calibrating and robust**: `tolerance = max(delta_k·1.4826·MAD, max_delta_frac·|median|)`
+— the MAD term widens the band for a genuinely volatile field (so it never cries wolf), and the fractional
+floor (default 25%) catches a large move on a near-constant one. It stays **0-LLM**; reasons are value-free
+(only percentages / ratios / `n`). The first ~5 replays are **advisory** (they build the baseline, never
+quarantine). For a real, permanent level shift, `flow release --rebaseline` clears the baseline so the field
+re-warms at the new normal; tune per field with `flow contracts --set price:max_delta_frac=0.5` (or
+`delta_advisory=true` to log-only, `delta_enabled=false` to turn magnitude off for that field). **Known
+limit:** a value that *slowly creeps* within-band each run isn't caught — a rolling baseline can't see its
+own drift; the async sampled-LLM judge (a later slice) is the answer.
 
 ## Auth refresh
 

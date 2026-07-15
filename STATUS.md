@@ -13,8 +13,8 @@ engine is the moat, and it is not yet hardened for unattended production.** Phas
 engine), A–C (the Flow API: define → learn → approve → replay → auth-refresh → health), and D
 (write flows) are shipped and merged, and the ops layer has since hardened (logging, CI,
 retry/backoff, fleet supervisor + freshness canary, a cross-process meta lock, and a standing
-locator-resilience benchmark). **422 tests**, all key-less (real headless Chromium against local
-fixtures, run in CI on Linux + Windows); version **0.56.0**. Secrets handling is a real strength:
+locator-resilience benchmark). **442 tests**, all key-less (real headless Chromium against local
+fixtures, run in CI on Linux + Windows); version **0.57.0**. Secrets handling is a real strength:
 credentials are env-sourced at runtime and **never persisted** — only the resulting `storage_state`
 cookies are saved (atomically).
 
@@ -116,7 +116,7 @@ multi-step/auth pages, and (3) operability — *not* in making replay faster (it
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
 phases have kept landing since: **#33–#35 CI (Phase J), #36 pinned 0-LLM reads (Phase H), #37 fleet
 supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 → **145** tests
-(key-less); version **0.22.0** *at the time* — it has since grown to **422 tests / 0.56.0** as the
+(key-less); version **0.22.0** *at the time* — it has since grown to **442 tests / 0.57.0** as the
 trust-hardening below landed. Original near-term list with the PR that landed each:
 
 1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`
@@ -193,8 +193,17 @@ refuses 0-LLM at pre-flight until a human `flow release`s it. Reasons are **valu
 type names / counts / bounds — no raw values at rest); seeding is single-sample-safe + truncation-aware; the
 human overlay `FlowSpec.contracts` is approval-hashed (a tighten *or* loosen re-blesses); the write rail is
 untouched (contracts are read-side only). A 3-lens adversarial review (silent-wrong-value escape, quarantine
-bypass, truncation/secret/re-approval) gated it. The **numeric magnitude** case (129→40, same sign, above
-floor) needs a human `min`/`max` now — layer-2's rolling-median delta + the sampled-LLM judge are the next slice.
+bypass, truncation/secret/re-approval) gated it. **H9 layer 2 (deterministic magnitude defense)** then shipped
+(0.57.0), closing the last gap layer 1 left open — a wrong-but-*same-sign*, above-floor scalar number (a price
+129→40). Every scalar-number field auto-accrues a bounded, numbers-only rolling **history** sidecar over clean
+replays; once warmed (≥5 samples) a value beyond a robust self-calibrating band — `max(delta_k·1.4826·MAD,
+0.25·|median|)` — quarantines identically (still 0-LLM, still value-free reasons). The **MAD** term widens the
+band for a genuinely volatile field (no habituation); the fractional floor catches the near-constant gap case;
+the first ~5 replays are advisory (never false-quarantine); `flow release --rebaseline` re-warms at a real new
+normal. A 3-lens review caught a `ZeroDivisionError` on a zero-median (sign-oscillating) field — fixed +
+re-verified. **Slow drift** (a value creeping within-band each run) is the honest remaining limit — a rolling
+baseline can't see it; the async **sampled-LLM judge** (the roadmap's other layer-2 half) is the answer, and a
+separate future slice.
 Then **H3 typed templates, slice 1** shipped (0.47.0): flows stop being input-frozen — a `SlotSpec` +
 `FlowSpec.slots` typed input contract, a 0-LLM **pre-flight validator** (`validate_params`: type / enum /
 pattern / min-max / required / env-resolved secrets — an out-of-domain value fails loud before the browser

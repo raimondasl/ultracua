@@ -701,6 +701,13 @@ roadmapped action-breadth verbs from a list of primitives to verified contracts.
 
 ### H9. Semantic-wrongness defense (value contracts + judge-sampled canary)
 
+> ✅ **Layer 1 shipped (0.56.0)** — deterministic per-field value contracts (type / non-null / sign /
+> format / count-floor / null-rate) checked after the shape gate, persisted quarantine, `flow release`.
+> ✅ **Layer-2 *deterministic magnitude* half shipped (0.57.0)** — a bounded rolling numeric history per
+> scalar field + a robust self-calibrating band (`max(delta_k·1.4826·MAD, max_delta_frac·|median|)`) that
+> catches a wrong-but-same-sign move (129→40), warm-up-advisory, `flow release --rebaseline`. **Still
+> deferred:** the async sampled-**LLM judge** half below (the answer to slow drift), a separate future slice.
+
 **What.** Two layers against plausible-but-wrong extracted data. **Layer 1 (hot path, key-less,
 deterministic)**: per-field contracts (type, format regex, numeric range, null-rate ceiling,
 list-count lower bounds, max-delta vs rolling median) checked right after the existing shape gate;

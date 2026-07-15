@@ -280,12 +280,18 @@ def _flow_release(args: argparse.Namespace) -> None:
 
     spec = load_spec(args.name)
     h = health(spec)
-    if h.status != "quarantined":
+    rebaseline = getattr(args, "rebaseline", False)
+    if h.status != "quarantined" and not rebaseline:
         print(f"{spec.name!r} is not quarantined (status: {h.status}) — nothing to release")
         return
-    release(spec)
-    print(f"released {spec.name!r} — the next run RE-ARMS the same contracts (it re-quarantines if the value "
-          f"is still wrong). Fix the upstream value, or relax the contract via `flow contracts --set`.")
+    release(spec, rebaseline=rebaseline)
+    if rebaseline:
+        print(f"released {spec.name!r} + cleared the magnitude baseline — the field RE-WARMS at the new normal "
+              f"(advisory until it re-accrues). Use this only for a genuine, permanent level shift.")
+    else:
+        print(f"released {spec.name!r} — the next run RE-ARMS the same contracts (it re-quarantines if the value "
+              f"is still wrong). Fix the upstream value, relax via `flow contracts --set`, or, for a real "
+              f"permanent level shift, `flow release --rebaseline`.")
 
 
 def _coerce_contract_value(v: str):
@@ -663,6 +669,9 @@ def _flow_main(argv) -> None:
 
     prl = sub.add_parser("release", help="Clear an H9 value-contract QUARANTINE after investigating the value.")
     prl.add_argument("--name", required=True)
+    prl.add_argument("--rebaseline", action="store_true",
+                     help="also clear the magnitude baseline so the field re-warms at the new normal "
+                          "(use ONLY for a genuine, permanent level shift).")
 
     pct = sub.add_parser("contracts", help="View / edit a flow's H9 VALUE contracts (fail-loud value guards).")
     pct.add_argument("--name", required=True)
