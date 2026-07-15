@@ -756,7 +756,10 @@ def test_load_meta_ignores_unknown_future_fields(tmp_path) -> None:
     meta = _load_meta(cache, key)
     assert meta.approved is True                 # preserved, NOT wiped to default False
     assert meta.runs == 9 and meta.successes == 8
+    # NOTE: the real H9 field is `quarantine` (a record), deliberately NOT `quarantined` — so this fake
+    # future key `"quarantined"` stays an UNKNOWN field that must be dropped (it never aliases the real one).
     assert not hasattr(meta, "quarantined")      # the unknown field is dropped, not carried
+    assert meta.quarantine is None               # the real field defaults clean on a version-skew load
 
 
 # --- Phase D: write (MUTATE) flows ------------------------------------------------------------

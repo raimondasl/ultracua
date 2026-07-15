@@ -333,6 +333,38 @@ in the data's *shape*, since the steps still replay in that case). Write flows r
 entirely — re-driving a write under uncertainty could double-submit, so they fail loud for a human to
 re-learn and re-approve.
 
+### Value contracts — fail loud on wrong-but-plausible data (H9)
+
+The shape check catches a field *vanishing* or a scalar *becoming a list* — but not a **same-shape,
+wrong value**: a price that silently went `129 → 0`, a date field that became `null`, a list of 500 rows
+that quietly collapsed to 3. For an unattended pipeline feeding an ERP or a pricing sheet, wrong data is
+worse than no data. So a **value contract** is now auto-seeded from the learned extraction and checked on
+every replay, right after the shape gate — **pure Python, zero LLM on the hot path**:
+
+- Seeded conservatively (single-sample-safe): each field's **type**, **non-null** presence, **positive
+  sign** for a learned-positive number, a **high-confidence format** (ISO date / email / all-digits), a
+  list **count-floor** (a >50% collapse trips), and a null-rate ceiling. Numeric `min`/`max` range is
+  **not** auto-seeded (meaningless from one sample) — set it yourself when you want it.
+- A violation raises a typed **`FlowQuarantineError`** and **quarantines** the flow: every future run —
+  single, `run_batch`, MCP tool call, or `run-all` — **refuses 0-LLM at pre-flight** until a human
+  investigates and clears it. `flow status` shows `quarantined` + the reason; **`flow release --name …`**
+  clears it (and re-arms the same contract, so a still-wrong value re-quarantines — no silent habituation).
+- Reasons are **value-free** (only types / counts / bounds — never the raw value, which could be a secret).
+- Tune contracts with **`flow contracts --name …`** (view) / `--set price:min=1` / `--disable <field>`;
+  a change re-triggers approval (a loosened guarantee must be re-blessed). Contracts are **read-side only**
+  — the write rail is untouched.
+
+```bash
+uv run ultracua flow contracts --name daily-orders                 # view the seeded contracts
+uv run ultracua flow contracts --name daily-orders --set :min_count=100   # tighten the row-count floor
+uv run ultracua flow release  --name daily-orders                  # clear a quarantine after investigating
+```
+
+The Python API mirrors it: a violating `replay()` raises `FlowQuarantineError`; `release_flow(spec)`
+clears it; `flows.contracts_for(spec)` returns the effective contracts + any quarantine. **Known limit:**
+a wrong-but-same-sign, above-floor scalar (`129 → 40`) needs a human `min`/`max` today — an automatic
+rolling-median delta + a sampled-LLM judge are the next slice.
+
 ## Auth refresh
 
 For cookie sessions that expire, add `login=LoginSpec(url=…, username_env=…, password_env=…)` —

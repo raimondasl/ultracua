@@ -31,6 +31,7 @@ from .browser import BrowserSession
 from .cache import CachedFlow, CachedStep, FlowCache, StepConfirm, flow_key
 from .conditions import condition_present
 from .config import settings
+from .contracts import CONTRACT_ATTRS, check_contracts, effective_contracts, seed_contracts
 from .extract import extract
 from .flow import run_cached
 from .ledger import LedgerError, RunLedger
@@ -161,6 +162,7 @@ class FlowSpec:
     login: Optional[Union[LoginSpec, LoginCallable]] = None  # how to (re)authenticate on expiry
     mutate: Optional[MutateSpec] = None    # set -> this is a WRITE flow (Phase D)
     slots: Optional[dict] = None           # H3: {slot_name: SlotSpec} — the typed input contract
+    contracts: Optional[dict] = None       # H9: {field_path: {attr: value}} — sparse HUMAN value-contract overlay
     max_steps: Optional[int] = None
     headless: Optional[bool] = None
 
@@ -203,6 +205,15 @@ class FlowMeta:
     # flow refuses if the current schema no longer matches — a domain widened after approval (e.g. a
     # payee enum loosened to any string) is a stale-approval injection surface, worst on a write.
     slots_hash: Optional[str] = None
+    # H9 layer 1: deterministic per-field VALUE contracts (fail loud on a same-shape-but-wrong value).
+    # `contracts` = the MACHINE seed auto-derived at learn (learn-bound like `shape`, NOT hashed);
+    # `contracts_hash` = the approved hash of the HUMAN overlay `FlowSpec.contracts` (tighten OR loosen
+    # re-approves); `quarantine` = a persisted violation record `{code, reason, ts}` (None = clean) that
+    # makes every future run refuse 0-LLM until `release()`. Named `quarantine` (NOT `quarantined`) so the
+    # forward-compat test whose fake future key is literally `"quarantined"` still asserts drop-unknown.
+    contracts: Optional[dict] = None
+    contracts_hash: Optional[str] = None
+    quarantine: Optional[dict] = None
 
 
 @dataclass
@@ -210,7 +221,7 @@ class FlowHealth:
     """A flow's status for the fleet view."""
 
     name: str
-    status: str  # not-learned | never-run | healthy | failing | stale
+    status: str  # not-learned | never-run | healthy | failing | stale | quarantined
     cached: bool
     approved: bool
     runs: int
@@ -278,11 +289,23 @@ class ParamValidationError(FlowReplayError):
     retryable = False
 
 
+class FlowQuarantineError(FlowReplayError):
+    """A replayed value violated its learned VALUE CONTRACT (H9): a same-shape-but-WRONG value — a field that
+    went null, a number that flipped non-positive, a list that collapsed below its count floor. The flow is
+    QUARANTINED (persisted): every future run refuses 0-LLM at pre-flight until a human investigates the value
+    and `flow release`s it. NOT retryable — re-running can't fix wrong data, and a relearn would bypass the
+    quarantine. Value-free by construction (the message names types/counts/bounds, never an extracted value)."""
+
+    code = "quarantined"
+    retryable = False
+
+
 def _classify_replay_failure(kind: str) -> type[FlowReplayError]:
     """Map an `_attempt_replay` failure `kind` to its taxonomy class (default: DriftError)."""
     return {
         "shape": ShapeDriftError,
         "escalate": EscalateError,
+        "quarantine": FlowQuarantineError,
         "miss": FlowReplayError,  # no learned flow — an absence, not a drift
     }.get(kind, DriftError)
 
@@ -778,6 +801,10 @@ async def _learn_once(
             # Bind the pin to the just-learned DOM: a re-learn ALWAYS resets it (a fresh pin, or None
             # when pin_read is off / unpinnable) so a stale pin can never outlive the cached flow.
             meta.read_pin = out.get("pin") if spec.pin_read else None
+            # H9: auto-seed value contracts from the learned extraction — READ flows only (a write flow's
+            # meta.contracts stays None to keep the write rail untouched). Re-derived on every re-learn
+            # (learn-bound like `shape`); the human overlay lives separately in `spec.contracts`.
+            meta.contracts = seed_contracts(data, truncated=bool(out.get("truncated"))) if spec.mutate is None else None
             pinned = meta.read_pin is not None
             approved = meta.approved
 
@@ -801,19 +828,31 @@ def _slots_hash(spec: FlowSpec) -> Optional[str]:
     return hashlib.sha256(json.dumps(canon, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
 
 
+def _contracts_hash(spec: FlowSpec) -> Optional[str]:
+    """A stable hash of the HUMAN value-contract overlay (`FlowSpec.contracts`), bound into approval so a
+    later tighten OR loosen refuses replay until re-approved (a weakened fail-loud guarantee must be
+    re-blessed by a human). None when there is no overlay. The MACHINE seed (`FlowMeta.contracts`) is NOT
+    hashed — it is learn-bound and re-derived only by a human-initiated re-learn."""
+    if not spec.contracts:
+        return None
+    return hashlib.sha256(json.dumps(spec.contracts, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+
+
 def approve(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> None:
     """Mark a learned flow trusted (so `replay(require_approved=True)` will run it). For a slotted flow,
     the approval is BOUND to the current slot schema — a later domain change refuses replay until
-    re-approved (see `replay`)."""
+    re-approved (see `replay`). It is likewise bound to the human value-contract overlay (H9)."""
     cache = cache or _default_cache()
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     if cache.get(key) is None:
         raise FlowReplayError(f"{spec.name!r}: nothing to approve — learn the flow first")
     sh = _slots_hash(spec)
+    ch = _contracts_hash(spec)
 
     def _apply(m: FlowMeta) -> None:
         m.approved = True
         m.slots_hash = sh
+        m.contracts_hash = ch
 
     _update_meta(cache, key, _apply)
 
@@ -822,6 +861,41 @@ def unapprove(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> None:
     cache = cache or _default_cache()
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     _update_meta(cache, key, lambda m: setattr(m, "approved", False))
+
+
+def release(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> None:
+    """Clear a flow's H9 quarantine after a human has investigated the wrong value. Re-arms under the SAME
+    contracts — if the value is still wrong the next run re-quarantines (no silent habituation; a sticky
+    release means fixing the upstream value, relaxing the contract via `spec.contracts` + re-approve, or
+    disabling that field). Resets the failure streak so a clean next run reports healthy."""
+    cache = cache or _default_cache()
+    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    meta = _load_meta(cache, key)
+    if meta.quarantine is None:
+        return
+    _log.info("flow %r: releasing quarantine (was: %s)", spec.name, meta.quarantine.get("reason"))
+
+    def _apply(m: FlowMeta) -> None:
+        m.quarantine = None
+        m.consecutive_failures = 0
+
+    _update_meta(cache, key, _apply)
+
+
+def _quarantine(cache: FlowCache, key: str, *, reason: str) -> None:
+    """Persist an H9 value-contract quarantine (value-free reason) so every future run refuses at pre-flight
+    until `release()`. Written under the meta lock via `_update_meta`, durably, before the raise."""
+    _update_meta(cache, key, lambda m: setattr(
+        m, "quarantine", {"code": "quarantined", "reason": reason, "ts": time.time()}))
+
+
+def contracts_for(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> "tuple[dict, Optional[dict]]":
+    """The EFFECTIVE value contracts (the machine SEED overlaid by the human `spec.contracts`) and the current
+    quarantine record (or None), for `flow contracts` / inspection. Read-only."""
+    cache = cache or _default_cache()
+    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    meta = _load_meta(cache, key)
+    return effective_contracts(spec.contracts, meta.contracts), meta.quarantine
 
 
 def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Optional[float] = None) -> FlowHealth:
@@ -835,6 +909,8 @@ def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Op
     meta = _load_meta(cache, key)
     if not cached:
         status = "not-learned"
+    elif meta.quarantine is not None:  # H9: a wrong-value quarantine is the most severe/actionable state
+        status = "quarantined"
     elif meta.runs == 0:
         status = "never-run"
     elif meta.consecutive_failures > 0:
@@ -885,6 +961,14 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="
     data = out.get("data")
     if check_shape and meta.shape is not None and not _shape_matches(meta.shape, _shape_of(data)):
         return False, None, f"data shape changed vs the learned flow (expected {meta.shape})", "shape"
+    # H9 layer 1: same-shape VALUE check (deterministic, 0-LLM). READ flows only (a write flow's meta.contracts
+    # stays None), gated on the same `check_shape` trust switch as the shape gate. A violation is a QUARANTINE
+    # kind — replay() persists it and fails loud; the reason is value-free (safe to log/persist).
+    if check_shape and spec.mutate is None and (meta.contracts or spec.contracts):
+        eff = effective_contracts(spec.contracts, meta.contracts)
+        reason = check_contracts(eff, data, truncated=bool(out.get("truncated")))
+        if reason is not None:
+            return False, None, reason, "quarantine"
     return True, data, "", ""
 
 
@@ -992,6 +1076,14 @@ def _preflight_row(
     row-blind one-shot precheck)."""
     is_mutate = spec.mutate is not None
     parameterizing = params is not None
+    # H9: a quarantined flow refuses EVERY future run, 0-LLM, before any browser or arg validation — a
+    # persisted wrong-value quarantine dominates (a bad arg is moot while the flow is known to return wrong
+    # data). Cleared only by a human `release()` after investigating the value. `replay`, `run_batch` (per-row),
+    # `preflight_keys` (MCP), and `run_all` all funnel through here, so every surface inherits the refusal.
+    if meta.quarantine is not None:
+        raise FlowQuarantineError(
+            f"{spec.name!r}: quarantined — {meta.quarantine.get('reason')}. Investigate the value, then "
+            f"`flow release` (or relax the contract via spec.contracts + re-approve).")
     resolved = validate_params(spec, params)  # 0-LLM pre-flight: raises on any out-of-domain value
     if is_mutate:
         if not spec.mutate.has_confirm():
@@ -1020,6 +1112,15 @@ def _preflight_row(
         raise FlowReplayError(
             f"{spec.name!r}: the slot schema changed since approval — re-approve the flow before replaying "
             f"it (a widened/edited slot domain must not run under a stale approval)")
+    # H9: the human value-contract overlay is likewise approval-bound. A tightened OR loosened OR fully
+    # REMOVED contract since approve() must be re-blessed (a loosened/removed contract is a WEAKENED fail-loud
+    # guarantee). No `spec.contracts and` short-circuit — else dropping the whole overlay would silently skip
+    # the re-approval. Base replay_error (a config re-bless, not a data quarantine). The machine seed is
+    # learn-bound, not hashed, so it can never silently widen a human-approved guarantee.
+    if meta.approved and _contracts_hash(spec) != meta.contracts_hash:
+        raise FlowReplayError(
+            f"{spec.name!r}: value contracts changed since approval — re-approve the flow before replaying it "
+            f"(a tightened or loosened value guarantee must be re-blessed by a human)")
     # BINDING SAFETY: a resolved slot value only substitutes at a step whose `.slot` names it. If a supplied
     # slot binds to NO recorded type/select step, its value would fold into the flow's identity — and, at a
     # write, into the Idempotency-Key on the wire — WITHOUT being typed onto the page: the frozen literal is
@@ -1135,11 +1236,23 @@ async def replay(
         _log.info("flow %r: replay ok%s", spec.name, " (write confirmed)" if is_mutate else "")
         return {"status": "confirmed", "data": data} if is_mutate else data
 
+    def _do_quarantine(why: str) -> "FlowQuarantineError":
+        # H9: a value-contract violation is DETERMINISTIC wrong data — re-login / re-author can't fix it, and a
+        # relearn would BYPASS the quarantine (re-seeding contracts from the wrong page). PERSIST it (every
+        # future run then refuses 0-LLM at pre-flight) and fail loud. Called from BOTH the first attempt AND the
+        # post-auth-refresh attempt, so a quarantine detected on the retry is never dropped without persisting.
+        _quarantine(cache, key, reason=why)
+        _record_run(cache, key, ok=False, error=why)
+        _log.warning("flow %r: QUARANTINED — %s", spec.name, why)
+        raise FlowQuarantineError(f"{spec.name!r}: {why}")
+
     try:
         ok, data, reason, kind = await _attempt_replay(spec, router, cache, key, meta, check_shape,
                                                         params=params)
         if ok:
             return _ok(data)
+        if kind == "quarantine":
+            raise _do_quarantine(reason)   # first attempt: never enters the auth-refresh / relearn paths
         # The session may have expired — re-login (refresh cookies) and retry once. A WRITE flow is
         # NOT retried unless it has an idempotency precheck: a first attempt may have committed the
         # write before failing its confirm check, and a blind retry would double-submit. With a
@@ -1180,6 +1293,10 @@ async def replay(
             else:
                 reason = (f"{reason}; not retrying a write after auth refresh without an idempotency precheck "
                           f"(would risk a double-submit) — add mutate.precheck_* or run `flow login` then replay")
+        if kind == "quarantine":
+            # The post-auth-refresh attempt hit a value-contract violation — persist + fail loud BEFORE the
+            # relearn block (a relearn would re-seed contracts from the wrong page and bypass the quarantine).
+            raise _do_quarantine(reason)
         if on_drift == "relearn":  # (refused above for write flows)
             # The flow has drifted, so a previously-learned pin (anchored to the OLD final page) is no
             # longer trustworthy — drop it BEFORE we repair, and persist that first. The repair re-caches

@@ -13,8 +13,8 @@ engine is the moat, and it is not yet hardened for unattended production.** Phas
 engine), A–C (the Flow API: define → learn → approve → replay → auth-refresh → health), and D
 (write flows) are shipped and merged, and the ops layer has since hardened (logging, CI,
 retry/backoff, fleet supervisor + freshness canary, a cross-process meta lock, and a standing
-locator-resilience benchmark). **402 tests**, all key-less (real headless Chromium against local
-fixtures, run in CI on Linux + Windows); version **0.55.0**. Secrets handling is a real strength:
+locator-resilience benchmark). **422 tests**, all key-less (real headless Chromium against local
+fixtures, run in CI on Linux + Windows); version **0.56.0**. Secrets handling is a real strength:
 credentials are env-sourced at runtime and **never persisted** — only the resulting `storage_state`
 cookies are saved (atomically).
 
@@ -116,7 +116,7 @@ multi-step/auth pages, and (3) operability — *not* in making replay faster (it
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
 phases have kept landing since: **#33–#35 CI (Phase J), #36 pinned 0-LLM reads (Phase H), #37 fleet
 supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 → **145** tests
-(key-less); version **0.22.0** *at the time* — it has since grown to **402 tests / 0.55.0** as the
+(key-less); version **0.22.0** *at the time* — it has since grown to **422 tests / 0.56.0** as the
 trust-hardening below landed. Original near-term list with the PR that landed each:
 
 1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`
@@ -182,6 +182,19 @@ Idempotency-Key is the correctness floor, the ledger/mutex/confirm are the rails
 review (double-fire/race, elicit-bypass, exposure/secret) came back clean. **HTTP transport** and stage 3's
 **per-caller credentials** stay deferred to a later slice + the Phase-I auth daemon (until then a caller
 rides the operator's identity — a documented confused-deputy cap, loud in the tool description + CLI).
+**H9 value contracts, layer 1** then shipped (0.56.0): the deepest remaining fail-loud gap closed — replay
+checked the extracted data's *shape* but not its *values*, so a same-shape-but-WRONG value (a price 129→0, a
+field that went null, a 500-row list that collapsed to 3) was returned as if correct. Now a conservative
+per-field VALUE contract (type / non-null / positive-sign / a high-confidence format / a list count-floor /
+null-rate ceiling) is **auto-seeded at learn** ([`contracts.py`](src/ultracua/contracts.py)) and checked
+right after the shape gate on replay — pure Python, **0 LLM on the hot path**. A violation raises a typed
+`FlowQuarantineError` and **persists a quarantine**, so every future run (single / `run_batch` / MCP / fleet)
+refuses 0-LLM at pre-flight until a human `flow release`s it. Reasons are **value-free by construction** (only
+type names / counts / bounds — no raw values at rest); seeding is single-sample-safe + truncation-aware; the
+human overlay `FlowSpec.contracts` is approval-hashed (a tighten *or* loosen re-blesses); the write rail is
+untouched (contracts are read-side only). A 3-lens adversarial review (silent-wrong-value escape, quarantine
+bypass, truncation/secret/re-approval) gated it. The **numeric magnitude** case (129→40, same sign, above
+floor) needs a human `min`/`max` now — layer-2's rolling-median delta + the sampled-LLM judge are the next slice.
 Then **H3 typed templates, slice 1** shipped (0.47.0): flows stop being input-frozen — a `SlotSpec` +
 `FlowSpec.slots` typed input contract, a 0-LLM **pre-flight validator** (`validate_params`: type / enum /
 pattern / min-max / required / env-resolved secrets — an out-of-domain value fails loud before the browser
