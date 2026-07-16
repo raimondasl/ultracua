@@ -45,9 +45,24 @@ class FieldContract:
     min_count: Optional[int] = None     # list count floor (a >50% collapse trips)
     null_rate_max: Optional[float] = None  # ceiling on the null fraction across list items
     enabled: bool = True                # per-field off switch (the narrow escape hatch vs a blanket release)
+    # H9 layer 2 — deterministic MAGNITUDE defense (scalar numbers): a value too far from the field's own
+    # rolling numeric baseline fails loud (catches a wrong-but-same-sign 129→40). All human-overridable.
+    max_delta_frac: Optional[float] = None  # fractional tolerance floor vs the rolling median (override)
+    delta_k: Optional[float] = None     # MAD multiplier — the band self-calibrates to the field's spread (override)
+    warmup_runs: Optional[int] = None   # clean samples before ENFORCING (advisory until then) (override)
+    delta_advisory: bool = False        # log-only forever for this field (never quarantines on magnitude)
+    delta_enabled: Optional[bool] = None  # per-field magnitude off-switch (distinct from `enabled` = all checks)
 
 
 CONTRACT_ATTRS = frozenset(f.name for f in dataclasses.fields(FieldContract))
+
+# H9 layer-2 magnitude defaults (module consts; per-field overrides live in the approval-hashed overlay).
+DELTA_K = 5.0            # ≈5σ band (via the MAD→σ rescale below) — passes ordinary jitter, catches gross moves
+DELTA_FLOOR_FRAC = 0.25  # a value must move >25% of |median| to trip a near-constant field (closes 129→40)
+DELTA_WARMUP = 5         # clean samples accrued before the check ENFORCES (advisory before that)
+DELTA_RING = 20          # rolling window size (bounded; robust median/MAD, resists single-sample poisoning)
+DELTA_ABS_EPS = 1e-9     # a floor for the degenerate zero-centered field (no magnitude scale to compare)
+_MAD_SIGMA = 1.4826      # rescales the median-absolute-deviation to a normal-consistent σ estimate
 
 # High-confidence string recognizers only — a pattern is seeded ONLY when EVERY learned value matches one of
 # these (never overfit an arbitrary string). Ordered specific-first.
@@ -263,3 +278,75 @@ def _check_scalar(lbl: str, c: dict, v: Any) -> Optional[str]:
     if "pattern" in c and isinstance(v, str) and re.fullmatch(c["pattern"], v) is None:
         return f"{lbl}: value did not match the learned format {c['pattern']!r}"
     return None
+
+
+# --- H9 layer 2: deterministic magnitude defense (pure, 0-LLM, scalar numbers) ----------------
+def _median(xs: list) -> float:
+    s = sorted(xs)
+    n = len(s)
+    if n == 0:
+        return 0.0
+    mid = n // 2
+    return float(s[mid]) if n % 2 else (s[mid - 1] + s[mid]) / 2.0
+
+
+def magnitude_fields(eff: dict, data: Any) -> dict:
+    """The in-scope SCALAR-NUMBER fields for the magnitude check: `{path: float}`. Scope = a root scalar (path
+    "") or a root-dict key (path "<key>", not a list-item path) whose EFFECTIVE contract's `type` is "number"
+    AND whose runtime value is a number (bool excluded — it's an int subclass), with neither `enabled` nor
+    `delta_enabled` disabled. List-item paths ("[]" / "[].<key>") are out of scope this slice."""
+    out: dict = {}
+    for path, c in eff.items():
+        if path.startswith("["):
+            continue
+        if c.get("type") != "number":
+            continue
+        if c.get("enabled", True) is False or c.get("delta_enabled") is False:
+            continue
+        if path == "":
+            v = data
+        elif isinstance(data, dict) and path in data:
+            v = data[path]
+        else:
+            continue
+        if contract_type(v) == "number":
+            out[path] = float(v)
+    return out
+
+
+def check_magnitude(c: dict, value: float, ring: list) -> Optional[str]:
+    """Warm-up-AGNOSTIC magnitude band check (pure, 0-LLM). Returns a VALUE-FREE reason if `value` deviates too
+    far from the ring's rolling baseline, else None. The CALLER decides advisory-vs-enforce from `len(ring)`.
+
+    Band: `tol = max(delta_k·1.4826·MAD, max_delta_frac·|median|, ε)`; a violation is `|value - median| > tol`.
+    The MAD term self-calibrates the band WIDE for a genuinely volatile field (so it never habituates); the
+    fractional-floor term catches a wrong-but-same-sign move on a near-constant field (the 129→40 gap) and stops
+    a zero-variance field tripping on legit jitter. A zero-centered field (|median|≈0 and MAD≈0) has no
+    magnitude scale — skipped (layer-1 sign/null already guards it)."""
+    n = len(ring)
+    if n == 0:
+        return None
+    med = _median(ring)
+    mad = _median([abs(h - med) for h in ring])
+    if abs(med) <= DELTA_ABS_EPS and mad <= DELTA_ABS_EPS:
+        return None
+    k = DELTA_K if c.get("delta_k") is None else c["delta_k"]
+    frac = DELTA_FLOOR_FRAC if c.get("max_delta_frac") is None else c["max_delta_frac"]
+    tol = max(k * _MAD_SIGMA * mad, frac * abs(med), DELTA_ABS_EPS)
+    if abs(value - med) > tol:
+        # VALUE-FREE (persists to the sidecar / meta.json): only ratios and n — never the raw datum or the
+        # median. When |median| is non-zero, a delta-% + tolerance-% reads best; when the median is exactly 0
+        # (a legitimate sign-oscillating field, e.g. a net-change/P&L with median 0 but non-zero spread — the
+        # zero-centered skip above only fires when the SPREAD is also ~0), express the excursion as a multiple
+        # of the tolerance band instead (`tol` is always >= DELTA_ABS_EPS, so this never divides by zero).
+        if abs(med) > DELTA_ABS_EPS:
+            return (f"magnitude: value deviates {100 * abs(value - med) / abs(med):.0f}% from the rolling "
+                    f"baseline (tolerance +/-{100 * tol / abs(med):.0f}%, n={n})")
+        return (f"magnitude: value is {abs(value - med) / tol:.1f}x the allowed deviation from the rolling "
+                f"baseline (n={n})")
+    return None
+
+
+def accrue_ring(ring: list, value: float, *, ring_size: int = DELTA_RING) -> list:
+    """Append one clean numeric observation to a rolling ring, keeping only the newest `ring_size` (numbers)."""
+    return (list(ring) + [float(value)])[-ring_size:]
