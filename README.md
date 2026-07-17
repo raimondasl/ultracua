@@ -79,6 +79,7 @@ Hacker News (read-only) and is built to record: `uv run python examples/hn_diges
 |---|---|
 | **[EXAMPLES.md](EXAMPLES.md)** | a worked, runnable real-site example — **start here** |
 | **[GUIDE.md](GUIDE.md)** | developer guide: the Flow API + CLI in depth (auth, write flows, record by demonstration, health, providers) |
+| **[HEALING.md](HEALING.md)** | how it self-heals (and deliberately doesn't) when a page's elements change: resilient locators, LLM heal/re-plan, and the fail-loud boundaries |
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | how it works inside + how to contribute (engine, safety, tiers, benchmarks, layout) |
 | **[STATUS.md](STATUS.md)** | honest status, measured benchmarks, known fragilities |
 | **[ROADMAP.md](ROADMAP.md)** | what's next |
