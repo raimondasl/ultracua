@@ -35,7 +35,7 @@ from .contracts import (
     CONTRACT_ATTRS, DELTA_WARMUP, accrue_ring, check_contracts, check_magnitude, effective_contracts,
     magnitude_fields, seed_contracts,
 )
-from .history import history_path, load_history, save_history
+from .history import history_path, load_history, save_history, set_anchor
 from .extract import extract
 from .flow import run_cached
 from .ledger import LedgerError, RunLedger
@@ -167,6 +167,10 @@ class FlowSpec:
     mutate: Optional[MutateSpec] = None    # set -> this is a WRITE flow (Phase D)
     slots: Optional[dict] = None           # H3: {slot_name: SlotSpec} — the typed input contract
     contracts: Optional[dict] = None       # H9: {field_path: {attr: value}} — sparse HUMAN value-contract overlay
+    # H9 layer 2 (judge): None = inert (nothing captured, not one byte written) | "advisory" = capture + judge
+    # + report, quarantine NOTHING | "enforce" = a corroborated finding may quarantine. Armed only by a human
+    # editing the spec (`flow audit --set-mode`); there is deliberately no runtime flag that can arm it.
+    audit: Optional[str] = None
     max_steps: Optional[int] = None
     headless: Optional[bool] = None
 
@@ -218,6 +222,11 @@ class FlowMeta:
     contracts: Optional[dict] = None
     contracts_hash: Optional[str] = None
     quarantine: Optional[dict] = None
+    # H9 layer 2 (judge): `audit_due` marks the NEXT replay as must-capture (set after a heal/replan, a
+    # re-learn, or a human `release()` — the highest-risk runs); `audit_advisories` counts unreviewed
+    # advisory findings so habituation is MEASURED (surfaced by `flow status`), never a silent pile-up.
+    audit_due: bool = False
+    audit_advisories: int = 0
 
 
 @dataclass
@@ -809,6 +818,7 @@ async def _learn_once(
             # meta.contracts stays None to keep the write rail untouched). Re-derived on every re-learn
             # (learn-bound like `shape`); the human overlay lives separately in `spec.contracts`.
             meta.contracts = seed_contracts(data, truncated=bool(out.get("truncated"))) if spec.mutate is None else None
+            meta.audit_due = True   # H9: a re-authored extraction is high-risk -> the next replay is audited
             pinned = meta.read_pin is not None
             approved = meta.approved
 
@@ -893,6 +903,7 @@ def release(spec: FlowSpec, *, cache: Optional[FlowCache] = None, rebaseline: bo
     def _apply(m: FlowMeta) -> None:
         m.quarantine = None
         m.consecutive_failures = 0
+        m.audit_due = True   # H9: the first run after a human clears a quarantine is high-risk -> audit it
 
     _update_meta(cache, key, _apply)
     if rebaseline:
@@ -904,6 +915,46 @@ def _quarantine(cache: FlowCache, key: str, *, reason: str) -> None:
     until `release()`. Written under the meta lock via `_update_meta`, durably, before the raise."""
     _update_meta(cache, key, lambda m: setattr(
         m, "quarantine", {"code": "quarantined", "reason": reason, "ts": time.time()}))
+
+
+@dataclass(frozen=True)
+class QuarantineSink:
+    """The audit path's ONLY effect handle. One method; one direction; a CODE, not a string.
+
+    There is deliberately no `clear`, no `approve`, no `unapprove`, no `rebaseline`, no `meta`, and no
+    free-text argument — an implementation bug cannot reach for a capability that was never handed over, and
+    neither the model nor a web page can author the persisted reason (it is looked up in `audit.REASONS`,
+    which raises KeyError on an unknown code rather than passing anything through). `cache`/`key` are bound at
+    construction, so a sink can never be pointed at a different flow."""
+
+    _cache: FlowCache
+    _key: str
+    _name: str
+
+    def quarantine(self, code: str) -> None:
+        from . import audit
+
+        reason = f"audit({code}): {audit.REASONS[code]}"   # KeyError on an unknown code — never passthrough
+        _log.warning("flow %r: QUARANTINED by audit — %s", self._name, reason)
+        _quarantine(self._cache, self._key, reason=reason)
+
+
+@dataclass(frozen=True)
+class AdvisorySink:
+    """The advisory twin: validates the code identically but writes NOTHING to the flow's trust state — it
+    only bumps the unreviewed-advisory counter so habituation is measured and surfaced by `flow status`."""
+
+    _cache: FlowCache
+    _key: str
+    _name: str
+
+    def quarantine(self, code: str) -> None:
+        from . import audit
+
+        _ = audit.REASONS[code]   # same validation; an unknown code is a bug, not a silent no-op
+        _log.info("flow %r: audit ADVISORY — %s", self._name, code)
+        _update_meta(self._cache, self._key,
+                     lambda m: setattr(m, "audit_advisories", (m.audit_advisories or 0) + 1))
 
 
 def contracts_for(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> "tuple[dict, Optional[dict]]":
@@ -935,6 +986,55 @@ def _accrue_all(doc: dict, mfields: dict) -> None:
     fields = doc.setdefault("fields", {})
     for path, value in mfields.items():
         fields[path] = accrue_ring(fields.get(path, []), value)
+        # H9: the learn-time ANCHOR — the first clean observation, never overwritten. The rolling median
+        # tracks a slow creep (the baseline IS the creep), so only a fixed point makes slow drift visible.
+        set_anchor(doc, path, value)
+
+
+def _secret_values(spec: FlowSpec) -> tuple:
+    """The RUNTIME values of every secret the spec resolves from the env — the only realistic plaintext-echo
+    path onto a page. Passed to the artifact redactor so a secret can never land in an audit file. The env var
+    NAMES are never written either."""
+    out = []
+    for s in (spec.slots or {}).values():
+        env = getattr(s, "secret_env", None)
+        if getattr(s, "secret", False) and env:
+            out.append(os.environ.get(env) or "")
+    login = spec.login
+    for attr in ("username_env", "password_env"):
+        env = getattr(login, attr, None) if login is not None and not callable(login) else None
+        if env:
+            out.append(os.environ.get(env) or "")
+    return tuple(v for v in out if v)
+
+
+def _capture_audit(cache: FlowCache, key: str, spec: FlowSpec, meta: "FlowMeta", report, data: Any,
+                   *, eff: dict, truncated: bool) -> None:
+    """H9 judge: persist ONE evidence artifact for the out-of-band `flow audit` to judge later. ZERO LLM, and
+    fully swallowed — a capture problem must never fail (or slow the failure of) a replay. The page text is
+    free: `report.final_text` was already captured by the engine on every replay."""
+    try:
+        from . import audit  # lazy: keeps the module off the import path of a flow that never audits
+
+        doc = load_history(cache, key)
+        rings, anchors = doc.get("fields") or {}, doc.get("anchors") or {}
+        mfields = magnitude_fields(eff, data)
+        signals = audit.drift_signals(rings, anchors, mfields)
+        healed = int(getattr(report, "healed_steps", 0) or 0)
+        rmode = getattr(report, "mode", "replay") or "replay"
+        if not audit.should_capture(rmode, healed, runs=meta.runs, due=bool(meta.audit_due),
+                                    signals=signals):
+            return
+        watched = {p: rings.get(p, []) for p in mfields}
+        audit.capture(cache, key, goal=spec.goal, extract=spec.extract, data=data,
+                      page_text=getattr(report, "final_text", "") or "",
+                      rings=watched, anchors={p: anchors[p] for p in watched if p in anchors},
+                      signals=signals, report_mode=rmode, healed=healed, truncated=truncated,
+                      redact=_secret_values(spec))   # `capture` prunes the store itself
+        if meta.audit_due:  # the due flag is CONSUMED by the capture it asked for
+            _update_meta(cache, key, lambda m: setattr(m, "audit_due", False))
+    except Exception as exc:  # noqa: BLE001 - audit capture is best-effort, never load-bearing
+        _log.warning("flow %r: audit capture skipped (%s: %s)", spec.name, type(exc).__name__, exc)
 
 
 def _magnitude_gate(cache: FlowCache, key: str, eff: dict, data: Any, spec_name: str) -> Optional[str]:
@@ -1039,6 +1139,13 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="
             reason = _magnitude_gate(cache, key, eff, data, spec.name)
             if reason is not None:
                 return False, None, reason, "quarantine"
+        # H9 judge: capture an evidence artifact for the LATER, out-of-band `flow audit`. This writes a file;
+        # it NEVER calls an LLM, never blocks, and never fails a replay. Only reached once BOTH deterministic
+        # gates passed (a run that already quarantined needs no judge and its artifact would be the most
+        # sensitive thing we could keep) and only on a pure replay.
+        if mode == "replay" and spec.audit:
+            _capture_audit(cache, key, spec, meta, report, data, eff=eff,
+                           truncated=bool(out.get("truncated")))
     return True, data, "", ""
 
 
@@ -1478,6 +1585,133 @@ class FleetRun:
     ms: float = 0.0
     data: Any = None
     error: Optional[str] = None
+
+
+@dataclass
+class AuditFinding:
+    """One judged artifact (H9). `code` is a key of `audit.REASONS`; `enforced` says whether it quarantined
+    (only ever true in `enforce` mode with a code-verified anchor)."""
+
+    name: str
+    code: str
+    enforced: bool
+    ts: float = 0.0
+    quote: str = ""       # the model's citation — for `flow audit --show`; NEVER persisted to meta
+
+
+@dataclass
+class AuditRun:
+    """The report from one `flow audit` invocation."""
+
+    findings: list = field(default_factory=list)     # list[AuditFinding]
+    judged: int = 0
+    unjudged: int = 0          # artifacts left on disk (budget exhausted / no LLM) — NOT "clean"
+    quarantined: int = 0
+    advisories: int = 0
+    calls: int = 0
+    skipped: list = field(default_factory=list)      # [(name, why)]
+    budget_exhausted: bool = False
+    no_llm: bool = False
+
+    @property
+    def exit_code(self) -> int:
+        """2 = something was quarantined (alert); 3 = artifacts left UNJUDGED ("we didn't look" — a weaker,
+        distinct alarm); 0 = nothing to report. 2 wins if both apply."""
+        if self.quarantined:
+            return 2
+        return 3 if (self.unjudged or self.no_llm) else 0
+
+
+async def audit_flows(
+    *, names: Optional[list[str]] = None, cache: Optional[FlowCache] = None, router=None,
+    provider_name: Optional[str] = None, max_calls: int = 0, dry_run: bool = False, keep: bool = False,
+) -> AuditRun:
+    """H9 judge — the ASYNC, out-of-band audit verb. Reads persisted artifacts, asks the judge, and lets
+    PURE code decide. It opens NO browser, never calls `replay`, and is never reached from the replay path.
+
+    THE GUARANTEE: the only state it can write is `FlowMeta.quarantine` (via `QuarantineSink`, which takes a
+    CODE and looks the English up in a closed table) and the `audit_advisories` counter. It cannot approve,
+    clear, un-fail, rebaseline, edit contracts, or touch a write flow — those capabilities are never
+    constructed. A flow that is ALREADY quarantined is skipped before any LLM call, so an audit can never
+    overwrite (and thereby soften) a deterministic layer-1/2 reason."""
+    from . import audit
+
+    cache = cache or _default_cache()
+    run = AuditRun()
+    max_calls = max_calls or audit.AUDIT_MAX_CALLS
+    if router is None:
+        pname = provider_name or settings.provider
+        if not _llm_configured(pname):
+            run.no_llm = True
+        else:
+            _, router = _router(pname)
+
+    # gather candidate artifacts across flows, riskiest first (a budget-limited run spends where it matters)
+    candidates: list = []
+    for name in (names or list_specs()):
+        try:
+            spec = load_spec(name)
+        except Exception as exc:  # noqa: BLE001 - a broken spec must not kill the audit
+            run.skipped.append((name, f"unreadable spec: {exc}"))
+            continue
+        key = flow_key(spec.goal, spec.start_url, spec.scope)
+        if spec.mutate is not None:
+            run.skipped.append((name, "write flow (never captured, never judged)"))
+            continue
+        if not spec.audit:
+            run.skipped.append((name, "audit not enabled"))
+            continue
+        audit.prune(cache, key)
+        arts = audit.load_artifacts(cache, key)
+        if not arts:
+            continue
+        if _load_meta(cache, key).quarantine is not None:
+            # already quarantined deterministically — an audit must never overwrite that reason
+            run.skipped.append((name, "already quarantined"))
+            continue
+        for art in arts:
+            prio = 0 if (art.get("signals") or art.get("mode") != "replay") else 1
+            candidates.append((prio, art.get("ts") or 0, name, spec, key, art))
+    candidates.sort(key=lambda c: (c[0], c[1]))
+
+    if run.no_llm or router is None:
+        run.unjudged = len(candidates)
+        return run
+
+    snap = router.totals.snapshot() if hasattr(router.totals, "snapshot") else None
+    for _prio, _ts, name, spec, key, art in candidates:
+        if run.calls >= max_calls:                      # checked BEFORE every call — never overshoots
+            run.budget_exhausted = True
+            run.unjudged += 1
+            continue
+        finding = await audit.judge(router, art)
+        run.calls += 1
+        run.judged += 1
+        mode = "advisory" if dry_run else (spec.audit or "advisory")
+        code = audit.decide(art, finding, mode=mode)
+        adv_code = (finding or {}).get("reason_code") if isinstance(finding, dict) else None
+        if code:
+            sink = QuarantineSink(cache, key, name)
+            sink.quarantine(code)
+            run.quarantined += 1
+            run.findings.append(AuditFinding(name, code, True, art.get("ts") or 0,
+                                             (finding or {}).get("evidence_quote") or ""))
+        elif adv_code and adv_code in audit.REASONS:
+            AdvisorySink(cache, key, name).quarantine(adv_code)
+            run.advisories += 1
+            run.findings.append(AuditFinding(name, adv_code, False, art.get("ts") or 0,
+                                             (finding or {}).get("evidence_quote") or ""))
+        elif isinstance(finding, dict) and finding.get("injection_suspected") and art.get("markers"):
+            AdvisorySink(cache, key, name).quarantine("semantic_mismatch_other")
+            run.advisories += 1
+        if not keep:
+            audit.drop(art.get("_path"))                # its whole purpose was one judge call
+    if snap is not None and hasattr(router.totals, "since"):
+        try:
+            run.calls = max(run.calls, router.totals.since(snap).calls)
+        except Exception:  # noqa: BLE001 - accounting is best-effort, never load-bearing
+            pass
+    return run
 
 
 async def run_all(

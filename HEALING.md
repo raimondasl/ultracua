@@ -122,7 +122,10 @@ checks are 0-LLM and run *before* anything irreversible happens.
    back can be wrong. ultracua's **value contracts** (see GUIDE.md → *Value contracts*) fail loud when a field
    changes type, goes null, flips sign, or a number moves too far from its own rolling history (a price silently
    going 129 → 40). That's not "healing" — it's a **sticky quarantine** that refuses every future run until a
-   human investigates.
+   human investigates. An opt-in **LLM audit** covers the one case the deterministic checks can't see — a value
+   that *creeps* a little each run — but it runs **out-of-band, never on the replay path**, and it is built so
+   that **it can flag a flow for a human and can never bless one**: a finding may only ever quarantine, and only
+   when pure Python independently corroborates it.
 
 Beyond these: an **interstitial / CAPTCHA** wall is an escalation, not a heal (a machine can't proceed), and a
 **cross-origin redirect** during learning is refused rather than cached.

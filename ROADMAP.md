@@ -705,8 +705,12 @@ roadmapped action-breadth verbs from a list of primitives to verified contracts.
 > format / count-floor / null-rate) checked after the shape gate, persisted quarantine, `flow release`.
 > ✅ **Layer-2 *deterministic magnitude* half shipped (0.57.0)** — a bounded rolling numeric history per
 > scalar field + a robust self-calibrating band (`max(delta_k·1.4826·MAD, max_delta_frac·|median|)`) that
-> catches a wrong-but-same-sign move (129→40), warm-up-advisory, `flow release --rebaseline`. **Still
-> deferred:** the async sampled-**LLM judge** half below (the answer to slow drift), a separate future slice.
+> catches a wrong-but-same-sign move (129→40), warm-up-advisory, `flow release --rebaseline`.
+> ✅ **Layer-2 *LLM judge* half shipped (0.58.0)** — a per-field learn-time **anchor** makes slow drift visible
+> in pure Python, and an opt-in `FlowSpec.audit` + the out-of-band `flow audit` verb judge sampled artifacts
+> with ONE forced-tool call. Quarantine-only by construction (no approve field, `decide -> Optional[str]`, a
+> code-taking sink, AST-pinned import surface); every enforceable code needs a Python-verified anchor. Replay
+> stays provably 0-LLM. **H9 is now complete.** Remaining honest limits are documented in `HEALING.md`.
 
 **What.** Two layers against plausible-but-wrong extracted data. **Layer 1 (hot path, key-less,
 deterministic)**: per-field contracts (type, format regex, numeric range, null-rate ceiling,
@@ -1055,9 +1059,9 @@ scarcest training commodity — ultracua's recorder captures them natively.
 **Wave 0 — the six cross-cutting prerequisites** (small, deliberate, unblock everything). *Status:
 #1/#2/#3/#6 done; #4/#5 remain.*
 **Wave 1 — leverage:** ✅ **H3 typed templates** (the #1 gap) and ✅ **H2 MCP server** (all three
-stages — the widest distribution surface) both **SHIPPED** (0.46 → 0.55). Remaining Wave-1: **H9 layer-1
-value contracts** (⏳ *in progress — 0.56* — the next fail-loud gap) + **H8 stages 1–2** (files +
-volatile-ID blocklist — the cheap certain wins). **Wave 2 — the trust wedge:** H5 dry-run, H1 attested replay, H6
+stages — the widest distribution surface) both **SHIPPED** (0.46 → 0.55), as is ✅ **H9 semantic-wrongness
+defense, complete** (layer 1 value contracts 0.56, layer 2 magnitude 0.57, layer 2 LLM judge 0.58). Remaining
+Wave-1: **H8 stages 1–2** (files + volatile-ID blocklist — the cheap certain wins). **Wave 2 — the trust wedge:** H5 dry-run, H1 attested replay, H6
 drift-repair tier 1, H10 Drift-Watch — these four compound: the same evidence/verification
 machinery sells enterprise trust. **Wave 3 — reach:** H4 in-profile recorder, H7 control flow, H12
 talk-through, H11 bot-auth identity. **Frontier (spike-gated, parallel):** H13 lanes (markdown

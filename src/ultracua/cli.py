@@ -258,6 +258,19 @@ def _ago(ts: float) -> str:
     return f"{int(d)}s ago"
 
 
+def _audit_advisories(name: str) -> int:
+    """Unreviewed H9 audit advisories for a flow (CLI-only; never part of FlowHealth's status vocabulary)."""
+    try:
+        from .cache import FlowCache, flow_key
+        from .flows import _load_meta, load_spec
+
+        spec = load_spec(name)
+        meta = _load_meta(FlowCache(), flow_key(spec.goal, spec.start_url, spec.scope))
+        return int(getattr(meta, "audit_advisories", 0) or 0)
+    except Exception:  # noqa: BLE001 - a status line must never break `flow status`
+        return 0
+
+
 def _flow_status(args: argparse.Namespace) -> None:
     from .flows import health, list_specs, load_spec
 
@@ -273,6 +286,12 @@ def _flow_status(args: argparse.Namespace) -> None:
               f"last_ok={_ago(h.last_ok_ts)}")
         if h.last_error and h.status not in ("healthy", "never-run", "not-learned"):
             print(f"    last error: {h.last_error}")
+        # H9 judge: surface unreviewed advisories so habituation is MEASURED, not a silent pile-up. This
+        # ESCALATES without quarantining — FlowHealth's status vocabulary is deliberately unchanged.
+        adv = _audit_advisories(name)
+        if adv:
+            print(f"    audit: {adv} unreviewed advisor{'y' if adv == 1 else 'ies'} — "
+                  f"`flow audit --list --name {name}`")
 
 
 def _flow_release(args: argparse.Namespace) -> None:
@@ -341,6 +360,72 @@ def _flow_contracts(args: argparse.Namespace) -> None:
     print(f"value contracts for {spec.name!r} (field: predicates):")
     for path in sorted(eff):
         print(f"  {path or '<root>'}: {eff[path]}")
+
+
+def _flow_audit(args: argparse.Namespace) -> None:
+    from .audit import AUDIT_MODES, audit_dir, load_artifacts
+    from .cache import FlowCache, flow_key
+    from .flows import audit_flows, list_specs, load_spec, save_spec
+    from .audit import purge as audit_purge
+
+    names = [args.name] if args.name else None
+    # --set-mode is the ONLY way to arm enforcement: a human editing the spec. There is deliberately no
+    # runtime --enforce flag, so a cron line can never arm what the operator didn't bless.
+    if args.set_mode:
+        if not args.name:
+            raise SystemExit("--set-mode needs --name")
+        if args.set_mode not in AUDIT_MODES + ("off",):
+            raise SystemExit(f"--set-mode must be one of {AUDIT_MODES + ('off',)}")
+        spec = load_spec(args.name)
+        spec.audit = None if args.set_mode == "off" else args.set_mode
+        save_spec(spec)
+        print(f"audit mode for {spec.name!r} is now {spec.audit or 'off'}"
+              + (" — a corroborated finding can now QUARANTINE this flow (a human must `flow release` it)"
+                 if spec.audit == "enforce" else
+                 " — findings are reported only; nothing will be quarantined" if spec.audit else
+                 " — nothing is captured and no artifact is written"))
+        return
+
+    cache = FlowCache()
+    if args.purge:
+        for name in (names or list_specs()):
+            spec = load_spec(name)
+            audit_purge(cache, flow_key(spec.goal, spec.start_url, spec.scope))
+        print("purged the audit artifact store")
+        return
+
+    if args.list or args.show:
+        for name in (names or list_specs()):
+            spec = load_spec(name)
+            key = flow_key(spec.goal, spec.start_url, spec.scope)
+            arts = load_artifacts(cache, key)
+            if not arts:
+                continue
+            print(f"{name} ({spec.audit or 'off'}): {len(arts)} artifact(s) in {audit_dir(cache, key)}")
+            for a in arts if args.show else []:
+                print(f"  - ts={a.get('ts'):.0f} mode={a.get('mode')} signals={a.get('signals')} "
+                      f"markers={a.get('markers')}\n      data: {str(a.get('data'))[:160]}"
+                      f"\n      page: {str(a.get('text'))[:200]}")
+        return
+
+    run = asyncio.run(audit_flows(names=names, cache=cache, max_calls=args.max_calls,
+                                  dry_run=args.dry_run, keep=args.keep, provider_name=args.provider))
+    for f in run.findings:
+        mark = "QUARANTINED" if f.enforced else "advisory"
+        print(f"  [{mark:<11}] {f.name:<24} {f.code}" + (f"\n      quote: {f.quote[:120]}" if f.quote else ""))
+    if args.verbose:
+        for name, why in run.skipped:
+            print(f"  [skipped    ] {name:<24} {why}")
+    print(f"\n== judged {run.judged}, {run.quarantined} quarantined, {run.advisories} advisory, "
+          f"{run.unjudged} unjudged ({run.calls} LLM call(s)) ==")
+    if run.no_llm:
+        print("WARNING: no LLM configured — nothing was judged. UNJUDGED IS NOT CLEAN.")
+    elif run.budget_exhausted:
+        print(f"WARNING: budget exhausted after {run.calls} call(s) — {run.unjudged} artifact(s) left "
+              f"UNJUDGED. Unjudged is NOT clean; raise --max-calls or audit more often.")
+    if run.quarantined:
+        print("A flow was quarantined by the audit. Investigate the value, then `flow release --name <n>`.")
+    raise SystemExit(run.exit_code)
 
 
 def _post_alert(url: str, failed: list) -> None:
@@ -681,6 +766,22 @@ def _flow_main(argv) -> None:
                      help="disable the contract on a field, e.g. price (root = empty PATH) (repeatable).")
     pct.add_argument("--enable", action="append", metavar="PATH", help="re-enable a disabled field (repeatable).")
 
+    pau = sub.add_parser("audit", help="H9 judge: audit captured read artifacts with an LLM (out-of-band). "
+                                       "It can only QUARANTINE a flow for a human — never approve or clear one.")
+    pau.add_argument("--name", help="a single flow (default: all).")
+    pau.add_argument("--set-mode", dest="set_mode", metavar="off|advisory|enforce",
+                     help="arm auditing for a flow. 'advisory' reports only; 'enforce' lets a corroborated "
+                          "finding quarantine. THE ONLY way to enable enforcement (no runtime flag exists).")
+    pau.add_argument("--list", action="store_true", help="list captured artifacts (0 LLM).")
+    pau.add_argument("--show", action="store_true", help="print each artifact's evidence (0 LLM).")
+    pau.add_argument("--purge", action="store_true", help="delete the captured artifact store now.")
+    pau.add_argument("--dry-run", dest="dry_run", action="store_true",
+                     help="judge + report but never quarantine (downgrades every flow to advisory).")
+    pau.add_argument("--keep", action="store_true", help="keep artifacts after judging (debugging).")
+    pau.add_argument("--max-calls", dest="max_calls", type=int, default=0, help="LLM call budget (default 20).")
+    pau.add_argument("--provider", **prov)
+    pau.add_argument("-v", "--verbose", action="store_true", help="also print skipped flows.")
+
     pra = sub.add_parser("run-all", help="Replay every saved flow (read + approved by default); "
                                          "report + alert; exits non-zero if any fails. Point cron at this.")
     pra.add_argument("--provider", **prov)
@@ -774,6 +875,8 @@ def _flow_main(argv) -> None:
         _flow_release(args)
     elif args.cmd == "contracts":
         _flow_contracts(args)
+    elif args.cmd == "audit":
+        _flow_audit(args)
     elif args.cmd == "run-all":
         _flow_run_all(args)
     elif args.cmd == "run-batch":

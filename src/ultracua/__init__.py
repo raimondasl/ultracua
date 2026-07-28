@@ -20,7 +20,9 @@ from .flows import (
     FleetRun, FlowHealth, FlowQuarantineError, FlowReplayError, FlowSpec, LoginSpec, MutateSpec, SlotSpec,
     refresh_auth,
 )
+from .flows import AuditFinding, AuditRun
 from .flows import approve as approve_flow
+from .flows import audit_flows
 from .flows import health as flow_health
 from .flows import learn as learn_flow
 from .flows import release as release_flow
@@ -71,6 +73,9 @@ __all__ = [
     "approve_flow",
     "unapprove_flow",
     "release_flow",
+    "audit_flows",
+    "AuditRun",
+    "AuditFinding",
     "run_all_flows",
     "refresh_auth",
     "flow_health",
