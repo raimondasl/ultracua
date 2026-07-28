@@ -148,6 +148,9 @@ The cost of that choice is honest: ultracua will **fail loud on some changes a m
 LLM approach would have adapted to** — most notably a full redesign, where it escalates to an (opt-in) LLM
 re-plan or re-learn rather than silently re-deriving the flow every run.
 
+> For how this contrasts with a mainstream always-ask-the-LLM tool, see
+> [docs/comparison-stagehand.md](docs/comparison-stagehand.md).
+
 ---
 
 ## Configuring healing
