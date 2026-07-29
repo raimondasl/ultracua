@@ -13,8 +13,8 @@ engine is the moat, and it is not yet hardened for unattended production.** Phas
 engine), A–C (the Flow API: define → learn → approve → replay → auth-refresh → health), and D
 (write flows) are shipped and merged, and the ops layer has since hardened (logging, CI,
 retry/backoff, fleet supervisor + freshness canary, a cross-process meta lock, and a standing
-locator-resilience benchmark). **442 tests**, all key-less (real headless Chromium against local
-fixtures, run in CI on Linux + Windows); version **0.57.0**. Secrets handling is a real strength:
+locator-resilience benchmark). **488 tests**, all key-less (real headless Chromium against local
+fixtures, run in CI on Linux + Windows); version **0.58.0**. Secrets handling is a real strength:
 credentials are env-sourced at runtime and **never persisted** — only the resulting `storage_state`
 cookies are saved (atomically).
 
@@ -116,7 +116,7 @@ multi-step/auth pages, and (3) operability — *not* in making replay faster (it
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
 phases have kept landing since: **#33–#35 CI (Phase J), #36 pinned 0-LLM reads (Phase H), #37 fleet
 supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 → **145** tests
-(key-less); version **0.22.0** *at the time* — it has since grown to **442 tests / 0.57.0** as the
+(key-less); version **0.22.0** *at the time* — it has since grown to **488 tests / 0.58.0** as the
 trust-hardening below landed. Original near-term list with the PR that landed each:
 
 1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`
@@ -201,9 +201,22 @@ replays; once warmed (≥5 samples) a value beyond a robust self-calibrating ban
 band for a genuinely volatile field (no habituation); the fractional floor catches the near-constant gap case;
 the first ~5 replays are advisory (never false-quarantine); `flow release --rebaseline` re-warms at a real new
 normal. A 3-lens review caught a `ZeroDivisionError` on a zero-median (sign-oscillating) field — fixed +
-re-verified. **Slow drift** (a value creeping within-band each run) is the honest remaining limit — a rolling
-baseline can't see it; the async **sampled-LLM judge** (the roadmap's other layer-2 half) is the answer, and a
-separate future slice.
+re-verified. **H9 layer 2b — the async sampled LLM JUDGE** then shipped (0.58.0), closing the slow-drift gap
+the rolling baseline structurally cannot see. Two halves: (a) a per-field learn-time **anchor** (numbers-only,
+set once) makes a creep visible in **pure Python** — `anchor_delta` + `monotone_fraction` — and lands even if
+the judge is never enabled; (b) an opt-in `FlowSpec.audit` captures ONE bounded, secret-redacted artifact per
+sampled clean replay (100% after any heal/re-learn/release), which the **separate** `flow audit` verb judges
+out-of-band. **Replay stays provably 0-LLM** — the judge never runs on it. The guarantee: *the judge can flag
+a flow for a human; it can never bless one* — there is no approve/verdict field in the tool schema, `decide()`
+is a pure `Optional[str]`, the judge function gets no cache/key/meta, `audit.py` cannot even name a clearing
+verb (AST-pinned), the one effect takes a **code** whose English is looked up in a closed table, and an
+already-quarantined flow is skipped before any LLM call. Every enforceable code needs an anchor Python
+re-proves (ring arithmetic for drift; a literal page citation for the semantic codes), so a compromised or
+prompt-injected judge can only **fail to fire**. A 3-lens review raised 10 candidates; the verify pass
+confirmed none as invariant breaks, but four genuine weaknesses were fixed anyway (a vacuous staleness anchor,
+a zero-width fence bypass, unredacted numeric secrets, a misleading excerpt bound). **Honest limits:** the
+judge sees only the engine's 500-char page prefix; a patient adversary who also controls a re-baseline still
+wins; and advisory-first means it protects nobody until an operator flips it to `enforce`.
 Then **H3 typed templates, slice 1** shipped (0.47.0): flows stop being input-frozen — a `SlotSpec` +
 `FlowSpec.slots` typed input contract, a 0-LLM **pre-flight validator** (`validate_params`: type / enum /
 pattern / min-max / required / env-resolved secrets — an out-of-domain value fails loud before the browser

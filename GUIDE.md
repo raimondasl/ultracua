@@ -374,8 +374,30 @@ floor (default 25%) catches a large move on a near-constant one. It stays **0-LL
 quarantine). For a real, permanent level shift, `flow release --rebaseline` clears the baseline so the field
 re-warms at the new normal; tune per field with `flow contracts --set price:max_delta_frac=0.5` (or
 `delta_advisory=true` to log-only, `delta_enabled=false` to turn magnitude off for that field). **Known
-limit:** a value that *slowly creeps* within-band each run isn't caught — a rolling baseline can't see its
-own drift; the async sampled-LLM judge (a later slice) is the answer.
+**Slow drift, and the LLM judge (layer 2b).** A value that creeps a little each run stays inside the band
+forever — the baseline *is* the creep. Two things close that. First, each field now keeps a **learn-time
+anchor** (its first clean observation, never overwritten), so the distance today's median has travelled from
+that fixed point is measurable in **pure Python, 0 LLM**. Second, an opt-in **audit** can ask an LLM about the
+runs that look suspicious — *entirely off the replay path*:
+
+```bash
+uv run ultracua flow audit --set-mode advisory --name daily-orders   # arm it (reports only)
+uv run ultracua flow audit                                           # judge captured runs (cron this)
+uv run ultracua flow audit --set-mode enforce --name daily-orders    # let a finding quarantine
+```
+
+With `audit` set, a *successful* replay writes one small, bounded, **secret-redacted** artifact (the extracted
+value, the numeric baseline, and a page excerpt) — never an LLM call. The separate `flow audit` verb then
+judges those artifacts later, in another process. **The guarantee: the judge can flag a flow for a human; it
+can never bless one.** There is no approve field it could return; a finding only ever *quarantines*, and only
+when deterministic Python independently corroborates it (it re-proves the creep from the numbers, or verifies
+the model's citation is a literal substring of the captured page). A compromised or prompt-injected judge can
+therefore only fail to fire. `advisory` is the sensible first mode — findings are reported and counted (`flow
+status` shows unreviewed advisories) but nothing is ever blocked; `enforce` is armed only by a human editing
+the spec. Artifacts are deleted as soon as they're judged; `flow audit --list/--show/--purge` inspect and
+clear the store. **Known limits:** the judge sees only the engine's ~500-char page prefix, sampling means a
+one-off wrong value can still ship (the verdict is inherently after-the-fact), and a legitimate slow change
+(inflation, a repricing) looks like drift — `flow release --rebaseline` is the answer there.
 
 ## Auth refresh
 
