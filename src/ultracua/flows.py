@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Optional, 
 from .browser import BrowserSession
 from .cache import CachedFlow, CachedStep, FlowCache, StepConfirm, flow_key
 from .conditions import condition_present
-from .config import settings
+from .config import flow_home, settings
 from .contracts import (
     CONTRACT_ATTRS, DELTA_WARMUP, accrue_ring, check_contracts, check_magnitude, effective_contracts,
     magnitude_fields, seed_contracts,
@@ -808,16 +808,26 @@ async def _learn_once(
     pinned = False
     approved = False
     if cached is not None:
+        was_approved = _load_meta(cache, key).approved
+
         def _apply(meta: FlowMeta) -> None:  # under the lock: preserve `approved`, refresh shape/pin
             nonlocal pinned, approved
-            meta.shape, meta.learned_ts = _shape_of(data), time.time()
+            meta.learned_ts = time.time()
             # Bind the pin to the just-learned DOM: a re-learn ALWAYS resets it (a fresh pin, or None
             # when pin_read is off / unpinnable) so a stale pin can never outlive the cached flow.
             meta.read_pin = out.get("pin") if spec.pin_read else None
-            # H9: auto-seed value contracts from the learned extraction — READ flows only (a write flow's
-            # meta.contracts stays None to keep the write rail untouched). Re-derived on every re-learn
-            # (learn-bound like `shape`); the human overlay lives separately in `spec.contracts`.
-            meta.contracts = seed_contracts(data, truncated=bool(out.get("truncated"))) if spec.mutate is None else None
+            # H9 PRESERVATION: re-seeding the shape + value contracts from THIS run silently re-baselines the
+            # semantic-wrongness defense. On an UN-approved flow that's right (it's still being authored). On
+            # an APPROVED flow it would discard the guarantees a human blessed — and if this re-learn ran on a
+            # drifted/wrong page, it would enshrine the wrong values as the new normal. So keep them: a
+            # re-authored approved flow FAILS LOUD against its old contracts instead of quietly adopting new
+            # ones. For a deliberate clean baseline: `flow unapprove` -> `flow learn` -> `flow approve`, or
+            # `flow release --rebaseline` for a genuine permanent level shift.
+            if not was_approved:
+                meta.shape = _shape_of(data)
+                # READ flows only — a write flow's meta.contracts stays None (the write rail is untouched).
+                meta.contracts = (seed_contracts(data, truncated=bool(out.get("truncated")))
+                                  if spec.mutate is None else None)
             meta.audit_due = True   # H9: a re-authored extraction is high-risk -> the next replay is audited
             pinned = meta.read_pin is not None
             approved = meta.approved
@@ -825,7 +835,9 @@ async def _learn_once(
         _update_meta(cache, key, _apply)
         # H9 layer 2: a re-authored extraction restarts the magnitude baseline (learn-bound like `shape` +
         # the seed) — a fresh window re-warms rather than comparing a new-normal value to the old baseline.
-        _reset_history(cache, key)
+        # Same reasoning as above: an APPROVED flow keeps its baseline so a re-learn can't silently reset it.
+        if not was_approved:
+            _reset_history(cache, key)
     else:
         approved = _load_meta(cache, key).approved
     return LearnResult(
@@ -875,8 +887,15 @@ def approve(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> None:
 
 
 def unapprove(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> None:
+    """Withdraw approval. Also the way to RE-BASELINE an approved flow's learned data shape + value contracts:
+    while approved those are deliberately preserved across a re-author, so `unapprove` -> re-author ->
+    `approve` is how a human adopts a legitimately restructured page."""
     cache = cache or _default_cache()
     key = flow_key(spec.goal, spec.start_url, spec.scope)
+    # Mirror `approve`'s guard: don't silently mint a meta sidecar (and promise a re-seed) for a flow that was
+    # never learned in the first place.
+    if cache.get(key) is None:
+        raise FlowReplayError(f"{spec.name!r}: nothing to unapprove — learn or record the flow first")
     _update_meta(cache, key, lambda m: setattr(m, "approved", False))
 
 
@@ -1298,6 +1317,18 @@ def _preflight_row(
         raise FlowReplayError(
             f"{spec.name!r}: value contracts changed since approval — re-approve the flow before replaying it "
             f"(a tightened or loosened value guarantee must be re-blessed by a human)")
+    # APPROVAL INTEGRITY: `on_drift="relearn"` lets the engine SELF-HEAL / suffix-replan / fully re-author the
+    # cached steps and write them straight back (`flow.py`'s `if dirty and success: cache.put(flow)`). On an
+    # APPROVED flow that would run LLM-authored steps no human ever reviewed, under the existing approval — the
+    # human sign-off this project advertises would not be binding. It also silently re-baselines H9 (a re-learn
+    # re-seeds shape/contracts and resets the magnitude history). So refuse, exactly as a write flow already
+    # does: recovery on an approved flow is a human action (`flow record`/`flow learn`, then re-approve).
+    if meta.approved and on_drift == "relearn":
+        raise FlowReplayError(
+            f"{spec.name!r}: on_drift='relearn' is refused for an APPROVED flow — re-authoring would replay "
+            f"steps no human reviewed under the existing approval (and would re-baseline the value contracts). "
+            f"Fix it deliberately: `flow record`/`flow learn`, review with `flow inspect`, then `flow approve`. "
+            f"To let an unattended run self-heal, run the flow unapproved (`--include-unapproved`).")
     # BINDING SAFETY: a resolved slot value only substitutes at a step whose `.slot` names it. If a supplied
     # slot binds to NO recorded type/select step, its value would fold into the flow's identity — and, at a
     # write, into the Idempotency-Key on the wire — WITHOUT being typed onto the page: the frozen literal is
@@ -1510,8 +1541,34 @@ async def replay(
 
 
 # --- spec persistence (for the `ultracua flow` CLI) -------------------------------------------
+class EmptyFlowStoreError(RuntimeError):
+    """A FLEET verb resolved ZERO flows, so it would have reported success while doing nothing.
+
+    This is the ops-layer form of inviolable #2 (never silently act wrong). The overwhelmingly common cause is
+    a scheduled job or an MCP server started in the wrong working directory — the flow home is cwd-relative
+    unless `$ULTRACUA_HOME` is set. Pass `allow_empty=True` (CLI: `--allow-empty`) where an empty fleet is
+    genuinely expected."""
+
+
+def _resolve_fleet(names: Optional[list], *, allow_empty: bool, verb: str) -> list:
+    """The shared fleet-name resolver. An EXPLICIT `names=[]` is a caller who asked for nothing and gets
+    nothing. But `names=None` (i.e. "every saved flow") resolving to ZERO is the silent-success footgun —
+    fail loud instead, naming the resolved home so the diagnosis is in the error."""
+    if names is not None:
+        return list(names)
+    found = list_specs()
+    if not found and not allow_empty:
+        raise EmptyFlowStoreError(
+            f"{verb}: no flows found in {flow_home()} — refusing to report success while doing nothing. "
+            f"Either you are running from the wrong directory (set $ULTRACUA_HOME, or run from the project "
+            f"that owns .ultracua/), or this store is genuinely empty — pass --allow-empty if so.")
+    return found
+
+
 def _specs_dir() -> Path:
-    return Path(".ultracua") / "specs"
+    """`<flow_home>/specs`. Resolved through `config.flow_home()` so the specs dir and the flow CACHE can
+    never diverge, and so a run from a project subdirectory finds the project's flows (see `flow_home`)."""
+    return flow_home() / "specs"
 
 
 def _only_known(data: dict, cls) -> dict:
@@ -1625,6 +1682,7 @@ class AuditRun:
 async def audit_flows(
     *, names: Optional[list[str]] = None, cache: Optional[FlowCache] = None, router=None,
     provider_name: Optional[str] = None, max_calls: int = 0, dry_run: bool = False, keep: bool = False,
+    allow_empty: bool = False,
 ) -> AuditRun:
     """H9 judge — the ASYNC, out-of-band audit verb. Reads persisted artifacts, asks the judge, and lets
     PURE code decide. It opens NO browser, never calls `replay`, and is never reached from the replay path.
@@ -1648,7 +1706,7 @@ async def audit_flows(
 
     # gather candidate artifacts across flows, riskiest first (a budget-limited run spends where it matters)
     candidates: list = []
-    for name in (names or list_specs()):
+    for name in _resolve_fleet(names, allow_empty=allow_empty, verb="flow audit"):
         try:
             spec = load_spec(name)
         except Exception as exc:  # noqa: BLE001 - a broken spec must not kill the audit
@@ -1717,7 +1775,7 @@ async def audit_flows(
 async def run_all(
     *, names: Optional[list[str]] = None, approved_only: bool = True, include_writes: bool = False,
     concurrency: Optional[int] = None, on_drift: str = "raise", provider_name: Optional[str] = None,
-    cache: Optional[FlowCache] = None,
+    cache: Optional[FlowCache] = None, allow_empty: bool = False,
 ) -> list[FleetRun]:
     """Replay every saved flow once (concurrently) and return each outcome — the thin fleet
     supervisor behind `ultracua flow run-all`.
@@ -1729,7 +1787,7 @@ async def run_all(
     `ULTRACUA_CONCURRENCY`.
     """
     cache = cache or _default_cache()
-    names = names if names is not None else list_specs()
+    names = _resolve_fleet(names, allow_empty=allow_empty, verb="flow run-all")
     sem = asyncio.Semaphore(concurrency or settings.concurrency)
 
     async def _one(name: str) -> FleetRun:
@@ -2026,12 +2084,12 @@ async def canary(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> Canary
 
 async def canary_all(
     *, names: Optional[list[str]] = None, cache: Optional[FlowCache] = None,
-    concurrency: Optional[int] = None,
+    concurrency: Optional[int] = None, allow_empty: bool = False,
 ) -> list[CanaryResult]:
     """Probe every saved flow's freshness concurrently — the cheap early-warning counterpart to
     `run_all`. Point cron at `flow canary` more frequently than the full `run-all` to catch rot early."""
     cache = cache or _default_cache()
-    names = names if names is not None else list_specs()
+    names = _resolve_fleet(names, allow_empty=allow_empty, verb="flow canary")
     sem = asyncio.Semaphore(concurrency or settings.concurrency)
 
     async def _one(name: str) -> CanaryResult:
@@ -2255,6 +2313,27 @@ def _mine_and_audit_slots(flow: "CachedFlow", spec: FlowSpec) -> "tuple[CachedFl
     return flow.model_copy(update={"steps": steps}), slots, findings
 
 
+def _reset_learn_baselines(cache: FlowCache, key: str) -> bool:
+    """A successful RE-AUTHORING (learn or record) of an UNAPPROVED flow drops the learn-bound baselines —
+    the data shape, the H9 value contracts and the magnitude history all describe the OLD recipe.
+
+    `learn` re-seeds them from its own extraction; `record` has no extracted data, so it CLEARS them and the
+    next learn (or the first clean runs, for the magnitude ring) re-establishes them. Symmetry matters: without
+    this, a learned-then-recorded flow kept a stale shape forever with no way to re-baseline, which made
+    `flow record` a dead end for a legitimate page restructure. An APPROVED flow keeps its blessed baselines
+    (a human must `flow unapprove` first) — that is the whole point of the preservation rule.
+    Returns True when the baselines were cleared."""
+    if _load_meta(cache, key).approved:
+        return False
+    def _apply(m: FlowMeta) -> None:
+        m.shape = None
+        m.contracts = None
+        m.audit_due = True
+    _update_meta(cache, key, _apply)
+    _reset_history(cache, key)
+    return True
+
+
 async def record(
     spec: FlowSpec, *, demo: Callable[[Any], Awaitable[None]], headless: bool = False,
     cache: Optional[FlowCache] = None, caption: Optional[Callable[..., Any]] = None,
@@ -2425,6 +2504,7 @@ async def record(
                                  "refused at replay; add it to writable_slots to bind it", spec.name, n)
         if final is not flow:
             cache.put(final)   # re-put ONLY when we changed the base flow (else record_demo's put stands)
+        _reset_learn_baselines(cache, key)   # a re-authored UNAPPROVED recipe drops stale baselines
         return RecordResult(spec, cached=True, reproduced=False, performed_write=wire_write, is_write=True,
                             steps=list(final.steps), slot_findings=slot_findings, note="")
 
@@ -2472,5 +2552,6 @@ async def record(
         flow = marked
         cache.put(flow)   # persist the slot markers alongside the verified flow
 
+    _reset_learn_baselines(cache, key)   # a re-authored UNAPPROVED recipe drops stale baselines
     return RecordResult(spec, cached=True, reproduced=True, performed_write=False, is_write=False,
                         steps=list(flow.steps), slot_findings=slot_findings)

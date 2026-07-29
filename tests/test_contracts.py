@@ -228,17 +228,37 @@ async def test_contract_change_requires_reapproval(tmp_path: Path) -> None:
         httpd.server_close()
 
 
-async def test_relearn_reseeds_contracts(tmp_path: Path) -> None:
+async def test_relearn_reseeds_contracts_only_while_unapproved(tmp_path: Path) -> None:
+    """A re-learn re-derives the seed WHILE THE FLOW IS UNAPPROVED (it's still being authored) — but once a
+    human has approved it, a re-learn must NOT silently re-baseline the contracts they blessed. Otherwise a
+    re-learn that ran against a drifted/wrong page would enshrine the wrong values as the new normal."""
     _write_fixture(tmp_path)
     httpd, base = _serve(tmp_path)
     cache = FlowCache(root=tmp_path / "cache")
     try:
-        spec = await _learn_read(cache, base, data=129)
+        spec = FlowSpec(name="reseed", start_url=f"{base}/page1.html", goal="open the answer page",
+                        extract="the answer number", headless=True)
+        assert (await learn(spec, provider=_ClickFirstLink(), router=_extract_router(129), cache=cache)).cached
         key = flow_key(spec.goal, spec.start_url, spec.scope)
         assert _load_meta(cache, key).contracts[""]["positive"] is True
-        # a re-learn on a page whose value is now a plain string re-derives the seed (no stale number contract)
+
+        # UNAPPROVED: a re-learn on a page whose value is now a string re-derives the seed (no stale contract)
         await learn(spec, provider=_ClickFirstLink(), router=_extract_router("hello"), cache=cache)
         assert _load_meta(cache, key).contracts[""]["type"] == "string"
+
+        # APPROVED: the same re-learn PRESERVES the blessed contracts — the flow will now fail loud against
+        # them rather than quietly adopting whatever this run happened to see.
+        await learn(spec, provider=_ClickFirstLink(), router=_extract_router(129), cache=cache)
+        approve(spec, cache=cache)
+        assert _load_meta(cache, key).contracts[""]["type"] == "number"
+        await learn(spec, provider=_ClickFirstLink(), router=_extract_router("hello"), cache=cache)
+        assert _load_meta(cache, key).contracts[""]["type"] == "number", "an approved re-learn re-baselined H9"
+
+        # REGRESSION: there MUST be a way out, or a legitimate page restructure wedges the flow forever.
+        # `unapprove -> learn -> approve` re-baselines under a human's eye.
+        flows.unapprove(spec, cache=cache)
+        await learn(spec, provider=_ClickFirstLink(), router=_extract_router("hello"), cache=cache)
+        assert _load_meta(cache, key).contracts[""]["type"] == "string", "unapprove -> learn did not re-seed"
     finally:
         httpd.shutdown()
         httpd.server_close()

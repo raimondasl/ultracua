@@ -168,15 +168,30 @@ async def test_release_default_rejects_and_rebaseline_rewarms(tmp_path: Path) ->
         httpd.server_close()
 
 
-async def test_relearn_clears_the_baseline(tmp_path: Path) -> None:
+async def test_relearn_clears_the_baseline_only_while_unapproved(tmp_path: Path) -> None:
+    """A re-learn restarts the magnitude window WHILE UNAPPROVED — but once a human has approved the flow, a
+    re-learn must NOT silently wipe the baseline (that would defeat the slow-drift defense unattended)."""
+    from ultracua.flows import approve
+    from ultracua.flows import FlowSpec as _Spec
+
     _write_fixture(tmp_path)
     httpd, base = _serve(tmp_path)
     cache = FlowCache(root=tmp_path / "cache")
     try:
-        spec = await _learn_read(cache, base, data=129)
+        spec = _Spec(name="rebase", start_url=f"{base}/page1.html", goal="open the answer page",
+                     extract="the answer number", headless=True)
+        assert (await learn(spec, provider=_ClickFirstLink(), router=_extract_router(129), cache=cache)).cached
         key = _seed_ring(cache, spec, [129] * 5)
-        await learn(spec, provider=_ClickFirstLink(), router=_extract_router(129), cache=cache)   # re-learn
-        assert H.load_history(cache, key)["fields"] == {}       # a re-authored extraction restarts the window
+
+        # UNAPPROVED: the window restarts (today's behavior, preserved)
+        await learn(spec, provider=_ClickFirstLink(), router=_extract_router(129), cache=cache)
+        assert H.load_history(cache, key)["fields"] == {}
+
+        # APPROVED: the baseline SURVIVES a re-learn
+        approve(spec, cache=cache)
+        _seed_ring(cache, spec, [129] * 5)
+        await learn(spec, provider=_ClickFirstLink(), router=_extract_router(129), cache=cache)
+        assert H.load_history(cache, key)["fields"][""] == [129] * 5, "an approved re-learn wiped the baseline"
     finally:
         httpd.shutdown()
         httpd.server_close()

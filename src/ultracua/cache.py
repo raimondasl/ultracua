@@ -124,7 +124,15 @@ class FlowCache:
     def __init__(
         self, root: Optional[Path | str] = None, ttl_seconds: Optional[float] = None
     ) -> None:
-        self.root = Path(root) if root else Path(".ultracua/flows")
+        # An explicit `root` always wins (tests, the daemon, a caller with its own store). Otherwise resolve
+        # `<flow_home>/flows` — the SAME home `flows._specs_dir()` uses, so the specs dir and the cache can
+        # never point at different stores (which is how a wrong-cwd run silently found zero flows).
+        if root:
+            self.root = Path(root)
+        else:
+            from .config import flow_home
+
+            self.root = flow_home() / "flows"
         self.ttl_seconds = ttl_seconds
 
     def _path(self, key: str) -> Path:
