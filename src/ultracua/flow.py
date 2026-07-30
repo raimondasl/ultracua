@@ -266,7 +266,12 @@ async def _author_steps(
         spec = None
         precond_scope = ""
         ctx: dict = {}
-        if action.action in ("click", "type") and action.ref:
+        # `select` belongs here with click/type: without it the step caches `locator=None` and replay
+        # refuses it as an "unreplayable step" — i.e. a dropdown authored by a scripted/custom provider
+        # produced a flow that could never replay. (Reachable only through those providers today:
+        # `ACTION_TOOL`'s action enum is `strict` and has no "select", so an LLM cannot emit one.) The
+        # recorder path builds its specs in JS and so was never affected, which is why 565 tests missed it.
+        if action.action in ("click", "type", "select") and action.ref:
             with tr.measure("describe"):
                 spec = await describe(session.page, action.ref)
             if action.action == "click":  # structural write-signal (does it submit a form? method?)
