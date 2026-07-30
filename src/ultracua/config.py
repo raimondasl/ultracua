@@ -58,6 +58,35 @@ def _default_data_dir() -> str:
     return str(Path.home() / ".ultracua" / "data")
 
 
+HOME_DIR_NAME = ".ultracua"
+
+
+def flow_home() -> Path:
+    """Where a flow's SPECS + CACHE live — resolved once, the same way for every surface.
+
+    Resolution order:
+      1. `$ULTRACUA_HOME` (`~` expanded) — set this for a machine-global store, and in an MCP client's `env`
+         block (an MCP server is launched with an arbitrary cwd). **Use an ABSOLUTE path**: a relative value
+         is still resolved against the current directory, which is exactly the cwd-dependence this exists to
+         escape.
+      2. The nearest ancestor directory containing a `.ultracua/` — git-style, so running from a
+         subdirectory of your project finds the project's flows instead of silently finding nothing.
+      3. `./.ultracua` — today's behavior when nothing else applies.
+
+    There is deliberately **NO `~/.ultracua` fallback**: a scheduled job started in the wrong directory must
+    fail loudly (see the empty-store refusals in the fleet verbs), never quietly run a *different* fleet.
+    Not memoized on purpose — a value cached across a `chdir` is exactly the bug class this fixes.
+    """
+    env = os.getenv("ULTRACUA_HOME")
+    if env:
+        return Path(env).expanduser().resolve()
+    cwd = Path.cwd()
+    for d in (cwd, *cwd.parents):
+        if (d / HOME_DIR_NAME).is_dir():
+            return d / HOME_DIR_NAME
+    return cwd / HOME_DIR_NAME
+
+
 @dataclass(frozen=True)
 class Settings:
     # Which provider drives the agent: anthropic | openai | gemini | mock.

@@ -486,6 +486,23 @@ spec = FlowSpec(name="checkout", start_url=…, goal="add the item then place th
   **compensation/rollback** + **dynamic-N** ("approve however many items exist today") are deferred to later
   Phase-G PRs; the recorder `--confirm-*` CLI flags too (use the Python API for now).
 
+## Where your flows live (the flow home)
+
+Specs and cached flows live under a single **flow home**, resolved in this order:
+
+1. **`$ULTRACUA_HOME`** (use an *absolute* path) — set this for a machine-global store, **and in your MCP
+   client's `env` block**, since an MCP server is launched with an arbitrary working directory.
+2. The nearest **ancestor directory containing a `.ultracua/`** — git-style, so running from a subdirectory of
+   your project finds the project's flows.
+3. `./.ultracua` — the fallback.
+
+There is deliberately **no `~/.ultracua` fallback**: a scheduled job started in the wrong directory must fail
+loudly rather than quietly run a *different* fleet. To that end, a fleet verb that resolves **zero flows**
+now **exits non-zero** — `flow run-all` and `flow canary` exit **2**, `flow audit` exits **3**, and
+`flow serve-mcp` refuses to start rather than serving an empty tool list. Pass `--allow-empty` where an empty
+fleet is genuinely expected. `flow status` / `flow list` still exit 0 and print the resolved home, which is
+usually the whole diagnosis for *"why does it say no flows?"*.
+
 ## Run a fleet
 
 Once you have several saved flows, **`ultracua flow run-all`** is the supervisor: it replays every

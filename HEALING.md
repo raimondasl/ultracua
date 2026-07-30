@@ -164,6 +164,29 @@ re-plan or re-learn rather than silently re-deriving the flow every run.
 - **Opt into LLM recovery** with a provider + `on_drift="relearn"` (CLI: `flow replay --on-drift relearn`).
   ultracua then escalates 0-LLM replay → single-step heal → suffix re-plan → full re-author, in that order, and
   re-caches the result so the *next* run is 0-LLM again.
+- **⚠️ `on_drift="relearn"` is refused on an APPROVED flow.** Re-authoring rewrites the cached steps, so an
+  unattended relearn would replay steps **no human reviewed** under the existing approval — and would
+  re-baseline the value contracts a human blessed. So an approved flow fails loud instead, and recovery is a
+  deliberate human action:
+
+  ```bash
+  uv run ultracua flow record --name daily-orders     # or: flow learn --name daily-orders
+  uv run ultracua flow inspect --name daily-orders    # review what changed
+  uv run ultracua flow approve --name daily-orders
+  ```
+
+  That sequence fixes **step** drift (a moved/renamed element). If the page **legitimately restructured** so the
+  *data's shape* changed too, note that an approved flow keeps its blessed shape + value contracts **on purpose**
+  — so re-authoring *while approved* will not adopt the new normal, and ultracua says so rather than letting
+  "recorded + verified" imply otherwise. Re-baseline it explicitly, in this order:
+
+  ```bash
+  uv run ultracua flow unapprove --name daily-orders   # release the blessed baseline
+  uv run ultracua flow learn     --name daily-orders   # (or `flow record` — a WRITE flow must use record)
+  uv run ultracua flow approve   --name daily-orders   # bless the new one
+  ```
+
+  To let an unattended run self-heal instead, run the flow unapproved (`run-all --include-unapproved`).
 - **Monitor a fleet** with `flow status` / `flow run-all` (a non-zero exit + a typed error on drift is the
   signal to alert on) and the cheap `flow canary` (does each flow still *start*?). See GUIDE.md → *Run a fleet*.
 

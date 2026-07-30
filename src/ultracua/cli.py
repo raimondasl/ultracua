@@ -109,6 +109,37 @@ def _has_confirm_args(args: argparse.Namespace) -> bool:
     return bool(args.confirm_selector or args.confirm_text_contains or args.confirm_url_contains)
 
 
+def _warn_if_shape_baseline_kept(spec, data, *, had_data: bool = True) -> None:
+    """An APPROVED flow deliberately KEEPS the data shape + value contracts a human blessed, so a re-author does
+    NOT re-baseline them. Say so, rather than let "cached=True" / "recorded + verified" imply the repair landed.
+
+    `had_data=False` (the recorder, which extracts nothing) just states that the baselines were preserved. With
+    data, the check uses the SAME lenient `_shape_matches` the replay gate uses, so it can't cry wolf over an
+    empty-vs-populated list."""
+    from .cache import FlowCache as _FC
+    from .flows import _load_meta, _shape_matches, _shape_of, flow_key as _fk
+
+    meta = _load_meta(_FC(), _fk(spec.goal, spec.start_url, spec.scope))
+    if meta.shape is None and meta.contracts is None:
+        return                                     # nothing was preserved, nothing to warn about
+    fresh = _shape_of(data) if had_data else None
+    if fresh is not None and _shape_matches(meta.shape, fresh):
+        return                                     # the replay gate would accept it — stay quiet
+    # A WRITE flow must NEVER be told to re-learn: re-authoring would actuate the write again. Its safe
+    # authoring path is the recorder (gated + wire-attributed + approval-gated).
+    redo = (f"ultracua flow record --name {spec.name} ..." if spec.mutate is not None
+            else f"ultracua flow learn --name {spec.name} ...")
+    detail = (f"this run's shape is {fresh}, so replay will STILL fail loud on shape drift"
+              if fresh is not None else
+              "a re-record does not re-baseline them, so replay still enforces the OLD shape/contracts")
+    print(f"WARNING: {spec.name!r} is APPROVED, so its blessed data shape + value contracts were KEPT "
+          f"({meta.shape}) — {detail}.\n"
+          f"         To adopt the new baseline deliberately:\n"
+          f"           ultracua flow unapprove --name {spec.name}\n"
+          f"           {redo}\n"
+          f"           ultracua flow approve --name {spec.name}")
+
+
 async def _flow_learn(args: argparse.Namespace) -> None:
     from .flows import FlowSpec, learn, save_spec
 
@@ -135,6 +166,8 @@ async def _flow_learn(args: argparse.Namespace) -> None:
         print("WARNING: no replayable flow was cached (the agent took no clean steps).")
     elif not res.approved:
         print(f"verify the above, then approve it: ultracua flow approve --name {spec.name}")
+    else:
+        _warn_if_shape_baseline_kept(spec, res.data)
 
 
 async def _flow_replay(args: argparse.Namespace) -> None:
@@ -158,6 +191,18 @@ def _flow_approve(args: argparse.Namespace) -> None:
     spec = load_spec(args.name)
     approve(spec)
     print(f"approved {spec.name!r} — `flow replay --name {spec.name} --require-approved` will run it")
+
+
+def _flow_unapprove(args: argparse.Namespace) -> None:
+    """Withdraw approval. Needed as a real verb (not just a Python API) because an APPROVED flow deliberately
+    KEEPS its learned data shape + value contracts across a re-learn — so when a page legitimately restructures,
+    `unapprove -> learn -> approve` is the only way to re-baseline them under a human's eye."""
+    from .flows import load_spec, unapprove
+
+    spec = load_spec(args.name)
+    unapprove(spec)
+    print(f"unapproved {spec.name!r} — its learned shape + value contracts will be RE-SEEDED by the next "
+          f"`flow learn --name {spec.name}`. Review the result, then `flow approve --name {spec.name}`.")
 
 
 async def _flow_login(args: argparse.Namespace) -> None:
@@ -215,16 +260,30 @@ def _flow_inspect(args: argparse.Namespace) -> None:
 
 
 def _flow_list() -> None:
+    from .config import flow_home
     from .flows import list_specs
 
     names = list_specs()
-    print("\n".join(names) if names else "(no saved flows)")
+    # Name the resolved home when there is nothing to list — that is usually the entire diagnosis for
+    # "why does it say no flows?" (the store is cwd-relative unless $ULTRACUA_HOME is set).
+    print("\n".join(names) if names else f"(no saved flows in {flow_home()})")
 
 
 def _flow_serve_mcp(args: argparse.Namespace) -> None:
+    from .config import flow_home
+    from .flows import list_specs
     from .mcpserver import list_flow_tools, serve
 
     expose_writes = getattr(args, "expose_writes", False)
+    # An MCP client launches its servers with an ARBITRARY cwd, and the flow home is cwd-relative unless
+    # $ULTRACUA_HOME is set — so this surface was the most likely of all to come up "healthy" exposing ZERO
+    # tools, with the failure visible nowhere. Refuse to start on a genuinely EMPTY store. (A store that has
+    # specs but none approved yet still starts: that's a legitimate mid-setup state.)
+    if not list_specs() and not getattr(args, "allow_empty", False):
+        print(f"error: no flows found in {flow_home()} — refusing to serve an empty tool list. Set "
+              f"$ULTRACUA_HOME (in your MCP client's `env` block) or launch from the project that owns "
+              f".ultracua/. Pass --allow-empty to serve anyway.", file=sys.stderr)
+        raise SystemExit(2)
     tools = list_flow_tools(expose_writes=expose_writes)  # preview to stderr; stdout is the MCP protocol
     reads = [t.name for t in tools if not t.is_write]
     writes = [t.name for t in tools if t.is_write]
@@ -274,9 +333,11 @@ def _audit_advisories(name: str) -> int:
 def _flow_status(args: argparse.Namespace) -> None:
     from .flows import health, list_specs, load_spec
 
+    from .config import flow_home
+
     names = [args.name] if args.name else list_specs()
     if not names:
-        print("(no saved flows)")
+        print(f"(no saved flows in {flow_home()})")
         return
     stale_after = args.stale_after * 3600 if args.stale_after else None  # hours -> seconds
     for name in names:
@@ -365,7 +426,7 @@ def _flow_contracts(args: argparse.Namespace) -> None:
 def _flow_audit(args: argparse.Namespace) -> None:
     from .audit import AUDIT_MODES, audit_dir, load_artifacts
     from .cache import FlowCache, flow_key
-    from .flows import audit_flows, list_specs, load_spec, save_spec
+    from .flows import _resolve_fleet, audit_flows, list_specs, load_spec, save_spec
     from .audit import purge as audit_purge
 
     names = [args.name] if args.name else None
@@ -388,14 +449,18 @@ def _flow_audit(args: argparse.Namespace) -> None:
 
     cache = FlowCache()
     if args.purge:
-        for name in (names or list_specs()):
+        purged = 0
+        for name in _resolve_fleet(names, allow_empty=getattr(args, "allow_empty", False),
+                                   verb="flow audit --purge"):
+            purged += 1
             spec = load_spec(name)
             audit_purge(cache, flow_key(spec.goal, spec.start_url, spec.scope))
-        print("purged the audit artifact store")
+        print(f"purged the audit artifact store for {purged} flow(s)")
         return
 
     if args.list or args.show:
-        for name in (names or list_specs()):
+        for name in _resolve_fleet(names, allow_empty=getattr(args, "allow_empty", False),
+                                   verb="flow audit --list"):
             spec = load_spec(name)
             key = flow_key(spec.goal, spec.start_url, spec.scope)
             arts = load_artifacts(cache, key)
@@ -409,7 +474,8 @@ def _flow_audit(args: argparse.Namespace) -> None:
         return
 
     run = asyncio.run(audit_flows(names=names, cache=cache, max_calls=args.max_calls,
-                                  dry_run=args.dry_run, keep=args.keep, provider_name=args.provider))
+                                  dry_run=args.dry_run, keep=args.keep, provider_name=args.provider,
+                                  allow_empty=getattr(args, "allow_empty", False)))
     for f in run.findings:
         mark = "QUARANTINED" if f.enforced else "advisory"
         print(f"  [{mark:<11}] {f.name:<24} {f.code}" + (f"\n      quote: {f.quote[:120]}" if f.quote else ""))
@@ -453,6 +519,7 @@ def _flow_run_all(args: argparse.Namespace) -> None:
     results = asyncio.run(run_all(
         approved_only=not args.include_unapproved, include_writes=args.include_writes,
         concurrency=args.concurrency, on_drift=args.on_drift, provider_name=args.provider,
+        allow_empty=getattr(args, "allow_empty", False),
     ))
     rank = {"failed": 0, "ok": 1, "skipped": 2}
     for r in sorted(results, key=lambda r: (rank.get(r.status, 3), r.name)):
@@ -628,6 +695,9 @@ def _flow_record(args: argparse.Namespace) -> None:
                       f"`params={{...}}` (e.g. `flows.replay(spec, params={{'{sorted(spec.slots)[0]}': '…'}})`).")
             print(f"\nrecorded + verified {spec.name!r} (replays 0-LLM). Approve it to run unattended:\n"
                   f"    ultracua flow approve --name {spec.name}")
+        # Same honesty as `flow learn`: an APPROVED flow keeps the shape a human blessed, so re-recording it
+        # does NOT re-baseline — say so rather than let "recorded + verified" imply the repair landed.
+        _warn_if_shape_baseline_kept(spec, None, had_data=False)
     else:
         raise SystemExit(f"\nNOT recorded: {res.note}")
 
@@ -638,7 +708,8 @@ def _flow_canary(args: argparse.Namespace) -> None:
     if args.name:
         results = [asyncio.run(canary(load_spec(args.name)))]
     else:
-        results = asyncio.run(canary_all(concurrency=args.concurrency))
+        results = asyncio.run(canary_all(concurrency=args.concurrency,
+                                         allow_empty=getattr(args, "allow_empty", False)))
     rank = {"stale": 0, "error": 1, "not-learned": 2, "fresh": 3}
     for r in sorted(results, key=lambda r: (rank.get(r.status, 9), r.name)):
         mark = {"fresh": "FRESH", "stale": "STALE", "error": "ERROR",
@@ -723,13 +794,18 @@ def _flow_main(argv) -> None:
     pr.add_argument("--require-approved", dest="require_approved", action="store_true",
                     help="refuse to run a flow that hasn't been approved.")
     pr.add_argument("--on-drift", dest="on_drift", default="raise", choices=["raise", "relearn"],
-                    help="raise = fail loud on drift (default); relearn = re-author the flow instead.")
+                    help="raise = fail loud on drift (default); relearn = re-author the flow instead. NOTE: relearn is REFUSED on an APPROVED flow (it would run steps no human reviewed) — unapprove first, or use --include-unapproved.")
     pr.add_argument("--no-auth-refresh", dest="auth_refresh", action="store_false",
                     help="don't re-login on drift (default: refresh an expired session and retry).")
     pr.add_argument("--verbose", "-v", action="store_true", help="log replay/heal/drift events (INFO).")
 
     pa = sub.add_parser("approve", help="Mark a learned flow trusted (for --require-approved replays).")
     pa.add_argument("--name", required=True)
+
+    pua = sub.add_parser("unapprove", help="Withdraw approval — also the way to RE-BASELINE an approved "
+                                           "flow's learned shape + value contracts "
+                                           "(unapprove -> learn -> approve).")
+    pua.add_argument("--name", required=True)
 
     plg = sub.add_parser("login", help="Re-authenticate a flow now (refresh its storage_state cookies).")
     plg.add_argument("--name", required=True)
@@ -781,6 +857,8 @@ def _flow_main(argv) -> None:
     pau.add_argument("--max-calls", dest="max_calls", type=int, default=0, help="LLM call budget (default 20).")
     pau.add_argument("--provider", **prov)
     pau.add_argument("-v", "--verbose", action="store_true", help="also print skipped flows.")
+    pau.add_argument("--allow-empty", dest="allow_empty", action="store_true",
+                     help="do not fail when the flow store resolves to zero flows.")
 
     pra = sub.add_parser("run-all", help="Replay every saved flow (read + approved by default); "
                                          "report + alert; exits non-zero if any fails. Point cron at this.")
@@ -791,7 +869,10 @@ def _flow_main(argv) -> None:
                      help="also run write/mutate flows (PERFORMS the writes).")
     pra.add_argument("--concurrency", type=int, default=None,
                      help="max flows run at once (default ULTRACUA_CONCURRENCY).")
-    pra.add_argument("--on-drift", dest="on_drift", default="raise", choices=["raise", "relearn"])
+    pra.add_argument("--on-drift", dest="on_drift", default="raise", choices=["raise", "relearn"],
+                     help="relearn is REFUSED on APPROVED flows (it would run un-reviewed steps); with the default approved-only fleet it would fail every flow.")
+    pra.add_argument("--allow-empty", dest="allow_empty", action="store_true",
+                     help="do not fail when the flow store resolves to zero flows.")
     pra.add_argument("--json", dest="json", help="write a machine-readable run record to this path.")
     pra.add_argument("--alert-webhook", dest="alert_webhook",
                      help="POST a JSON alert here if any flow fails (Slack/Discord/etc. incoming webhook).")
@@ -843,24 +924,41 @@ def _flow_main(argv) -> None:
     pca.add_argument("--name", help="a single flow (default: all).")
     pca.add_argument("--concurrency", type=int, default=None,
                      help="max flows probed at once (default ULTRACUA_CONCURRENCY).")
+    pca.add_argument("--allow-empty", dest="allow_empty", action="store_true",
+                     help="do not fail when the flow store resolves to zero flows.")
 
     sub.add_parser("list", help="List saved flows.")
     psm = sub.add_parser("serve-mcp", help="Serve APPROVED READ flows as MCP tools over stdio (H2; needs "
                                            "`uv sync --group mcp`). Writes are not exposed by default.")
+    psm.add_argument("--allow-empty", dest="allow_empty", action="store_true",
+                     help="serve even when the flow store resolves to zero flows.")
     psm.add_argument("--expose-writes", dest="expose_writes", action="store_true",
                      help="Also expose APPROVED, DECLARED write flows as tools. Each call requires an "
                           "interactive elicitation confirm (a client without elicitation is refused); a "
                           "retry of the same args is deduped, and calls run under the OPERATOR's identity.")
 
     args = p.parse_args(argv)
+    from .flows import EmptyFlowStoreError
     from .obs import configure_logging
     configure_logging("INFO" if getattr(args, "verbose", False) else settings.log_level)
+    try:
+        _flow_dispatch(args)
+    except EmptyFlowStoreError as exc:
+        # A fleet verb resolved ZERO flows. Exit 3 for `audit` (it already uses 3 for "we did not look"),
+        # 2 for the rest — never 0, which is what made a wrong-cwd cron job look healthy forever.
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(3 if args.cmd == "audit" else 2)
+
+
+def _flow_dispatch(args: argparse.Namespace) -> None:
     if args.cmd == "learn":
         asyncio.run(_flow_learn(args))
     elif args.cmd == "replay":
         asyncio.run(_flow_replay(args))
     elif args.cmd == "approve":
         _flow_approve(args)
+    elif args.cmd == "unapprove":
+        _flow_unapprove(args)
     elif args.cmd == "login":
         asyncio.run(_flow_login(args))
     elif args.cmd == "set-login":
