@@ -187,6 +187,23 @@ re-plan or re-learn rather than silently re-deriving the flow every run.
   ```
 
   To let an unattended run self-heal instead, run the flow unapproved (`run-all --include-unapproved`).
+- **Approval binds to the steps themselves, not just to the flow's name.** `flow approve` records a digest of
+  the recipe you reviewed (each step's action, intent, locator, typed text, `mutating` flag, commit barrier and
+  slot binding, in order). If anything later rewrites those steps — a heal or re-plan on an *unapproved* run, a
+  `flow record`, a re-learn, a hand-edited cache file — replay **refuses** with `stale_approval` rather than run
+  a recipe no human read. It is checked before the browser opens, so nothing has acted when it fires. `flow
+  status` shows it as `APPROVAL STALE` and the MCP server stops advertising the tool. The way out is a human
+  reading the new recipe:
+
+  ```bash
+  uv run ultracua flow inspect --name daily-orders
+  uv run ultracua flow approve --name daily-orders
+  ```
+
+  Scope, stated honestly: this is **integrity, not authenticity**. The digest is unkeyed and sits in the meta
+  sidecar next to the flow file it authenticates, so it catches the *system* re-authoring itself under a stale
+  approval bit — it is not tamper-proofing against someone who can already write to your flow store. Signing
+  is a separate, unbuilt concern.
 - **Monitor a fleet** with `flow status` / `flow run-all` (a non-zero exit + a typed error on drift is the
   signal to alert on) and the cheap `flow canary` (does each flow still *start*?). See GUIDE.md → *Run a fleet*.
 

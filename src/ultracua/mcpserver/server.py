@@ -149,6 +149,14 @@ def list_flow_tools(cache: Optional[FlowCache] = None, *, expose_writes: bool = 
         health = flows.health(spec, cache=cache)
         if not (health.approved and health.cached):  # only human-approved, learned flows
             continue
+        if health.approval_stale:
+            # The approval bit is set but no longer binds the steps on disk (they were re-authored, or the
+            # flow predates the binding). Pre-flight would refuse every call with `stale_approval`, so don't
+            # advertise it at all — an unlisted tool an agent never calls beats a listed tool that always
+            # fails. Logged, not silent: an operator needs to know why their tool vanished.
+            _log.warning("mcp: skipping %r — approval no longer matches the flow's steps; review with "
+                         "`flow inspect --name %s` and re-approve", spec_name, spec_name)
+            continue
         is_write = _is_write_flow(spec, cache)
         if is_write:
             # A write is exposed ONLY behind --expose-writes AND only if it's a DECLARED write with a confirm
@@ -200,8 +208,10 @@ async def call_flow_tool(
     cache = cache or FlowCache()
     resolved = {t.name: t for t in list_flow_tools(cache, expose_writes=expose_writes)}.get(name)
     if resolved is None:
-        return ToolOutcome(False, code="unknown_tool",
-                           message=f"no tool named {name!r} (unlisted, unapproved, or a write not exposed)")
+        return ToolOutcome(
+            False, code="unknown_tool",
+            message=f"no tool named {name!r} (unlisted, unapproved, its approval no longer matches the "
+                    f"flow's reviewed steps, or a write not exposed)")
     spec = flows.load_spec(resolved.spec_name)
     # Shared params rule: a real dict -> use it; a slotted flow with no args -> {} (enforce required); a
     # no-slot flow -> None (frozen replay). ALL arg validation happens inside replay/preflight_keys.

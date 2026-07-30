@@ -109,6 +109,24 @@ def _has_confirm_args(args: argparse.Namespace) -> bool:
     return bool(args.confirm_selector or args.confirm_text_contains or args.confirm_url_contains)
 
 
+def _warn_if_approval_stale(spec) -> None:
+    """Say it at the moment it happens: re-authoring an APPROVED flow's steps invalidates the approval, so
+    the flow is now UNRUNNABLE until a human re-approves. `flow status` also reports it, but an operator who
+    just ran `flow learn`/`flow record` and saw "cached=True" would otherwise not find out until the next
+    scheduled run refused."""
+    try:
+        from .flows import health
+    except Exception:  # noqa: BLE001 — a courtesy warning must never break the command that succeeded
+        return
+    if not health(spec).approval_stale:
+        return
+    print(f"WARNING: {spec.name!r} is APPROVED, but these steps are NOT the ones that were approved — replay "
+          f"will now REFUSE (stale_approval).\n"
+          f"         Review them and re-approve:\n"
+          f"           ultracua flow inspect --name {spec.name}\n"
+          f"           ultracua flow approve --name {spec.name}")
+
+
 def _warn_if_shape_baseline_kept(spec, data, *, had_data: bool = True) -> None:
     """An APPROVED flow deliberately KEEPS the data shape + value contracts a human blessed, so a re-author does
     NOT re-baseline them. Say so, rather than let "cached=True" / "recorded + verified" imply the repair landed.
@@ -167,6 +185,7 @@ async def _flow_learn(args: argparse.Namespace) -> None:
     elif not res.approved:
         print(f"verify the above, then approve it: ultracua flow approve --name {spec.name}")
     else:
+        _warn_if_approval_stale(spec)
         _warn_if_shape_baseline_kept(spec, res.data)
 
 
@@ -186,11 +205,131 @@ async def _flow_replay(args: argparse.Namespace) -> None:
 
 
 def _flow_approve(args: argparse.Namespace) -> None:
-    from .flows import approve, load_spec
+    from .cache import FlowCache, flow_key
+    from .flows import _contracts_hash, _load_meta, _slots_hash, approve, load_spec
 
+    if getattr(args, "all", False):
+        _flow_approve_all(args)
+        return
+    if not args.name:
+        raise SystemExit("approve needs --name NAME (or --all to re-approve a whole read fleet)")
     spec = load_spec(args.name)
+    # One `approve` stamps THREE bindings — the recipe, the slot schema, and the value-contract overlay. Read
+    # the BEFORE state so we can say which of them this approval actually moved: silently re-blessing a widened
+    # slot domain (or a loosened contract) as a side effect of blessing a recipe is how a gate gets defeated by
+    # the very command meant to enforce it.
+    before = _load_meta(FlowCache(), flow_key(spec.goal, spec.start_url, spec.scope))
+    also = []
+    if before.approved and _slots_hash(spec) != before.slots_hash:
+        also.append("its SLOT SCHEMA (a changed/widened slot domain — check `flow inspect --name "
+                    f"{spec.name}`)")
+    if before.approved and _contracts_hash(spec) != before.contracts_hash:
+        also.append("its VALUE CONTRACTS (a tightened or loosened guarantee — check `flow contracts --name "
+                    f"{spec.name}`)")
     approve(spec)
     print(f"approved {spec.name!r} — `flow replay --name {spec.name} --require-approved` will run it")
+    if also:
+        print("NOTE: this also re-approved " + "; and ".join(also))
+
+
+def _step_line(i: int, s, spec) -> str:
+    """One step, as a human reviewing an approval needs to see it: everything the approval digest BINDS.
+    A step whose value comes from a SECRET slot prints the slot name, never the frozen literal."""
+    parts = [f"  {i}: {s.action} {s.intent!r}"]
+    if s.locator is not None:
+        what = s.locator.name or s.locator.testid or s.locator.css or s.locator.elem_id or ""
+        parts.append(f"  -> {s.locator.role or s.locator.tag or '?'} {what!r}")
+    if s.slot:
+        slot = (spec.slots or {}).get(s.slot)
+        parts.append(f"  [slot {s.slot}"
+                     + (" SECRET" if slot is not None and getattr(slot, "secret", False) else "") + "]")
+    if s.text is not None and s.text != "":
+        slot = (spec.slots or {}).get(s.slot) if s.slot else None
+        if slot is not None and getattr(slot, "secret", False):
+            parts.append('  text="***"')            # never echo a secret slot's frozen literal
+        else:
+            shown = s.text if len(s.text) <= 60 else s.text[:57] + "..."
+            parts.append(f"  text={shown!r}")
+    if s.mutating:
+        parts.append("  **MUTATING**")
+    return "".join(parts)
+
+
+def _flow_approve_all(args: argparse.Namespace) -> None:
+    """Bulk re-approval, for the one-time upgrade to steps-bound approvals (see `cache.steps_hash`).
+
+    Deliberately awkward, because bulk-blessing recipes is exactly the thing this release exists to stop
+    being easy:
+      - it PRINTS every flow's steps first — including each step's typed text and slot binding, i.e. the
+        things the digest actually binds, not just an action list;
+      - it REFUSES any flow with a mutating step — a write's recipe gets read one at a time, by a human,
+        with `flow inspect`. There is no `--include-writes`;
+      - it REFUSES a flow with a PENDING slot-schema or value-contract re-approval. `approve()` stamps all
+        three bindings at once, so blessing such a flow here would silently clear a *different* trust gate
+        (a widened slot domain, a loosened contract) that this printout does not show. Those go one at a
+        time too;
+      - it requires an interactive confirmation (or an explicit `--yes`, so a documented migration script
+        can run non-interactively — the operator typed it, which is the same consent one level up).
+    """
+    from .cache import FlowCache, flow_key
+    from .config import flow_home
+    from .flows import _contracts_hash, _load_meta, _slots_hash, approve, list_specs, load_spec
+
+    names = list_specs()
+    if not names:
+        raise SystemExit(f"no saved flows in {flow_home()} — nothing to approve")
+    cache = FlowCache()
+    pending: list[tuple[str, object]] = []   # (name, spec) — eligible reads
+    skipped: list[tuple[str, str]] = []      # (name, why)
+    for name in names:
+        try:
+            spec = load_spec(name)
+        except Exception as exc:  # noqa: BLE001 — one unreadable spec must not block the migration
+            skipped.append((name, f"unreadable spec: {exc}"))
+            continue
+        key = flow_key(spec.goal, spec.start_url, spec.scope)
+        cached = cache.get(key)
+        if cached is None:
+            skipped.append((name, "not learned yet"))
+            continue
+        if spec.mutate is not None or any(s.mutating for s in cached.steps):
+            skipped.append((name, "WRITE flow — review it individually (`flow inspect --name "
+                                  f"{name}`) and approve by name"))
+            continue
+        meta = _load_meta(cache, key)
+        if meta.quarantine is not None:
+            skipped.append((name, f"quarantined — `flow release --name {name}` it first"))
+            continue
+        if meta.approved and _slots_hash(spec) != meta.slots_hash:
+            skipped.append((name, "its SLOT SCHEMA also changed since approval — that is a separate "
+                                  "re-approval this printout does not show. Review `flow inspect --name "
+                                  f"{name}` and approve by name"))
+            continue
+        if meta.approved and _contracts_hash(spec) != meta.contracts_hash:
+            skipped.append((name, "its VALUE CONTRACTS also changed since approval — that is a separate "
+                                  f"re-approval this printout does not show. Review `flow contracts --name "
+                                  f"{name}` and approve by name"))
+            continue
+        pending.append((name, spec))
+        first = "" if meta.approved else "   [FIRST approval — this flow was never approved before]"
+        print(f"\n== {name}: {len(cached.steps)} step(s)  [{spec.start_url}]{first}")
+        for i, s in enumerate(cached.steps):
+            print(_step_line(i, s, spec))
+    for name, why in skipped:
+        print(f"\n-- SKIPPING {name}: {why}")
+    if not pending:
+        raise SystemExit("\nnothing eligible for bulk approval (see the skip reasons above)")
+    print(f"\nabout to approve {len(pending)} read flow(s): {', '.join(n for n, _ in pending)}")
+    if not getattr(args, "yes", False):
+        if not sys.stdin.isatty():
+            raise SystemExit("refusing to bulk-approve without a human: re-run attached to a terminal, or "
+                             "pass --yes if you have read the recipes above.")
+        if input("approve these? [y/N] ").strip().lower() not in ("y", "yes"):
+            raise SystemExit("aborted — nothing approved")
+    for name, spec in pending:
+        approve(spec)
+    print(f"approved {len(pending)} flow(s). Writes were skipped on purpose — approve each by name after "
+          f"`flow inspect --name <name>`.")
 
 
 def _flow_unapprove(args: argparse.Namespace) -> None:
@@ -252,9 +391,12 @@ def _flow_inspect(args: argparse.Namespace) -> None:
     print(json.dumps(asdict(spec), indent=2))
     cached = FlowCache().get(flow_key(spec.goal, spec.start_url, spec.scope))
     if cached:
+        # Every `stale_approval` refusal sends the operator here to decide whether to re-approve, so this must
+        # show what the approval digest actually BINDS — the target, the typed text, the slot, the mutating
+        # flag — not just an action list. (A secret slot's literal is never echoed.)
         print(f"\nlearned {len(cached.steps)} step(s):")
         for i, s in enumerate(cached.steps):
-            print(f"  {i}: {s.action} {s.intent!r}")
+            print(_step_line(i, s, spec))
     else:
         print("\n(no learned flow cached yet — run: ultracua flow learn ...)")
 
@@ -347,6 +489,12 @@ def _flow_status(args: argparse.Namespace) -> None:
               f"last_ok={_ago(h.last_ok_ts)}")
         if h.last_error and h.status not in ("healthy", "never-run", "not-learned"):
             print(f"    last error: {h.last_error}")
+        # The approval bit is set but no longer binds the steps on disk -> every run REFUSES at pre-flight.
+        # Surfaced here (not folded into `status`) because it is orthogonal to run health: a flow can read
+        # `healthy` on its history and still be unrunnable until a human re-approves.
+        if h.approval_stale:
+            print(f"    APPROVAL STALE: the cached steps are not the ones that were approved — replay will "
+                  f"refuse. Review with `flow inspect --name {name}`, then `flow approve --name {name}`.")
         # H9 judge: surface unreviewed advisories so habituation is MEASURED, not a silent pile-up. This
         # ESCALATES without quarantining — FlowHealth's status vocabulary is deliberately unchanged.
         adv = _audit_advisories(name)
@@ -696,7 +844,9 @@ def _flow_record(args: argparse.Namespace) -> None:
             print(f"\nrecorded + verified {spec.name!r} (replays 0-LLM). Approve it to run unattended:\n"
                   f"    ultracua flow approve --name {spec.name}")
         # Same honesty as `flow learn`: an APPROVED flow keeps the shape a human blessed, so re-recording it
-        # does NOT re-baseline — say so rather than let "recorded + verified" imply the repair landed.
+        # does NOT re-baseline — say so rather than let "recorded + verified" imply the repair landed. And a
+        # re-record almost always moves the recipe, which un-binds the approval outright.
+        _warn_if_approval_stale(spec)
         _warn_if_shape_baseline_kept(spec, None, had_data=False)
     else:
         raise SystemExit(f"\nNOT recorded: {res.note}")
@@ -799,8 +949,16 @@ def _flow_main(argv) -> None:
                     help="don't re-login on drift (default: refresh an expired session and retry).")
     pr.add_argument("--verbose", "-v", action="store_true", help="log replay/heal/drift events (INFO).")
 
-    pa = sub.add_parser("approve", help="Mark a learned flow trusted (for --require-approved replays).")
-    pa.add_argument("--name", required=True)
+    pa = sub.add_parser("approve", help="Mark a learned flow trusted (for --require-approved replays). "
+                                        "Approval BINDS to the flow's steps: if they are re-authored, replay "
+                                        "refuses until a human re-approves.")
+    pa.add_argument("--name", help="the flow to approve (required unless --all).")
+    pa.add_argument("--all", action="store_true",
+                    help="print every learned READ flow's steps and approve them in bulk — for the one-time "
+                         "upgrade to steps-bound approvals. WRITE flows are always skipped: review each with "
+                         "`flow inspect` and approve it by name.")
+    pa.add_argument("--yes", action="store_true",
+                    help="skip the interactive confirmation for --all (for a documented migration script).")
 
     pua = sub.add_parser("unapprove", help="Withdraw approval — also the way to RE-BASELINE an approved "
                                            "flow's learned shape + value contracts "
