@@ -192,6 +192,38 @@ async def _same_element(a: Locator, b: Locator) -> bool:
         return False
 
 
+async def _testid_contradicted(loc: Locator, testid: Optional[str]) -> bool:
+    """True iff the element `loc` bound POSITIVELY FALSIFIES the recorded `data-testid`.
+
+    The Tier-2 css-trust is a RENAME HYPOTHESIS: it exists so a target whose visible label changed is still
+    found by its structural path. A rename cannot change a `data-testid` — that is a developer token, not
+    user-visible copy — so a recorded testid the bound element does not carry is direct evidence the path
+    landed on a DIFFERENT element, and the hypothesis the trust was granted under does not hold.
+
+    Deliberately a CONTRADICTION test, never a corroboration one. Both renames the drift corpus must keep
+    recovering (`target-renamed`, `span-renamed`) record NO identity token at all, so any "require N-of-M
+    positive corroboration" rule would refuse them — measured: such a rule drops v1 parity from 12/12 to
+    10/12. Absence of evidence must not become evidence of absence.
+
+    Scope, stated honestly: this closes the retarget only for a target that HAD a testid. 8 of the 10
+    Tier-2 css binds in the corpus are token-less, and for those a positional retarget remains
+    undetectable with the fields `describe()` records — see the token-less row in
+    `benchmarks/drift_bench.KNOWN_WRONG_BINDS`.
+
+    `placeholder` is excluded on purpose (user-visible copy, the same class as text/name, which the corpus
+    proves non-discriminating). `elem_id` is excluded because it cannot fire: `cssPath` returns `#<id>` and
+    stops, so a css match on an id-bearing spec already carries that id.
+
+    Any exception -> True (contradicted), mirroring `_same_element`'s fail-loud convention.
+    """
+    if not testid:
+        return False
+    try:
+        return bool(await loc.evaluate("(el, want) => el.getAttribute('data-testid') !== want", testid))
+    except Exception:  # noqa: BLE001 — detached / navigating -> treat as a contradiction
+        return True
+
+
 async def resolve(page: Page, spec: LocatorSpec, unique: bool = False,
                   sink: Optional[dict] = None) -> Optional[Locator]:
     """Resolve a spec to a visible Playwright Locator, trying resilient strategies before brittle
@@ -329,9 +361,22 @@ async def resolve(page: Page, spec: LocatorSpec, unique: bool = False,
         # css resolves uniquely and the fuzzy guess does NOT contradict it (absent / ambiguous / agrees).
         # css is a structural locator, so trust it — this is what recovers a renamed target
         # (`target-renamed`, `span-renamed`) where the tag-scoped substring rightly finds nothing.
-        _bound("css")
-        return cu
-    if cu is not None and fu is not None:
+        if not await _testid_contradicted(cu, spec.testid):
+            _bound("css")
+            return cu
+        # ...UNLESS the element it bound positively FALSIFIES the recorded identity. A positional path
+        # whose target was REMOVED re-matches whatever same-tag sibling slid into the slot, and if that
+        # element happens to reach a plausible page the run reports success — a silently wrong action.
+        # Fall through instead of returning: a critical caller (`unique=True`, which is every production
+        # call site) fails loud, a lenient one keeps css as a best-effort guess.
+        if sink is not None:
+            sink["identity_contradiction"] = True   # distinct from `conflict`: identity, not cross-check
+        if not unique and ambiguous is None:
+            ambiguous, ambiguous_label = cu, "css"
+    # `elif` from here on, and it is load-bearing: the branch above no longer always returns, so without
+    # the chain a testid-contradicted css would ALSO fall into the cross-check branch and set
+    # `sink["conflict"]`, conflating an identity refusal with a two-guesses-disagreed refusal.
+    elif cu is not None and fu is not None:
         # Both resolve uniquely but to DIFFERENT elements (a same-tag sibling that shares the cached
         # substring vs a drifted positional css pointing at a moved-in neighbor). Neither is trustworthy
         # -> fail loud (unique); lenient keeps css as a best-effort structural guess.

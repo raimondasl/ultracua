@@ -156,20 +156,34 @@ ESCALATE_ROW = ("interstitial", "escalate", "document.title='Checking your brows
 # tolerance launders an unknown number of holes, whereas a named row with a reason keeps inviolable #2
 # honest and makes closing it a visible act (delete the entry).
 #
-# `shop-4step/positional-css-retarget` is `resolve()`'s documented residual: when a target with only a
-# POSITIONAL css is removed and a same-tag sibling slides into its slot, the cached path re-matches the
-# neighbour. Here that means 0-LLM replay clicks an alternate route no human approved, lands on the
-# correct-LOOKING destination and reports success — which is why the golden trail matters: v1's URL check
-# would have called this a clean survival.
+# THE POSITIONAL-CSS RETARGET: when a target whose only surviving anchor is a POSITIONAL css is removed and
+# a same-tag sibling slides into its slot, the cached path re-matches the neighbour. Replay then actuates an
+# element no human approved, and if it reaches a plausible page the run reports SUCCESS. (This is why the
+# golden trail matters: v1 judged by landed URL and would have scored it a clean survival.)
 #
-# It is accepted rather than fixed because the fix trades one wrong-bind class for a worse one. `resolve()`
-# trusts a unique positional css precisely so a RENAMED target still recovers (v1's `target-renamed` and
-# `span-renamed`), and demoting or dropping that candidate was measured during v1's development to turn the
-# two `conflict` rows into silent wrong-binds. Closing it properly needs a signal this bench does not have —
-# e.g. verifying post-actuation identity, or refusing a css-only bind whose element's own text no longer
-# matches. Until then it is counted, published, and gated as EXACTLY this one row.
+# HALF OF IT IS NOW CLOSED (0.62.0). `locators._testid_contradicted` withdraws the Tier-2 css-trust when the
+# bound element positively falsifies a recorded `data-testid`: that trust is a RENAME hypothesis, and a
+# rename cannot change a developer token. `shop-4step/positional-css-retarget` therefore now fails loud
+# (replay `drifted`; repair recovers by an alternate route) and its entry is gone from this table.
+#
+# THE OTHER HALF REMAINS OPEN, and it is the COMMON half: 8 of the corpus's 10 Tier-2 css binds are on
+# targets that recorded no identity token at all, and for those nothing `describe()` captures separates "the
+# target was renamed" from "a sibling slid into its slot" — both renames the resolver must keep recovering
+# (`target-renamed`, `span-renamed`) present exactly as the retarget does. That is an information limit of
+# the recorded field set, not an oversight.
+#
+# So the entry MOVED rather than being deleted: `anchor-link/positional-css-retarget-tokenless` is a curated
+# row on a token-less target that reproduces the surviving hole. Deleting the old entry without adding it
+# would have converted a MEASURED hole into an assumed-closed one — precisely the failure this bench exists
+# to prevent.
+#
+# Ruled out with measurement, so they are not re-proposed: demoting or dropping the css candidate (turns the
+# two `conflict` rows into silent wrong-binds — measured during v1); any N-of-M positive corroboration rule
+# (both renames record zero corroborating tokens, so it refuses them — predicted to drop v1 parity to
+# 10/12); text similarity (the renames change text exactly as the retarget does); and the neighbour anchor
+# (it MATCHES on the retarget row, since the decoy is inserted into the same section).
 KNOWN_WRONG_BINDS = (
-    ("shop-4step", "positional-css-retarget"),
+    ("anchor-link", "positional-css-retarget-tokenless"),
 )
 
 
@@ -208,14 +222,24 @@ def build_corpus(seed: int, per_k: int = 3, only: Optional[str] = None) -> list:
     for sc in SCENARIOS:
         if only and sc["name"] != only:
             continue
-        if sc["source"] == "v1-port":
-            continue                      # v1 pages keep exactly their v1 rows
         pristine = set(sc["pristine_anchors"])
         step_index = sc.get("target_step", 0)
+        # CURATED rows first, and outside the v1-port skip: a v1 page keeps exactly its v1 drift list (so
+        # `v1_parity` stays an element-wise comparison against `baselines/drift.json`), but it may still
+        # carry a hand-written row of its own. `anchor-link` needs one — it is the corpus's token-less
+        # positional-retarget case, and v1 has no drift of that shape. Curated rows carry `source="curated"`
+        # so they can never enter the `v1_parity` block, which selects on `source == "v1-port"`.
+        for cr in sc.get("curated_rows") or ():
+            add(sc["name"], cr["name"], cr["kind"], "curated", mutation_js((cr["js"],)),
+                primitives=(cr["name"],), step_index=step_index, expected=cr["expected"])
+            if rows and rows[-1]["row_id"].endswith("/" + cr["name"]):
+                rows[-1]["target_sel_override"] = cr["target_sel"]
+        if sc["source"] == "v1-port":
+            continue                      # v1 pages keep exactly their v1 drift list
         for combo in compose(pristine, seed=seed, per_k=per_k):
             k = len(killed_anchors(pristine, combo))
             st = apply_composition(pristine, combo)
-            exp, _by = predict(st)
+            exp, _by = predict(st, pristine=frozenset(pristine))
             js = mutation_js(tuple((PRIMITIVES_BY_NAME[c]).js for c in combo))
             add(sc["name"], "+".join(combo), "cosmetic" if exp != "wrong" else "conflict", "generated", js,
                 primitives=combo, step_index=step_index, expected=exp, k=k,
@@ -225,12 +249,6 @@ def build_corpus(seed: int, per_k: int = 3, only: Optional[str] = None) -> list:
         for sname, sp in SEMANTIC_BY_NAME.items():
             add(sc["name"], sname, "semantic", "curated", mutation_js((sp.js,)),
                 primitives=(sname,), step_index=step_index, expected="drifted")
-        # -- curated rows: the replan-eligible route removal, and the positional-css residual hole --
-        for cr in sc.get("curated_rows") or ():
-            add(sc["name"], cr["name"], cr["kind"], "curated", mutation_js((cr["js"],)),
-                primitives=(cr["name"],), step_index=step_index, expected=cr["expected"])
-            if rows and rows[-1]["row_id"].endswith("/" + cr["name"]):
-                rows[-1]["target_sel_override"] = cr["target_sel"]
     return rows
 
 

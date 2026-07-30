@@ -214,11 +214,15 @@ class BindState:
     ambiguous: set = field(default_factory=set)  # anchors matching >1 element (Tier-1 -> skipped when unique=True)
 
 
-def predict(state: BindState) -> tuple[str, str]:
+def predict(state: BindState, *, pristine: frozenset = frozenset()) -> tuple[str, str]:
     """-> (expected_outcome, expected_bound_by), simulating `resolve(unique=True)` exactly.
 
-    Mirrors locators.py:292-341 step for step. Kept as a straight-line transcription rather than something
+    Mirrors `locators.resolve` step for step. Kept as a straight-line transcription rather than something
     cleverer so a reader can diff it against the resolver by eye.
+
+    `pristine` is the target's ORIGINAL anchor set, needed only for the testid-contradiction branch: the
+    rule keys off "a testid was recorded and is no longer alive", which the post-mutation `state` alone
+    cannot express (a target that never had one looks identical to one whose token died).
     """
     # Tier 1 — first UNIQUE confident match wins. `unique=True` means an ambiguous candidate is skipped
     # entirely (never a blind `.first`), and a DECOY-pointing Tier-1 anchor is a wrong-bind, not a survival.
@@ -235,12 +239,24 @@ def predict(state: BindState) -> tuple[str, str]:
     sub_target = "substring" in state.alive
     sub_decoy = "substring" in state.decoy
 
+    # A recorded testid that is no longer alive is FALSIFIED by whatever the css path bound, so the
+    # css-trust — which is a RENAME hypothesis, and a rename cannot change a developer token — is
+    # withdrawn. Mirrors `locators._testid_contradicted`.
+    identity_contradicted = "testid" in pristine and "testid" not in state.alive
+
     if css_target and not sub_decoy:
+        if identity_contradicted:
+            return "drifted", "none"
         return "survived", "css"                 # css unique, substring absent/agreeing
     if css_target and sub_decoy:
         return "drifted", "none"                 # they disagree -> neither trusted -> fail loud
     if css_decoy and not (sub_target or sub_decoy):
-        return "wrong", "css"                    # css alone, pointing at a decoy: a silent wrong-bind
+        if identity_contradicted:
+            return "drifted", "none"
+        # THE RESIDUAL HOLE: a TOKEN-LESS positional retarget. Nothing `describe()` records can tell this
+        # apart from a legitimately renamed target, so it stays a silent wrong-bind — published, counted,
+        # and pinned by its own corpus row rather than assumed closed.
+        return "wrong", "css"
     if css_decoy and sub_target:
         return "drifted", "none"                 # disagree the other way -> fail loud
     if sub_target or sub_decoy:

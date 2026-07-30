@@ -236,13 +236,16 @@ These are the measured limits as of **drift-bench v2** ([`baselines/drift_v2.jso
 - **A write is never recovered — measured on 14/14 drifted write rows.** Heal refuses, replan skips it,
   `block_mutations` blocks it, and a write-firing repair is never cached. Zero double-submits, zero silently
   suppressed writes, zero writes at the decoy target.
-- **There is one published wrong-bind, and it is exactly the positional-CSS case.** When a target whose only
-  surviving anchor is a *positional* CSS path is removed and a same-tag sibling slides into its slot, the
-  cached path re-matches the neighbour: replay actuates something no human approved, and if that element
-  happens to reach a plausible page it reports **success**. Rate: 0.9% of rows. It is accepted rather than
-  fixed because the obvious fix trades it for something worse — the same trust-a-unique-CSS rule is what
-  recovers a *renamed* target, and demoting it was measured to turn two conflict cases into silent
-  wrong-binds. It is named, counted, and gated as exactly that one row, never as a loosened tolerance.
+- **One published wrong-bind remains, and 0.62.0 halved it.** When a target whose only surviving anchor is a
+  *positional* CSS path is removed and a same-tag sibling slides into its slot, the cached path re-matches the
+  neighbour: replay actuates something no human approved, and if that element reaches a plausible page it
+  reports **success**. ultracua now withdraws that CSS trust when the bound element **falsifies a recorded
+  `data-testid`** — the trust exists to survive a *rename*, and a rename cannot change a developer token.
+  That closes the token-bearing case (measured: the row went from a silent wrong action to a loud refusal,
+  with no regression to the renamed-target recovery). It does **not** close the token-less case, which is the
+  more common one: 8 of 10 such binds are on targets with no recorded identity token, and nothing captured
+  at record time distinguishes a renamed target from a substituted one. That half is still counted (0.9% of
+  rows), still named, and now pinned by its own benchmark row so it cannot be mistaken for closed.
   **This is also the strongest argument for how v2 judges outcomes:** it compares the actual ordered sequence
   of actuated elements against the learned one, so a mis-bind that still lands somewhere plausible is caught.
   v1 read only the final URL and would have scored this row a clean survival.

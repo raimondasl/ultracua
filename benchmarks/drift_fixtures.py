@@ -425,6 +425,20 @@ SCENARIOS: tuple = (
         "steps": [{"action": "click", "role": "link", "name": "Continue",
                    "intent": "continue to the next step"}, {"action": "done", "intent": "done"}],
         "golden": ["go", "DONE"], "source": "v1-port",
+        # The TOKEN-LESS half of the positional-css retarget. This target records no `data-testid` and no
+        # id, so the identity-contradiction rule that closes `shop-4step/positional-css-retarget` is
+        # structurally inert here — nothing `describe()` captures separates "the target was renamed" from
+        # "a same-tag sibling slid into the target's css slot". 8 of the corpus's 10 Tier-2 css binds are
+        # token-less, so this is the COMMON case, and the row exists so that closing the token-bearing half
+        # cannot be mistaken for closing the hole. It is expected to be `wrong`, and it inherits the
+        # published `KNOWN_WRONG_BINDS` entry the shop-4step row vacates.
+        "curated_rows": [
+            {"name": "positional-css-retarget-tokenless", "target_sel": '[data-oracle="go"]',
+             "js": "const alt=document.createElement('a'); alt.href='/wrong';"
+                   "alt.setAttribute('data-oracle','decoy'); alt.textContent='Elsewhere';"
+                   "t.parentNode.insertBefore(alt, t); t.remove();",
+             "expected": "drifted", "kind": "residual-hole"},
+        ],
     },
     {
         "name": "span-link", "path": "/span", "goal": "advance to the next view",
