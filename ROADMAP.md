@@ -182,7 +182,8 @@ reliable one-call LLM extractor. **If 0-LLM structured reads are revisited, JSON
 declared `ItemList`/object data) **is the safer mechanism** — authoritative, no induction, no positional
 selectors.
 
-**Tier 3 — later:** parameterized typed slots; skill / workflow memory as a discovery prior (scales with
+**Tier 3 — later:** ~~parameterized typed slots~~ (✅ shipped as H3, 0.47→0.53); ~~Phase G proper's
+barrier-commit multi-write~~ (✅ shipped, see Phase G above); skill / workflow memory as a discovery prior (scales with
 flow volume); Phase G proper (barrier-commit multi-write + deterministic action primitives:
 upload / iframe / date); a local fast tier under constrained decoding (spike); the WebMCP spec fix.
 
@@ -191,13 +192,19 @@ Set-of-Marks on the vision tier (it's our no-DOM last resort, and SoM's marks co
 
 ### Phase E — Operability & trust at scale ("run a fleet unattended")
 
+> ✅ **Mostly shipped.** The thin supervisor (`run_all` / `flow run-all`), structured logging with a per-run
+> `run_id` (`obs.py`), fail-loud alerting (`--alert-webhook` + a non-zero exit), the auto-relearn policy for
+> reads (`on_drift="relearn"`), the health view (`health()` / `flow status`), and **atomic + cross-process
+> locked** storage (`_meta_lock`) are all live. **Still open:** a SQLite cache (storage is still one JSON file
+> per key) and pluggable secret resolution (Vault / 1Password / cloud). Scheduling stays cron-as-UX by design.
+
 A thin supervisor that runs saved flows on a schedule with structured logging + a `run_id`,
 fail-loud alerting, an auto-relearn policy for reads, and a health view over `flow_health`;
 pluggable secret resolution (Vault / 1Password / cloud) so credentials never touch disk even as
 paths; SQLite cache + atomic/locked storage for many flows.
 
 - *Enables:* "a team runs 50 recurring authenticated data-pulls and is paged only when one breaks."
-- *Closes:* no observability, no scheduler, non-atomic storage, fleet view limited to a CLI.
+- *Closes:* fleet view limited to a CLI. (Observability and atomic storage are now closed.)
 
 ### Phase F — Replay fidelity & adaptive resilience ("survive a real redesign")
 
@@ -210,13 +217,22 @@ replay → suffix-replan repair → full re-author), and covered by a drift-sand
 ([tests/test_replan.py](tests/test_replan.py)) that breaks a mid-flow step and asserts the tail heals
 while the prefix is preserved. Writes still refuse re-planning under drift (double-submit risk).
 
-**Still open:** a drift-sandbox *benchmark* (mutate fixtures, measure heal success/cost across many
-mutations, not just a unit fixture); optional embedding/visual anchor as an extra locator rank for
-renamed-but-same-purpose elements.
+✅ **Also shipped since:** the **drift-sandbox benchmark** ([benchmarks/drift_sandbox.py](benchmarks/drift_sandbox.py),
+gated by `baselines/drift.json` + a key-less CI test) — 12/12 cosmetic drifts survive 0-LLM, 0 wrong binds; real
+**accessible-name** computation (`snapshot.py`, matching `get_by_role`'s algorithm); and **neighbor-anchor
+capture** (`locators.py`), which landed standalone rather than waiting on a Similo tier.
+
+**Still open — and sharper than it looks:** the drift sandbox's corpus is **17 hand-authored drifts on a ~2-section
+synthetic page, every one a `click`, none carrying a `data-testid`** — so the top locator tier is never exercised,
+and the resolver fix it validates was *chosen on these same drifts*. Worse for the heal claim: `baselines/drift.json`
+records `cosmetic_survived_0llm == cosmetic_survived_incl_heal == 12`, i.e. **every drift already binds at 0-LLM, so
+there is nothing left for a heal to fix** — single-step heal and suffix-replan are currently **structurally
+unmeasurable** with this harness, not merely thinly measured. Closing that needs a *generated* mutation
+distribution + an identity oracle (see "drift-bench v2" below). Also open: an optional embedding/visual anchor rank.
 
 - *Enables:* "a vendor portal redesigns its checkout and the flow heals the changed step."
-- *Closes:* fingerprint over-sensitivity, single-step-local heal. Still open: accessible-name
-  brittleness, a drift benchmark.
+- *Closes:* fingerprint over-sensitivity, single-step-local heal, accessible-name brittleness, and the
+  *existence* of a drift benchmark. Still open: a realistic mutation **distribution**, and any measured heal rate.
 
 ### Phase G — Action breadth & multi-step writes ("real transactions, not just reads")
 
@@ -242,12 +258,17 @@ reviewed (a first cut was blocked for false-pass / double-submit holes; re-scope
 
 ### Phase H — Cost & latency floor ("cheap and fast at scale")
 
+> ✅ **The centerpiece shipped:** the **pinned-selector deterministic read** ([pin.py](src/ultracua/pin.py),
+> `FlowSpec.pin_read`) makes a recurring scalar data-pull *literally* 0-LLM. **Still open:** the local/open fast
+> tier and per-flow cost budgets (the only budget today is the H9 judge's LLM-call cap).
+
 A local/open fast tier (Qwen / Llama-8B + constrained decoding) for discovery and extraction; a
 **pinned-selector deterministic read** so recurring data-pulls are *literally* 0-LLM (design fork #1
 below); per-flow cost budgets.
 
 - *Enables:* "1000 recurring data-pulls/day at near-zero marginal cost and sub-second latency."
-- *Closes:* the uncounted per-run extraction cost, no cost accounting, hard cloud-LLM dependency.
+- *Closes:* the uncounted per-run extraction cost (for pinned reads), no cost accounting, hard cloud-LLM
+  dependency. Still open: a non-pinned extraction still costs one LLM call per run.
 
 ### Phase I — Distribution & product surface ("usable by non-builders")
 
@@ -276,17 +297,23 @@ live-path tests for all three adapters' `.complete()` glue (Anthropic cassette +
 + Gemini SDK-object) — which surfaced and fixed two real bugs the never-run-live path had hidden
 (OpenAI `max_tokens` rejection; Gemini response-parsing casing).
 
-**Still open:** a *standing* benchmark harness with **variance / error bars** run on a schedule
-(today's real-LLM runs are single-shot — the 6/10-vs-8/10 swing is why this matters); providers
-exercised against a real API (the live-path tests are key-less, so they replay synthetic responses).
+✅ **Also shipped since:** the variance harness itself ([benchmarks/variance.py](benchmarks/variance.py)) —
+Wilson score intervals, pass^k, and a stdev-tolerant baseline regression gate, with six records committed under
+`baselines/`. A real **5-rep** study is published in STATUS.md (N=1 52% ±13% vs N=3 best-of-N 60% ±0%), so the
+"single-shot, no error bars" caveat is out of date.
+
+**Still open (narrower than it was):** a **scheduled cadence** — CI triggers only on push/PR, there is no
+`schedule:` block, so the harness is standing but not *running* on its own; and providers exercised against a
+**real API** (the live-path tests replay synthetic responses).
 
 - *Enables:* "every change is gated on replay-fidelity and cost regressions across a benchmark matrix."
-- *Closes:* no CI, untested live LLM path, SDK-upgrade breakage risk. Still open: single-run
-  benchmarks (no error bars).
+- *Closes:* no CI, untested live LLM path, SDK-upgrade breakage risk, no error bars. Still open: nothing runs
+  the matrix on a schedule; no real-API exercise.
 
-**Suggested sequencing:** the near-term fixes in [STATUS.md](STATUS.md) → **E** and **F** first (they
-turn "validated prototype" into "trustworthy unattended tool") → **H** and **I** as the scale/adoption
-multipliers → **G** and **J** alongside as breadth and confidence demand.
+**Suggested sequencing:** ⚠️ *superseded.* Every letter above now has landed slices (E supervisor, F
+suffix-replan + drift sandbox, G multi-write barrier, H pinned reads, I recorder, J CI + variance harness), and
+the STATUS.md near-term fixes are all done. **The live sequencing is the Wave 0/1/2/3 block at the end of the
+horizons sweep below** — read that, not this line.
 
 ## The MVP line
 
@@ -295,6 +322,11 @@ multipliers → **G** and **J** alongside as breadth and confidence demand.
 theirs (cron + handle the returned data). Everything else is polish.
 
 ## Three design forks (worth deciding early)
+
+> **Status:** forks #1 and #2 are **decided and shipped both ways** — extraction offers both an LLM call and a
+> pinned deterministic read (`pin.py` / `FlowSpec.pin_read`), and `extract` accepts both a natural-language
+> instruction and a JSON schema (`FlowSpec.extract` / `.extract_schema`). Only fork #3 (auto-approve) is still
+> genuinely open — and it has become *more* consequential, not less: see "Known defects" below.
 
 1. **Extraction = LLM call or cached selector?** Today's extraction is one LLM call per run (cheap,
    flexible, but not literally 0-LLM for data tasks). Starting with LLM-extraction is fine; a later
@@ -1054,6 +1086,33 @@ scarcest training commodity — ultracua's recorder captures them natively.
 - **Live-health flow registry** — value gates entirely on network effects; sequence after H2 + H10
   generate the install base.
 
+## Known defects (verified against the code at 0.58.0 — fix these before new horizons)
+
+Two gaps found by a code-grounded audit, both verified by direct execution. Neither is a new feature; each is
+an existing guarantee that the code does not actually deliver.
+
+1. **The approval gate does not bind the STEPS.** `approve()` stamps `approved` / `slots_hash` /
+   `contracts_hash` — nothing hashes `CachedFlow.steps`. Meanwhile `flow.py:750` (`if dirty and success:
+   cache.put(flow)`) writes a **healed or suffix-replanned** flow — containing LLM-authored steps no human
+   reviewed — straight into the live cache, and the next unattended run executes it under the *old* approval
+   bit. This contradicts [docs/comparison-stagehand.md](docs/comparison-stagehand.md), which tells readers a
+   human approves a flow before any unattended run. It also **defeats H9**: an `on_drift="relearn"` run
+   re-seeds `meta.contracts`/`shape` and calls `_reset_history` (flows.py:828), silently re-baselining all
+   three semantic-wrongness layers with no human in the loop. *Fix:* a `FlowMeta.flow_hash` bound at
+   `approve()` and checked at pre-flight, plus a **heal-as-proposal** lane (write to a `.proposed` sidecar,
+   surface via `flow diff`, promote with `flow approve --accept-heal`). This is also the strict prerequisite
+   for H1 (attested replay), H5 (dry-run), and H6 (drift-repair PRs) — a receipt or a held-write report is
+   meaningless about steps that nothing freezes.
+
+2. **An empty flow store reports success forever** — a violation of inviolable #2 at the ops layer. The flow
+   root is hardcoded (`_specs_dir()` → `.ultracua/specs`, `FlowCache.root` → `.ultracua/flows`); there is no
+   `ULTRACUA_HOME`. A cron job launched from the wrong working directory prints
+   `== 0 ok, 0 failed, 0 skipped (of 0) ==` and **exits 0**, forever, doing nothing (verified empirically).
+   `flow canary` has the same hole, and `serve-mcp` comes up healthy exposing **zero tools** with no error —
+   the flagship H2 surface, whose MCP client launches it with an arbitrary cwd. *Fix:* resolve a root once
+   (`ULTRACUA_HOME` → walk up for a project-local `.ultracua` → `~/.ultracua`), thread it through both
+   hardcoded paths, and make zero-resolved-flows exit non-zero behind an explicit `--allow-empty`.
+
 ## Suggested sequencing (horizons)
 
 **Wave 0 — the six cross-cutting prerequisites** (small, deliberate, unblock everything). *Status:
@@ -1061,7 +1120,9 @@ scarcest training commodity — ultracua's recorder captures them natively.
 **Wave 1 — leverage:** ✅ **H3 typed templates** (the #1 gap) and ✅ **H2 MCP server** (all three
 stages — the widest distribution surface) both **SHIPPED** (0.46 → 0.55), as is ✅ **H9 semantic-wrongness
 defense, complete** (layer 1 value contracts 0.56, layer 2 magnitude 0.57, layer 2 LLM judge 0.58). Remaining
-Wave-1: **H8 stages 1–2** (files + volatile-ID blocklist — the cheap certain wins). **Wave 2 — the trust wedge:** H5 dry-run, H1 attested replay, H6
+Wave-1: **H8 stages 1–2** (files + volatile-ID blocklist — the cheap certain wins). ⚠️ **But fix the two
+"Known defects" above FIRST** — they are small, they close gaps between what the docs promise and what the code
+does, and defect #1 is a hard prerequisite for the whole Wave-2 trust wedge. **Wave 2 — the trust wedge:** H5 dry-run, H1 attested replay, H6
 drift-repair tier 1, H10 Drift-Watch — these four compound: the same evidence/verification
 machinery sells enterprise trust. **Wave 3 — reach:** H4 in-profile recorder, H7 control flow, H12
 talk-through, H11 bot-auth identity. **Frontier (spike-gated, parallel):** H13 lanes (markdown
