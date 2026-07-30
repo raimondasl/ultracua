@@ -635,6 +635,12 @@ async def _replay(
     mode = "replay"
     dirty = False
     replanned = False
+    # Per-run token/cost accounting, mirroring `_learn`'s delta pattern. A pure replay makes no LLM call
+    # and reports zeros; a HEAL or suffix-replan does, and its cost was previously invisible — `llm_calls`
+    # counts `decide()` calls, which is not a price. Without this no benchmark can put a dollar figure on
+    # a recovery. (`_router` is None on the 0-LLM path, so this costs nothing there.)
+    _router = getattr(provider, "router", None)
+    _usnap = _router.totals.snapshot() if _router is not None else None
     try:
         if extra_headers:
             await session.set_extra_http_headers(extra_headers)
@@ -722,6 +728,12 @@ async def _replay(
                         block_mutations=True,  # a replay-repair must never perform a NEW write
                     )
                     llm += replan_llm
+                    # Tag the re-authored traces so a caller can tell a suffix-REPLAN apart from a
+                    # single-step HEAL. `report.mode` can't: it is last-writer-wins, and `healed_steps`
+                    # counts heal ATTEMPTS (a row that healed then still failed reports healed=1). The
+                    # replan traces also restart their index at 0, colliding with the prefix's.
+                    for _t in replan_traces:
+                        _t.meta["phase"] = "replan"
                     traces.extend(replan_traces)
                     # If the repair fired a write on the wire (a formless or cross-origin POST that
                     # block_mutations, being classifier-based, can't see), do NOT cache/keep it —
@@ -750,6 +762,9 @@ async def _replay(
         if replanned and not success and isinstance(fin, dict) and fin.get("solved"):
             success = True
         extra = {"finalize": fin} if finalize else {}
+        _used = _router.totals.since(_usnap) if _router is not None else None
+        if _used is not None:
+            extra["usage"] = _used.as_dict(settings.model)
         final_text = await _body_text(session)
         if dirty and success:
             cache.put(flow)
@@ -820,7 +835,9 @@ async def _replay_step(
                 # FAIL LOUD, not bind a blind `.first` whose identical form scope then fingerprint-matches
                 # and waves the write through into the WRONG form. Same fail-on-ambiguity rationale as the
                 # pinned-read gate (locators.resolve docstring).
-                target = await resolve(page, step.locator, unique=True)
+                gate_sink: dict = {}
+                target = await resolve(page, step.locator, unique=True, sink=gate_sink)
+                tr.meta["gate_bound_by"] = gate_sink.get("bound_by", "")
                 if target is None:
                     drifted, reason = True, "mutation gate: target missing/ambiguous — refusing to re-drive a write"
                 else:
@@ -903,7 +920,11 @@ async def _replay_step(
                 # click/type the WRONG element and return wrong data. The neighbor anchor disambiguates
                 # most same-name cases; a genuinely ambiguous bind fails loud here -> heal (auto) or a
                 # loud replay failure to re-learn, never a silent wrong-element actuation.
-                loc = await resolve(page, step.locator, unique=True)
+                # `sink=tr.meta` records WHICH candidate bound (observability only, no behaviour change) —
+                # so a resilience rate can be read together with the tier that carried it. A rate that
+                # stays at 100% while load migrates from role+name onto the brittle positional css is a
+                # real safety regression that the rate alone cannot show. See `benchmarks/drift_bench.py`.
+                loc = await resolve(page, step.locator, unique=True, sink=tr.meta)
             if loc is None:
                 return await _maybe_heal(
                     session, step, provider, tr, goal, "locator unresolved or ambiguous (drift)"
@@ -976,7 +997,11 @@ async def _maybe_heal(
     if action.action in ("done", "give_up"):
         return False, f"{note}; heal declined", True
     spec = None
-    if action.action in ("click", "type") and action.ref:
+    # `select` belongs here for the same reason it belongs in `_author_steps`: without it a healed select
+    # actuates for THIS run but `step.locator` is never updated, so the repair is not persisted and the very
+    # next replay drifts again — while the report still says the step healed. (A benchmark counting
+    # `heal_persisted` would count that as a durable recovery it is not.)
+    if action.action in ("click", "type", "select") and action.ref:
         spec = await describe(session.page, action.ref)
     with tr.measure("heal_act"):
         try:

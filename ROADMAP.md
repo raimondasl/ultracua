@@ -222,17 +222,40 @@ gated by `baselines/drift.json` + a key-less CI test) — 12/12 cosmetic drifts 
 **accessible-name** computation (`snapshot.py`, matching `get_by_role`'s algorithm); and **neighbor-anchor
 capture** (`locators.py`), which landed standalone rather than waiting on a Similo tier.
 
-**Still open — and sharper than it looks:** the drift sandbox's corpus is **17 hand-authored drifts on a ~2-section
-synthetic page, every one a `click`, none carrying a `data-testid`** — so the top locator tier is never exercised,
-and the resolver fix it validates was *chosen on these same drifts*. Worse for the heal claim: `baselines/drift.json`
-records `cosmetic_survived_0llm == cosmetic_survived_incl_heal == 12`, i.e. **every drift already binds at 0-LLM, so
-there is nothing left for a heal to fix** — single-step heal and suffix-replan are currently **structurally
-unmeasurable** with this harness, not merely thinly measured. Closing that needs a *generated* mutation
-distribution + an identity oracle (see "drift-bench v2" below). Also open: an optional embedding/visual anchor rank.
+✅ **drift-bench v2 — SHIPPED (0.61.0).** The gap above is closed. It was even sharper than written: v1's
+`--provider` arm passed a kwarg `run_cached` does not accept, so it raised `TypeError` and **had never
+executed once** — "structurally unmeasurable" was too generous. v2
+([`benchmarks/drift_bench.py`](benchmarks/drift_bench.py) + `drift_corpus`/`drift_fixtures`/`oracle_provider`,
+baseline [`baselines/drift_v2.json`](baselines/drift_v2.json)) delivers:
+
+- an **intensity axis** — `k` = how many of the target's resolution anchors a composed mutation destroys,
+  derived from the composition, sampled from a seeded pool of realistic primitives — so 0-LLM survival is a
+  **curve** (11/12 at k=1 → **0/6 at k=7**) instead of a saturated 12/12;
+- a **heal-eligible population where v1 had none** (21 recovery-eligible rows), giving heal a measured
+  mechanism ceiling of **12/12** and suffix-replan **1/9**, decomposed into attempted/declined/persisted;
+- **`silent_wrong` judged from the actuated action sequence**, not the landed URL — which immediately found a
+  real hole v1's classifier would have scored a clean survival (the positional-CSS retarget, now published,
+  counted at 0.9% of rows, and gated as exactly one named row);
+- **write safety measured in both directions** — recovery refused on 14/14 drifted write rows, 0
+  double-submits, 0 suppressed, 0 at the decoy target;
+- **`bound_by` attribution**, so a rate that holds at 100% while load migrates onto the brittle positional
+  CSS is finally visible;
+- multi-page, multi-step, `type`/`select` coverage (which surfaced two real engine defects: a learned and a
+  healed `select` both cached no locator).
+
+v1's 17 drifts are ported verbatim and its 12/12 is gated **element-wise** inside v2, so retiring
+`tests/test_drift_sandbox.py` cost no coverage. Read
+[`baselines/README.md`](baselines/README.md#what-these-numbers-do-not-prove) before quoting any of it — the
+heal figure is a *ceiling* measured with a perfect-vision provider, not a heal rate.
+
+**Still open:** the **model-accuracy factor** (the paid `--provider anthropic` arm is built but unrun, so
+`real recovery = ceiling × accuracy` has one unmeasured term); **real frozen page snapshots** (v2 refutes
+"single cosmetic mutation on a 2-section page" but not "toy page"); an optional embedding/visual anchor rank.
 
 - *Enables:* "a vendor portal redesigns its checkout and the flow heals the changed step."
-- *Closes:* fingerprint over-sensitivity, single-step-local heal, accessible-name brittleness, and the
-  *existence* of a drift benchmark. Still open: a realistic mutation **distribution**, and any measured heal rate.
+- *Closes:* fingerprint over-sensitivity, single-step-local heal, accessible-name brittleness, the drift
+  benchmark's *existence*, its mutation **distribution**, and the first (mechanism) half of a measured heal
+  rate.
 
 ### Phase G — Action breadth & multi-step writes ("real transactions, not just reads")
 

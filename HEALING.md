@@ -22,9 +22,14 @@ and measured numbers).
   **write** step's context drifted, or if the returned **data looks wrong**, ultracua **fails loud and
   escalates to a human** instead of silently doing the wrong thing. This is the deliberate trade: it heals a
   lot for free, and refuses the risky cases by design.
-- **The one measured guarantee:** on a synthetic drift sandbox, **12/12 cosmetic DOM changes survive at 0 LLM
-  with 0 wrong binds** — a real, CI-enforced number, but for *single cosmetic mutations on a toy page*, not a
-  full production redesign (see [the honest limits](#honest-limits)).
+- **What is actually measured** (key-less, CI-enforced — `benchmarks/drift_bench.py`): 0-LLM survival across
+  a graded distribution of *compounding* DOM mutations, falling from **11/12** when one locator anchor is
+  destroyed to **0/6** when all seven are; the heal machinery recovering **12/12** of those total-destruction
+  cases *given* correct element identity; suffix-replan recovering **1/9** cases where the target is gone; a
+  write **never** recovered across 14/14 drifted write rows; and **one published wrong-bind** (0.9% of rows),
+  the positional-CSS retarget case. Each of those numbers has a sharp limit — read
+  [the honest limits](#honest-limits) before quoting any of them, especially the heal figure, which is a
+  *mechanism ceiling* measured with a perfect-vision provider and not a heal rate.
 
 ---
 
@@ -211,16 +216,44 @@ re-plan or re-learn rather than silently re-deriving the flow every run.
 
 ## Honest limits
 
-- **The 12/12 drift-sandbox number is a toy-page guarantee.** Every drift in
-  [`baselines/drift.json`](baselines/drift.json) is a *single cosmetic mutation on a ~2-section synthetic page*.
-  It proves the resolver survives id/class/style/move/wrapper/rename **without an LLM and without a single
-  wrong bind** — a real, key-less, CI-enforced result — but it is **not** evidence about surviving a real
-  multi-element production redesign.
-- **LLM heal and re-plan have no measured success rate.** Each is proven correct by exactly one hand-broken
-  unit fixture (`tests/test_heal.py`, `tests/test_replan.py`), not a measured distribution of real drifts.
-- **A drift *benchmark* with a realistic mutation distribution is still open** (mutate real fixtures, measure
-  heal success + cost across many mutations) — it's tracked under Phase F in [ROADMAP.md](ROADMAP.md).
-- **A purely positional CSS whose target is removed can, in principle, retarget a moved-in neighbour** — which
-  is precisely why the "two guesses must agree" rule exists and why conflict cases fail loud instead.
+These are the measured limits as of **drift-bench v2** ([`baselines/drift_v2.json`](baselines/drift_v2.json),
+`benchmarks/drift_bench.py`). Several of them replace claims that were previously assertions.
 
-*Everything above is verified against the code as of v0.57.0.*
+- **0-LLM resilience is a CURVE, and it reaches zero.** The old headline — 12/12 cosmetic drifts survive —
+  was true but saturated and uninformative: every drift bound at 0-LLM, so the number could only ever go
+  down. v2 grades mutations by how many of the target's resolution *anchors* they destroy, and survival falls
+  from **11/12 at k=1 to 0/6 at k=7** (all anchors gone, target still present). So: the resolver is highly
+  resilient to one-or-two-anchor damage and **fails, loudly, when a change takes out everything it recorded**.
+- **Heal now has a measured MECHANISM ceiling: 12/12.** Where the target is still present and every anchor is
+  destroyed, the machinery recovers every time — re-grounds, verifies the effect, persists the locator,
+  invalidates the approval. **But that is a ceiling, not a heal rate:** it is measured with a *perfect-vision*
+  provider that reads ground-truth element identity off the fixture. `real recovery = ceiling × model
+  accuracy`, and **the model-accuracy factor is still unmeasured** — the paid arm exists (`--provider
+  anthropic`) and has not been run.
+- **Suffix-replan recovers 1 of 9.** It only helps when the goal is reachable by *another route*; when the
+  learned target is simply gone and nothing else leads to the goal, it correctly fails loud. Previously this
+  tier had no number at all.
+- **A write is never recovered — measured on 14/14 drifted write rows.** Heal refuses, replan skips it,
+  `block_mutations` blocks it, and a write-firing repair is never cached. Zero double-submits, zero silently
+  suppressed writes, zero writes at the decoy target.
+- **There is one published wrong-bind, and it is exactly the positional-CSS case.** When a target whose only
+  surviving anchor is a *positional* CSS path is removed and a same-tag sibling slides into its slot, the
+  cached path re-matches the neighbour: replay actuates something no human approved, and if that element
+  happens to reach a plausible page it reports **success**. Rate: 0.9% of rows. It is accepted rather than
+  fixed because the obvious fix trades it for something worse — the same trust-a-unique-CSS rule is what
+  recovers a *renamed* target, and demoting it was measured to turn two conflict cases into silent
+  wrong-binds. It is named, counted, and gated as exactly that one row, never as a loosened tolerance.
+  **This is also the strongest argument for how v2 judges outcomes:** it compares the actual ordered sequence
+  of actuated elements against the learned one, so a mis-bind that still lands somewhere plausible is caught.
+  v1 read only the final URL and would have scored this row a clean survival.
+- **The pages are still synthetic.** v2 refutes *"every drift is a single cosmetic mutation on a ~2-section
+  page"* — mutations now compound, span multiple pages, and hit form controls. It does **not** refute *"toy
+  page"*: the HTML is still hand-written, and a benchmark over *real frozen page snapshots* remains unbuilt.
+- **The intensity axis has no empirical prior.** `k` models `resolve()`'s decision surface, so the curve
+  answers *how much damage does it take to break us* — a robustness score. It says nothing about *how often a
+  real redesign does that much damage*.
+- **No H9 layer is measured.** Value contracts, magnitude drift and the sampled judge are exactly as
+  unmeasured as before; v2 drives the engine directly, so the `flows.py` trust layer is out of its reach.
+
+*Everything above is verified against the code as of v0.61.0, and every number cited is reproducible
+key-lessly with `uv run python -m benchmarks.drift_bench`.*
