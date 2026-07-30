@@ -9,15 +9,107 @@ is produced by `drift_sandbox.py` (scripted/**key-less**) and `recorder_ceiling.
 
 | File | Bench | Captured | Headline |
 |---|---|---|---|
+| `drift_v2.json` | **drift-bench v2** (6 scenarios, 114 rows × 2 arms) | 2026-07-30 | 0-LLM survival **falls 11/12 → 0/6** across mutation intensity k=1…7 (k50=7); **21 recovery-eligible rows where v1 had 0**; heal MECHANISM **12/12**, replan **1/9**; **1 published wrong-bind** (`positional-css-retarget`, 0.9% of rows) — the key-less CI gate |
 | `demo.json` | demo-shop (4-step) | 2026-06-19 | 5/5 replay, speedup **86.3× ± 20.9**, ~$0.27 — no discovery variance (cost/speedup reference) |
 | `miniwob.json` | MiniWoB++ ×10 (N=1) | 2026-06-19 | replay success **52% ± 13%** (40–70%), pass^k=0, ~$4.24 — the discovery-reliability reference |
 | `miniwob_bestof3.json` | MiniWoB++ ×10 (**N=3 best-of-N**) | 2026-06-20 | **60% ± 0%** (6/10 every rep), ~$6.58 (1.55×) — best-of-N vs the N=1 baseline: +8 pts and **variance → 0** |
 | `miniwob_reflect3.json` | MiniWoB++ ×10 (**N=3 + reflexion**) | 2026-06-20 | **52% ± 4%** (mostly 5/10), ~$8.32 — reflexion measured **net-harmful** vs best-of-N (−8 pts, +26% cost) |
-| `drift.json` | drift-sandbox (2 scenarios, 17 DOM drifts) | 2026-06-23 | **0-LLM resilience 12/12 (100%)** cosmetic drifts, **wrong-binds 0**, ambiguous twin disambiguated, 2 conflict drifts fail loud (never wrong), removed / cross-tag-twin targets fail loud — the **key-less, no-LLM** locator-resilience reference |
+| `drift.json` | drift-sandbox v1 (2 scenarios, 17 DOM drifts) | 2026-06-23 | **0-LLM resilience 12/12 (100%)** cosmetic drifts, **wrong-binds 0** — **SUPERSEDED by `drift_v2.json`**, which ports all 17 rows verbatim and gates this record's outcomes element-wise as its `v1_parity` block. Kept as the historical reference and a manually runnable cross-check; the CI gate now lives in v2 |
 | `recorder_ceiling.json` | recorder ceiling (MiniWoB++, 3 tasks × 3 seeds) | 2026-06-24 | **recorder 9/9 vs LLM authoring 4/9** on the *same* seeds — recorder solves all garbled-label instances 0-LLM, **re-grounding by role+name+css (ids stripped)**; the LLM (N=1) solves only single-target and **misses every multi-target selection** (the grounding ceiling) |
 
-**Drift-sandbox** ([`benchmarks/drift_sandbox.py`](../benchmarks/drift_sandbox.py)) is the **only key-less
-baseline** — it learns a flow then replays it against a distribution of realistic DOM drifts. It runs **two
+## drift-bench v2 — what it measures, and what it does not
+
+[`benchmarks/drift_bench.py`](../benchmarks/drift_bench.py) (+ `drift_corpus.py`, `drift_fixtures.py`,
+`oracle_provider.py`). Key-less, deterministic, ~49 s, gated in CI by `tests/test_drift_bench.py`.
+
+**Why v2.** v1 reported 12/12 on twelve hand-written cosmetic drifts. That number could not move and could
+not teach: **every** drift binds at 0-LLM, so the recovery machinery is never consulted — and that is now
+*measured*, not inferred (`uv run python -m benchmarks.drift_sandbox --provider mock` shows `llm_calls == 0`
+on all 12). v1's `--provider` arm was in fact worse than unmeasured: it passed a `provider_name=` kwarg
+`run_cached` does not accept, so it raised `TypeError` and **had never executed once**. Both are fixed.
+
+**The intensity axis.** `k` = how many of the target's resolution *anchors* a mutation destroys
+(test-id, role+name exact, role+name substring, placeholder, exact-text, id, css path, neighbour anchor).
+Compositions are sampled from a seeded pool of realistic primitives, and `k` is **derived** from the
+composition, never hand-set. Two primitives are fixture-conditional for a measured reason: `cssPath` returns
+`#<id>` and stops for any id-bearing element, so such a target has no independent css anchor and a wrapper
+cannot move it, while `hash_ids` takes out both at once.
+
+**The headline numbers** (seed 7, 114 rows × 2 arms):
+
+| | v1 | v2 |
+|---|---|---|
+| 0-LLM survival | 12/12 (saturated) | a **curve**: k1 11/12, k2 8/12, k3 11/12, k4 9/12, k5 6/9, k6 5/9, **k7 0/6** (k50 = 7) |
+| recovery-eligible rows | **0** | **21** (12 heal-eligible + 9 replan-eligible) |
+| heal | unmeasurable | **12/12** mechanism ceiling |
+| suffix-replan | unmeasurable | **1/9** — it recovers only when an alternate route exists |
+| wrong outcomes | 0, judged by landed URL | **1 published hole**, judged by the actuated action sequence |
+| write safety | not covered | recovery **refused on 14/14** drifted write rows; 0 double-submits, 0 suppressed, 0 wrong-target |
+
+**`silent_wrong` is judged from a golden trail, not a URL** — every interactable carries a `data-oracle` id
+and a capture-phase listener records the exact ordered (element, value) sequence actuated. This is strictly
+stronger than v1: a mis-bind that does not navigate left v1 reporting `success` on the start page, which its
+classifier labelled `drifted` — the *safe* bucket. Typing into a decoy field or picking a wrong option were
+laundered.
+
+**The one published wrong-bind.** `shop-4step/positional-css-retarget`: a target whose only surviving anchor
+is a *positional* css is removed and a same-tag sibling slides into its slot, so the cached path re-matches
+the neighbour — 0-LLM clicks a route no human approved, lands on the correct-**looking** page and reports
+success. **v1's URL check would have scored this a clean survival.** It is accepted rather than fixed because
+the obvious fix trades it for something worse: `resolve()` trusts a unique positional css precisely so a
+*renamed* target still recovers, and demoting that candidate was measured during v1's development to turn
+two `conflict` rows into silent wrong-binds. So it is counted, named in `KNOWN_WRONG_BINDS` with its reason,
+published as a rate (0.9% of rows), and gated as **exactly** that one row — never as a loosened tolerance.
+
+### What these numbers do NOT prove
+
+- **The recovery rates are a MECHANISM CEILING, not a heal rate.** The key-less arm answers with
+  `OracleProvider`, which reads a ground-truth marker off the page — a perfect-vision model at accuracy 1.0.
+  It measures whether the machinery recovers: re-ground, reject a no-effect heal, persist the locator, splice
+  the tail, preserve the prefix, move the approval digest. `real recovery = ceiling × model accuracy`, and
+  **nothing here measures the second factor.** Only the paid `--provider anthropic` arm does, and it has not
+  been run.
+- **A perfect oracle is not automatically a correct one.** The first version keyed on "the first unperformed
+  step" and manufactured a *false heal* the engine reported as `success=True, mode=replay+heal`. Only the
+  golden trail caught it.
+- **The pages are still synthetic.** Server-side injection buys deterministic, multi-page, compounding
+  mutation; it does not buy realistic markup. v2 refutes *"every drift is a single cosmetic mutation on a
+  ~2-section page"*. It does **not** refute *"toy page"*. Real frozen snapshots remain unbuilt.
+- **`k` has no empirical prior.** It is a model of `resolve()`'s decision surface, so the curve answers *how
+  many anchors must an adversary destroy before we break* — a robustness score. It does **not** answer *how
+  likely is a real redesign to break us*. That is also why no area-under-curve scalar is gated: an
+  equal-weighted average over an axis with no prior would encode this sampler's weighting as a fact.
+- **`silent_wrong` bounds the wrong-bind rate at roughly <2.5% (95% CI) over ~114 rows, not at zero.** It is
+  an absence of evidence on this population. And it is a *lower* bound in one corner: an act landing on a
+  non-interactable with no handler logs nothing and reads as `drifted` — the safe direction, but silent.
+- **Recovery is judged by outcome, not by trail equality.** A heal or replan is *allowed* to actuate a
+  different element — that is what recovery is. What guards a recovery that reaches the goal via an element
+  no human approved is not this bench: it is the **approval digest**, which moves on every persisted repair
+  so an approved flow refuses (`stale_approval`, 0.60.0). Asserted here as `heal_invalidates_approval`.
+- **The write rows measure the GATE, never recovery** — by design, at four independent refusal points. They
+  say nothing about a real payment API's idempotency semantics, and nothing about the per-write commit
+  barrier (`StepConfirm` is built only in `flows.py`, never on the `run_cached` path this bench drives).
+- **Nothing at the `flows.py` layer is measured** — approval, `_preflight_row`, quarantine and the H9
+  layers (contracts, magnitude, the sampled judge) are all structurally unreachable from `run_cached`, with
+  the single deliberate exception of the approval digest above. Reading v2 as narrowing the H9 gap would be
+  wrong.
+- **The per-`k` rates are mildly PLATFORM-SENSITIVE, and the first version of this bench made that worse.**
+  It forced `action_timeout_ms` to 1500 ms, which `browser.py` applies as the *context-wide* default for
+  every Playwright operation — so a slow-but-successful operation on a slower machine became a fail-loud row,
+  and GitHub's Windows runner drifted 1–2 rows more per read scenario than the development machine. The
+  override is gone (it bought ~3 s of the ~52 s run) and the bench now measures the engine at its configured
+  timeout, which is recorded and compared for equality. The residual sensitivity is why the per-`k` gate
+  carries a 10-point tolerance while the safety invariants carry none.
+- **`predicted_agreement` (94%) is a diagnostic, not a quality score.** It compares the resolver against a
+  frozen model of its own decision surface; only *new* mismatches are gated. Write rows are excluded because
+  the predictor models `resolve()` alone and a write step also passes the mutation gate — measured: every
+  in-form mutation makes `order-form` drift with the locator resolving perfectly and the *gate* refusing.
+
+---
+
+**Drift-sandbox v1** ([`benchmarks/drift_sandbox.py`](../benchmarks/drift_sandbox.py)) — superseded, kept as
+the historical record. It learns a flow then replays it against a distribution of realistic DOM drifts. It
+runs **two
 scenarios** so both `resolve()` code paths are exercised: **anchor-link** (the target is an `<a>` with
 role+name *and* a neighbor-anchor heading — banner added, id removed, target wrapped / reordered /
 re-classed, sibling inserted, heading renamed, target renamed, an ambiguous same-name twin, target removed)
@@ -27,7 +119,10 @@ span-reordered, plus two **conflict** drifts span-augmented-reordered / span-sib
 many *cosmetic* drifts the resilient locator survives at 0-LLM and asserts the invariant **wrong-binds = 0**
 (a drift never silently reaches the wrong target *page*), that **conflict** drifts fail loud (never bind the
 `/wrong` decoy), the ambiguous twin is disambiguated, and a removed target fails loud. Because it needs no
-API key it runs in CI via `tests/test_drift_sandbox.py`; `drift.json` is the precise gate for `--baseline`.
+API key it was the first bench to run in CI. Its CI test is now **retired**: v2 asserts all four of its
+boolean invariants *and* compares its 12/12 plus its per-row outcome vector element-wise, so deleting
+`tests/test_drift_sandbox.py` cost no coverage (and tightened the floor from `>= 0.8` to an exact `1.0`).
+`drift.json` remains the reference v2's `v1_parity` block is compared against.
 
 **Found gap → fixed (the benchmark paying off):** the original miss was `target-renamed` — when the
 target's visible label changes, `role+name` breaks and `resolve()`'s loose substring `text` candidate

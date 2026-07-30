@@ -2,8 +2,15 @@
 DISTRIBUTION of realistic DOM drifts at 0-LLM, and prove no drift ever silently binds the WRONG element.
 
     uv run python -m benchmarks.drift_sandbox                       # key-less (0-LLM resilience)
-    uv run python -m benchmarks.drift_sandbox --provider anthropic  # + heal recovery (real LLM)
+    uv run python -m benchmarks.drift_sandbox --provider mock        # + the recovery arm, key-less
+    uv run python -m benchmarks.drift_sandbox --provider anthropic   # + the recovery arm, real LLM
     uv run python -m benchmarks.drift_sandbox --json out.json --baseline baselines/drift.json
+
+SUPERSEDED by `benchmarks/drift_bench.py` (drift-bench v2), which ports all 17 of these drifts verbatim
+and gates this file's headline 12/12 element-wise as its `v1_parity` block. This file stays as the frozen
+historical record and a manually runnable cross-check; the CI gate lives in v2.
+
+Its recovery arm was broken from the day it was written and is repaired here — see `_recovery_note` below.
 
 Until now heal/locator resilience was anecdotal (one hand-broken `test_replan` fixture). This learns a
 flow on a pristine page, then replays the cached flow against each of N named drifts and classifies the
@@ -36,14 +43,14 @@ import argparse
 import asyncio
 import http.server
 import json
+import shutil
 import threading
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from ultracua.cache import FlowCache
 from ultracua.flow import run_cached
-from ultracua.llm.base import Router, Tier
-from ultracua.llm.mock import MockClient
+from ultracua.providers import get_provider
 from ultracua.providers.scripted import ScriptedProvider
 
 # --- Scenario A: anchor-link --------------------------------------------------------------------------
@@ -201,9 +208,31 @@ def _serve():
     return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
 
 
-def _mock_router() -> Router:
-    mc = MockClient(actions=[{"found": True, "data": None}], tool_name="submit")
-    return Router(fast=Tier(mc, "m"), strong=Tier(mc, "m"))
+_recovery_note = """The recovery arm was broken from the day it was written, in two independent ways, and
+neither could ever have produced a number:
+
+  1. It passed `provider_name=provider_name` to `run_cached`, which has no such parameter and no `**kwargs`
+     -> `TypeError` on the FIRST replay row. So `--provider anthropic` never executed once. (HEALING.md's
+     "heal is structurally unmeasurable" was therefore too generous: it crashed.)
+  2. Even with the call repaired, `mode="auto"` falls through to a FULL RE-AUTHOR when replay can't recover
+     (flow.py:127-129), which returns `mode="learn", success=True, healed_steps=0` — and `_classify` scores
+     exactly that as `survived`. A brand-new LLM-authored flow would have been reported as a 0-LLM survival.
+
+Repaired: build a real Provider and pass it POSITIONALLY, and use `mode="repair"` — heal + suffix-replan,
+never a silent re-author (flow.py:121 gates `heal_provider` on mode in ("auto","repair")).
+
+What the repaired arm actually MEASURES (run with `--provider mock`, key-less, 2026-07-30):
+
+  * 0 of the 12 COSMETIC drifts consult heal at all — `llm_calls == 0` on every one. The headline
+    population this bench reports a rate over is entirely heal-starved, so no candidate ordering, provider
+    or model could move the number. That is the precise, measured form of the gap: not "heal performs
+    badly", but "heal is never asked".
+  * 4 of the 5 non-cosmetic rows DO reach heal, and 1 recovered (`span-sibling-decoy`), 3 failed loud.
+    So the machinery is reachable and does work — just never on the rows the headline is computed from.
+
+That distinction is why drift-bench v2 engineers a heal-ELIGIBLE population (mutations that destroy every
+anchor while leaving the target present and semantically correct) instead of adding more cosmetic drifts.
+This arm stays runnable so the claim above stays falsifiable, not as a source of headline numbers."""
 
 
 def _prepare(js: str):
@@ -228,7 +257,7 @@ async def _finalize(session):
     return {"url": session.page.url}
 
 
-def _classify(drift: dict, report) -> tuple[str, int]:
+def _classify(report) -> tuple[str, int]:
     """-> (outcome, llm_calls). outcome in {survived, healed, drifted, wrong}."""
     fin = (report.extra or {}).get("finalize") or {}
     landed_done = str(fin.get("url", "")).endswith("/done")
@@ -245,27 +274,36 @@ async def measure(provider_name: str = "scripted") -> dict:
     printing) — so a CI test can assert the metrics directly."""
     httpd, base = _serve()
     rows: list[dict] = []
+    recovery = provider_name != "scripted"
     try:
         with TemporaryDirectory() as td:
-            cache = FlowCache(root=Path(td) / "c")
+            golden = Path(td) / "golden"
             for sc in SCENARIOS:
                 start = f"{base}{sc['path']}"
                 # LEARN once on the pristine page (scripted teacher — key-less).
-                learn = await run_cached(start, sc["goal"], ScriptedProvider(list(sc["steps"])), cache,
-                                         mode="learn", headless=True)
+                learn = await run_cached(start, sc["goal"], ScriptedProvider(list(sc["steps"])),
+                                        FlowCache(root=golden), mode="learn", headless=True)
                 if not learn.success:
                     raise RuntimeError(f"failed to learn the baseline drift-sandbox flow: {sc['name']}")
                 # REPLAY the cached flow against each drift. With a provider, a 0-LLM miss may self-heal.
-                for d in sc["drifts"]:
-                    kw: dict = {}
-                    if provider_name != "scripted":
-                        kw["provider_name"] = provider_name  # enables heal/replan on drift
+                for i, d in enumerate(sc["drifts"]):
+                    # A successful heal/replan sets `dirty` and RE-CACHES (flow.py), so a shared cache would
+                    # let row N's repair mutate the locator row N+1 replays. Give every row a throwaway copy
+                    # of the pristine learn. (Harmless on the `scripted` arm; required on the recovery arm.)
+                    row_root = Path(td) / f"row-{sc['name']}-{i}"
+                    shutil.copytree(golden, row_root)
                     report = await run_cached(
-                        start, sc["goal"], None, cache,
-                        mode="replay" if provider_name == "scripted" else "auto",
-                        headless=True, prepare=_prepare(d["js"]), finalize=_finalize, **kw,
+                        start, sc["goal"],
+                        # A real Provider, passed POSITIONALLY — `run_cached` has no `provider_name` kwarg,
+                        # which is why this arm used to raise TypeError. `mode="repair"` = heal + suffix-replan
+                        # only; "auto" would fall through to a full re-author and `_classify` would score that
+                        # brand-new flow as a 0-LLM `survived`.
+                        get_provider(provider_name) if recovery else None,
+                        FlowCache(root=row_root),
+                        mode="repair" if recovery else "replay",
+                        headless=True, prepare=_prepare(d["js"]), finalize=_finalize,
                     )
-                    outcome, llm = _classify(d, report)
+                    outcome, llm = _classify(report)
                     rows.append({"scenario": sc["name"], "drift": d["name"], "kind": d["kind"],
                                  "outcome": outcome, "llm": llm})
     finally:
@@ -329,7 +367,10 @@ async def run(provider_name: str, json_path: str | None, baseline_path: str | No
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(prog="benchmarks.drift_sandbox")
-    ap.add_argument("--provider", default="scripted", choices=["scripted", "anthropic", "openai", "gemini"])
+    ap.add_argument("--provider", default="scripted",
+                    choices=["scripted", "mock", "anthropic", "openai", "gemini"],
+                    help="scripted = the key-less 0-LLM arm. Anything else adds the recovery arm (heal + "
+                         "suffix-replan); `mock` is key-less, for verifying the arm EXECUTES at all.")
     ap.add_argument("--json", dest="json_path", default=None, help="write the run record to this path")
     ap.add_argument("--baseline", dest="baseline_path", default=None,
                     help="fail (exit 1) if resilience regresses or any wrong-bind appears vs this record")
