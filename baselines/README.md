@@ -93,6 +93,13 @@ published as a rate (0.9% of rows), and gated as **exactly** that one row — ne
   layers (contracts, magnitude, the sampled judge) are all structurally unreachable from `run_cached`, with
   the single deliberate exception of the approval digest above. Reading v2 as narrowing the H9 gap would be
   wrong.
+- **The per-`k` rates are mildly PLATFORM-SENSITIVE, and the first version of this bench made that worse.**
+  It forced `action_timeout_ms` to 1500 ms, which `browser.py` applies as the *context-wide* default for
+  every Playwright operation — so a slow-but-successful operation on a slower machine became a fail-loud row,
+  and GitHub's Windows runner drifted 1–2 rows more per read scenario than the development machine. The
+  override is gone (it bought ~3 s of the ~52 s run) and the bench now measures the engine at its configured
+  timeout, which is recorded and compared for equality. The residual sensitivity is why the per-`k` gate
+  carries a 10-point tolerance while the safety invariants carry none.
 - **`predicted_agreement` (94%) is a diagnostic, not a quality score.** It compares the resolver against a
   frozen model of its own decision surface; only *new* mismatches are gated. Write rows are excluded because
   the predictor models `resolve()` alone and a write step also passes the mutation gate — measured: every

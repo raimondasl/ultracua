@@ -77,10 +77,23 @@ from .oracle_provider import OracleProvider, plan_for
 
 BENCH_VERSION = 1
 
-# Lowered from the 5000 ms default so ~150 rows fit a CI budget. RECORDED in the record and compared for
-# equality by `--baseline`, because a tighter timeout can turn a slow-but-successful bind into a fail-loud
-# row and bias the rate DOWNWARD — a rate measured at a different timeout is not comparable.
-BENCH_ACTION_TIMEOUT_MS = 1500
+# The bench does NOT override `settings.action_timeout_ms`, and that is a correction of a real mistake.
+#
+# An earlier version forced it to 1500 ms "so the rows fit a CI budget", assuming a drifted row waits out the
+# full action timeout. Wrong twice over:
+#
+#   1. A drifted row fails at RESOLVE, which returns immediately — only a row that resolves and then fails to
+#      ACTUATE pays the timeout, and those are rare. Measured: 48.7 s at 1500 ms vs 51.9 s at the 5000 ms
+#      default, for byte-identical outcomes. The override bought ~3 s.
+#   2. `browser.py` applies this value with `context.set_default_timeout(...)`, so it is the CONTEXT-WIDE
+#      default for EVERY Playwright operation in the run, not just clicks. Lowering it tightened the whole
+#      harness, which is why GitHub's Windows runner drifted 1-2 rows MORE per read scenario than the
+#      development machine did: a slow-but-successful operation became a fail-loud row, so part of what the
+#      "resilience" number measured was the speed of the machine measuring it.
+#
+# Running at the engine's own configured timeout removes that entire bias class and means the bench measures
+# the engine as actually deployed. The value is still RECORDED and compared for equality by `--baseline`, so a
+# rate measured under a different configuration is never silently compared against this one.
 
 # `heal_eligible_nonempty`: the anti-rot invariant. If a resolver improvement re-saturates the ladder so
 # that nothing drifts at 0-LLM any more, the bench must fail loud demanding harder rungs rather than
@@ -291,6 +304,74 @@ def _bound_by(report) -> list:
     return [t.meta["bound_by"] for t in report.traces if "bound_by" in t.meta]
 
 
+# A terminal page appends its own marker on load (see `drift_fixtures._ACTLOG_JS`), so a trail ending in one
+# is complete by construction.
+_TERMINAL = (GOAL_MARK, WRONG_MARK)
+
+
+async def _settled_trail(page, cap_ms: int = 3000, quiet_ms: int = 25) -> list:
+    """Read the act trail only after the page has finished reacting to the last actuation.
+
+    WHY THIS EXISTS. Dropping v1's fixed `wait_for_url` from `finalize` — justified at the time as "the trail
+    is read synchronously from sessionStorage, so no wait is needed" — removed a real synchronisation without
+    replacing it. A click that navigates does so ASYNCHRONOUSLY and the destination page appends its marker on
+    ITS OWN load, so an immediate read can catch the flow mid-navigation. The row then shows `success=True`
+    with the goal marker absent, which scores `wrong`: a FABRICATED wrong-bind. It passed locally and failed
+    on slower CI hardware — the worst possible form, because a benchmark whose headline invariant flakes is
+    untrustworthy in both directions.
+
+    WHY NOT JUST QUIESCENCE. Polling until two reads agree is unsound here, and my first fix had exactly that
+    hole: while a navigation is in flight the trail is legitimately UNCHANGED, so two equal reads mean
+    "nothing has happened yet", not "nothing more will happen". On a machine slower than the poll interval
+    that reproduces the original bug a few milliseconds later.
+
+    So the primary signal is Playwright's own: `wait_for_load_state("load")` resolves immediately when the
+    document is already loaded and otherwise waits for the in-flight navigation to complete — and by the time
+    `click()` has returned, a handler's `location.href` assignment has already initiated it. Quiescence is
+    kept afterwards only as a cheap backstop for a second hop.
+
+    Neither half biases the outcome: a trail already ending in a terminal marker returns immediately, and a
+    genuinely drifted row is already loaded and static so it exits after one tick. A wait keyed on "the goal
+    marker appeared" would have biased the measurement toward success by construction.
+    """
+    deadline = time.perf_counter() + cap_ms / 1000.0
+    try:
+        await page.wait_for_load_state("load", timeout=cap_ms)
+    except Exception:  # noqa: BLE001 — already closed / navigating again; the loop below still bounds it
+        pass
+    prev = None
+    while True:
+        try:
+            cur = await page.evaluate(READ_ACTS_JS)
+        except Exception:  # noqa: BLE001 — mid-navigation the context can be torn down; retry within the cap
+            cur = None
+        if cur is not None:
+            if cur and cur[-1] in _TERMINAL:
+                return cur                      # a terminal page marked itself: nothing more can arrive
+            # THE SOUND STOPPING RULE. `page.url` updates when a navigation COMMITS, so a terminal URL whose
+            # marker has not yet been appended means the destination document is still initialising — the
+            # trail is incomplete and quiescence must NOT be trusted. This is the case the first version of
+            # this function got wrong: while a navigation is in flight the trail is legitimately UNCHANGED,
+            # so two equal reads meant "nothing has happened yet", and it returned the mid-navigation trail.
+            if not _url_is_terminal(page):
+                if cur == prev:
+                    return cur                  # not navigating anywhere terminal, and static -> settled
+                prev = cur
+        if time.perf_counter() > deadline:
+            return prev if prev is not None else (cur or [])
+        await asyncio.sleep(quiet_ms / 1000.0)
+
+
+def _url_is_terminal(page) -> bool:
+    """Is the page currently AT a terminal fixture page? Used to tell "still loading the destination" apart
+    from "nothing more is coming"."""
+    try:
+        url = (page.url or "").split("?")[0]
+    except Exception:  # noqa: BLE001
+        return False
+    return url.endswith("/done") or url.endswith("/wrong")
+
+
 # ---------------------------------------------------------------------------------------------------
 # The run
 # ---------------------------------------------------------------------------------------------------
@@ -298,11 +379,6 @@ async def measure(provider_name: str = "oracle", seed: int = 7, per_k: int = 3,
                   only: Optional[str] = None, arms: tuple = ("replay", "repair")) -> dict:
     """Run every row in every arm and return the record. PRINTS NOTHING, so a CI test can assert it."""
     t_start = time.perf_counter()
-    # `Settings` is `@dataclass(frozen=True)` and its defaults are evaluated from the environment at IMPORT
-    # time, so neither plain assignment nor setting `$ULTRACUA_ACTION_TIMEOUT_MS` here can change it — hence
-    # the explicit override. Needed because a DRIFTED row waits out the full action timeout on its failing
-    # step, and at the 5000 ms default ~130 such rows across two arms would cost several minutes.
-    object.__setattr__(settings, "action_timeout_ms", BENCH_ACTION_TIMEOUT_MS)
     lint = interstitial_offenders(all_fixture_texts())
     rows = build_corpus(seed, per_k=per_k, only=only)
     srv = FixtureServer().start()
@@ -366,7 +442,7 @@ async def measure(provider_name: str = "oracle", seed: int = 7, per_k: int = 3,
                             _b["census"] = await session.page.evaluate(CENSUS_JS, _sel)
 
                         async def _fin(session):
-                            return await session.page.evaluate(READ_ACTS_JS)
+                            return await _settled_trail(session.page)
 
                         t0 = time.perf_counter()
                         rep = await run_cached(
@@ -499,7 +575,9 @@ def _score(rows: list, *, provider_name: str, seed: int, per_k: int, lint: list,
     rec = {
         "bench": "drift_bench", "version": BENCH_VERSION, "fixtures_version": FIXTURES_VERSION,
         "mutator_version": MUTATOR_VERSION, "provider": provider_name, "seed": seed, "per_k": per_k,
-        "scenario_filter": only, "action_timeout_ms": BENCH_ACTION_TIMEOUT_MS,
+        # Recorded, not overridden: the timeout the engine actually ran with, so a rate measured under a
+        # different configuration is never silently compared against this baseline.
+        "scenario_filter": only, "action_timeout_ms": settings.action_timeout_ms,
         "corpus_hash": corpus_hash([{"scenario": r["scenario"], "step_index": r["step_index"],
                                      "primitives": r["primitives"]} for r in replay]),
         "corpus_size": len(replay),

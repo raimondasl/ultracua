@@ -327,7 +327,11 @@ class FixtureServer:
         outer = self
 
         class _H(http.server.BaseHTTPRequestHandler):
-            protocol_version = "HTTP/1.0"
+            # HTTP/1.1 so connections are KEPT ALIVE. Every response here sets Content-Length, which is what
+            # makes that safe. With HTTP/1.0 each of the ~700 requests in a run burned its own socket, and a
+            # handful of consecutive runs exhausted the ephemeral-port range (`net::ERR_NO_BUFFER_SPACE` on
+            # Windows). A benchmark that degrades when run repeatedly is a benchmark people stop re-running.
+            protocol_version = "HTTP/1.1"
 
             def log_message(self, *a) -> None:
                 pass

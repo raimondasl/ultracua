@@ -210,6 +210,85 @@ def test_every_scenario_declares_a_golden_trail_matching_its_steps() -> None:
         assert sc["golden"][-1] == "DONE", f"{sc['name']}: the trail must end at the goal marker"
 
 
+# ============================ the settled trail read (a CI-only flake, pinned) ============================
+# The bench once read the act trail immediately in `finalize`. A click that navigates does so
+# asynchronously and the destination page appends its marker on ITS load, so an immediate read could catch
+# the flow mid-navigation: the row then showed `success=True` with the goal marker absent, which scores
+# `wrong` — a FABRICATED wrong-bind. It passed locally and failed on GitHub's Windows runner. These pin the
+# contract browser-free so the class cannot return silently.
+
+class _FakePage:
+    """Serves a scripted sequence of trail reads; `url` models where the browser has COMMITTED to."""
+
+    def __init__(self, reads: list, url: str = "http://x/shop") -> None:
+        self.reads = list(reads)
+        self.url = url
+        self.calls = 0
+        self.waited = False
+
+    async def wait_for_load_state(self, *_a, **_k) -> None:
+        self.waited = True
+
+    async def evaluate(self, *_a, **_k) -> list:
+        self.calls += 1
+        return self.reads[min(self.calls - 1, len(self.reads) - 1)]
+
+
+async def test_a_trail_already_at_a_terminal_page_is_read_once() -> None:
+    """The common success path must pay nothing: a terminal marker means nothing further can arrive."""
+    from benchmarks.drift_bench import _settled_trail
+
+    page = _FakePage([["go", "DONE"]], url="http://x/done")
+    assert await _settled_trail(page) == ["go", "DONE"]
+    assert page.calls == 1
+    assert page.waited, "the load-state wait is the PRIMARY signal and must always be awaited"
+
+
+async def test_a_committed_navigation_is_awaited_even_while_the_trail_looks_static() -> None:
+    """THE ACTUAL CI FAILURE, and the hole the first fix still had. The browser has committed to /done but
+    the destination has not yet appended its marker, so the trail is UNCHANGED across reads. Quiescence
+    alone therefore concludes "settled" and returns a mid-navigation trail, which scores the row `wrong` —
+    a fabricated wrong-bind. The URL is what disambiguates "nothing yet" from "nothing more"."""
+    from benchmarks.drift_bench import _settled_trail
+
+    page = _FakePage([["go"], ["go"], ["go", "DONE"]], url="http://x/done")
+    assert await _settled_trail(page, quiet_ms=1) == ["go", "DONE"], \
+        "returned a mid-navigation trail — this is the fabricated-wrong-bind bug"
+
+
+async def test_a_genuinely_static_trail_returns_without_burning_the_cap() -> None:
+    """A fail-loud row never navigated, so its URL is not terminal and its trail is static — it must settle
+    immediately. Otherwise every drifted row pays for the success path's synchronisation, which is exactly
+    what made v1's fixed `wait_for_url` the wrong shape (it cost ~12 s of v1's 27 s)."""
+    from benchmarks.drift_bench import _settled_trail
+
+    page = _FakePage([["qty=3"]], url="http://x/shop")
+    assert await _settled_trail(page, cap_ms=5000, quiet_ms=1) == ["qty=3"]
+    assert page.calls <= 3, f"polled {page.calls} times for a static trail"
+
+
+async def test_a_wrong_page_landing_is_also_terminal() -> None:
+    """A decoy's destination marks itself too, so a wrong-bind is detected without waiting on the cap."""
+    from benchmarks.drift_bench import _settled_trail
+
+    page = _FakePage([["decoy"], ["decoy", "WRONG-PAGE"]], url="http://x/wrong")
+    assert await _settled_trail(page, quiet_ms=1) == ["decoy", "WRONG-PAGE"]
+
+
+async def test_the_bench_does_not_override_the_engines_action_timeout() -> None:
+    """An earlier version forced 1500 ms, which turns a slow-but-successful bind into a fail-loud row — so
+    the measured "resilience" partly measured the machine, and GitHub's Windows runner drifted 1-2 extra
+    rows per scenario. The bench must run at whatever timeout the engine is configured with."""
+    import benchmarks.drift_bench as db
+    from ultracua.config import settings
+
+    assert not hasattr(db, "BENCH_ACTION_TIMEOUT_MS"), \
+        "the bench reintroduced a hardcoded action timeout — that biases the rate by machine speed"
+    src = Path("benchmarks/drift_bench.py").read_text(encoding="utf-8")
+    assert "object.__setattr__(settings" not in src, "the bench is mutating frozen settings again"
+    assert settings.action_timeout_ms > 0
+
+
 def test_every_anchor_name_is_known() -> None:
     for p in (*PRIMITIVES, *SEMANTIC):
         for a in (*p.kills, *p.points_elsewhere):
