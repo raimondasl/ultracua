@@ -13,6 +13,7 @@ blind-replay irreversible actions.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import time
@@ -112,6 +113,82 @@ def _norm_goal(goal: str) -> str:
 def flow_key(goal: str, url: str, scope: str = "default") -> str:
     basis = "\n".join([_norm_goal(goal), _norm_url(url), scope])
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
+
+
+# --- the approval-bound RECIPE digest ---------------------------------------------------------
+# `flow_key` above hashes a flow's IDENTITY (goal+url+scope). `steps_hash` hashes its RECIPE — the actual
+# steps a human reviewed — so `approve()` can bind to it and replay can refuse a recipe that changed since.
+#
+# THE INCLUSION RULE (it derives every list below): include a field iff changing it could make a run do
+# something DIFFERENT BUT STILL PASSING, or WEAKEN A GUARD while still passing. Exclude iff changing it can
+# only produce a loud failure, or it is already bound elsewhere, or it is pure churn with no trust semantics.
+# The usual counter-pressure ("don't un-approve on site-derived churn") does NOT apply here: a cached flow's
+# JSON is immutable during healthy operation — every `cache.put` site is an authoring event and `get` never
+# rewrites — so every CachedStep field is frozen at capture and the rule resolves toward INCLUDE.
+#
+# ADDITIVE SAFETY (this is the load-bearing part): `CachedStep` has grown additively several times, each with
+# a "NO schema bump needed" comment. Digesting `model_dump()` would therefore un-approve EVERY flow in EVERY
+# fleet on the next additive release. So the basis is an EXPLICIT, enumerated allow-list, and `_canon` OMITS
+# any field still at its declared default — a newly added defaulted field changes no existing digest. A new
+# field lands in `_UNHASHED_*` by choice; promoting it later means bumping STEPS_HASH_VERSION, which
+# re-approval-gates every fleet on purpose. `tests/test_cache.py` enforces the classification (field census)
+# and pins the exact bytes (golden vector).
+STEPS_HASH_VERSION = 1
+
+_HASHED_FLOW_FIELDS = ("key", "goal", "start_url")
+_UNHASHED_FLOW_FIELDS = ("created_ts", "schema_version")   # churn / already gated by the loader
+_NESTED_FLOW_FIELDS = ("steps",)
+
+# `intent` is NOT cosmetic: it is an input to the write dedupe key (`safety.idempotency_key`), it is what
+# `expects_intent` binds a per-write confirm barrier against, and it is the only thing a human actually reads
+# in `flow inspect` — i.e. literally the recipe they approved.
+_HASHED_STEP_FIELDS = ("intent", "action", "text", "coords", "tool", "args",
+                       "precond_fingerprint", "precond_scope", "mutating", "slot", "slot_domain")
+_UNHASHED_STEP_FIELDS: tuple = ()
+_NESTED_STEP_FIELDS = ("locator", "confirm")
+
+_HASHED_LOCATOR_FIELDS = ("role", "name", "tag", "elem_id", "testid", "placeholder",
+                          "text", "css", "anchor", "anchor_source")            # ALL of LocatorSpec
+_HASHED_CONFIRM_FIELDS = ("confirm_selector", "confirm_text_contains", "confirm_url_contains",
+                          "timeout_ms", "expects_intent")                      # ALL of StepConfirm
+
+
+def _canon(m, fields: tuple) -> dict:
+    """Canonical dict over `fields`, OMITTING any whose value still equals its declared default — so adding a
+    new defaulted field to a model leaves every existing digest byte-identical."""
+    out = {}
+    mf = type(m).model_fields
+    for f in fields:
+        v = getattr(m, f)
+        if f in mf and v == mf[f].default:
+            continue
+        out[f] = v
+    return out
+
+
+def steps_hash(flow: "CachedFlow") -> str:
+    """A stable digest of the RECIPE a human reviewed: each step's action, intent, locator, typed text,
+    `mutating` flag, commit barrier and slot binding, IN ORDER, plus the flow's identity.
+
+    Honest scope: this is an INTEGRITY check against the system re-authoring itself under a stale approval
+    bit — a heal, a suffix-replan, a re-record, a re-learn, or a hand-edited cache file. It is NOT
+    tamper-proofing: it is unkeyed and lives in `<key>.meta.json` right beside the `<key>.json` it
+    authenticates, so anyone who can rewrite the steps can rewrite the hash. Signing is a separate concern.
+    16 hex matches `flow_key` / the slot + contract hashes; the threat model is accident, not preimage.
+    """
+    rows = []
+    for s in flow.steps:
+        row = _canon(s, _HASHED_STEP_FIELDS)
+        if s.locator is not None:
+            row["locator"] = _canon(s.locator, _HASHED_LOCATOR_FIELDS)
+        if s.confirm is not None:
+            row["confirm"] = _canon(s.confirm, _HASHED_CONFIRM_FIELDS)
+        rows.append(row)
+    basis = {"v": f"ultracua-steps-v{STEPS_HASH_VERSION}",
+             **{f: getattr(flow, f) for f in _HASHED_FLOW_FIELDS},
+             "steps": rows}
+    blob = json.dumps(basis, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
 class FlowCache:

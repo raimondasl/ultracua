@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Optional, Union
 
 from .browser import BrowserSession
-from .cache import CachedFlow, CachedStep, FlowCache, StepConfirm, flow_key
+from .cache import CachedFlow, CachedStep, FlowCache, StepConfirm, flow_key, steps_hash
 from .conditions import condition_present
 from .config import flow_home, settings
 from .contracts import (
@@ -222,6 +222,15 @@ class FlowMeta:
     contracts: Optional[dict] = None
     contracts_hash: Optional[str] = None
     quarantine: Optional[dict] = None
+    # The RECIPE a human actually approved: `cache.steps_hash(cached_flow)` stamped at `approve()`. The
+    # other two hashes above bind the SPEC (slot schema, contract overlay); this one binds the STEPS, which
+    # is what "approved" means to a human — they read `flow inspect` and said yes to those actions on those
+    # targets. Without it, `approved` was a sticky bit that survived the flow being re-authored underneath
+    # it (a heal that retargets a locator, a suffix-replan, a re-record, a re-learn, a hand-edited cache
+    # file), so an approved WRITE could fire steps no human ever saw. `None` on a flow approved by an older
+    # version -> replay REFUSES with a migration message rather than back-filling (a lazy back-fill would
+    # rubber-stamp exactly the drifted recipe the gate exists to catch). See `cache.steps_hash`.
+    steps_hash: Optional[str] = None
     # H9 layer 2 (judge): `audit_due` marks the NEXT replay as must-capture (set after a heal/replan, a
     # re-learn, or a human `release()` — the highest-risk runs); `audit_advisories` counts unreviewed
     # advisory findings so habituation is MEASURED (surfaced by `flow status`), never a silent pile-up.
@@ -243,6 +252,11 @@ class FlowHealth:
     last_run_ts: float
     last_ok_ts: float
     last_error: Optional[str]
+    # True when `approved` is set but no longer binds the steps on disk (they were re-authored, or the flow
+    # was approved before the binding existed). Such a flow REFUSES at pre-flight with `stale_approval`, so
+    # the fleet view surfaces it rather than letting an operator find out at run time. Defaulted so callers
+    # that construct a FlowHealth positionally (tests, fixtures) keep working.
+    approval_stale: bool = False
 
 
 class FlowReplayError(RuntimeError):
@@ -310,6 +324,20 @@ class FlowQuarantineError(FlowReplayError):
     quarantine. Value-free by construction (the message names types/counts/bounds, never an extracted value)."""
 
     code = "quarantined"
+    retryable = False
+
+
+class StaleApprovalError(FlowReplayError):
+    """The flow's cached RECIPE no longer matches what a human approved (`cache.steps_hash` != the digest
+    stamped by `approve()`), or it was approved by a version that predates the binding.
+
+    Raised pre-browser at pre-flight, so nothing has acted yet. NOT retryable and NOT healable: only a human
+    re-reading the steps (`flow inspect`) and re-approving (`flow approve`) can clear it — automating that
+    away would restore exactly the sticky-approval hole this closes. Deliberately absent from
+    `_classify_replay_failure`: this is a config/trust refusal decided BEFORE any attempt, never a
+    classification of an attempt's failure `kind`."""
+
+    code = "stale_approval"
     retryable = False
 
 
@@ -868,20 +896,30 @@ def _contracts_hash(spec: FlowSpec) -> Optional[str]:
 
 
 def approve(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> None:
-    """Mark a learned flow trusted (so `replay(require_approved=True)` will run it). For a slotted flow,
-    the approval is BOUND to the current slot schema — a later domain change refuses replay until
-    re-approved (see `replay`). It is likewise bound to the human value-contract overlay (H9)."""
+    """Mark a learned flow trusted (so `replay(require_approved=True)` will run it).
+
+    Approval is BOUND to three things, and a change to any of them refuses replay until a human
+    re-approves (see `_preflight_row`):
+      - the RECIPE — the cached steps themselves (`cache.steps_hash`), i.e. what a human read in
+        `flow inspect` and said yes to. This is the binding that makes `approved` mean something: it
+        stops the system re-authoring an approved flow underneath its own approval bit.
+      - the slot SCHEMA (`FlowSpec.slots`) — a widened domain is an injection surface, worst on a write.
+      - the human value-contract OVERLAY (`FlowSpec.contracts`) — a weakened fail-loud guarantee.
+    """
     cache = cache or _default_cache()
     key = flow_key(spec.goal, spec.start_url, spec.scope)
-    if cache.get(key) is None:
+    cached = cache.get(key)
+    if cached is None:
         raise FlowReplayError(f"{spec.name!r}: nothing to approve — learn the flow first")
     sh = _slots_hash(spec)
     ch = _contracts_hash(spec)
+    steps_h = steps_hash(cached)
 
     def _apply(m: FlowMeta) -> None:
         m.approved = True
         m.slots_hash = sh
         m.contracts_hash = ch
+        m.steps_hash = steps_h
 
     _update_meta(cache, key, _apply)
 
@@ -1086,8 +1124,21 @@ def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Op
     """
     cache = cache or _default_cache()
     key = flow_key(spec.goal, spec.start_url, spec.scope)
-    cached = cache.get(key) is not None
+    cached_flow = cache.get(key)
+    cached = cached_flow is not None
     meta = _load_meta(cache, key)
+    # Is the approval still bound to the steps on disk? Same predicate as `_preflight_row`'s recipe gate, so
+    # the fleet view can SHOW a flow that will refuse instead of leaving an operator to discover it at run
+    # time. `None` (approved before the binding existed) counts as stale: it needs the same human re-approval.
+    approval_stale = False
+    if meta.approved and cached_flow is not None:
+        try:
+            # An UNCOMPUTABLE digest counts as stale, for the same reason pre-flight refuses on one: we cannot
+            # show the recipe is the approved one. And it must not traceback — `health()` backs `flow status`
+            # and the MCP `tools/list` loop, so one corrupt flow would otherwise take down the fleet view.
+            approval_stale = meta.steps_hash is None or meta.steps_hash != steps_hash(cached_flow)
+        except Exception:  # noqa: BLE001
+            approval_stale = True
     if not cached:
         status = "not-learned"
     elif meta.quarantine is not None:  # H9: a wrong-value quarantine is the most severe/actionable state
@@ -1104,6 +1155,7 @@ def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Op
         name=spec.name, status=status, cached=cached, approved=meta.approved,
         runs=meta.runs, successes=meta.successes, consecutive_failures=meta.consecutive_failures,
         last_run_ts=meta.last_run_ts, last_ok_ts=meta.last_ok_ts, last_error=meta.last_error,
+        approval_stale=approval_stale,
     )
 
 
@@ -1266,10 +1318,11 @@ def _preflight_row(
 
     Guards, in order: 0-LLM pre-flight (`validate_params`); a write needs a confirm check; `on_drift=
     'relearn'` is refused for a write and for any parameterized replay (a re-author drops params → frozen
-    defaults); the approval gate; the slot-schema approval gate (a domain widened since approve() must
-    re-approve); the binding guard (a supplied slot must bind a type/select step, else its value folds into
-    the idempotency key without being typed); the precheck refusal (a parameterized write can't lean on a
-    row-blind one-shot precheck)."""
+    defaults); the approval gate; the three approval BINDINGS — slot schema (a domain widened since approve()
+    must re-approve), value contracts, and the RECIPE itself (`cache.steps_hash`: the cached steps must still
+    be the ones a human reviewed); the binding guard (a supplied slot must bind a type/select step, else its
+    value folds into the idempotency key without being typed); the precheck refusal (a parameterized write
+    can't lean on a row-blind one-shot precheck)."""
     is_mutate = spec.mutate is not None
     parameterizing = params is not None
     # H9: a quarantined flow refuses EVERY future run, 0-LLM, before any browser or arg validation — a
@@ -1317,6 +1370,42 @@ def _preflight_row(
         raise FlowReplayError(
             f"{spec.name!r}: value contracts changed since approval — re-approve the flow before replaying it "
             f"(a tightened or loosened value guarantee must be re-blessed by a human)")
+    # RECIPE INTEGRITY — the gate that makes `approved` mean what a human thinks it means. The two gates above
+    # bind the SPEC; this one binds the STEPS. Without it `approved` was a sticky bit that survived the flow
+    # being re-authored underneath it: a self-heal that retargets a locator, a suffix-replan, a `flow record`
+    # over an approved flow, a re-learn, or a hand-edited cache file all left `approved=True` on steps no human
+    # ever read — and on a WRITE that means firing an unreviewed action at an unreviewed target. Checked here,
+    # pre-browser, so the refusal costs nothing and nothing has acted.
+    if meta.approved and cached_flow is not None:
+        if meta.steps_hash is None:
+            # MIGRATION: approved before this binding existed, so there is no digest to compare. Refuse rather
+            # than back-fill — back-filling would stamp whatever the steps are NOW as "approved", which
+            # rubber-stamps precisely the silently-re-authored recipe the gate exists to catch. One human
+            # re-approval per flow, once.
+            raise StaleApprovalError(
+                f"{spec.name!r}: approved by an older version that did not bind the approval to the flow's "
+                f"steps. Review the steps (`flow inspect --name {spec.name}`) and re-approve once "
+                f"(`flow approve --name {spec.name}`) — this is a one-time upgrade step, and it is NOT back-filled "
+                f"automatically because that would bless whatever the steps happen to be now.")
+        try:
+            current = steps_hash(cached_flow)
+        except Exception as exc:  # noqa: BLE001
+            # A digest we cannot COMPUTE is not a digest that matches. (Reachable via a hand-written/foreign
+            # cache file whose `args`/`slot_domain` holds something `json.dumps(sort_keys=True)` rejects, e.g.
+            # mixed-type keys.) Refuse in the taxonomy rather than escape as a bare TypeError that a caller's
+            # `except FlowReplayError` would miss — inviolable #2 wants loud, not just non-silent.
+            raise StaleApprovalError(
+                f"{spec.name!r}: could not verify the flow's steps against the approval ({type(exc).__name__}: "
+                f"{exc}) — refusing rather than replaying an unverifiable recipe. The cached flow is probably "
+                f"corrupt or hand-edited: re-record it, review with `flow inspect --name {spec.name}`, then "
+                f"`flow approve --name {spec.name}`.") from exc
+        if current != meta.steps_hash:
+            raise StaleApprovalError(
+                f"{spec.name!r}: the flow's steps changed since approval "
+                f"(approved {meta.steps_hash}, now {current}) — refusing to replay steps no human reviewed. "
+                f"Something re-authored the cached flow (a heal/replan on an unapproved run, a re-record, a "
+                f"re-learn, or an edited cache file). Review with `flow inspect --name {spec.name}`, then "
+                f"`flow approve --name {spec.name}` to bless the new recipe.")
     # APPROVAL INTEGRITY: `on_drift="relearn"` lets the engine SELF-HEAL / suffix-replan / fully re-author the
     # cached steps and write them straight back (`flow.py`'s `if dirty and success: cache.put(flow)`). On an
     # APPROVED flow that would run LLM-authored steps no human ever reviewed, under the existing approval — the

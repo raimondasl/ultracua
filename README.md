@@ -65,7 +65,7 @@ Hacker News (read-only) and is built to record: `uv run python examples/hn_diges
 
 - **0-LLM replay** — a learned flow replays with no model calls (one cheap extraction reads the data).
 - **Resilient, self-healing locators** — survive cosmetic DOM drift; one-step LLM re-grounding on real drift, or a **suffix-replan** that re-authors just the broken tail (keeping the working prefix) when the path changes.
-- **Trust controls** — approval gate, data-shape drift detection, **fail-loud** `FlowReplayError`.
+- **Trust controls** — an approval gate **bound to the steps you reviewed** (re-author them and replay refuses, before the browser opens), data-shape + value-contract drift detection, **fail-loud** `FlowReplayError`.
 - **Auth refresh** — re-login on session expiry; credentials are env-sourced and **never persisted**.
 - **Write flows** — submit / post / purchase with **action-completion verification** + idempotency.
 - **Record by demonstration** — `ultracua flow record` captures a headed walkthrough into a cached **0-LLM** flow: reads are verify-by-replay; declared writes are **gated + approval-gated + idempotency-keyed**.

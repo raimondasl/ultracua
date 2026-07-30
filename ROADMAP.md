@@ -1086,32 +1086,34 @@ scarcest training commodity — ultracua's recorder captures them natively.
 - **Live-health flow registry** — value gates entirely on network effects; sequence after H2 + H10
   generate the install base.
 
-## Known defects (verified against the code at 0.58.0 — fix these before new horizons)
+## Known defects (found at 0.58.0 — both now ✅ FIXED)
 
-Two gaps found by a code-grounded audit, both verified by direct execution. Neither is a new feature; each is
-an existing guarantee that the code does not actually deliver.
+Two gaps found by a code-grounded audit, both verified by direct execution. Neither was a new feature; each was
+an existing guarantee that the code did not actually deliver.
 
-1. **The approval gate does not bind the STEPS.** `approve()` stamps `approved` / `slots_hash` /
-   `contracts_hash` — nothing hashes `CachedFlow.steps`. Meanwhile `flow.py:750` (`if dirty and success:
-   cache.put(flow)`) writes a **healed or suffix-replanned** flow — containing LLM-authored steps no human
-   reviewed — straight into the live cache, and the next unattended run executes it under the *old* approval
-   bit. This contradicts [docs/comparison-stagehand.md](docs/comparison-stagehand.md), which tells readers a
-   human approves a flow before any unattended run. It also **defeats H9**: an `on_drift="relearn"` run
-   re-seeds `meta.contracts`/`shape` and calls `_reset_history` (flows.py:828), silently re-baselining all
-   three semantic-wrongness layers with no human in the loop. *Fix:* a `FlowMeta.flow_hash` bound at
-   `approve()` and checked at pre-flight, plus a **heal-as-proposal** lane (write to a `.proposed` sidecar,
-   surface via `flow diff`, promote with `flow approve --accept-heal`). This is also the strict prerequisite
-   for H1 (attested replay), H5 (dry-run), and H6 (drift-repair PRs) — a receipt or a held-write report is
-   meaningless about steps that nothing freezes.
+1. **The approval gate did not bind the STEPS** — ✅ **CLOSED in 0.59.0 + 0.60.0.** `approve()` stamped
+   `approved` / `slots_hash` / `contracts_hash` but nothing hashed `CachedFlow.steps`, while `flow.py`'s `if
+   dirty and success: cache.put(flow)` wrote a **healed or suffix-replanned** flow — LLM-authored steps no human
+   reviewed — straight into the live cache, to be executed under the *old* approval bit. Closed in two halves:
+   **0.59.0** refused `on_drift="relearn"` on an approved flow outright (no unattended re-authoring) and stopped
+   silently re-baselining H9 while approved; **0.60.0** added the binding itself — `cache.steps_hash()` stamped
+   at `approve()` and checked at pre-flight, so *any* re-authoring (a heal on an unapproved run, a `flow record`,
+   a re-learn, a hand-edited cache file) makes replay refuse with `stale_approval` until a human re-reads the
+   recipe. Surfaced as `FlowHealth.approval_stale` (`flow status`), an unlisted MCP tool, and a post-`learn`/
+   post-`record` warning. Scope is honest: **integrity, not authenticity** — the digest is unkeyed and sits
+   beside the flow file it authenticates. The remaining *ergonomic* piece is optional and unbuilt: a
+   **heal-as-proposal** lane (write to a `.proposed` sidecar, surface via `flow diff`, promote with `flow approve
+   --accept-heal`), which would turn today's loud refusal into a reviewable diff. The binding is the part H1
+   (attested replay), H5 (dry-run) and H6 (drift-repair PRs) actually depend on — a receipt is meaningless about
+   steps nothing freezes — so those are no longer blocked.
 
-2. **An empty flow store reports success forever** — a violation of inviolable #2 at the ops layer. The flow
-   root is hardcoded (`_specs_dir()` → `.ultracua/specs`, `FlowCache.root` → `.ultracua/flows`); there is no
-   `ULTRACUA_HOME`. A cron job launched from the wrong working directory prints
-   `== 0 ok, 0 failed, 0 skipped (of 0) ==` and **exits 0**, forever, doing nothing (verified empirically).
-   `flow canary` has the same hole, and `serve-mcp` comes up healthy exposing **zero tools** with no error —
-   the flagship H2 surface, whose MCP client launches it with an arbitrary cwd. *Fix:* resolve a root once
-   (`ULTRACUA_HOME` → walk up for a project-local `.ultracua` → `~/.ultracua`), thread it through both
-   hardcoded paths, and make zero-resolved-flows exit non-zero behind an explicit `--allow-empty`.
+2. **An empty flow store reports success forever** — ✅ **FIXED in 0.59.0** (`ULTRACUA_HOME` + `flow_home()` +
+   `EmptyFlowStoreError`; `--allow-empty` is the explicit escape hatch). Kept here for the record. It was a
+   violation of inviolable #2 at the ops layer: the flow root was hardcoded and cwd-relative, so a cron job
+   launched from the wrong directory printed `== 0 ok, 0 failed, 0 skipped (of 0) ==` and **exited 0**, forever,
+   doing nothing (verified empirically) — and `serve-mcp` came up healthy exposing **zero tools** with no error.
+   Note the resolution order shipped *without* a `~/.ultracua` fallback on purpose: a wrong-cwd run must fail
+   loudly, never quietly run a *different* fleet.
 
 ## Suggested sequencing (horizons)
 
@@ -1119,10 +1121,11 @@ an existing guarantee that the code does not actually deliver.
 #1/#2/#3/#6 done; #4/#5 remain.*
 **Wave 1 — leverage:** ✅ **H3 typed templates** (the #1 gap) and ✅ **H2 MCP server** (all three
 stages — the widest distribution surface) both **SHIPPED** (0.46 → 0.55), as is ✅ **H9 semantic-wrongness
-defense, complete** (layer 1 value contracts 0.56, layer 2 magnitude 0.57, layer 2 LLM judge 0.58). Remaining
-Wave-1: **H8 stages 1–2** (files + volatile-ID blocklist — the cheap certain wins). ⚠️ **But fix the two
-"Known defects" above FIRST** — they are small, they close gaps between what the docs promise and what the code
-does, and defect #1 is a hard prerequisite for the whole Wave-2 trust wedge. **Wave 2 — the trust wedge:** H5 dry-run, H1 attested replay, H6
+defense, complete** (layer 1 value contracts 0.56, layer 2 magnitude 0.57, layer 2 LLM judge 0.58). Both
+**"Known defects" are now closed** (0.59.0 + 0.60.0), which unblocks the Wave-2 trust wedge: an attested replay
+or a held-write report is meaningless about steps nothing freezes, and `cache.steps_hash` is that freeze.
+Remaining Wave-1: **H8 stages 1–2** (files + volatile-ID blocklist — the cheap certain wins).
+**Wave 2 — the trust wedge:** H5 dry-run, H1 attested replay, H6
 drift-repair tier 1, H10 Drift-Watch — these four compound: the same evidence/verification
 machinery sells enterprise trust. **Wave 3 — reach:** H4 in-profile recorder, H7 control flow, H12
 talk-through, H11 bot-auth identity. **Frontier (spike-gated, parallel):** H13 lanes (markdown

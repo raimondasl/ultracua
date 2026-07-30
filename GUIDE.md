@@ -4,6 +4,24 @@ How to *use* ultracua — the Flow API and the `ultracua` CLI in depth. For a ru
 walkthrough start with [EXAMPLES.md](EXAMPLES.md); for how it works inside see
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
+> ### ⚠️ Upgrading to 0.60.0 — every approved flow needs one re-approval
+>
+> Approval is now **bound to the steps you reviewed** (`cache.steps_hash`), not just to the flow's name. A flow
+> approved by 0.59.0 or earlier has no such binding recorded, so replay **refuses** it with `stale_approval`
+> until a human re-approves once. This is deliberate and not back-filled automatically: back-filling would
+> stamp whatever the steps happen to be *now* as approved, which is exactly the silently-re-authored recipe
+> the binding exists to catch.
+>
+> ```bash
+> uv run ultracua flow status                       # every affected flow shows APPROVAL STALE
+> uv run ultracua flow approve --all                # prints each READ flow's steps, then approves in bulk
+> uv run ultracua flow inspect --name place-order   # WRITE flows are skipped — review each one...
+> uv run ultracua flow approve --name place-order   # ...and approve it by name
+> ```
+>
+> Check `flow status` before your next scheduled run: an un-re-approved flow fails loudly, it does not run.
+> Details: [Trust for unattended runs](#trust-for-unattended-runs).
+
 ## Contents
 
 - [The one-shot agent](#the-one-shot-agent)
@@ -324,6 +342,16 @@ a change in the data's *shape* vs the learned run as drift; and `on_drift="relea
 drift instead of raising. So a scheduled run either returns trustworthy data or fails loudly — point
 cron at it and alert on a non-zero exit. (CLI: `ultracua flow approve --name …`; `flow replay
 --require-approved --on-drift relearn`.)
+
+**What "approved" is bound to.** Approving a flow stamps a digest of the **steps you reviewed** — each step's
+action, intent, locator, typed text, `mutating` flag, commit barrier and slot binding, in order — alongside the
+digests of its slot schema and value contracts. If anything later rewrites those steps (a heal or re-plan on an
+*unapproved* run, a `flow record`, a re-learn, an edited cache file), replay refuses with `stale_approval`
+**before the browser opens**, and the flow shows `APPROVAL STALE` in `flow status`; an MCP server stops
+advertising the tool rather than serving one that always fails. The way out is a human reading the new recipe
+(`flow inspect --name X`, then `flow approve --name X`) — nothing re-blesses a recipe automatically. Upgrading
+from ≤0.59.0, every already-approved flow needs one re-approval; `flow approve --all` prints each read flow's
+steps and approves them in bulk (write flows are always skipped — review those one at a time).
 
 `on_drift="relearn"` recovers in the cheapest way that works, escalating only as needed: a pure 0-LLM
 replay first; then a **suffix-replan repair** that re-authors *only the broken tail* from the current
