@@ -277,7 +277,14 @@ async def resolve(page: Page, spec: LocatorSpec, unique: bool = False,
             exact_text = exact_text.and_(page.locator(spec.tag))
         confident.append(("exact-text", exact_text))
     if spec.elem_id:
-        confident.append(("elem_id", page.locator(f'[id="{spec.elem_id}"]')))
+        # `_attr_eq`, never an f-string: `elem_id` is PAGE-CONTROLLED (`el.id`), and an id containing a
+        # quote or a backslash otherwise changes what the selector MEANS. Measured, all three shapes:
+        #   id='a"b'              -> raw selector is invalid; the exception is swallowed by `classify`, so
+        #                            the Tier-1 id candidate is silently LOST (fail-safe, but a lost anchor)
+        #   id='a\\b'             -> `\\b` is a CSS escape, so the raw form matches `ab`, a DIFFERENT element
+        #   id='zzz"],[id="other' -> the raw form becomes a selector LIST and binds `#other`: count==1, so
+        #                            Tier 1 returns it OUTRIGHT. A confident, cross-check-free wrong bind.
+        confident.append(("elem_id", page.locator(_attr_eq("id", spec.elem_id))))
 
     # --- Tier 2: the two independent "guess" locators (cross-checked against each other) ---
     # Fuzzy substring text, SCOPED to the element's own tag. A bare get_by_text(exact=False) matches the
