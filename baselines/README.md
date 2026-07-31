@@ -9,7 +9,7 @@ is produced by `drift_sandbox.py` (scripted/**key-less**) and `recorder_ceiling.
 
 | File | Bench | Captured | Headline |
 |---|---|---|---|
-| `drift_v2.json` | **drift-bench v2** (6 scenarios, 114 rows × 2 arms) | 2026-07-30 | 0-LLM survival **falls 11/12 → 0/6** across mutation intensity k=1…7 (k50=7); **21 recovery-eligible rows where v1 had 0**; heal MECHANISM **12/12**, replan **1/9**; **1 published wrong-bind** (`positional-css-retarget`, 0.9% of rows) — the key-less CI gate |
+| `drift_v2.json` | **drift-bench v2** (6 scenarios, 115 rows × 2 arms) | 2026-07-30 | 0-LLM survival **falls 11/12 → 0/6** across mutation intensity k=1…7 (k50=6); **23 recovery-eligible rows where v1 had 0**; heal MECHANISM **13/13**, replan **2/10**; **1 published wrong-bind** (the *token-less* positional retarget, 0.9% of rows — its token-bearing half closed in 0.62.0) — the key-less CI gate |
 | `demo.json` | demo-shop (4-step) | 2026-06-19 | 5/5 replay, speedup **86.3× ± 20.9**, ~$0.27 — no discovery variance (cost/speedup reference) |
 | `miniwob.json` | MiniWoB++ ×10 (N=1) | 2026-06-19 | replay success **52% ± 13%** (40–70%), pass^k=0, ~$4.24 — the discovery-reliability reference |
 | `miniwob_bestof3.json` | MiniWoB++ ×10 (**N=3 best-of-N**) | 2026-06-20 | **60% ± 0%** (6/10 every rep), ~$6.58 (1.55×) — best-of-N vs the N=1 baseline: +8 pts and **variance → 0** |
@@ -35,14 +35,14 @@ composition, never hand-set. Two primitives are fixture-conditional for a measur
 `#<id>` and stops for any id-bearing element, so such a target has no independent css anchor and a wrapper
 cannot move it, while `hash_ids` takes out both at once.
 
-**The headline numbers** (seed 7, 114 rows × 2 arms):
+**The headline numbers** (seed 7, 115 rows × 2 arms, as of 0.62.0):
 
 | | v1 | v2 |
 |---|---|---|
-| 0-LLM survival | 12/12 (saturated) | a **curve**: k1 11/12, k2 8/12, k3 11/12, k4 9/12, k5 6/9, k6 5/9, **k7 0/6** (k50 = 7) |
-| recovery-eligible rows | **0** | **21** (12 heal-eligible + 9 replan-eligible) |
-| heal | unmeasurable | **12/12** mechanism ceiling |
-| suffix-replan | unmeasurable | **1/9** — it recovers only when an alternate route exists |
+| 0-LLM survival | 12/12 (saturated) | a **curve**: k1 11/12, k2 8/12, k3 11/12, k4 9/12, k5 6/9, k6 4/9, **k7 0/6** (k50 = 6) |
+| recovery-eligible rows | **0** | **23** (13 heal-eligible + 10 replan-eligible) |
+| heal | unmeasurable | **13/13** mechanism ceiling |
+| suffix-replan | unmeasurable | **2/10** — it recovers only when an alternate route exists |
 | wrong outcomes | 0, judged by landed URL | **1 published hole**, judged by the actuated action sequence |
 | write safety | not covered | recovery **refused on 14/14** drifted write rows; 0 double-submits, 0 suppressed, 0 wrong-target |
 
@@ -52,14 +52,37 @@ stronger than v1: a mis-bind that does not navigate left v1 reporting `success` 
 classifier labelled `drifted` — the *safe* bucket. Typing into a decoy field or picking a wrong option were
 laundered.
 
-**The one published wrong-bind.** `shop-4step/positional-css-retarget`: a target whose only surviving anchor
-is a *positional* css is removed and a same-tag sibling slides into its slot, so the cached path re-matches
-the neighbour — 0-LLM clicks a route no human approved, lands on the correct-**looking** page and reports
-success. **v1's URL check would have scored this a clean survival.** It is accepted rather than fixed because
-the obvious fix trades it for something worse: `resolve()` trusts a unique positional css precisely so a
-*renamed* target still recovers, and demoting that candidate was measured during v1's development to turn
-two `conflict` rows into silent wrong-binds. So it is counted, named in `KNOWN_WRONG_BINDS` with its reason,
-published as a rate (0.9% of rows), and gated as **exactly** that one row — never as a loosened tolerance.
+**The published wrong-bind, and what 0.62.0 did to it.** A target whose only surviving anchor is a
+*positional* css is removed and a same-tag sibling slides into its slot, so the cached path re-matches the
+neighbour — 0-LLM clicks a route no human approved, lands on the correct-**looking** page and reports
+success. **v1's URL check would have scored this a clean survival.**
+
+0.62.0 closed **half** of it. `locators._testid_contradicted` withdraws the Tier-2 css-trust when the bound
+element positively falsifies a recorded `data-testid`: that trust is a *rename hypothesis*, and a rename
+cannot change a developer token, so the token's absence is evidence the path landed elsewhere. Measured:
+`shop-4step/positional-css-retarget` went `wrong` → `drifted` at 0-LLM and `wrong` → `replanned` in the
+recovery arm, with **no** v1 row, `cart-row` row or write row moving.
+
+**The other half is the common half, and it is still open.** 8 of the corpus's 10 Tier-2 css binds are on
+targets that recorded no identity token at all, and for those nothing `describe()` captures separates *"the
+target was renamed"* from *"a sibling slid into its slot"* — both renames the resolver must keep recovering
+present exactly as the retarget does. That is an information limit of the recorded field set, not an
+oversight. So the allowlist entry **moved rather than disappeared**: `anchor-link/positional-css-retarget-
+tokenless` is a curated row that reproduces the surviving hole, and `silent_wrong` is still 2 (0.9% of rows).
+Deleting the old entry without adding it would have converted a *measured* hole into an *assumed-closed*
+one — the exact failure this bench exists to prevent.
+
+The cost was one row: `anchor-button/placeholder_rewrite+rename_full+testid_drop` (every identity token dead
+*and* the css bind correct — indistinguishable from the retarget in the recorded-field lens) now fails loud
+instead of binding. It is heal-eligible and the ladder recovers it, but it drags `resilience_by_k["6"]` from
+5/9 to 4/9 and therefore the published **`k50` from 7 to 6**. That is a deliberate re-baseline, recorded
+here rather than left for a reader to discover: the rung got *safer*, and one row moved it.
+
+Ruled out **with measurement**, so they are not re-proposed: demoting or dropping the css candidate (turns
+the two `conflict` rows into silent wrong-binds — measured during v1); any N-of-M positive corroboration rule
+(both renames record zero corroborating tokens, so it refuses them — predicted to drop v1 parity to 10/12);
+text similarity (the renames change text exactly as the retarget does); and the neighbour anchor (it
+*matches* on the retarget row, since the decoy sits in the same section).
 
 ### What these numbers do NOT prove
 
