@@ -1332,7 +1332,7 @@ wheels = [
 
 [[package]]
 name = "ultracua"
-version = "0.62.1"
+version = "0.63.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
