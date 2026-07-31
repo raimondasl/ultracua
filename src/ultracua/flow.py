@@ -107,6 +107,9 @@ async def run_cached(
     reflect: bool = False,
     window_size: Optional[tuple[int, int]] = None,
     params: Optional[dict] = None,
+    # H5: a `dryrun.DryRunArbiter`, not a bool — the CALLER owns the arbiter so it can read the held
+    # writes afterwards, and so the object that made the hold guarantee is the one that reports it.
+    dry_run: Optional[object] = None,
 ) -> FlowReport:
     cache = cache or FlowCache()
     governor = governor or PacingGovernor()
@@ -115,6 +118,12 @@ async def run_cached(
     new_run_id()
     _log.info("run start: mode=%s cached=%s url=%s goal=%r", mode, cached is not None, url, goal)
 
+    if dry_run is not None and (mode != "replay" or cached is None):
+        # A dry run must be structurally incapable of reaching `_learn`, which would perform the write FOR
+        # REAL. Refuse rather than degrade: there is no safe fallback for "no cached flow" here.
+        return FlowReport(mode="miss", success=False,
+                          note="dry-run requires mode='replay' and a cached flow")
+
     if cached is not None and mode in ("auto", "replay", "repair"):
         # "repair" = replay WITH the heal provider (self-heal + suffix-replan a drifted tail), but
         # NO fall-through to a full re-author — the caller owns whole-flow relearn (and its metadata).
@@ -122,7 +131,7 @@ async def run_cached(
         report = await _replay(
             url, key, cached, cache, heal_provider, headless, on_step,
             prepare, finalize, goal, governor, scope, browser, record_har_path, extra_headers,
-            storage_state, window_size=window_size, params=params,
+            storage_state, window_size=window_size, params=params, dry_run=dry_run,
         )
         if report.success or mode in ("replay", "repair") or report.mode == "escalate":
             return report
@@ -623,10 +632,11 @@ async def _replay(
     storage_state: Optional[str] = None,
     window_size: Optional[tuple[int, int]] = None,
     params: Optional[dict] = None,
+    dry_run: Optional[object] = None,
 ) -> FlowReport:
     session = await BrowserSession(
         headless=headless, browser=browser, record_har_path=record_har_path,
-        storage_state=storage_state, window_size=window_size,
+        storage_state=storage_state, window_size=window_size, dry_run=dry_run,
     ).start()
     traces: list[StepTrace] = []
     llm = 0
@@ -676,8 +686,18 @@ async def _replay(
                     timeout_ms=0,
                 )
             ok, note, did_heal = await _replay_step(
-                session, step, provider, tr, goal, governor, scope, i, params=params
+                session, step, provider, tr, goal, governor, scope, i, params=params,
+                dry_run=dry_run,
             )
+            if dry_run is not None and getattr(dry_run, 'aborted', False):
+                # A safety abort OUTRANKS the step result: a step can look fine while the arbiter
+                # saw something it could not promise to hold.
+                success = False
+                note = f"dry-run aborted: {dry_run.report.aborted} — {dry_run.report.abort_detail}"
+                traces.append(tr)
+                if on_step:
+                    on_step(tr)
+                break
             # COMMIT BARRIER: a write with a per-step confirm must show its completion signal TRANSITION to
             # present before we proceed. A failure flips `ok` to False and falls into the existing fail-loud
             # path below — and since the step is `mutating`, suffix-replan is skipped, so replay STOPS here
@@ -804,6 +824,7 @@ async def _replay_step(
     scope: str,
     idx: int,
     params: Optional[dict] = None,
+    dry_run: Optional[object] = None,
 ) -> tuple[bool, str, bool]:
     """Replay one cached step. Returns (ok, note, did_heal)."""
     page = session.page
@@ -859,6 +880,11 @@ async def _replay_step(
         key = idempotency_key(scope, idx, step.intent, slot_values=params)
         tr.meta["idempotency_key"] = key
         await session.set_extra_http_headers({"Idempotency-Key": key})
+        if dry_run is not None:
+            # Opened AFTER the header so the held request carries it: the report can then show that
+            # the key `flows.preflight_keys` PREDICTED is the key that actually rode the wire.
+            dry_run.open_window(step=idx, intent=step.intent, key=key,
+                                grace_ms=settings.write_window_ms)
 
     # Bounded wait for a mutating step's (possibly async) write to leave the browser before the `finally`
     # clears the Idempotency-Key. Kept SHORT (write_settle_ms) so a no-write mutating step doesn't stall the
@@ -971,6 +997,15 @@ async def _replay_step(
         return False, "unreplayable step", False
     finally:
         if step.mutating:
+            if dry_run is not None:
+                # DRAIN BEFORE CLOSING, and the ordering is the subtle part: the `request` event
+                # that `page.expect_request` resolves on fires BEFORE the route handler runs, so at
+                # the moment that context manager returns the HeldWrite may not be recorded yet.
+                # Closing on that signal alone would classify the flow's OWN expected write as
+                # out-of-window and trip `ungated-write` — turning the safest possible flow into an
+                # abort.
+                await dry_run.drain(timeout_ms=write_settle_ms)
+                dry_run.close_window()
             await session.set_extra_http_headers({})  # clear the idempotency header
 
 

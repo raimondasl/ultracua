@@ -353,6 +353,46 @@ advertising the tool rather than serving one that always fails. The way out is a
 from ≤0.59.0, every already-approved flow needs one re-approval; `flow approve --all` prints each read flow's
 steps and approves them in bulk (write flows are always skipped — review those one at a time).
 
+### Dry run — see what a write would send, before approving it
+
+```bash
+uv run ultracua flow dry-run --name place-order
+```
+
+Replays a write flow with the mutation gate fully armed and **every write held**: intercepted, dropped,
+and answered with a synthesized response, so nothing reaches the server. You get the exact method, URL,
+`Idempotency-Key` and body the flow *would* send — the artifact you need to approve a new, re-learned or
+imported write flow on a site with no staging environment.
+
+```
+  HELD  step 2 'place the order'
+        POST https://shop.example.com/order
+        Idempotency-Key: uca-3f9c…
+        body: action=place&ref=R-9
+
+== 1 of 1 planned write(s) reached; 1 request(s) held ==
+```
+
+**What it is not.** A dry run is *not* evidence the flow works, and the report deliberately has no
+pass/fail field — any boolean would be read as "safe to approve". Specifically:
+
+- **Confirm barriers are never evaluated**, only reported `held — unverifiable`. A held write produces a
+  synthesized response, so a barrier could only be checked against fiction.
+- **Everything after the first hold is unrepresentative**, and the report says so by step index. Write #2's
+  body may be computed from a response that never existed.
+- **Three numbers, never two**: writes *reached* vs writes *planned* vs requests *held*. A flow that stops
+  at its first held write has not shown you its remaining bodies — they are unknown, not empty.
+- **Bodies are printed and never persisted** — no `--json`, no HAR (a dry run refuses `record_har_path`
+  outright), nothing on disk. A held body is whatever the page computed, which can include typed values.
+- It **skips the approval gates on purpose** (it is the pre-approval artifact) and **names every one it
+  skipped**, so a dry run of an unapproved or re-authored recipe can't be mistaken for a run of an
+  approved one. It never records run health.
+
+**If it aborts, that is not a report about your flow.** An abort means a channel could not be *proven*
+held — a write outside any act window, a WebSocket frame, an uninterceptable transport — and the run
+stops rather than continue under a guarantee it can't make. Exit code is non-zero, so a CI pre-flight
+fails loudly.
+
 `on_drift="relearn"` recovers in the cheapest way that works, escalating only as needed: a pure 0-LLM
 replay first; then a **suffix-replan repair** that re-authors *only the broken tail* from the current
 page while keeping the working prefix (so a locator/navigation change fixes itself without re-running

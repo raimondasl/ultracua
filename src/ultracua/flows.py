@@ -1309,6 +1309,7 @@ def validate_params(spec: FlowSpec, params: Optional[dict]) -> dict:
 def _preflight_row(
     spec: FlowSpec, params: Optional[dict], *, meta: "FlowMeta", cached_flow: Optional[CachedFlow],
     require_approved: bool = False, on_drift: str = "raise",
+    skip_approval_gates: bool = False,
 ) -> dict:
     """The 0-LLM, NO-BROWSER trust gate shared by `replay()` and `run_batch()`: resolve + validate one
     row's params against the slot schema and run every guard with ZERO side effects, returning the
@@ -1352,12 +1353,17 @@ def _preflight_row(
             f"per-run values and would return data for the frozen defaults. Use on_drift='fail' (the "
             f"default) with params, or drop params to relearn the frozen flow.")
     # A write defaults to approval-gated even without require_approved (stronger trust for writes).
-    if (require_approved or is_mutate) and not meta.approved:
+    # `skip_approval_gates` is plumbed ONLY from `flows.dry_run`, which is the pre-approval
+    # artifact — gating it on approval would make it useless for the case it exists for. Note
+    # `require_approved=False` is NOT sufficient: the gate is unconditional for a WRITE flow.
+    # Every skipped gate is NAMED in the report, so a dry run of an unapproved or re-authored
+    # recipe can never be mistaken for a run of an approved one.
+    if not skip_approval_gates and (require_approved or is_mutate) and not meta.approved:
         raise FlowReplayError(f"{spec.name!r}: flow not approved — learn it, verify it, then approve")
     # The approval is bound to the slot schema. A slotted flow whose domain changed since approve() (e.g. a
     # payee enum loosened to any string) must refuse until re-approved — a stale approval must never
     # authorize a WIDER contract than the human reviewed (an injection surface, worst on a write).
-    if meta.approved and spec.slots and _slots_hash(spec) != meta.slots_hash:
+    if not skip_approval_gates and meta.approved and spec.slots and _slots_hash(spec) != meta.slots_hash:
         raise FlowReplayError(
             f"{spec.name!r}: the slot schema changed since approval — re-approve the flow before replaying "
             f"it (a widened/edited slot domain must not run under a stale approval)")
@@ -1366,7 +1372,7 @@ def _preflight_row(
     # guarantee). No `spec.contracts and` short-circuit — else dropping the whole overlay would silently skip
     # the re-approval. Base replay_error (a config re-bless, not a data quarantine). The machine seed is
     # learn-bound, not hashed, so it can never silently widen a human-approved guarantee.
-    if meta.approved and _contracts_hash(spec) != meta.contracts_hash:
+    if not skip_approval_gates and meta.approved and _contracts_hash(spec) != meta.contracts_hash:
         raise FlowReplayError(
             f"{spec.name!r}: value contracts changed since approval — re-approve the flow before replaying it "
             f"(a tightened or loosened value guarantee must be re-blessed by a human)")
@@ -1376,7 +1382,7 @@ def _preflight_row(
     # over an approved flow, a re-learn, or a hand-edited cache file all left `approved=True` on steps no human
     # ever read — and on a WRITE that means firing an unreviewed action at an unreviewed target. Checked here,
     # pre-browser, so the refusal costs nothing and nothing has acted.
-    if meta.approved and cached_flow is not None:
+    if not skip_approval_gates and meta.approved and cached_flow is not None:
         if meta.steps_hash is None:
             # MIGRATION: approved before this binding existed, so there is no digest to compare. Refuse rather
             # than back-fill — back-filling would stamp whatever the steps are NOW as "approved", which
@@ -1412,7 +1418,7 @@ def _preflight_row(
     # human sign-off this project advertises would not be binding. It also silently re-baselines H9 (a re-learn
     # re-seeds shape/contracts and resets the magnitude history). So refuse, exactly as a write flow already
     # does: recovery on an approved flow is a human action (`flow record`/`flow learn`, then re-approve).
-    if meta.approved and on_drift == "relearn":
+    if not skip_approval_gates and meta.approved and on_drift == "relearn":
         raise FlowReplayError(
             f"{spec.name!r}: on_drift='relearn' is refused for an APPROVED flow — re-authoring would replay "
             f"steps no human reviewed under the existing approval (and would re-baseline the value contracts). "
@@ -1467,6 +1473,95 @@ def preflight_keys(
     resolved = _preflight_row(spec, params, meta=meta, cached_flow=cached,
                               require_approved=require_approved, on_drift="raise")
     return resolved, (_plan_idempotency_keys(spec, resolved, cached) if spec.mutate is not None else [])
+
+
+async def dry_run(spec: FlowSpec, params: Optional[dict] = None, *,
+                  cache: Optional[FlowCache] = None) -> "DryRunReport":
+    """Replay a WRITE flow with every write HELD — the pre-approval artifact.
+
+    Shows the exact request bodies this flow *would* send, with the mutation gate fully armed, on a site
+    with no staging environment. The hold guarantee lives in `dryrun.DryRunArbiter`; this is the driver.
+
+    A THIN DRIVER, NOT A FLAG THROUGH `replay()`, deliberately: `replay()`'s tail records run health on
+    every path (`_record_run` on success, drift and exception). Threading a flag through it would leave a
+    future edit one line away from silently recording a dry run as a real one — and a dry run is neither a
+    success (the flow was never shown to work) nor a failure (a hold is the intended outcome). `health()`
+    must be byte-identical before and after. So: no `_record_run`, ever, on any path here.
+
+    What is DELIBERATELY BYPASSED — and every one is named in the report, so a dry run of an unapproved or
+    re-authored recipe can never be mistaken for a run of an approved one:
+      * the approval gates. This IS the pre-approval artifact; gating it on approval makes it useless for
+        the only case it exists for. Note `require_approved=False` is NOT sufficient — the gate is
+        UNCONDITIONAL for a write flow (`require_approved or is_mutate`), which is every flow that matters
+        here.
+      * `_already_committed` (the one-shot idempotency precheck): it opens a SECOND BrowserSession with no
+        arbiter attached. GET-only today, but an unprotected browser in a mode that promises none exist is
+        not a risk worth carrying — and an "already-done" short-circuit would return with no artifact.
+      * auth refresh: `_form_login` submits real credentials to a real server. Under the arbiter that POST
+        is HELD, so login silently fails and surfaces as bogus drift. A dry run therefore needs a valid
+        `spec.storage_state` and says so by name when it lands on a login page.
+
+    What STILL RUNS, because these are what make the artifact predictive rather than a simulation: the
+    mutation gate, the H9 quarantine refusal, `validate_params`, the write-needs-a-confirm-check refusal,
+    both `on_drift='relearn'` refusals, the slot-binding guard, and the parameterized-write precheck
+    refusal.
+    """
+    from .dryrun import DryRunArbiter
+
+    cache = cache or _default_cache()
+    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    meta = _load_meta(cache, key)
+    cached = cache.get(key)
+    arb = DryRunArbiter()
+    rep = arb.report
+
+    if cached is None:
+        rep.aborted = "not-learned"
+        rep.abort_detail = f"{spec.name!r}: nothing cached — learn or record the flow first"
+        return rep
+    rep.steps_hash = steps_hash(cached)
+    rep.writes_planned = sum(1 for s in cached.steps if s.mutating)
+    if not meta.approved:
+        rep.approval_gates_skipped.append("not-approved (this is the pre-approval artifact)")
+    if meta.approved and meta.steps_hash is not None and meta.steps_hash != rep.steps_hash:
+        rep.approval_gates_skipped.append("stale_approval: the cached steps are not the approved ones")
+    if meta.approved and spec.slots and _slots_hash(spec) != meta.slots_hash:
+        rep.approval_gates_skipped.append("the slot schema changed since approval")
+    if meta.approved and _contracts_hash(spec) != meta.contracts_hash:
+        rep.approval_gates_skipped.append("the value contracts changed since approval")
+
+    try:
+        resolved = _preflight_row(spec, params, meta=meta, cached_flow=cached,
+                                  require_approved=False, on_drift="raise", skip_approval_gates=True)
+    except FlowReplayError as exc:
+        rep.aborted = getattr(exc, "code", "replay_error")
+        rep.abort_detail = str(exc)
+        return rep
+
+    rep.precheck_skipped = spec.mutate is not None and spec.mutate.has_precheck()
+    report = await run_cached(
+        spec.start_url, spec.goal, None, cache, mode="replay", headless=spec.headless,
+        scope=spec.scope, extra_headers=spec.headers, storage_state=spec.storage_state,
+        params=resolved or None, dry_run=arb,
+    )
+    arb.reconcile()
+
+    rep.writes_reached = sum(1 for h in rep.held if h.in_window)
+    # The FIRST hold makes every later step unrepresentative: it was fulfilled with a synthesized response,
+    # so the page state after it is fictional and write #2's body may be computed from it.
+    first_hold_step = min((h.step for h in rep.held if h.step >= 0), default=-1)
+    rep.steps_representative = first_hold_step if first_hold_step >= 0 else len(cached.steps)
+    if rep.held and rep.writes_planned > rep.writes_reached:
+        rep.warnings.append(
+            f"only {rep.writes_reached} of {rep.writes_planned} planned writes were reached — the flow "
+            f"stopped at the first held write, so the remaining bodies are UNKNOWN, not empty")
+    if rep.held:
+        rep.warnings.append(
+            f"steps after index {rep.steps_representative} ran against a SYNTHESIZED response and are not "
+            f"representative of a real run")
+    if not report.success and rep.aborted is None and not rep.held:
+        rep.warnings.append(f"replay did not complete: {report.note or report.mode}")
+    return rep
 
 
 async def replay(

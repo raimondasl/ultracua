@@ -12,6 +12,7 @@ import asyncio
 import json
 import sys
 from dataclasses import asdict
+from typing import Optional
 
 from .cache import FlowCache, flow_key
 from .config import settings
@@ -187,6 +188,60 @@ async def _flow_learn(args: argparse.Namespace) -> None:
     else:
         _warn_if_approval_stale(spec)
         _warn_if_shape_baseline_kept(spec, res.data)
+
+
+async def _flow_dry_run(args: argparse.Namespace) -> None:
+    """Show what a write flow WOULD send, with every write held. The pre-approval artifact.
+
+    Bodies are printed and never written anywhere: no `--json`, no HAR, nothing on disk. A held body is
+    whatever the page computed, which for a real flow can include values a human typed — persisting it
+    would create a secrets-at-rest problem the rest of the project takes care to avoid.
+    """
+    from .flows import dry_run, load_spec
+
+    spec = load_spec(args.name)
+    params: Optional[dict] = None
+    for item in getattr(args, "param", None) or []:
+        k, sep, v = item.partition("=")
+        if not sep:
+            raise SystemExit(f"--param expects NAME=VALUE, got {item!r}")
+        params = params or {}
+        params[k.strip()] = v
+    rep = await dry_run(spec, params)
+
+    if rep.aborted:
+        print(f"DRY RUN ABORTED ({rep.aborted}): {rep.abort_detail}")
+        print("Nothing was written. An abort means a channel could not be PROVEN held — it is not a "
+              "report about the flow.")
+        raise SystemExit(2)
+
+    print(f"dry run of {spec.name!r} — {len(rep.held)} request(s) HELD, none sent\n")
+    for h in rep.held:
+        where = f"step {h.step} {h.intent!r}" if h.step >= 0 else "outside any step"
+        print(f"  HELD  {where}")
+        print(f"        {h.method} {h.url}")
+        if h.idempotency_key:
+            print(f"        Idempotency-Key: {h.idempotency_key}")
+        if h.body:
+            print(f"        body: {h.body[:500]}")
+        if h.telemetry:
+            print("        (classified as telemetry — held anyway; classification decides reporting, "
+                  "never whether bytes are released)")
+        print()
+
+    # THREE numbers, never two. "1 of 1 held" would read as complete coverage of a 3-write flow that
+    # stopped at the first hold, which is the single most dangerous thing this report could imply.
+    print(f"== {rep.writes_reached} of {rep.writes_planned} planned write(s) reached; "
+          f"{rep.requests_held} request(s) held ==")
+    for w in rep.warnings:
+        print(f"  ! {w}")
+    for g in rep.approval_gates_skipped:
+        print(f"  ~ approval gate skipped: {g}")
+    if rep.precheck_skipped:
+        print("  ~ the one-shot idempotency precheck was skipped (it opens an unarbitered browser)")
+    print("\nConfirm barriers were NOT evaluated: a held write produces a synthesized response, so a "
+          "barrier could only report 'held — unverifiable'.")
+    print("This is not evidence the flow works. It is evidence of what it would send.")
 
 
 async def _flow_replay(args: argparse.Namespace) -> None:
@@ -960,6 +1015,12 @@ def _flow_main(argv) -> None:
     pa.add_argument("--yes", action="store_true",
                     help="skip the interactive confirmation for --all (for a documented migration script).")
 
+    pdr = sub.add_parser("dry-run", help="Replay a WRITE flow with every write HELD — see the exact "
+                                         "request bodies it WOULD send, before approving it.")
+    pdr.add_argument("--name", required=True)
+    pdr.add_argument("--param", action="append", metavar="NAME=VALUE",
+                     help="a slot value, repeatable (same validation as a real replay).")
+
     pua = sub.add_parser("unapprove", help="Withdraw approval — also the way to RE-BASELINE an approved "
                                            "flow's learned shape + value contracts "
                                            "(unapprove -> learn -> approve).")
@@ -1113,6 +1174,8 @@ def _flow_dispatch(args: argparse.Namespace) -> None:
         asyncio.run(_flow_learn(args))
     elif args.cmd == "replay":
         asyncio.run(_flow_replay(args))
+    elif args.cmd == "dry-run":
+        asyncio.run(_flow_dry_run(args))
     elif args.cmd == "approve":
         _flow_approve(args)
     elif args.cmd == "unapprove":

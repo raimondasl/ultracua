@@ -30,6 +30,7 @@ class BrowserSession:
         record_har_path: str | None = None,
         storage_state: str | None = None,
         window_size: tuple[int, int] | None = None,
+        dry_run: "object | None" = None,
     ) -> None:
         self.headless = settings.headless if headless is None else headless
         # Optional (width, height) for the browser window/viewport; falls back to the machine-level
@@ -48,6 +49,14 @@ class BrowserSession:
         # Path to a Playwright storage_state JSON (cookies + localStorage) to seed the context —
         # cookie-based auth for a recurring Flow, so replay starts already logged in.
         self._storage_state = storage_state
+        # H5: a `DryRunArbiter` that HOLDS every write. Installed on the CONTEXT, never the page — a
+        # service-worker-originated POST is delivered to `context.route` but NOT to `page.route`, where it
+        # reaches the server (measured). See `dryrun.py`.
+        self._dry_run = dry_run
+        if dry_run is not None and record_har_path:
+            # `record_har_content="embed"` would write the raw POST bodies to a HAR on disk, directly
+            # against the rule that held bodies are shown to a human and never persisted.
+            raise ValueError("dry-run refuses record_har_path: a HAR would persist raw held write bodies")
         self.browser: Browser | None = browser
         self.context: BrowserContext | None = None
         self.page: Page | None = None
@@ -78,9 +87,18 @@ class BrowserSession:
                     # Let the page fill the actual window inner area (window minus browser chrome),
                     # so content fills the headed window exactly instead of guessing the chrome height.
                     context_kwargs["no_viewport"] = True
+            if self._dry_run is not None:
+                # Block service workers: `context.route` does hold an SW-originated fetch, but a live SW
+                # can also spoof a confirm barrier's response, and a dry run must not be able to "pass" a
+                # barrier for a write that never happened.
+                context_kwargs["service_workers"] = "block"
             self.context = await self.browser.new_context(**context_kwargs)
             self.context.set_default_timeout(settings.action_timeout_ms)
             self.context.set_default_navigation_timeout(settings.nav_timeout_ms)
+            if self._dry_run is not None:
+                # ARM BEFORE THE FIRST PAGE EXISTS. A page created before the route is registered could
+                # issue a request the arbiter never sees.
+                await self._dry_run.install(self.context)
             self.page = await self.context.new_page()
             return self
         except BaseException:
