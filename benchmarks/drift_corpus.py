@@ -47,14 +47,18 @@ MUTATOR_VERSION = 1
 # The anchors, in `resolve()`'s real order (locators.py:216-341). Names match the `bound_by` labels the
 # resolver now emits, so the model and the measurement speak the same vocabulary.
 #
-#   Tier 1 (confident, identity-anchored — first UNIQUE match wins outright):
-#     testid, role+name (exact), role+name~ (inexact/substring name), placeholder, exact-text, elem_id
+#   Tier 1 (confident — first UNIQUE match wins outright):
+#     the IDENTITY anchors first — testid, role+name (exact), placeholder, exact-text, elem_id — then,
+#     strictly LAST, the one fuzzy candidate in this tier: role+name~ (a substring match on the
+#     accessible name). The order MIRRORS `locators.resolve`'s candidate list and must keep mirroring
+#     it, or this predictor and the resolver disagree about which anchor carried a bind — which is
+#     precisely what `bound_by_hist` exists to measure.
 #   Tier 2 (two independent guesses, cross-checked against each other):
 #     css (the recorded path) and substring (the cached text, scoped to the element's own tag)
 #   Tier 3 (last-resort tiebreaker, only NARROWS an ambiguous role+name — never overrides):
 #     anchor (the neighbouring landmark)
 # ---------------------------------------------------------------------------------------------------
-TIER1 = ("testid", "role+name", "role+name~", "placeholder", "exact-text", "elem_id")
+TIER1 = ("testid", "role+name", "placeholder", "exact-text", "elem_id", "role+name~")
 TIER2 = ("css", "substring")
 TIER3 = ("anchor",)
 ANCHORS = TIER1 + TIER2 + TIER3

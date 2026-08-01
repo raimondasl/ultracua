@@ -5,7 +5,7 @@ failing LOUD on drift.**
 
 ## Read this first
 
-**[docs/open-defects.md](docs/open-defects.md) — the standing defect register.** 2 open findings from an
+**[docs/open-defects.md](docs/open-defects.md) — the standing defect register.** 1 open finding from an
 adversarial audit, every one independently reproduced with a probe, with `file:line` and concrete failure
 scenarios. Check it before starting new work and before touching anything it names; re-deriving it costs
 ~25 minutes of fan-out.

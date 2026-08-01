@@ -270,9 +270,13 @@ async def resolve(page: Page, spec: LocatorSpec, unique: bool = False,
     histogram for exactly that reason.
 
     Resolution runs in three tiers:
-      1. CONFIDENT locators that are anchored to a stable identity (test-id, role+name, placeholder,
-         exact whole-text, id). The first that resolves uniquely wins — these can't drift onto an
-         unrelated element the way a fuzzy match can.
+      1. CONFIDENT locators anchored to a stable IDENTITY (test-id, role+name, placeholder, exact
+         whole-text, id) — these can't drift onto an unrelated element the way a fuzzy match can — and
+         then, strictly LAST, the one fuzzy candidate in this tier: `role+name~`, a case-insensitive
+         SUBSTRING match on the accessible name. It earns its place in Tier 1 by re-finding a control
+         whose label was lightly augmented, but it must never outrank an exact identity: as the second
+         candidate it used to short-circuit placeholder / exact-text / id and bind a decoy whose name
+         merely CONTAINED the cached one. The first candidate that resolves uniquely wins.
       2. Two GUESS strategies for an element whose confident locators all broke: the cached text as a
          tag-scoped SUBSTRING (re-finds a lightly-augmented label of the SAME element kind), and the
          recorded css path. Each can mis-resolve alone — a same-tag sibling that merely shares the cached
@@ -294,7 +298,6 @@ async def resolve(page: Page, spec: LocatorSpec, unique: bool = False,
         confident.append(("testid", page.get_by_test_id(spec.testid)))
     if spec.role in KNOWN_ROLES and spec.name:
         confident.append(("role+name", page.get_by_role(spec.role, name=spec.name, exact=True)))  # type: ignore[arg-type]
-        confident.append(("role+name~", page.get_by_role(spec.role, name=spec.name, exact=False)))  # type: ignore[arg-type]
     if spec.placeholder:
         confident.append(("placeholder", page.get_by_placeholder(spec.placeholder, exact=True)))
     if spec.text:
@@ -316,6 +319,24 @@ async def resolve(page: Page, spec: LocatorSpec, unique: bool = False,
         #   id='zzz"],[id="other' -> the raw form becomes a selector LIST and binds `#other`: count==1, so
         #                            Tier 1 returns it OUTRIGHT. A confident, cross-check-free wrong bind.
         confident.append(("elem_id", page.locator(_attr_eq("id", spec.elem_id))))
+    if spec.role in KNOWN_ROLES and spec.name:
+        # LAST in Tier 1, deliberately. `get_by_role(exact=False)` is a case-insensitive SUBSTRING match on
+        # the accessible name — a fuzzy matcher wearing an identity anchor's clothes. Sitting ABOVE
+        # placeholder / exact-text / elem_id, it short-circuited all three (the loop returns the first
+        # unique match OUTRIGHT), and being Tier 1 it never reached the css cross-check built to stop
+        # exactly this. Measured failure: rename the recorded target's label, and an unrelated control
+        # whose name merely CONTAINS the cached one ("Coupon code" for "Code") single-matches and binds —
+        # while three intact exact anchors still pointed at the right element. As a `type` step that fills
+        # the WRONG field, 0-LLM, reporting success.
+        #
+        # Demoting rather than deleting keeps what it is actually good for: re-finding a control whose
+        # label was lightly AUGMENTED ("Proceed" -> "Proceed now") when no exact anchor survives. Measured
+        # at zero cost on the drift corpus — deletion loses a 0-LLM row, this reorder loses none.
+        #
+        # RESIDUAL, worth stating: when role+name~ is the ONLY surviving Tier-1 candidate and a substring
+        # decoy exists, it still binds outright with no corroboration. Closing that needs a css-agreement
+        # gate like Tier 2's, which measured at the same cost as full deletion. See HEALING.md.
+        confident.append(("role+name~", page.get_by_role(spec.role, name=spec.name, exact=False)))  # type: ignore[arg-type]
 
     # --- Tier 2: the two independent "guess" locators (cross-checked against each other) ---
     # Fuzzy substring text, SCOPED to the element's own tag. A bare get_by_text(exact=False) matches the
