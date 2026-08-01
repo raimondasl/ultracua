@@ -21,8 +21,12 @@ FEWER samples (= more warm-up / advisory, never a false quarantine).
 from __future__ import annotations
 
 import json
+import logging
 import os
+import time
 from pathlib import Path
+
+_log = logging.getLogger("ultracua.history")
 
 
 def history_path(cache, key: str) -> Path:
@@ -34,16 +38,38 @@ def _num(x):
     return x if isinstance(x, (int, float)) and not isinstance(x, bool) else None
 
 
+def _preserve_corrupt(p: Path) -> None:
+    """Move an unreadable history sidecar aside so the next clean run's re-anchor doesn't erase it."""
+    try:
+        os.replace(p, p.with_name(f"{p.name}.corrupt.{int(time.time())}"))
+    except OSError as exc:  # noqa: BLE001 — best effort
+        _log.warning("could not preserve the corrupt magnitude history %s: %s", p, exc)
+
+
 def load_history(cache, key: str) -> dict:
     """Tolerant read → `{"v": 1, "fields": {path: [num, ...]}, "anchors": {path: num}}`. A missing / torn /
     corrupt / non-dict file, or any non-numeric element, is dropped — never raises, never yields a non-number
     (biases toward fewer samples / no anchor, i.e. toward advisory, never toward a false quarantine)."""
     doc = {"v": 1, "fields": {}, "anchors": {}}
+    p = history_path(cache, key)
     try:
-        raw = json.loads(history_path(cache, key).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return doc                      # no baseline yet — the ordinary pre-first-run state, not a loss
+    except (OSError, ValueError) as exc:
+        # The file EXISTS but can't be read. Falling through silently loses the ANCHOR, and that loss is
+        # self-concealing: `set_anchor` only writes when the path is absent, so the very next clean run
+        # re-anchors at TODAY's possibly-already-drifted value and permanently blesses the drift the anchor
+        # exists to detect. Preserve the bytes and say so. (Still no raise, and still an empty doc — the
+        # numbers-only bias toward "fewer samples / advisory" is a genuine safe default for the RING.)
+        _log.error("magnitude history %s is unreadable (%s) — the learn-time ANCHOR is lost, so slow-drift "
+                   "detection re-warms from the current value; `flow release --rebaseline` to make that "
+                   "deliberate", p, exc)
+        _preserve_corrupt(p)
         return doc
     if not isinstance(raw, dict) or not isinstance(raw.get("fields"), dict):
+        _log.error("magnitude history %s is not a history document — the learn-time ANCHOR is lost", p)
+        _preserve_corrupt(p)
         return doc
     clean: dict = {}
     for path, ring in raw["fields"].items():
@@ -73,9 +99,15 @@ def set_anchor(doc: dict, path: str, value) -> None:
 
 
 def save_history(cache, key: str, doc: dict) -> None:
-    """Atomically persist the history doc (temp + os.replace, mirroring the meta sidecar's atomic save)."""
+    """Atomically + DURABLY persist the history doc (fsync then os.replace, mirroring `_save_meta`).
+
+    The fsync is not decoration: without it a host crash can leave a zero-length/NUL-filled file, and the
+    thing lost is the ANCHOR — whose loss silently re-baselines at the drifted value (see `load_history`)."""
     p = history_path(cache, key)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(doc), encoding="utf-8")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(doc))
+        fh.flush()
+        os.fsync(fh.fileno())
     os.replace(tmp, p)

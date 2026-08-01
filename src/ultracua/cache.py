@@ -236,10 +236,16 @@ class FlowCache:
 
     def put(self, flow: CachedFlow) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
-        # Atomic write (temp + os.replace) so a concurrent reader never sees a half-written flow.
+        # Atomic (temp + os.replace) so a concurrent reader never sees a half-written flow, and DURABLE
+        # (fsync before the rename) so a host crash / power loss can't leave a zero-length or NUL-filled
+        # entry behind — `get()` reads that as a miss, i.e. a silently forgotten recipe. Same reasoning and
+        # the same shape as `_save_meta` and the ledger.
         p = self._path(flow.key)
         tmp = p.with_suffix(f".{os.getpid()}.tmp")
-        tmp.write_text(flow.model_dump_json(indent=2), encoding="utf-8")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(flow.model_dump_json(indent=2))
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, p)
 
     def delete(self, key: str) -> bool:

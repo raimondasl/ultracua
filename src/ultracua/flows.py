@@ -341,12 +341,28 @@ class StaleApprovalError(FlowReplayError):
     retryable = False
 
 
+class WriteReadbackError(FlowReplayError):
+    """The write LANDED and its completion signal was confirmed, but the confirmation READBACK
+    (`spec.extract` — the order number, the reference id) could not be read.
+
+    Raised INSTEAD of returning `{"status": "confirmed", "data": None}`, which is what a caller would
+    otherwise log against a real order. **Emphatically NOT retryable**: the side effect has already
+    happened, so re-running would double-submit (inviolable #3). The correct human response is to read the
+    reference off the page/inbox and, if the flow keeps missing it, re-record the readback — never to
+    re-run. The run is recorded as a SUCCESS in fleet health for the same reason: the write succeeded, and
+    a failure streak would invite exactly the retry that must not happen."""
+
+    code = "write_readback"
+    retryable = False
+
+
 def _classify_replay_failure(kind: str) -> type[FlowReplayError]:
     """Map an `_attempt_replay` failure `kind` to its taxonomy class (default: DriftError)."""
     return {
         "shape": ShapeDriftError,
         "escalate": EscalateError,
         "quarantine": FlowQuarantineError,
+        "write_unreadable": WriteReadbackError,
         "miss": FlowReplayError,  # no learned flow — an absence, not a drift
     }.get(kind, DriftError)
 
@@ -476,37 +492,103 @@ def _update_meta(cache: FlowCache, key: str, mutate: Callable[["FlowMeta"], None
         _save_meta(cache, key, meta)
 
 
+_META_UNREADABLE = (
+    "the trust sidecar is UNREADABLE (corrupt or torn) — approval, quarantine, contracts, the recipe "
+    "digest and the 0-LLM read pin could not be recovered. Inspect the preserved `.corrupt.*` copy, then "
+    "re-learn and re-approve."
+)
+
+
+def _poisoned_meta() -> FlowMeta:
+    """The meta to hand back when the sidecar can't be read: a QUARANTINE, not a blank slate."""
+    return FlowMeta(quarantine={"code": "meta_unreadable", "reason": _META_UNREADABLE, "ts": time.time()})
+
+
+def _preserve_corrupt(p: Path) -> None:
+    """Move an unreadable sidecar aside before anything can overwrite it. The meta is the HOT file (every
+    replay rewrites it via `_record_run`), so without this the next run destroys the only evidence."""
+    try:
+        os.replace(p, p.with_name(f"{p.name}.corrupt.{int(time.time())}"))
+    except OSError as exc:  # noqa: BLE001 — best effort; the refusal below is the load-bearing part
+        _log.warning("could not preserve the corrupt flow meta %s: %s", p, exc)
+
+
+def _refuse_unreadable_meta(cache: FlowCache, key: str, p: Path, why: str) -> FlowMeta:
+    """Preserve the corrupt sidecar, PERSIST a quarantine in its place, and return that quarantine.
+
+    Persisting is the load-bearing half. Moving the bad file aside and returning an in-memory quarantine
+    would only postpone the wipe by one call: the very next `_load_meta` would find the path ABSENT and
+    hand back a virgin `FlowMeta()` — the same silent trust reset, one step later. Writing the refusal makes
+    it survive, and makes it idempotent (the second load reads valid JSON, so nothing is preserved twice).
+    """
+    _log.error("flow meta %s is unreadable (%s) — refusing to run on a default trust state", p, why)
+    _preserve_corrupt(p)
+    meta = _poisoned_meta()
+    try:
+        _save_meta(cache, key, meta)
+    except OSError as exc:  # noqa: BLE001 — read-only/full disk: the caller still gets the refusal in hand
+        _log.error("could not persist the meta-unreadable quarantine for %s (%s) — this run refuses, but "
+                   "the NEXT one would see an absent sidecar and start from a clean trust state", p, exc)
+    return meta
+
+
 def _load_meta(cache: FlowCache, key: str) -> FlowMeta:
+    """Read a flow's trust sidecar. ABSENT and UNREADABLE are deliberately NOT the same thing.
+
+    Absent -> a virgin `FlowMeta()` (a flow that was never learned has no trust state to lose). Unreadable
+    -> a meta carrying a `meta_unreadable` QUARANTINE, so every surface refuses at pre-flight instead of
+    running on a default trust state. Returning `FlowMeta()` for a torn file — as this used to — silently
+    dropped quarantine, approval, shape, contracts, the steps digest and `read_pin` in one step: a flow
+    quarantined for returning a WRONG value would return that value again as a clean success, and the wiped
+    pin would put the LLM extractor back on a replay that was pinned 0-LLM (inviolable #1). It never
+    raises: `health()` and the MCP tools/list loop must not traceback on one bad flow.
+
+    The sibling readers already got this right — `cache.get` returns None on a corrupt flow (which surfaces
+    as `mode == "miss"`, fail-loud) and `load_history` now preserves + reports its own corruption.
+    """
     p = _meta_path(cache, key)
     if p.exists():
         try:
             raw = json.loads(p.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001 — corrupt/torn file: treat as no meta
-            return FlowMeta()
-        if isinstance(raw, dict):
-            # Forward-compat: a meta written by a NEWER version may carry fields this version doesn't
-            # know. Drop only the unknown keys and keep the rest — NEVER let one unexpected key make
-            # `FlowMeta(**raw)` raise and reset approval + run history to defaults (a silent trust wipe).
-            unknown = [k for k in raw if k not in {f.name for f in dataclasses.fields(FlowMeta)}]
-            if unknown:
-                sig = frozenset(unknown)
-                if sig not in _warned_unknown_meta_keys:  # warn once per distinct key-set, not per load
-                    _warned_unknown_meta_keys.add(sig)
-                    _log.warning(
-                        "flow meta carries field(s) %s this version doesn't know — ignoring them and "
-                        "preserving approval + run history (metas with these keys won't be re-logged)",
-                        sorted(unknown),
-                    )
-            return FlowMeta(**_only_known(raw, FlowMeta))
+        except Exception as exc:  # noqa: BLE001 — corrupt/torn/unreadable
+            return _refuse_unreadable_meta(cache, key, p, f"{type(exc).__name__}: {exc}")
+        if not isinstance(raw, dict):
+            # Valid JSON, wrong document (a bare list/scalar from a truncated-then-patched file or a bad
+            # hand-edit). Same treatment: it is not a meta, so it must not read as "no meta".
+            return _refuse_unreadable_meta(cache, key, p, f"not an object ({type(raw).__name__})")
+        # Forward-compat: a meta written by a NEWER version may carry fields this version doesn't
+        # know. Drop only the unknown keys and keep the rest — NEVER let one unexpected key make
+        # `FlowMeta(**raw)` raise and reset approval + run history to defaults (a silent trust wipe).
+        unknown = [k for k in raw if k not in {f.name for f in dataclasses.fields(FlowMeta)}]
+        if unknown:
+            sig = frozenset(unknown)
+            if sig not in _warned_unknown_meta_keys:  # warn once per distinct key-set, not per load
+                _warned_unknown_meta_keys.add(sig)
+                _log.warning(
+                    "flow meta carries field(s) %s this version doesn't know — ignoring them and "
+                    "preserving approval + run history (metas with these keys won't be re-logged)",
+                    sorted(unknown),
+                )
+        return FlowMeta(**_only_known(raw, FlowMeta))
     return FlowMeta()
 
 
 def _save_meta(cache: FlowCache, key: str, meta: FlowMeta) -> None:
+    """Atomically + DURABLY persist a flow's trust sidecar.
+
+    temp + `os.replace` alone never lets a reader see a torn file, but it does not survive a host crash or
+    power loss: `os.replace` can land while the temp file's BYTES are still only in the page cache, leaving
+    a zero-length or NUL-filled sidecar on the next boot. The meta is the hot file (every replay rewrites
+    it), so that window is hit often enough to matter — and a torn meta is exactly the input `_load_meta`
+    now has to quarantine on. `fsync` before the rename closes it, mirroring `ledger.py`, which has always
+    done this."""
     Path(cache.root).mkdir(parents=True, exist_ok=True)
-    # Atomic write (temp + os.replace) so a crash or a concurrent reader never sees a torn file.
     p = _meta_path(cache, key)
     tmp = f"{p}.{os.getpid()}.tmp"
-    Path(tmp).write_text(json.dumps(asdict(meta), indent=2), encoding="utf-8")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(asdict(meta), indent=2))
+        fh.flush()
+        os.fsync(fh.fileno())
     os.replace(tmp, p)
 
 
@@ -587,6 +669,16 @@ def _make_finalize(spec: FlowSpec, router, out: dict, pin: Optional[dict] = None
                     text = ""
                 ex = await extract(router, spec.extract, text, schema=spec.extract_schema)
                 data = ex.data
+                # Keep the READBACK's own outcome on a SEPARATE channel from `found`. `out["found"]` must
+                # stay bound to `confirmed` (the caller turns a false `found` into "write not confirmed",
+                # which invites a retry — and this write LANDED). But dropping ex.found/error/truncated
+                # entirely, as this branch used to, meant a failed readback returned
+                # {"status": "confirmed", "data": None} — a caller logging that records a null against a
+                # real order. The sibling READ branch below has always propagated these; the write branch
+                # is the path the GUIDE mandates for writes and it did not.
+                out["extract_found"] = ex.found
+                out["extract_error"] = ex.error
+                out["truncated"] = ex.truncated
             out["data"], out["found"] = data, confirmed
             out["error"] = None if confirmed else "write not confirmed (no completion signal on the page)"
             return {"solved": confirmed, "data": data}
@@ -811,7 +903,16 @@ async def _learn_once(
         finalize=_make_finalize(spec, router, out), verify_replay=verify_replay,
     )
     key = flow_key(spec.goal, spec.start_url, spec.scope)
-    cached = cache.get(key)
+    # ONLY the flow THIS attempt authored counts. `cache.get(key)` also returns a PRE-EXISTING flow, which
+    # would report a FAILED re-learn as `cached=True` off someone else's recipe: best-of-N would stop
+    # resampling, the "nothing was cached" warning would never print, and — worst — the meta refresh below
+    # would re-bind `read_pin` (and audit_due) onto steps this run never authored, so an approved flow would
+    # replay its OLD steps and read the REJECTED attempt's pin locator on the old page. That is a silently
+    # WRONG value, not just authoring hygiene: the approval gate can't see it, because the steps didn't
+    # change. The engine already computed the right answer (`flow._learn` sets extra["cached"]) and its own
+    # best-of-N loop uses it — this is the sibling path that didn't. `.get()` because the early returns
+    # (miss / escalate / no-provider) carry no "cached" key, and falsy is correct for all of them.
+    cached = cache.get(key) if report.extra.get("cached") else None
     # Phase G: attach per-write completion barriers (in commit order) to the LLM-authored mutating steps.
     # A mismatch refuses the flow (delete + cached=False) — never a half/mis-confirmed multi-write flow.
     if cached is not None and spec.mutate is not None and spec.mutate.step_confirms:
@@ -1117,6 +1218,33 @@ def _magnitude_gate(cache: FlowCache, key: str, eff: dict, data: Any, spec_name:
     return None
 
 
+def _approval_recipe_stale(meta: FlowMeta, cached_flow) -> Optional[str]:
+    """Does the approval still bind the steps on disk? `None` = yes; otherwise a human-readable reason.
+
+    THE single definition of the recipe-integrity predicate. It had three independent transcriptions —
+    `_preflight_row` (the real gate), `health()` (the fleet view) and `dry_run` (the preview) — and `dry_run`'s
+    copy dropped the `steps_hash is None` arm, so a flow approved by a pre-0.60 version produced an artifact
+    byte-identical to a fully-blessed flow's (`approval_gates_skipped == []`) while the real pre-flight
+    refused it. A preview strictly more permissive than the thing it previews is the worst kind, because it
+    is what an operator plans around. Three arms, all of which must count as stale:
+      * no digest at all (approved before the binding existed) — needs one human re-approval;
+      * an UNCOMPUTABLE digest (a corrupt / hand-edited / foreign cache file) — cannot show it matches;
+      * a digest that differs — something re-authored the recipe.
+    """
+    if not (meta.approved and cached_flow is not None):
+        return None
+    if meta.steps_hash is None:
+        return ("approved by an older version that did not bind the approval to the flow's steps — the "
+                "cached steps were never verified against the approval")
+    try:
+        current = steps_hash(cached_flow)
+    except Exception as exc:  # noqa: BLE001 — a digest we cannot COMPUTE is not a digest that matches
+        return f"could not verify the flow's steps against the approval ({type(exc).__name__}: {exc})"
+    if current != meta.steps_hash:
+        return f"the flow's steps changed since approval (approved {meta.steps_hash}, now {current})"
+    return None
+
+
 def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Optional[float] = None) -> FlowHealth:
     """A flow's status for the fleet view: not-learned / never-run / healthy / failing / stale.
 
@@ -1127,18 +1255,11 @@ def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Op
     cached_flow = cache.get(key)
     cached = cached_flow is not None
     meta = _load_meta(cache, key)
-    # Is the approval still bound to the steps on disk? Same predicate as `_preflight_row`'s recipe gate, so
-    # the fleet view can SHOW a flow that will refuse instead of leaving an operator to discover it at run
-    # time. `None` (approved before the binding existed) counts as stale: it needs the same human re-approval.
-    approval_stale = False
-    if meta.approved and cached_flow is not None:
-        try:
-            # An UNCOMPUTABLE digest counts as stale, for the same reason pre-flight refuses on one: we cannot
-            # show the recipe is the approved one. And it must not traceback — `health()` backs `flow status`
-            # and the MCP `tools/list` loop, so one corrupt flow would otherwise take down the fleet view.
-            approval_stale = meta.steps_hash is None or meta.steps_hash != steps_hash(cached_flow)
-        except Exception:  # noqa: BLE001
-            approval_stale = True
+    # Is the approval still bound to the steps on disk? THE shared predicate, so the fleet view can SHOW a
+    # flow that will refuse instead of leaving an operator to discover it at run time. It never raises —
+    # `health()` backs `flow status` and the MCP `tools/list` loop, so one corrupt flow must not take down
+    # the fleet view.
+    approval_stale = _approval_recipe_stale(meta, cached_flow) is not None
     if not cached:
         status = "not-learned"
     elif meta.quarantine is not None:  # H9: a wrong-value quarantine is the most severe/actionable state
@@ -1191,6 +1312,17 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="
     if (spec.extract is not None or spec.mutate is not None) and not out.get("found"):
         # a write flow gates `found` on the confirm check, so an unconfirmed write fails here
         return False, None, f"data not found / write not confirmed on replay: {out.get('error')}", "drift"
+    if spec.mutate is not None and spec.extract is not None and not out.get("extract_found"):
+        # The write CONFIRMED (above) but its readback missed. A distinct KIND from "drift", because the
+        # remedy is the opposite one: the side effect already landed, so this must never be retried or
+        # re-learned. Returning the confirm as a clean success here would hand the caller `data=None` for
+        # a real order.
+        why = out.get("extract_error") or "the value was not on the confirmation page"
+        if out.get("truncated"):
+            why += " (the page text was truncated before extraction, so the value may be past the cut)"
+        return (False, None,
+                f"the write WAS confirmed and must NOT be retried, but its confirmation readback failed: "
+                f"{why}", "write_unreadable")
     data = out.get("data")
     if check_shape and meta.shape is not None and not _shape_matches(meta.shape, _shape_of(data)):
         return False, None, f"data shape changed vs the learned flow (expected {meta.shape})", "shape"
@@ -1387,36 +1519,17 @@ def _preflight_row(
     # over an approved flow, a re-learn, or a hand-edited cache file all left `approved=True` on steps no human
     # ever read — and on a WRITE that means firing an unreviewed action at an unreviewed target. Checked here,
     # pre-browser, so the refusal costs nothing and nothing has acted.
-    if not skip_approval_gates and meta.approved and cached_flow is not None:
-        if meta.steps_hash is None:
-            # MIGRATION: approved before this binding existed, so there is no digest to compare. Refuse rather
-            # than back-fill — back-filling would stamp whatever the steps are NOW as "approved", which
-            # rubber-stamps precisely the silently-re-authored recipe the gate exists to catch. One human
-            # re-approval per flow, once.
+    # NOT back-filled when there is no digest: back-filling would stamp whatever the steps are NOW as
+    # "approved", rubber-stamping precisely the silently-re-authored recipe the gate exists to catch. One
+    # human re-approval per flow, once. And an UNCOMPUTABLE digest refuses inside the taxonomy rather than
+    # escaping as a bare TypeError a caller's `except FlowReplayError` would miss.
+    if not skip_approval_gates:
+        stale = _approval_recipe_stale(meta, cached_flow)
+        if stale is not None:
             raise StaleApprovalError(
-                f"{spec.name!r}: approved by an older version that did not bind the approval to the flow's "
-                f"steps. Review the steps (`flow inspect --name {spec.name}`) and re-approve once "
-                f"(`flow approve --name {spec.name}`) — this is a one-time upgrade step, and it is NOT back-filled "
-                f"automatically because that would bless whatever the steps happen to be now.")
-        try:
-            current = steps_hash(cached_flow)
-        except Exception as exc:  # noqa: BLE001
-            # A digest we cannot COMPUTE is not a digest that matches. (Reachable via a hand-written/foreign
-            # cache file whose `args`/`slot_domain` holds something `json.dumps(sort_keys=True)` rejects, e.g.
-            # mixed-type keys.) Refuse in the taxonomy rather than escape as a bare TypeError that a caller's
-            # `except FlowReplayError` would miss — inviolable #2 wants loud, not just non-silent.
-            raise StaleApprovalError(
-                f"{spec.name!r}: could not verify the flow's steps against the approval ({type(exc).__name__}: "
-                f"{exc}) — refusing rather than replaying an unverifiable recipe. The cached flow is probably "
-                f"corrupt or hand-edited: re-record it, review with `flow inspect --name {spec.name}`, then "
-                f"`flow approve --name {spec.name}`.") from exc
-        if current != meta.steps_hash:
-            raise StaleApprovalError(
-                f"{spec.name!r}: the flow's steps changed since approval "
-                f"(approved {meta.steps_hash}, now {current}) — refusing to replay steps no human reviewed. "
-                f"Something re-authored the cached flow (a heal/replan on an unapproved run, a re-record, a "
-                f"re-learn, or an edited cache file). Review with `flow inspect --name {spec.name}`, then "
-                f"`flow approve --name {spec.name}` to bless the new recipe.")
+                f"{spec.name!r}: {stale} — refusing to replay steps no human reviewed. Review them "
+                f"(`flow inspect --name {spec.name}`) and re-approve (`flow approve --name {spec.name}`). "
+                f"This is never done automatically: it would bless whatever the steps happen to be now.")
     # APPROVAL INTEGRITY: `on_drift="relearn"` lets the engine SELF-HEAL / suffix-replan / fully re-author the
     # cached steps and write them straight back (`flow.py`'s `if dirty and success: cache.put(flow)`). On an
     # APPROVED flow that would run LLM-authored steps no human ever reviewed, under the existing approval — the
@@ -1524,13 +1637,22 @@ async def dry_run(spec: FlowSpec, params: Optional[dict] = None, *,
         rep.aborted = "not-learned"
         rep.abort_detail = f"{spec.name!r}: nothing cached — learn or record the flow first"
         return rep
-    rep.steps_hash = steps_hash(cached)
+    try:
+        rep.steps_hash = steps_hash(cached)
+    except Exception:  # noqa: BLE001 — an uncomputable digest is REPORTED below, never raised past the API
+        rep.steps_hash = ""   # `health()` and pre-flight both treat "cannot compute" as stale; so must this
     rep.writes_planned = sum(1 for s in cached.steps if s.mutating)
     if not meta.approved:
         rep.approval_gates_skipped.append("not-approved (this is the pre-approval artifact)")
-    if meta.approved and meta.steps_hash is not None and meta.steps_hash != rep.steps_hash:
-        rep.approval_gates_skipped.append("stale_approval: the cached steps are not the approved ones")
-    if meta.approved and spec.slots and _slots_hash(spec) != meta.slots_hash:
+    # THE shared predicate — not a fourth transcription of it. Its `steps_hash is None` arm is the one this
+    # report used to drop, which made a pre-0.60 migration approval preview as fully blessed.
+    recipe_stale = _approval_recipe_stale(meta, cached)
+    if recipe_stale is not None:
+        rep.approval_gates_skipped.append(f"stale_approval: {recipe_stale}")
+    # NO `spec.slots and` short-circuit, for the reason spelled out on `_preflight_row`'s slot gate: with it,
+    # removing ONE slot was reported while removing the WHOLE TABLE was not (`_slots_hash` returns None for an
+    # empty table, so the comparison was skipped entirely) — the A13 hole, in the preview instead of the gate.
+    if meta.approved and _slots_hash(spec) != meta.slots_hash:
         rep.approval_gates_skipped.append("the slot schema changed since approval")
     if meta.approved and _contracts_hash(spec) != meta.contracts_hash:
         rep.approval_gates_skipped.append("the value contracts changed since approval")
@@ -1648,6 +1770,14 @@ async def replay(
                                                         params=params)
         if ok:
             return _ok(data)
+        if kind == "write_unreadable":
+            # The write LANDED; only its readback failed. Raise HERE, before `retry_ok` is even computed,
+            # so this can enter neither the auth-refresh retry nor the relearn path — both would re-fire a
+            # committed write. Recorded as ok=True on purpose: the write succeeded, and a failure streak
+            # would push an operator toward the one action that must not be taken.
+            _record_run(cache, key, ok=True)
+            _log.error("flow %r: write confirmed but its readback FAILED — %s", spec.name, reason)
+            raise WriteReadbackError(f"{spec.name!r}: {reason}")
         if kind == "quarantine":
             raise _do_quarantine(reason)   # first attempt: never enters the auth-refresh / relearn paths
         # The session may have expired — re-login (refresh cookies) and retry once. A WRITE flow is
