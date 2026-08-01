@@ -114,7 +114,15 @@ SNAPSHOT_JS = r"""
     const r = el.getBoundingClientRect();
     cands.push({ el, role, name, tag: el.tagName.toLowerCase(),
                  type: el.getAttribute('type'),
-                 value: (el.value != null ? String(el.value) : null),
+                 // A password field's value is MASKED, never sent. It is a placeholder rather than null
+                 // on purpose: the agent's "have I already filled this?" reasoning depends on seeing that
+                 // the field is non-empty (the system prompt tells it so), and emitting null would
+                 // silently degrade that into re-typing. `el.type` is the IDL property, already lowercased
+                 // by the DOM for inputs, so it can't be dodged by attribute casing.
+                 value: (el.value == null ? null
+                         : ((el.type || '').toLowerCase() === 'password'
+                            ? (el.value ? '\\u2022\\u2022\\u2022' : '')
+                            : String(el.value))),
                  bbox: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] });
   };
 
@@ -236,11 +244,30 @@ async def mutation_context(locator) -> dict:
         return {}
 
 
-async def capture(page, max_elements: int) -> Observation:
-    """Capture a scoped snapshot of the given Playwright page."""
+REDACTED = "[REDACTED]"
+
+
+async def capture(page, max_elements: int, redact: tuple = ()) -> Observation:
+    """Capture a scoped snapshot of the given Playwright page.
+
+    `redact`: runtime SECRET VALUES (from `flows._secret_values`) to scrub from element values and page
+    text before the Observation exists. `SNAPSHOT_JS` already masks `input[type=password]`, but that cannot
+    see a `$secret_env` API token typed into a plain text input — nor a page that echoes a token back as
+    body text. An Observation is documented as "sanitized" and `SlotSpec` promises a secret is "NEVER passed
+    in params, logged, or serialized"; every snapshot -> LLM path (heal, suffix-replan, the learn loop) runs
+    through here, so this is the one place that makes both true for all of them.
+    """
     raw = await page.evaluate(SNAPSHOT_JS, max_elements)
     elements = [Element(**e) for e in raw["elements"]]
     text = raw.get("text", "")
+    if redact:
+        terms = [t for t in redact if t]
+        for e in elements:
+            if e.value:
+                for term in terms:
+                    e.value = e.value.replace(term, REDACTED)
+        for term in terms:
+            text = text.replace(term, REDACTED)
     url = page.url
     title = await page.title()
     # Fingerprint over the structural signal (role/name/tag + url), NOT coordinates or page text.

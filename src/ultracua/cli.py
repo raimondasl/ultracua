@@ -298,7 +298,13 @@ def _step_line(i: int, s, spec) -> str:
         slot = (spec.slots or {}).get(s.slot)
         parts.append(f"  [slot {s.slot}"
                      + (" SECRET" if slot is not None and getattr(slot, "secret", False) else "") + "]")
-    if s.text is not None and s.text != "":
+    if getattr(s, "secret", False):
+        # A CREDENTIAL field. Defence in depth: the recorder already blanks the value at capture, so there
+        # should be nothing to leak — but this renderer feeds BOTH `flow inspect` and `flow approve --all`
+        # (which reprints fleet-wide), and it must never be the thing that echoes a secret from an older
+        # cache file or a hand-edit. Shown, not hidden: a human approving this needs to see the field is here.
+        parts.append('  [SECRET FIELD]  text="***"')
+    elif s.text is not None and s.text != "":
         slot = (spec.slots or {}).get(s.slot) if s.slot else None
         if slot is not None and getattr(slot, "secret", False):
             parts.append('  text="***"')            # never echo a secret slot's frozen literal

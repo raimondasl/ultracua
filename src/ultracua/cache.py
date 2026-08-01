@@ -89,6 +89,13 @@ class CachedStep(BaseModel):
     # max/datalist. Recorder auto-mining turns this into a typed SlotSpec (enum/pattern/range) so pre-flight
     # validation checks against the real domain. Additive, defaulted None (NO schema bump needed).
     slot_domain: Optional[dict] = None
+    # The captured field was a CREDENTIAL (input[type=password], or an autocomplete of current-password /
+    # new-password / one-time-code). The recorder stores `text=""` for such a step — the value never reaches
+    # disk — and this flag is what says the empty string is a REDACTION rather than a demonstrated empty
+    # field. `record()` refuses to cache a secret step that isn't bound to a secret slot, and `flow inspect`
+    # masks it. Additive + defaulted, so older flows deserialize unchanged (NO schema bump needed) — the
+    # same precedent as `slot` and `slot_domain` above.
+    secret: bool = False
 
 
 class CachedFlow(BaseModel):
@@ -143,7 +150,12 @@ _NESTED_FLOW_FIELDS = ("steps",)
 # `expects_intent` binds a per-write confirm barrier against, and it is the only thing a human actually reads
 # in `flow inspect` — i.e. literally the recipe they approved.
 _HASHED_STEP_FIELDS = ("intent", "action", "text", "coords", "tool", "args",
-                       "precond_fingerprint", "precond_scope", "mutating", "slot", "slot_domain")
+                       "precond_fingerprint", "precond_scope", "mutating", "slot", "slot_domain",
+                       # `secret` is HASHED by the inclusion rule: flipping it off WEAKENS a guard while
+                       # still passing — `flow inspect` would print the field unmasked and the empty `text`
+                       # would read as a demonstrated empty value rather than a redaction. It defaults to
+                       # False, and `_canon` omits defaults, so every existing digest is byte-identical.
+                       "secret")
 _UNHASHED_STEP_FIELDS: tuple = ()
 _NESTED_STEP_FIELDS = ("locator", "confirm")
 

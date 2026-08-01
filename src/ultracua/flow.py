@@ -111,6 +111,10 @@ async def run_cached(
     # confirm needs an absent->present TRANSITION for the same reason the per-write barrier does — a
     # confirm that was already true is not evidence THIS write landed. Same plumbing shape as `prepare`.
     pre_write: Optional[Prepare] = None,
+    # B2: runtime SECRET VALUES (`flows._secret_values`) scrubbed from every Observation before it can
+    # reach a provider. `SNAPSHOT_JS` masks `input[type=password]` on its own; this covers a
+    # `$secret_env` token typed into a PLAIN text input, which nothing in the DOM marks as sensitive.
+    redact: tuple = (),
     # H5: a `dryrun.DryRunArbiter`, not a bool — the CALLER owns the arbiter so it can read the held
     # writes afterwards, and so the object that made the hold guarantee is the one that reports it.
     dry_run: Optional[object] = None,
@@ -136,7 +140,7 @@ async def run_cached(
             url, key, cached, cache, heal_provider, headless, on_step,
             prepare, finalize, goal, governor, scope, browser, record_har_path, extra_headers,
             storage_state, window_size=window_size, params=params, dry_run=dry_run,
-            pre_write=pre_write,
+            pre_write=pre_write, redact=redact,
         )
         if report.success or mode in ("replay", "repair") or report.mode == "escalate":
             return report
@@ -152,13 +156,13 @@ async def run_cached(
             url, goal, key, provider, cache, max_steps, headless, on_step,
             prepare, finalize, governor, scope, browser, verifier, grounding,
             record_har_path, extra_headers, storage_state, verify_replay, samples, reflect,
-            window_size=window_size,
+            window_size=window_size, redact=redact,
         )
     return await _learn(
         url, goal, key, provider, cache, max_steps, headless, on_step,
         prepare, finalize, governor, scope, browser, verifier, grounding,
         record_har_path, extra_headers, storage_state, verify_replay,
-        window_size=window_size,
+        window_size=window_size, redact=redact,
     )
 
 
@@ -476,6 +480,7 @@ async def _learn(
     verify_replay: bool = False,
     reflections: Optional[list] = None,
     window_size: Optional[tuple[int, int]] = None,
+    redact: tuple = (),
 ) -> FlowReport:
     max_steps = max_steps or settings.max_steps
     _router = getattr(provider, "router", None)  # for per-run token/cost accounting, if available
@@ -484,6 +489,7 @@ async def _learn(
         headless=headless, browser=browser, record_har_path=record_har_path,
         storage_state=storage_state, window_size=window_size,
     ).start()
+    session.redact = redact
     traces: list[StepTrace] = []
     try:
         # Auth/setup headers must be on the context BEFORE the first navigation (e.g. a
@@ -628,6 +634,7 @@ async def _learn_n(
     record_har_path: Optional[str] = None, extra_headers: Optional[dict] = None,
     storage_state: Optional[str] = None, verify_replay: bool = False, samples: int = 1,
     reflect: bool = False, window_size: Optional[tuple[int, int]] = None,
+    redact: tuple = (),
 ) -> FlowReport:
     """Best-of-N authoring: re-author up to `samples` times and keep the FIRST sample the verify-by-replay
     oracle confirms. Each attempt is a fresh `_learn` (fresh session -> the LLM resamples at
@@ -651,7 +658,7 @@ async def _learn_n(
             last = await _learn(
                 url, goal, key, provider, cache, max_steps, headless, on_step, prepare, finalize,
                 governor, scope, browser, verifier, grounding, record_har_path, extra_headers,
-                storage_state, verify_replay, reflections or None, window_size,
+                storage_state, verify_replay, reflections or None, window_size, redact,
             )
         except Exception:  # an attempt that raised mid-way may have fired a write — never silently retry
             _log.warning("best-of-N: attempt %d raised — stopping (a write may have fired)", used)
@@ -692,11 +699,13 @@ async def _replay(
     params: Optional[dict] = None,
     dry_run: Optional[object] = None,
     pre_write: Optional[Prepare] = None,
+    redact: tuple = (),
 ) -> FlowReport:
     session = await BrowserSession(
         headless=headless, browser=browser, record_har_path=record_har_path,
         storage_state=storage_state, window_size=window_size, dry_run=dry_run,
     ).start()
+    session.redact = redact
     traces: list[StepTrace] = []
     llm = 0
     healed = 0
