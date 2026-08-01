@@ -148,7 +148,8 @@ _UNHASHED_STEP_FIELDS: tuple = ()
 _NESTED_STEP_FIELDS = ("locator", "confirm")
 
 _HASHED_LOCATOR_FIELDS = ("role", "name", "tag", "elem_id", "testid", "placeholder",
-                          "text", "css", "anchor", "anchor_source")            # ALL of LocatorSpec
+                          "text", "css", "anchor", "anchor_source",
+                          "anchor_id")                                         # ALL of LocatorSpec
 _HASHED_CONFIRM_FIELDS = ("confirm_selector", "confirm_text_contains", "confirm_url_contains",
                           "timeout_ms", "expects_intent")                      # ALL of StepConfirm
 

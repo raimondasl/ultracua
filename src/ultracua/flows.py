@@ -1363,7 +1363,12 @@ def _preflight_row(
     # The approval is bound to the slot schema. A slotted flow whose domain changed since approve() (e.g. a
     # payee enum loosened to any string) must refuse until re-approved — a stale approval must never
     # authorize a WIDER contract than the human reviewed (an injection surface, worst on a write).
-    if not skip_approval_gates and meta.approved and spec.slots and _slots_hash(spec) != meta.slots_hash:
+    # NO `spec.slots and` short-circuit — for exactly the reason spelled out on the contracts gate below.
+    # With it, removing ONE slot correctly refused while removing the WHOLE TABLE passed: `_slots_hash`
+    # returns None for an empty table, so the comparison was skipped entirely. A scrubbed secret step then
+    # types the EMPTY STRING into a credential field before the submit, and the write mints a different
+    # Idempotency-Key than the same logical write did while slotted.
+    if not skip_approval_gates and meta.approved and _slots_hash(spec) != meta.slots_hash:
         raise FlowReplayError(
             f"{spec.name!r}: the slot schema changed since approval — re-approve the flow before replaying "
             f"it (a widened/edited slot domain must not run under a stale approval)")

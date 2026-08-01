@@ -63,7 +63,12 @@ def _parse(text: str, value_type: str) -> Optional[Any]:
     fabricating a wrong value. Returns the stripped string for str pins."""
     s = " ".join((text or "").split()).strip()
     if value_type not in ("int", "float"):
-        return s
+        # An EMPTY string is drift, never an answer. A pin can only be created for a non-empty value, so
+        # `""` on replay means the element resolved but is unpopulated — an SPA skeleton box that is laid
+        # out but not yet filled. Returning it made `found=True, pinned=True` with all three H9 value gates
+        # clean, so a scheduler recorded a blank shipment status as a successful 0-LLM read. The list
+        # analogue of this was already closed; the scalar one was not.
+        return s or None
     num_re = (r"-?\d{1,3}(?:,\d{3})+|-?\d+" if value_type == "int"
               else r"-?\d{1,3}(?:,\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?|-?\.\d+")
     nums = re.findall(num_re, s)

@@ -9,7 +9,7 @@ is produced by `drift_sandbox.py` (scripted/**key-less**) and `recorder_ceiling.
 
 | File | Bench | Captured | Headline |
 |---|---|---|---|
-| `drift_v2.json` | **drift-bench v2** (6 scenarios, 115 rows × 2 arms) | 2026-07-30 | 0-LLM survival **falls 11/12 → 0/6** across mutation intensity k=1…7 (k50=6); **23 recovery-eligible rows where v1 had 0**; heal MECHANISM **13/13**, replan **2/10**; **1 published wrong-bind** (the *token-less* positional retarget, 0.9% of rows — its token-bearing half closed in 0.62.0) — the key-less CI gate |
+| `drift_v2.json` | **drift-bench v2** (6 scenarios, 115 rows × 2 arms) | 2026-07-30 | 0-LLM survival **falls 10/12 → 0/6** across mutation intensity k=1…7 (k50=6); **23 recovery-eligible rows where v1 had 0**; heal MECHANISM **14/14**, replan **2/10**; **1 published wrong-bind** (the *token-less* positional retarget, 0.9% of rows — its token-bearing half closed in 0.62.0) — the key-less CI gate |
 | `demo.json` | demo-shop (4-step) | 2026-06-19 | 5/5 replay, speedup **86.3× ± 20.9**, ~$0.27 — no discovery variance (cost/speedup reference) |
 | `miniwob.json` | MiniWoB++ ×10 (N=1) | 2026-06-19 | replay success **52% ± 13%** (40–70%), pass^k=0, ~$4.24 — the discovery-reliability reference |
 | `miniwob_bestof3.json` | MiniWoB++ ×10 (**N=3 best-of-N**) | 2026-06-20 | **60% ± 0%** (6/10 every rep), ~$6.58 (1.55×) — best-of-N vs the N=1 baseline: +8 pts and **variance → 0** |
@@ -35,13 +35,13 @@ composition, never hand-set. Two primitives are fixture-conditional for a measur
 `#<id>` and stops for any id-bearing element, so such a target has no independent css anchor and a wrapper
 cannot move it, while `hash_ids` takes out both at once.
 
-**The headline numbers** (seed 7, 115 rows × 2 arms, as of 0.62.0):
+**The headline numbers** (seed 7, 115 rows × 2 arms, as of 0.64.0):
 
 | | v1 | v2 |
 |---|---|---|
-| 0-LLM survival | 12/12 (saturated) | a **curve**: k1 11/12, k2 8/12, k3 11/12, k4 9/12, k5 6/9, k6 4/9, **k7 0/6** (k50 = 6) |
-| recovery-eligible rows | **0** | **23** (13 heal-eligible + 10 replan-eligible) |
-| heal | unmeasurable | **13/13** mechanism ceiling |
+| 0-LLM survival | 12/12 (saturated) | a **curve**: k1 10/12, k2 8/12, k3 11/12, k4 9/12, k5 6/9, k6 4/9, **k7 0/6** (k50 = 6) |
+| recovery-eligible rows | **0** | **24** (14 heal-eligible + 10 replan-eligible) |
+| heal | unmeasurable | **14/14** mechanism ceiling |
 | suffix-replan | unmeasurable | **2/10** — it recovers only when an alternate route exists |
 | wrong outcomes | 0, judged by landed URL | **1 published hole**, judged by the actuated action sequence |
 | write safety | not covered | recovery **refused on 14/14** drifted write rows; 0 double-submits, 0 suppressed, 0 wrong-target |
@@ -72,7 +72,16 @@ tokenless` is a curated row that reproduces the surviving hole, and `silent_wron
 Deleting the old entry without adding it would have converted a *measured* hole into an *assumed-closed*
 one — the exact failure this bench exists to prevent.
 
-The cost was one row: `anchor-button/placeholder_rewrite+rename_full+testid_drop` (every identity token dead
+**0.64.0 added a second, narrower identity check, on ROWS.** Deleting the row you recorded is what makes
+its control unique, so Tier 1 would bind a different customer's control outright — the neighbour anchor that
+would have objected is only consulted when role+name is AMBIGUOUS, which deleting the row removes. A row is
+now identified by its `id` / `data-*` value / inner link target, and a missing row fails loud. Keyed on that
+token and NOT on row text, deliberately: a text-keyed version was measured and cost FOUR rows of 0-LLM
+survival by refusing rows that had merely been *edited* — a price change is not a different record.
+Token-less rows are therefore unprotected, for the same information-limit reason as above. Net cost:
+`resilience_by_k["1"]` 11/12 → 10/12, one row, inside the gate's tolerance.
+
+The earlier cost was one row: `anchor-button/placeholder_rewrite+rename_full+testid_drop` (every identity token dead
 *and* the css bind correct — indistinguishable from the retarget in the recorded-field lens) now fails loud
 instead of binding. It is heal-eligible and the ladder recovers it, but it drags `resilience_by_k["6"]` from
 5/9 to 4/9 and therefore the published **`k50` from 7 to 6**. That is a deliberate re-baseline, recorded

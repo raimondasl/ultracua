@@ -879,7 +879,7 @@ async def _replay_step(
         # double-writing). None/{} params -> byte-identical to the pre-2a key (frozen writes unchanged).
         key = idempotency_key(scope, idx, step.intent, slot_values=params)
         tr.meta["idempotency_key"] = key
-        await session.set_extra_http_headers({"Idempotency-Key": key})
+        await session.set_transient_headers({"Idempotency-Key": key})
         if dry_run is not None:
             # Opened AFTER the header so the held request carries it: the report can then show that
             # the key `flows.preflight_keys` PREDICTED is the key that actually rode the wire.
@@ -1006,7 +1006,9 @@ async def _replay_step(
                 # abort.
                 await dry_run.drain(timeout_ms=write_settle_ms)
                 dry_run.close_window()
-            await session.set_extra_http_headers({})  # clear the idempotency header
+            # Restores the flow's BASE headers, it does not clear them — see
+            # `BrowserSession.set_transient_headers`.
+            await session.set_transient_headers({})
 
 
 async def _maybe_heal(
