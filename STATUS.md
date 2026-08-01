@@ -111,6 +111,18 @@ multi-step/auth pages, and (3) operability — *not* in making replay faster (it
 8. **OpenAI/Gemini are live-untested** — translation is unit-tested; the real network path of every
    adapter is exercised only via `MockClient`. OpenAI's `max_tokens` likely breaks newer models.
 
+## Open defects (2026-07-31 audit)
+
+A six-lens adversarial audit at 0.63.0 produced **20 surviving findings**; 4 were fixed in 0.64.0 and
+**16 remain open** — one critical, nine high, six medium, plus two secrets-at-rest issues. The full report,
+with `file:line`, concrete failure scenarios, verification status and a suggested order, is
+**[docs/open-defects.md](docs/open-defects.md)** — read it before starting new work.
+
+Headline for a reader in a hurry: the core promise holds on the narrow happy path (an approved, learned,
+slot-less read flow), and **inviolable #1 — replay never calls an LLM — survived intact**. The failures
+cluster precisely where a *written guarantee exists but is not enforced*, which is worse than an
+undocumented gap because the docs are what people plan around.
+
 ## Near-term priorities
 
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term

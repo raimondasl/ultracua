@@ -1109,6 +1109,17 @@ scarcest training commodity — ultracua's recorder captures them natively.
 - **Live-health flow registry** — value gates entirely on network effects; sequence after H2 + H10
   generate the install base.
 
+## Open defects — see [docs/open-defects.md](docs/open-defects.md)
+
+**Read that file before starting any new work.** A six-lens adversarial audit at 0.63.0 produced 20
+surviving findings; 4 were fixed in 0.64.0 and **16 remain open**, including one critical (a demonstrated
+write silently dropped from the recipe) and two secrets-at-rest issues. Each carries `file:line`, a concrete
+failure scenario, and a note on whether it was reproduced by hand.
+
+It also records the structural finding that matters more than any individual item: **five of them are guards
+that already exist on a sibling path and were simply never applied to the mechanism.** That pattern predicts
+where the next ones will be.
+
 ## Known defects (found at 0.58.0 — both now ✅ FIXED)
 
 Two gaps found by a code-grounded audit, both verified by direct execution. Neither was a new feature; each was
