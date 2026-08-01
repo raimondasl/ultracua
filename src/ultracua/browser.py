@@ -57,6 +57,7 @@ class BrowserSession:
             # `record_har_content="embed"` would write the raw POST bodies to a HAR on disk, directly
             # against the rule that held bodies are shown to a human and never persisted.
             raise ValueError("dry-run refuses record_har_path: a HAR would persist raw held write bodies")
+        self._base_headers: dict = {}
         self.browser: Browser | None = browser
         self.context: BrowserContext | None = None
         self.page: Page | None = None
@@ -114,10 +115,25 @@ class BrowserSession:
         await self.page.goto(url, wait_until="domcontentloaded")
 
     async def set_extra_http_headers(self, headers: dict[str, str]) -> None:
-        """Set (or clear, with {}) extra HTTP headers on the context — used to inject an
-        Idempotency-Key around mutating actions so a retry can't duplicate a side effect."""
+        """Set the flow's BASE headers on the context (`FlowSpec.headers`). Replaces, as Playwright does."""
         assert self.context is not None
-        await self.context.set_extra_http_headers(headers)
+        self._base_headers = dict(headers or {})
+        await self.context.set_extra_http_headers(self._base_headers)
+
+    async def set_transient_headers(self, headers: dict[str, str]) -> None:
+        """Overlay short-lived headers (the write's Idempotency-Key) ON TOP OF the flow's base headers,
+        and restore the base exactly when called with `{}`.
+
+        Playwright's `set_extra_http_headers` REPLACES the whole set. So injecting the Idempotency-Key with
+        it wiped `FlowSpec.headers` — the write itself went out with no `Authorization` / `X-Tenant`, and
+        because the `finally` then cleared to `{}`, they never came back for the rest of the run. Measured:
+            before the write   X-Tenant='42'
+            the write          X-Tenant=None     <- posts against the wrong tenant
+            every later step   X-Tenant=None     <- and the confirm reads the wrong context
+        ...and `replay()` still returned `{"status": "confirmed"}`. Merging is the whole fix."""
+        assert self.context is not None
+        merged = {**getattr(self, "_base_headers", {}), **(headers or {})}
+        await self.context.set_extra_http_headers(merged)
 
     async def save_storage_state(self, path: str) -> None:
         """Persist the context's cookies + localStorage to a Playwright storage_state JSON

@@ -10,12 +10,18 @@ Playwright's own "prefer user-facing locators" guidance.
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from playwright.async_api import Locator, Page
 from pydantic import BaseModel
 
 from .snapshot import _ACCNAME_JS, _ROLEOF_JS
+
+# `anchorOf` truncates every captured anchor to this many chars. A row anchor at exactly this length is
+# a PREFIX of the real row text, so it cannot be compared exactly — and a prefix comparison is the
+# wrong-bind this guards. Kept in sync with the `.slice(0, 60)` calls in `_SPECOF_JS` below.
+_ANCHOR_MAX = 60
 
 # Roles Playwright's get_by_role understands and that our snapshot emits.
 KNOWN_ROLES = {
@@ -64,6 +70,12 @@ class LocatorSpec(BaseModel):
     # own collapsed text). "label"/"heading" anchors carry a clean signal -> match them exactly; only "row"
     # (and old specs with no recorded source) fall back to the loose whole-subtree has_text substring.
     anchor_source: Optional[str] = None
+    # A stable IDENTITY for the anchor's row, when the page offers one: the row's id / data-* value, or
+    # the first identity-bearing href inside it. Row TEXT is not an identity — a price or status changing
+    # does not make it a different record — so text alone cannot tell "this row was edited" from "this row
+    # is gone". This can. Additive and defaulted None, so old cached flows deserialize unchanged and simply
+    # fall back to the previous behaviour.
+    anchor_id: Optional[str] = None
 
 
 # Runs in the page. Builds a LocatorSpec from a live element `el`, reusing snapshot.py's SHARED
@@ -96,6 +108,23 @@ _SPECOF_JS = r"""
   // reserve the loose whole-subtree substring for row text (which has no cleaner signal).
   const LM = 'form,fieldset,section,article,aside,nav,dialog,[role=region],[role=group],[role=form],li,tr,[role=listitem]';
   const _ucnorm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+  // A row's stable identity, best-effort and in preference order: an explicit id, any data-* value, or
+  // the first href/action inside it that carries something record-shaped. Returns null when the row offers
+  // nothing — a very common case, and one where we must NOT invent an identity.
+  const rowIdOf = (c) => {
+    try {
+      if (c.id) return 'id:' + c.id;
+      for (const a of Array.from(c.attributes || [])) {
+        if (a.name.indexOf('data-') === 0 && a.value) return a.name + ':' + a.value;
+      }
+      const link = c.querySelector('a[href], form[action]');
+      if (link) {
+        const v = link.getAttribute('href') || link.getAttribute('action') || '';
+        if (v && v !== '#' && !/^javascript:/i.test(v)) return 'href:' + v;
+      }
+    } catch (e) {}
+    return null;
+  };
   const anchorOf = (e) => {
     let c = e.closest(LM), hops = 0;
     while (c && hops < 4) {
@@ -105,7 +134,8 @@ _SPECOF_JS = r"""
       if (h) { const t = _ucnorm(h.innerText || h.textContent); if (t) return { text: t.slice(0, 60), source: 'heading' }; }
       const role = c.getAttribute && c.getAttribute('role');
       if (/^(li|tr)$/.test(c.tagName.toLowerCase()) || role === 'listitem') {
-        const t = _ucnorm(c.innerText || c.textContent); if (t) return { text: t.slice(0, 60), source: 'row' };
+        const t = _ucnorm(c.innerText || c.textContent);
+        if (t) return { text: t.slice(0, 60), source: 'row', id: rowIdOf(c) };
       }
       c = c.parentElement ? c.parentElement.closest(LM) : null;
       hops++;
@@ -125,6 +155,7 @@ _SPECOF_JS = r"""
       css: cssPath(el),
       anchor: anchor ? anchor.text : null,
       anchor_source: anchor ? anchor.source : null,
+      anchor_id: anchor ? (anchor.id || null) : null,
     };
   };
 """
@@ -321,9 +352,22 @@ async def resolve(page: Page, spec: LocatorSpec, unique: bool = False,
             scoped = landmark.filter(has=page.get_by_text(spec.anchor, exact=True))
         elif spec.anchor_source == "label":
             scoped = landmark.and_(page.locator(_attr_eq("aria-label", spec.anchor)))
+        elif len(spec.anchor) >= _ANCHOR_MAX:
+            # TRUNCATED row text (`anchorOf` slices to 60 chars). We only hold a PREFIX, so no exact
+            # comparison is possible and a prefix match is exactly the hole below. An anchor we cannot
+            # compare is an anchor we must not use.
+            scoped = None
         else:
-            scoped = landmark.filter(has_text=spec.anchor)
-        anchor_loc = scoped.get_by_role(spec.role, name=spec.name, exact=True)  # type: ignore[arg-type]
+            # EXACT, not `has_text`. `has_text` is a SUBSTRING match, so a recorded row
+            # "Acme Corp #3 Cancel" also matches "Acme Corp #30 Cancel" — and when the recorded row is
+            # DELETED, the sibling matches uniquely and binds outright. Measured: it cancelled order #30.
+            # The mutation gate cannot catch it either, because per-row forms are structurally identical
+            # so the scope fingerprint matches byte-for-byte. `heading` and `label` were hardened against
+            # precisely this; `row` — the only source that guards a PER-ROW WRITE — was left loose.
+            scoped = landmark.filter(has_text=re.compile(
+                r"^\s*" + re.escape(spec.anchor).replace(r"\ ", r"\s+") + r"\s*$"))
+        if scoped is not None:
+            anchor_loc = scoped.get_by_role(spec.role, name=spec.name, exact=True)  # type: ignore[arg-type]
 
     ambiguous: Optional[Locator] = None
 
@@ -339,6 +383,50 @@ async def resolve(page: Page, spec: LocatorSpec, unique: bool = False,
             return ("unique" if n == 1 else "ambiguous"), first
         except Exception:  # noqa: BLE001
             return "none", None
+
+    # THE RECORDED ROW MUST STILL EXIST — checked BEFORE Tier 1, and only when we hold a real identity.
+    #
+    # The anchor was only ever consulted at Tier 3, i.e. when role+name was AMBIGUOUS. But deleting the
+    # recorded row is exactly what makes role+name UNIQUE: with "Acme Corp #3" gone, the one remaining
+    # "Cancel" link matches count==1 and Tier 1 returns it outright. Measured — it bound a different
+    # customer's Cancel and reported success. The anchor that would have objected never ran, and the
+    # mutation gate cannot help: per-row forms are structurally identical, so the scope fingerprint matches
+    # byte-for-byte.
+    #
+    # Keyed on `anchor_id`, NOT on row text. Text is not an identity: a price or status changing does not
+    # make it a different record, so a text comparison cannot tell "this row was edited" from "this row is
+    # gone". Measured — a text-keyed version of this check cost 4 rows of 0-LLM survival at k1-k3 on the
+    # drift corpus by refusing rows that had merely been edited.
+    #
+    # NO identity captured (an old cached flow, or a row offering no id/data-*/href) -> NO refusal. We
+    # cannot distinguish the two cases, and failing loud on every token-less row would trade a targeted
+    # safety fix for a broad availability regression. That half stays open and is stated in HEALING.md.
+    # Deliberately not applied to `heading`/`label` either: a renamed section heading is a COSMETIC drift
+    # the resolver is required to survive (v1's `heading-renamed`), whereas a row vanishing is semantic.
+    if spec.anchor_source == "row" and spec.anchor_id:
+        try:
+            row_present = await page.evaluate(
+                r"""([sel, want]) => Array.from(document.querySelectorAll(sel)).some((c) => {
+                     try {
+                       if (c.id && ('id:' + c.id) === want) return true;
+                       for (const a of Array.from(c.attributes || [])) {
+                         if (a.name.indexOf('data-') === 0 && a.value &&
+                             (a.name + ':' + a.value) === want) return true;
+                       }
+                       const l = c.querySelector('a[href], form[action]');
+                       if (l) {
+                         const v = l.getAttribute('href') || l.getAttribute('action') || '';
+                         if (v && ('href:' + v) === want) return true;
+                       }
+                     } catch (e) {}
+                     return false;
+                   })""",
+                [_LANDMARKS, spec.anchor_id])
+        except Exception:  # noqa: BLE001 — navigating/detached: fail closed rather than guess
+            row_present = False
+        if not row_present:
+            _bound("none")
+            return None
 
     # Tier 1: a confident unique match wins outright; record the first ambiguous for the lenient fallback.
     ambiguous_label = ""

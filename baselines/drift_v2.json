@@ -99,8 +99,8 @@
   "resilience_by_k": {
     "1": {
       "n": 12,
-      "survived": 11,
-      "rate": 0.9167
+      "survived": 10,
+      "rate": 0.8333
     },
     "2": {
       "n": 12,
@@ -135,33 +135,34 @@
   },
   "k50": 6,
   "bound_by_hist": {
-    "role+name": 14,
+    "role+name": 13,
     "css": 9,
-    "none": 23,
+    "none": 24,
     "exact-text": 2,
     "placeholder": 3,
     "testid": 146,
     "elem_id": 2,
     "role+name~": 2
   },
-  "predicted_agreement": 0.9444,
+  "predicted_agreement": 0.9259,
   "predicted_mismatches": [
     "cart-row/aria_hide+sibling_removed",
     "cart-row/decoy_substring+strip_aria_label",
+    "cart-row/reparent",
     "shop-4step/aria_hide+hash_ids+testid_churn"
   ],
-  "heal_eligible": 13,
+  "heal_eligible": 14,
   "replan_eligible": 10,
-  "recovery_eligible": 23,
-  "mechanism_heal_attempted": 13,
+  "recovery_eligible": 24,
+  "mechanism_heal_attempted": 14,
   "mechanism_heal_declined": 0,
-  "mechanism_heal_persisted": 13,
+  "mechanism_heal_persisted": 14,
   "mechanism_heal_rate": 1.0,
   "mechanism_replan_attempted": 10,
   "mechanism_replan_recovered": 2,
   "mechanism_replan_rate": 0.2,
-  "mechanism_recovered": 15,
-  "mechanism_ladder_rate": 0.6522,
+  "mechanism_recovered": 16,
+  "mechanism_ladder_rate": 0.6667,
   "cost_usd": null,
   "silent_wrong": 2,
   "wrong_rows": [
@@ -296,7 +297,7 @@
   "write_at_wrong_target": 0,
   "write_recovered": 0,
   "fixture_lint": [],
-  "wall_ms": 49890.2,
+  "wall_ms": 64891.5,
   "rows": [
     {
       "scenario": "anchor-link",
@@ -331,8 +332,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": null,
@@ -341,7 +342,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 188.1
+      "wall_ms": 227.5
     },
     {
       "scenario": "anchor-link",
@@ -376,8 +377,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -386,7 +387,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 200.0
+      "wall_ms": 229.4
     },
     {
       "scenario": "anchor-link",
@@ -421,8 +422,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -431,7 +432,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 202.3
+      "wall_ms": 232.9
     },
     {
       "scenario": "anchor-link",
@@ -466,8 +467,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -476,7 +477,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 170.5
+      "wall_ms": 209.4
     },
     {
       "scenario": "anchor-link",
@@ -511,8 +512,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -521,7 +522,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 161.2
+      "wall_ms": 208.5
     },
     {
       "scenario": "anchor-link",
@@ -556,8 +557,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -566,7 +567,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 163.7
+      "wall_ms": 213.5
     },
     {
       "scenario": "anchor-link",
@@ -601,8 +602,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -611,7 +612,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 165.8
+      "wall_ms": 232.4
     },
     {
       "scenario": "anchor-link",
@@ -646,8 +647,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -656,7 +657,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 159.2
+      "wall_ms": 226.4
     },
     {
       "scenario": "anchor-link",
@@ -691,8 +692,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -701,7 +702,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 195.6
+      "wall_ms": 246.1
     },
     {
       "scenario": "anchor-link",
@@ -736,8 +737,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -746,7 +747,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 197.6
+      "wall_ms": 258.6
     },
     {
       "scenario": "anchor-link",
@@ -778,8 +779,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -788,7 +789,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 173.0
+      "wall_ms": 229.0
     },
     {
       "scenario": "span-link",
@@ -823,8 +824,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "7ad4404cced0a371",
-      "steps_hash_after": "7ad4404cced0a371",
+      "steps_hash_before": "da6dd18d569158c9",
+      "steps_hash_after": "da6dd18d569158c9",
       "recached": false,
       "orders_delta": null,
       "mut_applied": null,
@@ -835,7 +836,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 166.2
+      "wall_ms": 219.2
     },
     {
       "scenario": "span-link",
@@ -870,8 +871,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "7ad4404cced0a371",
-      "steps_hash_after": "7ad4404cced0a371",
+      "steps_hash_before": "da6dd18d569158c9",
+      "steps_hash_after": "da6dd18d569158c9",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -882,7 +883,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 159.8
+      "wall_ms": 227.2
     },
     {
       "scenario": "span-link",
@@ -917,8 +918,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "7ad4404cced0a371",
-      "steps_hash_after": "7ad4404cced0a371",
+      "steps_hash_before": "da6dd18d569158c9",
+      "steps_hash_after": "da6dd18d569158c9",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -929,7 +930,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 162.1
+      "wall_ms": 210.0
     },
     {
       "scenario": "span-link",
@@ -961,8 +962,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "7ad4404cced0a371",
-      "steps_hash_after": "7ad4404cced0a371",
+      "steps_hash_before": "da6dd18d569158c9",
+      "steps_hash_after": "da6dd18d569158c9",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -973,7 +974,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 184.1
+      "wall_ms": 228.6
     },
     {
       "scenario": "span-link",
@@ -1005,8 +1006,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "7ad4404cced0a371",
-      "steps_hash_after": "7ad4404cced0a371",
+      "steps_hash_before": "da6dd18d569158c9",
+      "steps_hash_after": "da6dd18d569158c9",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -1017,7 +1018,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 204.5
+      "wall_ms": 236.7
     },
     {
       "scenario": "span-link",
@@ -1049,8 +1050,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "7ad4404cced0a371",
-      "steps_hash_after": "7ad4404cced0a371",
+      "steps_hash_before": "da6dd18d569158c9",
+      "steps_hash_after": "da6dd18d569158c9",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -1059,7 +1060,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 175.8
+      "wall_ms": 215.0
     },
     {
       "scenario": "anchor-link",
@@ -1089,8 +1090,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -1099,7 +1100,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 107.2
+      "wall_ms": 149.4
     },
     {
       "scenario": "anchor-button",
@@ -1136,8 +1137,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -1148,7 +1149,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 203.3
+      "wall_ms": 242.5
     },
     {
       "scenario": "anchor-button",
@@ -1185,8 +1186,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -1197,7 +1198,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 194.1
+      "wall_ms": 245.1
     },
     {
       "scenario": "anchor-button",
@@ -1234,8 +1235,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -1246,7 +1247,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 164.7
+      "wall_ms": 221.2
     },
     {
       "scenario": "anchor-button",
@@ -1283,8 +1284,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -1295,7 +1296,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 165.8
+      "wall_ms": 211.0
     },
     {
       "scenario": "anchor-button",
@@ -1332,8 +1333,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -1344,7 +1345,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 161.7
+      "wall_ms": 197.7
     },
     {
       "scenario": "anchor-button",
@@ -1381,8 +1382,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -1393,7 +1394,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 163.4
+      "wall_ms": 211.6
     },
     {
       "scenario": "anchor-button",
@@ -1430,8 +1431,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -1442,7 +1443,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 162.0
+      "wall_ms": 227.8
     },
     {
       "scenario": "anchor-button",
@@ -1479,8 +1480,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -1491,7 +1492,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 164.4
+      "wall_ms": 245.3
     },
     {
       "scenario": "anchor-button",
@@ -1528,8 +1529,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -1540,7 +1541,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 183.4
+      "wall_ms": 228.3
     },
     {
       "scenario": "anchor-button",
@@ -1577,8 +1578,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -1589,7 +1590,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 192.9
+      "wall_ms": 207.8
     },
     {
       "scenario": "anchor-button",
@@ -1626,8 +1627,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -1638,7 +1639,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 163.9
+      "wall_ms": 214.3
     },
     {
       "scenario": "anchor-button",
@@ -1675,8 +1676,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -1687,7 +1688,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 161.7
+      "wall_ms": 192.2
     },
     {
       "scenario": "anchor-button",
@@ -1724,8 +1725,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -1736,7 +1737,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 162.5
+      "wall_ms": 196.0
     },
     {
       "scenario": "anchor-button",
@@ -1773,8 +1774,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -1785,7 +1786,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 162.6
+      "wall_ms": 211.0
     },
     {
       "scenario": "anchor-link",
@@ -1822,8 +1823,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -1832,7 +1833,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 197.6
+      "wall_ms": 212.1
     },
     {
       "scenario": "anchor-button",
@@ -1878,8 +1879,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -1890,7 +1891,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 165.1
+      "wall_ms": 197.6
     },
     {
       "scenario": "anchor-button",
@@ -1936,8 +1937,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -1948,7 +1949,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 161.7
+      "wall_ms": 194.7
     },
     {
       "scenario": "anchor-button",
@@ -1994,8 +1995,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -2006,7 +2007,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 166.0
+      "wall_ms": 211.9
     },
     {
       "scenario": "anchor-button",
@@ -2053,8 +2054,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -2065,7 +2066,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 162.5
+      "wall_ms": 196.8
     },
     {
       "scenario": "anchor-button",
@@ -2112,8 +2113,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -2124,7 +2125,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 158.5
+      "wall_ms": 230.7
     },
     {
       "scenario": "anchor-button",
@@ -2170,8 +2171,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -2182,7 +2183,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 161.8
+      "wall_ms": 191.8
     },
     {
       "scenario": "anchor-button",
@@ -2228,8 +2229,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -2240,7 +2241,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 165.3
+      "wall_ms": 226.6
     },
     {
       "scenario": "anchor-button",
@@ -2286,8 +2287,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -2298,7 +2299,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 161.5
+      "wall_ms": 213.9
     },
     {
       "scenario": "anchor-button",
@@ -2344,8 +2345,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -2356,7 +2357,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 162.3
+      "wall_ms": 211.7
     },
     {
       "scenario": "anchor-button",
@@ -2402,8 +2403,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -2414,7 +2415,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 165.7
+      "wall_ms": 218.7
     },
     {
       "scenario": "anchor-button",
@@ -2461,8 +2462,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -2473,7 +2474,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 161.9
+      "wall_ms": 212.4
     },
     {
       "scenario": "anchor-button",
@@ -2520,8 +2521,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -2532,7 +2533,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 164.0
+      "wall_ms": 224.3
     },
     {
       "scenario": "anchor-button",
@@ -2579,8 +2580,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -2591,7 +2592,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 161.8
+      "wall_ms": 208.1
     },
     {
       "scenario": "anchor-button",
@@ -2638,8 +2639,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -2650,7 +2651,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 162.6
+      "wall_ms": 196.1
     },
     {
       "scenario": "anchor-button",
@@ -2697,8 +2698,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -2709,7 +2710,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 166.8
+      "wall_ms": 214.6
     },
     {
       "scenario": "anchor-button",
@@ -2757,8 +2758,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -2769,7 +2770,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 159.9
+      "wall_ms": 224.2
     },
     {
       "scenario": "anchor-button",
@@ -2814,8 +2815,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -2826,7 +2827,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 208.5
+      "wall_ms": 245.3
     },
     {
       "scenario": "anchor-button",
@@ -2874,8 +2875,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -2886,7 +2887,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 166.5
+      "wall_ms": 232.2
     },
     {
       "scenario": "anchor-button",
@@ -2931,8 +2932,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -2943,7 +2944,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 185.3
+      "wall_ms": 225.7
     },
     {
       "scenario": "anchor-button",
@@ -2988,8 +2989,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -3000,7 +3001,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 185.5
+      "wall_ms": 241.5
     },
     {
       "scenario": "anchor-button",
@@ -3045,8 +3046,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -3057,7 +3058,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 196.3
+      "wall_ms": 230.6
     },
     {
       "scenario": "anchor-button",
@@ -3091,8 +3092,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -3101,7 +3102,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 176.9
+      "wall_ms": 226.3
     },
     {
       "scenario": "anchor-button",
@@ -3135,8 +3136,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -3145,7 +3146,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 199.5
+      "wall_ms": 213.8
     },
     {
       "scenario": "shop-4step",
@@ -3187,8 +3188,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -3197,7 +3198,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 214.6
+      "wall_ms": 273.2
     },
     {
       "scenario": "shop-4step",
@@ -3239,8 +3240,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -3249,7 +3250,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 244.2
+      "wall_ms": 274.4
     },
     {
       "scenario": "shop-4step",
@@ -3304,8 +3305,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -3314,7 +3315,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 292.1
+      "wall_ms": 315.9
     },
     {
       "scenario": "shop-4step",
@@ -3369,8 +3370,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -3379,7 +3380,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 264.5
+      "wall_ms": 332.4
     },
     {
       "scenario": "shop-4step",
@@ -3434,8 +3435,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -3444,7 +3445,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 262.9
+      "wall_ms": 308.1
     },
     {
       "scenario": "shop-4step",
@@ -3499,8 +3500,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -3509,7 +3510,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 262.6
+      "wall_ms": 313.2
     },
     {
       "scenario": "shop-4step",
@@ -3565,8 +3566,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -3575,7 +3576,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 263.2
+      "wall_ms": 310.9
     },
     {
       "scenario": "shop-4step",
@@ -3630,8 +3631,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -3640,7 +3641,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 263.1
+      "wall_ms": 328.2
     },
     {
       "scenario": "shop-4step",
@@ -3695,8 +3696,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -3705,7 +3706,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 263.5
+      "wall_ms": 312.1
     },
     {
       "scenario": "shop-4step",
@@ -3760,8 +3761,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -3770,7 +3771,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 261.6
+      "wall_ms": 316.3
     },
     {
       "scenario": "shop-4step",
@@ -3825,8 +3826,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -3835,7 +3836,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 301.6
+      "wall_ms": 322.1
     },
     {
       "scenario": "shop-4step",
@@ -3891,8 +3892,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -3901,7 +3902,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 257.6
+      "wall_ms": 319.2
     },
     {
       "scenario": "shop-4step",
@@ -3956,8 +3957,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -3966,7 +3967,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 264.7
+      "wall_ms": 320.3
     },
     {
       "scenario": "shop-4step",
@@ -4022,8 +4023,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -4032,7 +4033,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 246.0
+      "wall_ms": 314.4
     },
     {
       "scenario": "shop-4step",
@@ -4088,8 +4089,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -4098,7 +4099,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 261.8
+      "wall_ms": 311.0
     },
     {
       "scenario": "shop-4step",
@@ -4154,8 +4155,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -4164,7 +4165,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 245.0
+      "wall_ms": 317.1
     },
     {
       "scenario": "shop-4step",
@@ -4220,8 +4221,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -4230,7 +4231,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 265.2
+      "wall_ms": 327.0
     },
     {
       "scenario": "shop-4step",
@@ -4281,8 +4282,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -4291,7 +4292,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 203.8
+      "wall_ms": 242.4
     },
     {
       "scenario": "shop-4step",
@@ -4347,8 +4348,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -4357,7 +4358,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 255.6
+      "wall_ms": 314.0
     },
     {
       "scenario": "shop-4step",
@@ -4414,8 +4415,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -4424,7 +4425,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 260.4
+      "wall_ms": 323.7
     },
     {
       "scenario": "shop-4step",
@@ -4475,8 +4476,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -4485,7 +4486,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 197.3
+      "wall_ms": 248.2
     },
     {
       "scenario": "shop-4step",
@@ -4535,8 +4536,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -4545,7 +4546,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 198.3
+      "wall_ms": 247.6
     },
     {
       "scenario": "shop-4step",
@@ -4595,8 +4596,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -4605,7 +4606,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 203.4
+      "wall_ms": 245.8
     },
     {
       "scenario": "shop-4step",
@@ -4645,8 +4646,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -4655,7 +4656,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 194.7
+      "wall_ms": 243.7
     },
     {
       "scenario": "shop-4step",
@@ -4695,8 +4696,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -4705,7 +4706,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 246.0
+      "wall_ms": 250.9
     },
     {
       "scenario": "cart-row",
@@ -4748,8 +4749,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -4758,7 +4759,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 185.8
+      "wall_ms": 232.8
     },
     {
       "scenario": "cart-row",
@@ -4780,29 +4781,26 @@
         "role+name~"
       ],
       "arm": "replay",
-      "outcome": "survived",
+      "outcome": "drifted",
       "llm_calls": 0,
       "report_mode": "replay",
-      "success": true,
+      "success": false,
       "heal_attempted": false,
       "heal_declined": false,
       "heal_persisted": false,
       "replan_attempted": false,
       "replan_recovered": false,
       "bound_by": [
-        "role+name"
+        "none"
       ],
       "gate_bound_by": "",
-      "acts": [
-        "go",
-        "DONE"
-      ],
+      "acts": [],
       "golden": [
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -4811,7 +4809,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 163.7
+      "wall_ms": 191.2
     },
     {
       "scenario": "cart-row",
@@ -4854,8 +4852,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -4864,7 +4862,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 163.9
+      "wall_ms": 232.3
     },
     {
       "scenario": "cart-row",
@@ -4905,8 +4903,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -4915,7 +4913,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 182.9
+      "wall_ms": 243.3
     },
     {
       "scenario": "cart-row",
@@ -4959,8 +4957,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -4969,7 +4967,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 159.4
+      "wall_ms": 229.5
     },
     {
       "scenario": "cart-row",
@@ -5012,8 +5010,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -5022,7 +5020,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 198.4
+      "wall_ms": 250.2
     },
     {
       "scenario": "cart-row",
@@ -5065,8 +5063,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -5075,7 +5073,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 195.7
+      "wall_ms": 240.8
     },
     {
       "scenario": "cart-row",
@@ -5118,8 +5116,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -5128,7 +5126,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 198.2
+      "wall_ms": 242.9
     },
     {
       "scenario": "cart-row",
@@ -5171,8 +5169,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -5181,7 +5179,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 193.9
+      "wall_ms": 252.6
     },
     {
       "scenario": "cart-row",
@@ -5224,8 +5222,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -5234,7 +5232,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 195.8
+      "wall_ms": 244.2
     },
     {
       "scenario": "cart-row",
@@ -5274,8 +5272,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -5284,7 +5282,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 182.4
+      "wall_ms": 232.7
     },
     {
       "scenario": "cart-row",
@@ -5324,8 +5322,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -5334,7 +5332,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 186.6
+      "wall_ms": 223.4
     },
     {
       "scenario": "cart-row",
@@ -5368,8 +5366,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -5378,7 +5376,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 174.0
+      "wall_ms": 180.6
     },
     {
       "scenario": "cart-row",
@@ -5412,8 +5410,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -5422,7 +5420,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 190.7
+      "wall_ms": 214.5
     },
     {
       "scenario": "order-form",
@@ -5473,8 +5471,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 1,
       "mut_applied": true,
@@ -5483,7 +5481,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 257.1
+      "wall_ms": 358.4
     },
     {
       "scenario": "order-form",
@@ -5531,8 +5529,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -5541,7 +5539,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 203.5
+      "wall_ms": 483.7
     },
     {
       "scenario": "order-form",
@@ -5592,8 +5590,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 1,
       "mut_applied": true,
@@ -5602,7 +5600,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 253.5
+      "wall_ms": 675.8
     },
     {
       "scenario": "order-form",
@@ -5651,8 +5649,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -5661,7 +5659,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 217.3
+      "wall_ms": 565.8
     },
     {
       "scenario": "order-form",
@@ -5709,8 +5707,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -5719,7 +5717,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 213.5
+      "wall_ms": 404.8
     },
     {
       "scenario": "order-form",
@@ -5768,8 +5766,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -5778,7 +5776,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 223.3
+      "wall_ms": 299.3
     },
     {
       "scenario": "order-form",
@@ -5829,8 +5827,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 1,
       "mut_applied": true,
@@ -5839,7 +5837,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 248.6
+      "wall_ms": 300.0
     },
     {
       "scenario": "order-form",
@@ -5887,8 +5885,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -5897,7 +5895,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 200.0
+      "wall_ms": 255.3
     },
     {
       "scenario": "order-form",
@@ -5948,8 +5946,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 1,
       "mut_applied": true,
@@ -5958,7 +5956,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 227.8
+      "wall_ms": 302.2
     },
     {
       "scenario": "order-form",
@@ -6010,8 +6008,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 1,
       "mut_applied": true,
@@ -6020,7 +6018,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 263.2
+      "wall_ms": 313.4
     },
     {
       "scenario": "order-form",
@@ -6068,8 +6066,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -6078,7 +6076,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 199.9
+      "wall_ms": 241.2
     },
     {
       "scenario": "order-form",
@@ -6130,8 +6128,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 1,
       "mut_applied": true,
@@ -6140,7 +6138,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 258.5
+      "wall_ms": 296.8
     },
     {
       "scenario": "order-form",
@@ -6189,8 +6187,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -6199,7 +6197,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 206.4
+      "wall_ms": 261.5
     },
     {
       "scenario": "order-form",
@@ -6248,8 +6246,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -6258,7 +6256,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 206.9
+      "wall_ms": 276.4
     },
     {
       "scenario": "order-form",
@@ -6307,8 +6305,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -6317,7 +6315,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 198.0
+      "wall_ms": 266.2
     },
     {
       "scenario": "order-form",
@@ -6366,8 +6364,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -6376,7 +6374,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 201.6
+      "wall_ms": 261.1
     },
     {
       "scenario": "order-form",
@@ -6425,8 +6423,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -6435,7 +6433,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 215.8
+      "wall_ms": 259.2
     },
     {
       "scenario": "order-form",
@@ -6484,8 +6482,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -6494,7 +6492,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 214.1
+      "wall_ms": 240.9
     },
     {
       "scenario": "order-form",
@@ -6534,8 +6532,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -6544,7 +6542,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 205.0
+      "wall_ms": 265.8
     },
     {
       "scenario": "order-form",
@@ -6584,8 +6582,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -6594,7 +6592,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 202.5
+      "wall_ms": 263.1
     },
     {
       "scenario": "anchor-link",
@@ -6629,8 +6627,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": null,
@@ -6639,7 +6637,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 182.6
+      "wall_ms": 241.8
     },
     {
       "scenario": "anchor-link",
@@ -6674,8 +6672,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -6684,7 +6682,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 163.0
+      "wall_ms": 204.7
     },
     {
       "scenario": "anchor-link",
@@ -6719,8 +6717,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -6729,7 +6727,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 163.0
+      "wall_ms": 236.3
     },
     {
       "scenario": "anchor-link",
@@ -6764,8 +6762,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -6774,7 +6772,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 163.4
+      "wall_ms": 223.8
     },
     {
       "scenario": "anchor-link",
@@ -6809,8 +6807,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -6819,7 +6817,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 162.6
+      "wall_ms": 232.4
     },
     {
       "scenario": "anchor-link",
@@ -6854,8 +6852,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -6864,7 +6862,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 164.0
+      "wall_ms": 199.3
     },
     {
       "scenario": "anchor-link",
@@ -6899,8 +6897,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -6909,7 +6907,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 162.6
+      "wall_ms": 228.4
     },
     {
       "scenario": "anchor-link",
@@ -6944,8 +6942,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -6954,7 +6952,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 161.1
+      "wall_ms": 218.8
     },
     {
       "scenario": "anchor-link",
@@ -6989,8 +6987,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -6999,7 +6997,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 198.3
+      "wall_ms": 224.6
     },
     {
       "scenario": "anchor-link",
@@ -7034,8 +7032,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -7044,7 +7042,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 197.5
+      "wall_ms": 244.6
     },
     {
       "scenario": "anchor-link",
@@ -7076,8 +7074,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -7086,7 +7084,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 206.9
+      "wall_ms": 241.5
     },
     {
       "scenario": "span-link",
@@ -7121,8 +7119,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "7ad4404cced0a371",
-      "steps_hash_after": "7ad4404cced0a371",
+      "steps_hash_before": "da6dd18d569158c9",
+      "steps_hash_after": "da6dd18d569158c9",
       "recached": false,
       "orders_delta": null,
       "mut_applied": null,
@@ -7133,7 +7131,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 168.1
+      "wall_ms": 220.5
     },
     {
       "scenario": "span-link",
@@ -7168,8 +7166,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "7ad4404cced0a371",
-      "steps_hash_after": "7ad4404cced0a371",
+      "steps_hash_before": "da6dd18d569158c9",
+      "steps_hash_after": "da6dd18d569158c9",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -7180,7 +7178,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 163.2
+      "wall_ms": 210.7
     },
     {
       "scenario": "span-link",
@@ -7215,8 +7213,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "7ad4404cced0a371",
-      "steps_hash_after": "7ad4404cced0a371",
+      "steps_hash_before": "da6dd18d569158c9",
+      "steps_hash_after": "da6dd18d569158c9",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -7227,7 +7225,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 161.9
+      "wall_ms": 208.7
     },
     {
       "scenario": "span-link",
@@ -7262,8 +7260,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "7ad4404cced0a371",
-      "steps_hash_after": "fcbda1905e49ff36",
+      "steps_hash_before": "da6dd18d569158c9",
+      "steps_hash_after": "996d583e2279df1d",
       "recached": true,
       "orders_delta": null,
       "mut_applied": true,
@@ -7274,7 +7272,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 219.9
+      "wall_ms": 283.4
     },
     {
       "scenario": "span-link",
@@ -7309,8 +7307,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "7ad4404cced0a371",
-      "steps_hash_after": "3f3080275a92692d",
+      "steps_hash_before": "da6dd18d569158c9",
+      "steps_hash_after": "23ed4f09c5ef8834",
       "recached": true,
       "orders_delta": null,
       "mut_applied": true,
@@ -7321,7 +7319,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 219.0
+      "wall_ms": 296.2
     },
     {
       "scenario": "span-link",
@@ -7353,8 +7351,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "7ad4404cced0a371",
-      "steps_hash_after": "7ad4404cced0a371",
+      "steps_hash_before": "da6dd18d569158c9",
+      "steps_hash_after": "da6dd18d569158c9",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -7363,7 +7361,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 198.1
+      "wall_ms": 235.5
     },
     {
       "scenario": "anchor-link",
@@ -7393,8 +7391,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -7403,7 +7401,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 106.8
+      "wall_ms": 123.3
     },
     {
       "scenario": "anchor-button",
@@ -7440,8 +7438,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -7452,7 +7450,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 171.4
+      "wall_ms": 219.3
     },
     {
       "scenario": "anchor-button",
@@ -7489,8 +7487,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -7501,7 +7499,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 161.5
+      "wall_ms": 214.5
     },
     {
       "scenario": "anchor-button",
@@ -7538,8 +7536,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -7550,7 +7548,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 164.6
+      "wall_ms": 232.8
     },
     {
       "scenario": "anchor-button",
@@ -7587,8 +7585,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -7599,7 +7597,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 163.1
+      "wall_ms": 220.9
     },
     {
       "scenario": "anchor-button",
@@ -7636,8 +7634,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -7648,7 +7646,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 162.2
+      "wall_ms": 197.8
     },
     {
       "scenario": "anchor-button",
@@ -7685,8 +7683,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -7697,7 +7695,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 162.0
+      "wall_ms": 260.3
     },
     {
       "scenario": "anchor-button",
@@ -7734,8 +7732,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -7746,7 +7744,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 163.1
+      "wall_ms": 201.2
     },
     {
       "scenario": "anchor-button",
@@ -7783,8 +7781,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -7795,7 +7793,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 164.8
+      "wall_ms": 211.0
     },
     {
       "scenario": "anchor-button",
@@ -7832,8 +7830,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -7844,7 +7842,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 161.2
+      "wall_ms": 195.4
     },
     {
       "scenario": "anchor-button",
@@ -7881,8 +7879,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -7893,7 +7891,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 165.1
+      "wall_ms": 192.5
     },
     {
       "scenario": "anchor-button",
@@ -7930,8 +7928,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -7942,7 +7940,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 160.9
+      "wall_ms": 213.6
     },
     {
       "scenario": "anchor-button",
@@ -7979,8 +7977,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -7991,7 +7989,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 163.7
+      "wall_ms": 218.5
     },
     {
       "scenario": "anchor-button",
@@ -8028,8 +8026,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -8040,7 +8038,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 163.5
+      "wall_ms": 229.2
     },
     {
       "scenario": "anchor-button",
@@ -8077,8 +8075,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -8089,7 +8087,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 162.2
+      "wall_ms": 219.6
     },
     {
       "scenario": "anchor-link",
@@ -8126,8 +8124,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "244038cb62162cf6",
-      "steps_hash_after": "244038cb62162cf6",
+      "steps_hash_before": "7f21acc2fad58c67",
+      "steps_hash_after": "7f21acc2fad58c67",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -8136,7 +8134,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 194.9
+      "wall_ms": 212.1
     },
     {
       "scenario": "anchor-button",
@@ -8182,8 +8180,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -8194,7 +8192,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 164.0
+      "wall_ms": 214.6
     },
     {
       "scenario": "anchor-button",
@@ -8240,8 +8238,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -8252,7 +8250,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 164.6
+      "wall_ms": 216.0
     },
     {
       "scenario": "anchor-button",
@@ -8298,8 +8296,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -8310,7 +8308,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 161.9
+      "wall_ms": 226.1
     },
     {
       "scenario": "anchor-button",
@@ -8357,8 +8355,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -8369,7 +8367,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 163.5
+      "wall_ms": 212.2
     },
     {
       "scenario": "anchor-button",
@@ -8416,8 +8414,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -8428,7 +8426,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 160.1
+      "wall_ms": 193.5
     },
     {
       "scenario": "anchor-button",
@@ -8474,8 +8472,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -8486,7 +8484,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 163.2
+      "wall_ms": 214.1
     },
     {
       "scenario": "anchor-button",
@@ -8532,8 +8530,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -8544,7 +8542,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 162.3
+      "wall_ms": 217.8
     },
     {
       "scenario": "anchor-button",
@@ -8590,8 +8588,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -8602,7 +8600,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 164.4
+      "wall_ms": 234.5
     },
     {
       "scenario": "anchor-button",
@@ -8648,8 +8646,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -8660,7 +8658,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 164.0
+      "wall_ms": 226.9
     },
     {
       "scenario": "anchor-button",
@@ -8706,8 +8704,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -8718,7 +8716,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 163.4
+      "wall_ms": 206.9
     },
     {
       "scenario": "anchor-button",
@@ -8765,8 +8763,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -8777,7 +8775,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 162.2
+      "wall_ms": 191.8
     },
     {
       "scenario": "anchor-button",
@@ -8824,8 +8822,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -8836,7 +8834,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 164.6
+      "wall_ms": 232.0
     },
     {
       "scenario": "anchor-button",
@@ -8883,8 +8881,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -8895,7 +8893,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 164.0
+      "wall_ms": 194.8
     },
     {
       "scenario": "anchor-button",
@@ -8942,8 +8940,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -8954,7 +8952,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 160.4
+      "wall_ms": 232.6
     },
     {
       "scenario": "anchor-button",
@@ -9001,8 +8999,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -9013,7 +9011,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 163.6
+      "wall_ms": 208.4
     },
     {
       "scenario": "anchor-button",
@@ -9061,8 +9059,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -9073,7 +9071,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 163.3
+      "wall_ms": 221.3
     },
     {
       "scenario": "anchor-button",
@@ -9121,8 +9119,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "825f943536a6c9de",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "e9e7fd2961095175",
       "recached": true,
       "orders_delta": null,
       "mut_applied": true,
@@ -9133,7 +9131,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 217.0
+      "wall_ms": 295.7
     },
     {
       "scenario": "anchor-button",
@@ -9181,8 +9179,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -9193,7 +9191,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 166.4
+      "wall_ms": 233.1
     },
     {
       "scenario": "anchor-button",
@@ -9241,8 +9239,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "db304eddb168054e",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "978145d80a1afa99",
       "recached": true,
       "orders_delta": null,
       "mut_applied": true,
@@ -9253,7 +9251,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 204.2
+      "wall_ms": 263.1
     },
     {
       "scenario": "anchor-button",
@@ -9301,8 +9299,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "1f5adb6f171354fb",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "a0772439eedc4ddd",
       "recached": true,
       "orders_delta": null,
       "mut_applied": true,
@@ -9313,7 +9311,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 204.2
+      "wall_ms": 271.7
     },
     {
       "scenario": "anchor-button",
@@ -9361,8 +9359,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "db304eddb168054e",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "978145d80a1afa99",
       "recached": true,
       "orders_delta": null,
       "mut_applied": true,
@@ -9373,7 +9371,7 @@
       ],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 205.3
+      "wall_ms": 265.7
     },
     {
       "scenario": "anchor-button",
@@ -9407,8 +9405,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -9417,7 +9415,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 246.1
+      "wall_ms": 259.8
     },
     {
       "scenario": "anchor-button",
@@ -9451,8 +9449,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "d2d000ea2ac6bcea",
-      "steps_hash_after": "d2d000ea2ac6bcea",
+      "steps_hash_before": "f3217a52898b9e2c",
+      "steps_hash_after": "f3217a52898b9e2c",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -9461,7 +9459,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 212.2
+      "wall_ms": 263.4
     },
     {
       "scenario": "shop-4step",
@@ -9506,8 +9504,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "d9a6b9a4aef0b4b7",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "110d90b397007a26",
       "recached": true,
       "orders_delta": null,
       "mut_applied": true,
@@ -9516,7 +9514,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 338.0
+      "wall_ms": 466.1
     },
     {
       "scenario": "shop-4step",
@@ -9561,8 +9559,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "fd28898586b78864",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "e1e21375f04bbb6d",
       "recached": true,
       "orders_delta": null,
       "mut_applied": true,
@@ -9571,7 +9569,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 352.1
+      "wall_ms": 507.5
     },
     {
       "scenario": "shop-4step",
@@ -9626,8 +9624,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -9636,7 +9634,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 254.5
+      "wall_ms": 320.4
     },
     {
       "scenario": "shop-4step",
@@ -9691,8 +9689,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -9701,7 +9699,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 262.4
+      "wall_ms": 307.8
     },
     {
       "scenario": "shop-4step",
@@ -9756,8 +9754,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -9766,7 +9764,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 263.7
+      "wall_ms": 311.5
     },
     {
       "scenario": "shop-4step",
@@ -9821,8 +9819,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -9831,7 +9829,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 246.1
+      "wall_ms": 322.4
     },
     {
       "scenario": "shop-4step",
@@ -9887,8 +9885,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -9897,7 +9895,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 245.2
+      "wall_ms": 339.0
     },
     {
       "scenario": "shop-4step",
@@ -9952,8 +9950,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -9962,7 +9960,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 269.8
+      "wall_ms": 340.8
     },
     {
       "scenario": "shop-4step",
@@ -10017,8 +10015,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -10027,7 +10025,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 260.1
+      "wall_ms": 330.7
     },
     {
       "scenario": "shop-4step",
@@ -10082,8 +10080,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -10092,7 +10090,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 243.0
+      "wall_ms": 312.7
     },
     {
       "scenario": "shop-4step",
@@ -10147,8 +10145,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -10157,7 +10155,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 247.2
+      "wall_ms": 318.1
     },
     {
       "scenario": "shop-4step",
@@ -10213,8 +10211,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -10223,7 +10221,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 263.3
+      "wall_ms": 340.7
     },
     {
       "scenario": "shop-4step",
@@ -10278,8 +10276,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -10288,7 +10286,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 263.9
+      "wall_ms": 328.3
     },
     {
       "scenario": "shop-4step",
@@ -10344,8 +10342,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -10354,7 +10352,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 258.6
+      "wall_ms": 330.6
     },
     {
       "scenario": "shop-4step",
@@ -10410,8 +10408,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -10420,7 +10418,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 266.8
+      "wall_ms": 329.1
     },
     {
       "scenario": "shop-4step",
@@ -10476,8 +10474,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -10486,7 +10484,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 260.0
+      "wall_ms": 328.6
     },
     {
       "scenario": "shop-4step",
@@ -10542,8 +10540,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -10552,7 +10550,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 263.2
+      "wall_ms": 344.5
     },
     {
       "scenario": "shop-4step",
@@ -10609,8 +10607,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "03de314f6e2dceac",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "9f982c76855ec375",
       "recached": true,
       "orders_delta": null,
       "mut_applied": true,
@@ -10619,7 +10617,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 314.9
+      "wall_ms": 365.2
     },
     {
       "scenario": "shop-4step",
@@ -10675,8 +10673,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -10685,7 +10683,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 251.2
+      "wall_ms": 314.2
     },
     {
       "scenario": "shop-4step",
@@ -10742,8 +10740,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -10752,7 +10750,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 247.8
+      "wall_ms": 339.1
     },
     {
       "scenario": "shop-4step",
@@ -10809,8 +10807,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "03de314f6e2dceac",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "9f982c76855ec375",
       "recached": true,
       "orders_delta": null,
       "mut_applied": true,
@@ -10819,7 +10817,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 300.9
+      "wall_ms": 373.1
     },
     {
       "scenario": "shop-4step",
@@ -10875,8 +10873,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "03de314f6e2dceac",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "9f982c76855ec375",
       "recached": true,
       "orders_delta": null,
       "mut_applied": true,
@@ -10885,7 +10883,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 291.9
+      "wall_ms": 395.6
     },
     {
       "scenario": "shop-4step",
@@ -10941,8 +10939,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "50cf0eb57cfec80b",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "2333074fdf2cc1a5",
       "recached": true,
       "orders_delta": null,
       "mut_applied": true,
@@ -10951,7 +10949,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 295.9
+      "wall_ms": 390.2
     },
     {
       "scenario": "shop-4step",
@@ -10991,8 +10989,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -11001,7 +10999,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 238.1
+      "wall_ms": 255.0
     },
     {
       "scenario": "shop-4step",
@@ -11041,8 +11039,8 @@
         "fin",
         "DONE"
       ],
-      "steps_hash_before": "c0ce686c939b0147",
-      "steps_hash_after": "c0ce686c939b0147",
+      "steps_hash_before": "545726f023682411",
+      "steps_hash_after": "545726f023682411",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -11051,7 +11049,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 229.5
+      "wall_ms": 273.2
     },
     {
       "scenario": "cart-row",
@@ -11094,8 +11092,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -11104,7 +11102,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 161.5
+      "wall_ms": 238.9
     },
     {
       "scenario": "cart-row",
@@ -11126,17 +11124,17 @@
         "role+name~"
       ],
       "arm": "repair",
-      "outcome": "survived",
-      "llm_calls": 0,
-      "report_mode": "replay",
+      "outcome": "healed",
+      "llm_calls": 1,
+      "report_mode": "replay+heal",
       "success": true,
-      "heal_attempted": false,
+      "heal_attempted": true,
       "heal_declined": false,
-      "heal_persisted": false,
+      "heal_persisted": true,
       "replan_attempted": false,
       "replan_recovered": false,
       "bound_by": [
-        "role+name"
+        "none"
       ],
       "gate_bound_by": "",
       "acts": [
@@ -11147,9 +11145,9 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
-      "recached": false,
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "4d70923170f80adf",
+      "recached": true,
       "orders_delta": null,
       "mut_applied": true,
       "mut_error": null,
@@ -11157,7 +11155,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 164.5
+      "wall_ms": 228.1
     },
     {
       "scenario": "cart-row",
@@ -11200,8 +11198,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -11210,7 +11208,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 161.8
+      "wall_ms": 216.7
     },
     {
       "scenario": "cart-row",
@@ -11254,8 +11252,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "934484882777a3cd",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "729c15dc0be6cd45",
       "recached": true,
       "orders_delta": null,
       "mut_applied": true,
@@ -11264,7 +11262,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 201.5
+      "wall_ms": 264.0
     },
     {
       "scenario": "cart-row",
@@ -11308,8 +11306,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -11318,7 +11316,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 165.8
+      "wall_ms": 232.7
     },
     {
       "scenario": "cart-row",
@@ -11361,8 +11359,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -11371,7 +11369,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 197.8
+      "wall_ms": 258.2
     },
     {
       "scenario": "cart-row",
@@ -11414,8 +11412,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -11424,7 +11422,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 195.6
+      "wall_ms": 241.2
     },
     {
       "scenario": "cart-row",
@@ -11467,8 +11465,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -11477,7 +11475,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 198.0
+      "wall_ms": 277.4
     },
     {
       "scenario": "cart-row",
@@ -11520,8 +11518,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -11530,7 +11528,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 196.7
+      "wall_ms": 248.1
     },
     {
       "scenario": "cart-row",
@@ -11573,8 +11571,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -11583,7 +11581,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 178.2
+      "wall_ms": 248.1
     },
     {
       "scenario": "cart-row",
@@ -11626,8 +11624,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "01c0d7b7a273e786",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "5e94563940694e5f",
       "recached": true,
       "orders_delta": null,
       "mut_applied": true,
@@ -11636,7 +11634,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 202.1
+      "wall_ms": 289.4
     },
     {
       "scenario": "cart-row",
@@ -11679,8 +11677,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "223676266608ada4",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "d052434fba1c1cfd",
       "recached": true,
       "orders_delta": null,
       "mut_applied": true,
@@ -11689,7 +11687,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 205.3
+      "wall_ms": 260.7
     },
     {
       "scenario": "cart-row",
@@ -11723,8 +11721,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -11733,7 +11731,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 217.8
+      "wall_ms": 263.7
     },
     {
       "scenario": "cart-row",
@@ -11767,8 +11765,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "a02d29a258807bba",
-      "steps_hash_after": "a02d29a258807bba",
+      "steps_hash_before": "1946d912fb27ad4d",
+      "steps_hash_after": "1946d912fb27ad4d",
       "recached": false,
       "orders_delta": null,
       "mut_applied": true,
@@ -11777,7 +11775,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 219.3
+      "wall_ms": 293.5
     },
     {
       "scenario": "order-form",
@@ -11828,8 +11826,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 1,
       "mut_applied": true,
@@ -11838,7 +11836,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 251.1
+      "wall_ms": 493.2
     },
     {
       "scenario": "order-form",
@@ -11886,8 +11884,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -11896,7 +11894,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 202.8
+      "wall_ms": 419.9
     },
     {
       "scenario": "order-form",
@@ -11947,8 +11945,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 1,
       "mut_applied": true,
@@ -11957,7 +11955,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 258.0
+      "wall_ms": 520.4
     },
     {
       "scenario": "order-form",
@@ -12006,8 +12004,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -12016,7 +12014,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 216.8
+      "wall_ms": 491.5
     },
     {
       "scenario": "order-form",
@@ -12064,8 +12062,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -12074,7 +12072,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 202.0
+      "wall_ms": 351.6
     },
     {
       "scenario": "order-form",
@@ -12123,8 +12121,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -12133,7 +12131,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 222.5
+      "wall_ms": 282.2
     },
     {
       "scenario": "order-form",
@@ -12184,8 +12182,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 1,
       "mut_applied": true,
@@ -12194,7 +12192,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 260.0
+      "wall_ms": 309.2
     },
     {
       "scenario": "order-form",
@@ -12242,8 +12240,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -12252,7 +12250,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 210.3
+      "wall_ms": 246.5
     },
     {
       "scenario": "order-form",
@@ -12303,8 +12301,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 1,
       "mut_applied": true,
@@ -12313,7 +12311,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 248.7
+      "wall_ms": 306.1
     },
     {
       "scenario": "order-form",
@@ -12365,8 +12363,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 1,
       "mut_applied": true,
@@ -12375,7 +12373,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 232.1
+      "wall_ms": 314.4
     },
     {
       "scenario": "order-form",
@@ -12423,8 +12421,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -12433,7 +12431,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 216.3
+      "wall_ms": 264.7
     },
     {
       "scenario": "order-form",
@@ -12485,8 +12483,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 1,
       "mut_applied": true,
@@ -12495,7 +12493,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 257.9
+      "wall_ms": 303.3
     },
     {
       "scenario": "order-form",
@@ -12544,8 +12542,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -12554,7 +12552,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 218.8
+      "wall_ms": 253.1
     },
     {
       "scenario": "order-form",
@@ -12603,8 +12601,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -12613,7 +12611,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 214.7
+      "wall_ms": 257.8
     },
     {
       "scenario": "order-form",
@@ -12662,8 +12660,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -12672,7 +12670,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 218.2
+      "wall_ms": 247.8
     },
     {
       "scenario": "order-form",
@@ -12721,8 +12719,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -12731,7 +12729,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 210.7
+      "wall_ms": 256.8
     },
     {
       "scenario": "order-form",
@@ -12780,8 +12778,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -12790,7 +12788,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 216.1
+      "wall_ms": 261.4
     },
     {
       "scenario": "order-form",
@@ -12839,8 +12837,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -12849,7 +12847,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 219.0
+      "wall_ms": 244.5
     },
     {
       "scenario": "order-form",
@@ -12889,8 +12887,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -12899,7 +12897,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 227.2
+      "wall_ms": 263.0
     },
     {
       "scenario": "order-form",
@@ -12939,8 +12937,8 @@
         "go",
         "DONE"
       ],
-      "steps_hash_before": "86b282c17c12724f",
-      "steps_hash_after": "86b282c17c12724f",
+      "steps_hash_before": "3d35a319b9936092",
+      "steps_hash_after": "3d35a319b9936092",
       "recached": false,
       "orders_delta": 0,
       "mut_applied": true,
@@ -12949,7 +12947,7 @@
       "handlers": [],
       "cost_usd": null,
       "paid_calls": null,
-      "wall_ms": 201.1
+      "wall_ms": 237.6
     }
   ],
   "invariants": {

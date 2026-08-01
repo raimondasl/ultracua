@@ -249,6 +249,15 @@ These are the measured limits as of **drift-bench v2** ([`baselines/drift_v2.jso
   **This is also the strongest argument for how v2 judges outcomes:** it compares the actual ordered sequence
   of actuated elements against the learned one, so a mis-bind that still lands somewhere plausible is caught.
   v1 read only the final URL and would have scored this row a clean survival.
+- **A per-row write is protected only when the row carries an identity.** Deleting the row you recorded is
+  exactly what makes its control *unique* — with "Acme Corp #3" gone, the one remaining `Cancel` matches
+  uniquely and would bind outright, against a different customer. (The mutation gate cannot catch this:
+  per-row forms are structurally identical, so its fingerprint matches byte-for-byte.) Since 0.64.0 ultracua
+  captures a row identity — the row's `id`, a `data-*` value, or the link target inside it — and **fails
+  loud when that row is gone**. But when a row offers *no* such token, nothing distinguishes "this row was
+  edited" from "this row was deleted", so no refusal is possible and the protection does not apply. Row
+  *text* is not an identity: a price changing does not make it a different record. Measured — a text-keyed
+  version of this check cost four rows of 0-LLM survival by refusing rows that had merely been edited.
 - **The pages are still synthetic.** v2 refutes *"every drift is a single cosmetic mutation on a ~2-section
   page"* — mutations now compound, span multiple pages, and hit form controls. It does **not** refute *"toy
   page"*: the HTML is still hand-written, and a benchmark over *real frozen page snapshots* remains unbuilt.
