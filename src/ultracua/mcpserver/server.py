@@ -121,12 +121,15 @@ def _is_write_flow(spec, cache: FlowCache) -> bool:
     OR its cached steps in fact MUTATE. A flow learned as a "read" whose steps actually POST is an UNDECLARED
     write: replay still fires it (flow._replay_step gates on `step.mutating`), UNCONFIRMED (its confirm
     barrier keys off spec.mutate), so exposing it here would let an untrusted outer agent drive an unverified
-    write through a read-only-annotated tool. Key off the ACTUAL mutating signal, exactly as `run_batch` does."""
+    write through a read-only-annotated tool.
+
+    Thin cache lookup over `flows.is_write_flow`, which is now THE definition — this used to be one of three
+    independent transcriptions of it, and it is the one whose answer decides `readOnlyHint`."""
+    from ..cache import flow_key
+    from ..flows import is_write_flow
     if spec.mutate is not None:
         return True
-    from ..cache import flow_key
-    cached = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
-    return cached is not None and any(getattr(s, "mutating", False) for s in cached.steps)
+    return is_write_flow(spec, cache.get(flow_key(spec.goal, spec.start_url, spec.scope)))
 
 
 def list_flow_tools(cache: Optional[FlowCache] = None, *, expose_writes: bool = False) -> list[FlowTool]:

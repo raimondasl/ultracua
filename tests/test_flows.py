@@ -790,7 +790,7 @@ def _serve_mutate(counter: dict, drift: bool = False):
                            "<a href='/order'>place the order</a>")
             elif path == "/order":
                 counter["orders"] = counter.get("orders", 0) + 1  # the irreversible side effect
-                self._send("<h1>Order placed</h1><p>Confirmation #12345</p>")
+                self._send("<h1>Order placed</h1><p id='conf'>Confirmation #12345</p>")
             elif path == "/done":
                 self._send("<h1>Order placed</h1><p>Confirmation #12345</p>")  # already-ordered state
             else:
@@ -976,7 +976,10 @@ async def test_mutate_flow_with_extract_returns_confirmation_data(tmp_path: Path
 
 async def test_mutate_confirms_via_selector_and_url(tmp_path: Path) -> None:
     for name, mutate in (
-        ("sel", MutateSpec(confirm_selector="h1")),           # <h1>Order placed</h1> on /order
+        # `#conf` exists ONLY on the confirmation page. A bare "h1" would ALSO match
+        # <h1>Checkout</h1> on the entry page, so it could never show that THIS write landed —
+        # the whole-flow confirm now requires an absent->present transition and rightly refuses it.
+        ("sel", MutateSpec(confirm_selector="#conf")),
         ("url", MutateSpec(confirm_url_contains="/order")),    # the post-write URL ends in /order
     ):
         counter: dict = {}
