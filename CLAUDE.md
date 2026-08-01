@@ -5,9 +5,10 @@ failing LOUD on drift.**
 
 ## Read this first
 
-**[docs/open-defects.md](docs/open-defects.md) — the standing defect register.** 16 open findings from an
-adversarial audit, with `file:line`, concrete failure scenarios and verification status. Check it before
-starting new work and before touching anything it names; re-deriving it costs ~25 minutes of fan-out.
+**[docs/open-defects.md](docs/open-defects.md) — the standing defect register.** 10 open findings from an
+adversarial audit, every one independently reproduced with a probe, with `file:line` and concrete failure
+scenarios. Check it before starting new work and before touching anything it names; re-deriving it costs
+~25 minutes of fan-out.
 
 ## The three inviolables
 

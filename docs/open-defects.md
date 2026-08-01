@@ -5,15 +5,37 @@ to violate the three inviolables. 20 findings survived a refutation pass; 4 were
 rest are open. This file exists so the findings are not lost: re-deriving them costs ~28 agents and ~25
 minutes, and they are far more valuable written down than re-discovered.
 
+## 2026-08-01: all 14 open findings were independently reproduced
+
+One verifier per finding, each instructed to REFUTE and to default to refuting, each required to run a real
+probe rather than read code. **All 14 came back CONFIRMED with an executed probe** — none was misdiagnosed
+the way A1 was. Two severities moved, and both moves matter:
+
+* **C2 is worse than filed.** It was recorded as "authoring hygiene — no wrong data reaches a replay
+  consumer". It does: the rejected re-learn's `read_pin` is bound onto the APPROVED flow, whose steps still
+  walk to the OLD page, where that pin resolves to a *different* number. The approval gate structurally
+  cannot catch it, because the steps never changed. Reproduced returning `7` where the truth was `42`.
+* **C1 is milder** (low, not medium) — a reporting divergence, always loud.
+
+Several verifiers also found sibling exposure the audit missed, now folded into the fix plans: A10 makes
+`dry_run` **actually fire** a GET-commit at the real server while certifying itself clean, and silently
+no-ops `run_batch(resume=...)`; A7 and A9 poison the *cache* as well as the run; A12's twin lives in
+`history.py`, where losing the anchor is self-concealing.
+
+**Fixed in 0.65.0** (PR pending), each with a regression test confirmed to fail against the pre-fix code:
+**C2**, **A12** (+ its `history.py` twin and the missing `fsync` on all three sidecars), **A14**, **C1**
+(+ a `spec.slots and` short-circuit still living in `dry_run` — the A13 hole, one file over).
+
 **How to read it.** A *hole* here means a claim the code does not deliver, or an unguarded path that can
 silently return wrong data / actuate the wrong element / fire or suppress a write. Deliberately excluded:
 missing roadmap features, documented-and-enforced limits, and style. Severities are the audit's, corrected
 where the refutation pass corrected them.
 
 **How much to trust it.** Each finding was attacked by an independent verifier that defaulted to refuting;
-one was killed outright and several severities were cut. But 20-of-21 surviving is a high rate, and **only
-the items marked VERIFIED below were reproduced by hand**. One lens (`writes`) reported that its own safety
-review did not complete, so A2/A8/A9 warrant extra scrutiny.
+one was killed outright and several severities were cut. 20-of-21 surviving was a suspiciously high rate at
+the time — so on 2026-08-01 every remaining item was attacked a SECOND time by a fresh verifier required to
+run a probe, including A2/A8/A9, whose original lens had reported that its own safety review did not
+complete. All of them held. Treat this file as reproduced fact, not as leads.
 
 **A caution learned the hard way.** The audit MISDIAGNOSED A1 — it blamed the row anchor's substring
 matching, when in fact the anchor never runs in that scenario at all (deleting the row makes the control
@@ -39,27 +61,35 @@ guards down would have prevented most of this list, and is the highest-leverage 
 
 ## Status at a glance
 
-| | fixed in 0.64.0 | open |
-|---|---|---|
-| **critical** | A1 | A2 |
-| **high** | A4, A11 | A3, A5, A6, A7, A8, A9, A10, A12, B1 |
-| **medium** | A13 | A14, B2, C1, C2 |
+| | fixed in 0.64.0 | fixed in 0.65.0 | open |
+|---|---|---|---|
+| **critical** | A1 | — | A2 |
+| **high** | A4, A11 | A12, A14, C2 | A3, A5, A6, A7, A8, A9, A10 |
+| **medium** | A13 | — | B1, B2 |
+| **low** | — | C1 | — |
+
+(Severities in this table are the *verified* ones where the 2026-08-01 pass corrected the audit: A14 and C2
+up to high, B1 down to medium, C1 down to low.)
 
 Fixed in 0.64.0 (PR #104), each with a regression test confirmed to fail against the pre-fix code:
 **A1** (wrong-row write), **A4** (auth headers wiped by the Idempotency-Key), **A11** (empty pinned read
 returned as an answer), **A13** (dropping the whole slot table skipped re-approval).
 
-**VERIFIED BY HAND** (reproduced with a probe in-session): A1, A3, A4, A11, A13.
-Everything else carries `file:line` and the auditor's own probe output, but was not independently
-reproduced — treat as a strong lead, not a settled fact.
+**VERIFIED BY HAND** — as of 2026-08-01, **every finding in this file**. A1, A3, A4, A11, A13 in the
+original session; the other 14 in the independent reproduction pass described above, each with a probe that
+was actually executed. Nothing here is now "a strong lead" only.
 
-**Suggested order for the next batch**, cheapest-first within severity: B1 (secrets at rest — a recorded
-password is written to the flow cache in plaintext and `flow inspect` prints it), A10, A14, C1 (all small),
-then A3, A5, A12, then A2/A6/A8/A9 which need real design.
+**Suggested order for what remains**: A9+A5 first — they turn out to be **one fix** (back-propagate the
+learn-time wire-write evidence onto the step that caused it in `_author_steps`), and that one fix also
+supplies the signal A10's refusal needs. Then A10, A6, A7, A8 (the write-safety cluster proper), then
+B1+B2 (secrets, one slice — both are capture-site fixes), then A3 (a free Tier-1 reorder, but the drift
+bench has to be re-run to prove it), and A2 last: it is the only one needing genuinely new machinery
+(a capture-phase `submit` listener plus document-class request reconciliation).
 
 ---
 
-*Everything below is the audit's own report, unedited apart from the ✅ markers on the four fixed items.*
+*Everything below is the audit's own report, unedited apart from the ✅ markers on the fixed items and one
+struck-through sentence in C2 that the reproduction pass proved wrong.*
 
 ---
 
@@ -112,13 +142,13 @@ The per-write barrier snapshots pre-state; the whole-flow one — the only barri
 ✅ **FIXED in 0.64.0** — **A11. A pinned string read on a blank element returns `""` as the answer, and all three value gates pass.** *(high, `pin.py:59-66`)*
 `_parse` is strict for `int`/`float` and short-circuits for `str`. **Failure:** an SPA skeleton box is laid out but unpopulated, so `read_pin` returns `""`, `found=True`, `pinned=True`, and shape/contracts/magnitude all report clean. A scheduler records an empty shipment status as a clean 0-LLM success. A pin can never be created for an empty value, so `""` on replay is *always* drift. One-line fix; the list analogue of this hole was already closed.
 
-**A12. A corrupt or torn meta sidecar silently resets the whole trust state.** *(high, `flows.py:479-501`; also filed by the data lens)*
+✅ **FIXED in 0.65.0** — **A12. A corrupt or torn meta sidecar silently resets the whole trust state.** *(high, `flows.py:479-501`; also filed by the data lens)*
 `except Exception: return FlowMeta()` drops quarantine, contracts, shape, `steps_hash` and `read_pin` in one step, with no log. `_save_meta` never `fsync`s (unlike the ledger, which does), and the meta is the hot file rewritten on every replay — so ultracua's own write path can produce the corruption. **Failure:** a flow quarantined for returning a wrong value returns that value again as a clean success on the unapproved read path; `health()` reports `never-run`; the next run overwrites the evidence permanently. This is also the one place inviolable (1) frays: the wiped `read_pin` puts the LLM extractor back on a replay that was pinned 0-LLM. The ROADMAP names this as a prerequisite for H9; it was implemented for the neighbouring branch only.
 
 ✅ **FIXED in 0.64.0** — **A13. Dropping the entire slot table skips re-approval.** *(medium, `flows.py:1366`)*
 The gate reads `spec.slots and ...`; the contracts gate one line below carries the comment explaining why that short-circuit must not exist. **Failure:** an approved write flow's slot table is removed from the spec JSON; a scrubbed secret step then types the **empty string** into the credential field before the submit, and the write mints a different Idempotency-Key than the same logical write did while slotted. Removing one slot correctly refuses; removing all of them passes. One-word fix.
 
-**A14. A write flow's extraction discards `found`/`error`/`truncated`.** *(medium, `flows.py:582-591`)*
+✅ **FIXED in 0.65.0** — **A14. A write flow's extraction discards `found`/`error`/`truncated`.** *(medium, `flows.py:582-591`)*
 **Failure:** the confirmation panel renders lazily, the extraction fails, and `replay()` returns `{"status": "confirmed", "data": None}`. A caller logging that number records a null against a real order. Only on the `record()`-authored path, which is the path the GUIDE mandates for writes — the `learn()` path is accidentally saved by the shape gate.
 
 ---
@@ -135,9 +165,9 @@ Confirmed by probe: the rendered prompt contained `value="hunter2-BANK_TOKEN-SEC
 
 ## Group C — loud failure or reporting completeness (schedule or accept)
 
-**C1. `dry_run` doesn't name the migration stale-approval gate it skips.** *(medium, `flows.py:1526`)* An artifact for a flow approved by a pre-0.60 version is byte-identical to one for a fully-blessed flow (`gates_skipped=[]`), while the real preflight refuses it. The dry run is strictly more permissive than the thing it previews. `health()` implements the correct predicate one file over; `dry_run` drops the `is None` disjunct.
+✅ **FIXED in 0.65.0** — **C1. `dry_run` doesn't name the migration stale-approval gate it skips.** *(medium, `flows.py:1526`)* An artifact for a flow approved by a pre-0.60 version is byte-identical to one for a fully-blessed flow (`gates_skipped=[]`), while the real preflight refuses it. The dry run is strictly more permissive than the thing it previews. `health()` implements the correct predicate one file over; `dry_run` drops the `is None` disjunct.
 
-**C2. A failed re-learn reports success off the pre-existing flow and wipes its baselines.** *(medium, `flows.py:814`)* `cached = cache.get(key) is not None` instead of the correct `report.extra["cached"]` flag the engine already computes. Best-of-N short-circuits to one sample, no "nothing was cached" warning is printed, and `read_pin` is cleared even on approved flows. No wrong data reaches a replay consumer, so this is authoring hygiene rather than a wrongness break.
+✅ **FIXED in 0.65.0** — **C2. A failed re-learn reports success off the pre-existing flow and wipes its baselines.** *(medium, `flows.py:814`)* `cached = cache.get(key) is not None` instead of the correct `report.extra["cached"]` flag the engine already computes. Best-of-N short-circuits to one sample, no "nothing was cached" warning is printed, and `read_pin` is cleared even on approved flows. ~~No wrong data reaches a replay consumer, so this is authoring hygiene rather than a wrongness break.~~ **This last sentence was WRONG** (2026-08-01): the rejected attempt's `read_pin` is re-bound onto the APPROVED flow, which still walks its OLD steps to the OLD page — where that pin resolves to a different number. Reproduced returning `7` for a truth of `42`, with `approval_stale=False`, because the steps never changed and so the approval gate structurally cannot see it. Corrected to **high**.
 
 ---
 
