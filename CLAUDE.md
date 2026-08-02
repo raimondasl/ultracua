@@ -5,10 +5,11 @@ failing LOUD on drift.**
 
 ## Read this first
 
-**[docs/open-defects.md](docs/open-defects.md) — the standing defect register.** Round 1's 20 findings are
-all fixed (0.64.0–0.69.0). **Round 2 re-audited everything written SINCE and found 10 more, 2 CRITICAL —
-and A1 is NOT actually fixed.** Most of round 2 is holes in round 1's fixes: the pattern below struck the
-very changes written to prevent it. Read it before touching anything it names.
+**[docs/open-defects.md](docs/open-defects.md) — the standing defect register.** Two rounds, 30 findings,
+all fixed (0.64.0–0.72.0). Round 2 is the one to read: it re-audited the ~1059 lines round 1's fixes ADDED
+and found 10 more, 2 critical — **mostly holes in those fixes**, including that A1 was never actually
+closed. The pattern below struck the very changes written to prevent it. Read it before touching what it
+names, and note the residuals it records.
 
 ## The three inviolables
 

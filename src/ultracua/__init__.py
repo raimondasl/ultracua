@@ -18,7 +18,7 @@ from .verifiers import keyword_completion
 from .extract import Extraction, extract
 from .flows import (
     FleetRun, FlowHealth, FlowQuarantineError, FlowReplayError, FlowSpec, LoginSpec, MutateSpec, SlotSpec,
-    WriteReadbackError, refresh_auth,
+    WriteReadbackError, WriteUnverifiedError, refresh_auth,
 )
 from .flows import AuditFinding, AuditRun
 from .flows import approve as approve_flow
@@ -69,6 +69,7 @@ __all__ = [
     "FlowReplayError",
     "FlowQuarantineError",
     "WriteReadbackError",
+    "WriteUnverifiedError",
     "learn_flow",
     "replay_flow",
     "approve_flow",
