@@ -14,7 +14,7 @@ engine), A–C (the Flow API: define → learn → approve → replay → auth-r
 (write flows) are shipped and merged, and the ops layer has since hardened (logging, CI,
 retry/backoff, fleet supervisor + freshness canary, a cross-process meta lock, and a standing
 locator-resilience benchmark). **692 tests**, all key-less (real headless Chromium against local
-fixtures, run in CI on Linux + Windows); version **0.68.0**. Secrets handling is a real strength:
+fixtures, run in CI on Linux + Windows); version **0.68.1**. Secrets handling is a real strength:
 credentials are env-sourced at runtime and **never persisted** — only the resulting `storage_state`
 cookies are saved (atomically).
 
@@ -126,12 +126,50 @@ slot-less read flow), and **inviolable #1 — replay never calls an LLM — surv
 cluster precisely where a *written guarantee exists but is not enforced*, which is worse than an
 undocumented gap because the docs are what people plan around.
 
+## CI flakiness: what was measured, and what it ruled out
+
+The Windows CI job failed once with `net::ERR_NO_BUFFER_SPACE` (WSAENOBUFS) on `Page.goto`, in
+`test_select_locator.py` — a **resource** error in whichever test happened to be running, not a defect in
+that test. Ubuntu has never shown it, and two later runs of supersets of the same commit passed.
+
+The obvious explanation — the suite binds ~235 local HTTP servers per run, so it must be exhausting
+Windows' ephemeral ports — is **wrong, and was measured to be wrong** before anything was refactored on
+the strength of it:
+
+| measured on Windows, full suite | value |
+|---|---|
+| dynamic port range | 16384 (49152–65535) |
+| **peak TIME_WAIT during the two heaviest files** | **276 — 1.7% of the range** |
+| local HTTP servers bound per run | 235 |
+| **Chromium launches per run** | **650** |
+| **peak *concurrent* Chromium processes** | **8** |
+| Chromium processes surviving the run | 0 |
+
+Two conclusions worth keeping. **Ports are not the constraint** — two orders of magnitude of headroom, and
+a slower CI runner spreads the same connections over *more* time, so it has *more* headroom, not less.
+Sharing fixture servers across modules would therefore have cost real churn and fixed nothing. And
+**nothing leaks**: a peak of 8 concurrent processes against 650 launches proves teardown works on the
+failure path as well as the happy one — an empirical answer to a question a code read can only guess at.
+
+What remains suspect is the **650 launch/teardown cycles** themselves (handles / non-paged pool), but that
+has *not* been shown to cause the failure and the failure has never been reproduced locally. So no
+refactor was made on the strength of it — this project's own rule is that a fix built on a wrong diagnosis
+is worse than none. Instead CI now runs a **resource post-mortem on failure** (`.github/workflows/ci.yml`)
+capturing port range, TIME_WAIT, process/handle counts and free memory, so the next occurrence is settled
+by evidence in one look rather than costing another round of hypothesis-guessing.
+
+If it recurs and the post-mortem implicates handles or memory, the lever is already in place and needs no
+new machinery: `BrowserSession` accepts a shared `browser=`, running each session as a fresh **context**
+inside it — so per-test isolation is preserved while the process is reused. It would need `browser=`
+threaded through `flows.learn/replay/record`, which is a production API change and should be decided on
+its own merits, not slipped in as test tuning.
+
 ## Near-term priorities
 
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
 phases have kept landing since: **#33–#35 CI (Phase J), #36 pinned 0-LLM reads (Phase H), #37 fleet
 supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 → **145** tests
-(key-less); version **0.22.0** *at the time* — it has since grown to **692 tests / 0.68.0** as the
+(key-less); version **0.22.0** *at the time* — it has since grown to **692 tests / 0.68.1** as the
 trust-hardening below landed. Original near-term list with the PR that landed each:
 
 1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`

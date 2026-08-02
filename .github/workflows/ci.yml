@@ -44,3 +44,40 @@ jobs:
         # provider live-path + MCP-server tests actually run here (they `importorskip` and would
         # otherwise silently skip). Still key-less (no API keys, no network beyond localhost fixtures).
         run: uv run --group bench --group providers --group mcp pytest -q
+
+      # RESOURCE POST-MORTEM. The suite has once failed on the Windows runner with
+      # `net::ERR_NO_BUFFER_SPACE` (WSAENOBUFS) on `Page.goto` — a RESOURCE error, in whichever test
+      # happened to be running, not a defect in that test. Diagnosing it after the fact cost a day of
+      # hypothesis-guessing, so capture the state instead of guessing again.
+      #
+      # What was already measured locally and RULED OUT, so don't re-derive it: ephemeral-port
+      # exhaustion. Peak TIME_WAIT is ~276 against a 16384-port dynamic range (1.7%), and the suite
+      # binds ~235 local HTTP servers but holds at most ~8 Chromium processes at once — i.e. nothing
+      # leaks and ports are nowhere near the ceiling. The remaining suspect is the ~650 Chromium
+      # launch/teardown cycles per run (handles / non-paged pool), which this step measures directly.
+      #
+      # `continue-on-error` so a diagnostic can never itself redden a run.
+      - name: Resource post-mortem (on failure only)
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Write-Output "=== dynamic port range ==="
+          if ($IsWindows) { netsh int ipv4 show dynamicport tcp } else { cat /proc/sys/net/ipv4/ip_local_port_range }
+          Write-Output "=== TIME_WAIT (ephemeral) ==="
+          if ($IsWindows) {
+            $tw = @(Get-NetTCPConnection -State TimeWait -ErrorAction SilentlyContinue)
+            Write-Output "time_wait_total=$($tw.Count) ephemeral=$(@($tw | Where-Object { $_.LocalPort -ge 49152 }).Count)"
+          } else { ss -s }
+          Write-Output "=== processes / handles ==="
+          if ($IsWindows) {
+            $p = Get-Process -ErrorAction SilentlyContinue
+            Write-Output "process_count=$($p.Count) total_handles=$(($p | Measure-Object -Property HandleCount -Sum).Sum)"
+            Write-Output "chromium_still_running=$(@($p | Where-Object { $_.ProcessName -like 'chrome*' }).Count)"
+            $p | Sort-Object HandleCount -Descending | Select-Object -First 12 ProcessName, HandleCount, WS | Format-Table -AutoSize
+          } else { ps -eo comm,rss --sort=-rss | head -15 }
+          Write-Output "=== memory ==="
+          if ($IsWindows) {
+            $os = Get-CimInstance Win32_OperatingSystem
+            Write-Output "free_mb=$([int]($os.FreePhysicalMemory/1KB)) total_mb=$([int]($os.TotalVisibleMemorySize/1KB))"
+          } else { free -m }
