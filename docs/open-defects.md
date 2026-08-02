@@ -41,6 +41,14 @@ replay an empty one) and **B2** (password values are masked in `SNAPSHOT_JS` and
 `$secret_env` values are scrubbed from every Observation — element values AND page text — before one
 can reach a provider).
 
+**Fixed in 0.68.0**: **A3** — Tier 1's `role+name~` (a case-insensitive SUBSTRING match) is ordered
+LAST in its tier, so it can no longer short-circuit placeholder / exact-text / element id and bind a
+decoy whose name merely CONTAINS the cached one. Measured FREE on the drift corpus: the bound_by
+histogram, the survival curve, silent_wrong, the mechanism rates and the predictor's agreement are
+byte-identical to baselines/drift_v2.json, and the candidate still carries its 2 binds — deletion
+would have cost a 0-LLM row. The residual (uncorroborated when it is the ONLY surviving Tier-1
+candidate) is recorded in HEALING.md.
+
 **How to read it.** A *hole* here means a claim the code does not deliver, or an unguarded path that can
 silently return wrong data / actuate the wrong element / fire or suppress a write. Deliberately excluded:
 missing roadmap features, documented-and-enforced limits, and style. Severities are the audit's, corrected
@@ -76,12 +84,12 @@ guards down would have prevented most of this list, and is the highest-leverage 
 
 ## Status at a glance
 
-| | fixed in 0.64.0 | fixed in 0.65.0 | fixed in 0.66.0 | fixed in 0.67.0 | open |
-|---|---|---|---|---|---|
-| **critical** | A1 | — | — | — | A2 |
-| **high** | A4, A11 | A12, A14, C2 | A5, A6, A7, A8, A9, A10 | — | A3 |
-| **medium** | A13 | — | — | B1, B2 | — |
-| **low** | — | C1 | — | — | — |
+| | 0.64.0 | 0.65.0 | 0.66.0 | 0.67.0 | 0.68.0 | open |
+|---|---|---|---|---|---|---|
+| **critical** | A1 | — | — | — | — | A2 |
+| **high** | A4, A11 | A12, A14, C2 | A5, A6, A7, A8, A9, A10 | — | A3 | — |
+| **medium** | A13 | — | — | B1, B2 | — | — |
+| **low** | — | C1 | — | — | — | — |
 
 (Severities in this table are the *verified* ones where the 2026-08-01 pass corrected the audit: A14 and C2
 up to high, B1 down to medium, C1 down to low.)
@@ -94,11 +102,12 @@ returned as an answer), **A13** (dropping the whole slot table skipped re-approv
 original session; the other 14 in the independent reproduction pass described above, each with a probe that
 was actually executed. Nothing here is now "a strong lead" only.
 
-**Suggested order for what remains**: A3 (a free Tier-1 reorder — measured at zero corpus cost, but the
-drift bench has to be re-run to prove it), then A2, the only one needing genuinely new machinery (a
-capture-phase `submit` listener plus document-class request reconciliation). Note A2's
-`<button type=button>` variant may be PARTLY closed by 0.66.0's wire promotion — re-probe it before
-designing the fix rather than assuming either way.
+**What remains: A2 alone.** It is the only finding needing genuinely new machinery — a capture-phase
+`submit` listener plus document-class request reconciliation in the recorder, so a form POST fired from a
+`<div>` or via `form.submit()` is captured at all. Its `<button type=button>` variant may be PARTLY
+closed by 0.66.0's wire promotion, which now marks a step mutating on wire evidence the classifier
+missed — **re-probe it before designing the fix** rather than assuming either way. The original probe
+and its four variants are described in the A2 entry below.
 
 ---
 
@@ -129,7 +138,7 @@ Tier-3's row anchor matches a *substring* of the recorded row text, and the anch
 **A2. A demonstrated write is dropped from the recipe and never fires again, while replay says "confirmed."** *(critical, `recorder.py:516`, `recorder.py:249`, `flows.py:2639`)*
 The recorder only reconciles fetch/XHR writes. A form POST (document-class) fired from a `<div>`, a bare `<a>`, or a `<button type=button>` calling `form.submit()` is captured as no step at all — or as a non-mutating one. **Failure:** a "save draft, then send" flow permanently loses the draft write on every replay and returns `{'status': 'confirmed'}`. The `<button type=button>` variant is worse and needs no exotic markup: the write is captured but flagged non-mutating, so on replay it re-fires **ungated, with no precondition check and no Idempotency-Key**. Reproduced with four variants plus a fetch/XHR control that correctly refused.
 
-**A3. Tier-1 `role+name~` is a substring match dressed as an identity anchor.** *(high, `locators.py:266`)*
+✅ **FIXED in 0.68.0** — **A3. Tier-1 `role+name~` is a substring match dressed as an identity anchor.** *(high, `locators.py:266`)*
 It sits above placeholder, exact-text and element id, and returns outright — so the css cross-check built to stop exactly this never runs. **Failure:** the recorded target's label is renamed; three intact exact anchors still point at the correct element, and a substring match binds a *different* one ("Coupon code" instead of "Code"). As a `type` step it fills the wrong field. Universal surface — every flow, no writes required, 0 LLM, reports success. The whole corpus gives this candidate 2 binds out of 201, so demoting it is nearly free.
 
 ✅ **FIXED in 0.64.0** — **A4. The Idempotency-Key wipes the flow's auth headers — and they never come back.** *(high, `flow.py:882`, `flow.py:1009`)*

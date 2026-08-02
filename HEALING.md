@@ -249,6 +249,20 @@ These are the measured limits as of **drift-bench v2** ([`baselines/drift_v2.jso
   **This is also the strongest argument for how v2 judges outcomes:** it compares the actual ordered sequence
   of actuated elements against the learned one, so a mis-bind that still lands somewhere plausible is caught.
   v1 read only the final URL and would have scored this row a clean survival.
+- **Tier 1 holds ONE fuzzy candidate, and it is now last — but it is still uncorroborated when it is all
+  that survives.** `role+name~` is `get_by_role(exact=False)`: a case-insensitive SUBSTRING match on the
+  accessible name. Until 0.68.0 it sat SECOND in Tier 1, above placeholder / exact-text / element id — and
+  since the tier returns the first unique match outright, a substring hit short-circuited all three exact
+  anchors and never reached the Tier-2 css cross-check built to stop exactly this. Measured: rename the
+  recorded target's label and a control whose name merely *contains* the cached one ("Coupon code" for
+  "Code") binds instead, as a `type` step filling the wrong field, 0-LLM, reporting success. It is now
+  ordered LAST in the tier, which the drift bench measured as **free** — the histogram, the survival curve,
+  `silent_wrong`, the mechanism rates and the predictor's agreement are all byte-identical, and the
+  candidate still carries its 2 binds. Deleting it instead would have cost a 0-LLM row (a lightly augmented
+  label, "Proceed" -> "Proceed now", is the case it exists for). **The residual:** when `role+name~` is the
+  ONLY surviving Tier-1 candidate *and* a substring decoy exists, it still binds outright with nothing to
+  corroborate it. Gating it on css agreement the way Tier 2 does would close that — and measured at the same
+  cost as full deletion, so it is not obviously worth it. Named here rather than left implicit.
 - **A per-row write is protected only when the row carries an identity.** Deleting the row you recorded is
   exactly what makes its control *unique* — with "Acme Corp #3" gone, the one remaining `Cancel` matches
   uniquely and would bind outright, against a different customer. (The mutation gate cannot catch this:
