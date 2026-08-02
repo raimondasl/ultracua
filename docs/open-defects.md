@@ -1,8 +1,9 @@
 # Open defects — the 2026-07-31 audit
 
 **What this is.** A six-lens adversarial audit of every implemented subsystem at v0.63.0, hunting for ways
-to violate the three inviolables. 20 findings survived a refutation pass; 4 were fixed in 0.64.0 and the
-rest are open. This file exists so the findings are not lost: re-deriving them costs ~28 agents and ~25
+to violate the three inviolables. 20 findings survived a refutation pass. **All 20 are now fixed** (0.64.0 through 0.69.0); this file is
+kept as the record of what they were, how each was reproduced, and what residuals remain. It exists so the
+findings are not lost: re-deriving them costs ~28 agents and ~25
 minutes, and they are far more valuable written down than re-discovered.
 
 ## 2026-08-01: all 14 open findings were independently reproduced
@@ -22,7 +23,7 @@ Several verifiers also found sibling exposure the audit missed, now folded into 
 no-ops `run_batch(resume=...)`; A7 and A9 poison the *cache* as well as the run; A12's twin lives in
 `history.py`, where losing the anchor is self-concealing.
 
-**Fixed in 0.65.0** (PR pending), each with a regression test confirmed to fail against the pre-fix code:
+**Fixed in 0.65.0** (PR #106), each with a regression test confirmed to fail against the pre-fix code:
 **C2**, **A12** (+ its `history.py` twin and the missing `fsync` on all three sidecars), **A14**, **C1**
 (+ a `spec.slots and` short-circuit still living in `dry_run` — the A13 hole, one file over).
 
@@ -48,6 +49,17 @@ histogram, the survival curve, silent_wrong, the mechanism rates and the predict
 byte-identical to baselines/drift_v2.json, and the candidate still carries its 2 binds — deletion
 would have cost a 0-LLM row. The residual (uncorroborated when it is the ONLY surviving Tier-1
 candidate) is recorded in HEALING.md.
+
+**Fixed in 0.69.0: A2, the last one — the register is now EMPTY.** The re-probe first CORRECTED the
+finding: a flow whose only write is document-class was already refused (the `wire_write and not
+gated` arm fires when nothing is gated), so the hole needed a SECOND, correctly-gated write to mask
+it — the filed "save draft, then send" shape. The decisive control: the same masking shape over
+`fetch` was always refused, and over a form POST was cached, so the bug was the TRANSPORT the
+recorder could not see, not the shape. The recorder now markers document-class submissions in-page
+(both disjoint paths: the `HTMLFormElement.prototype.submit` patch and a capture-phase `submit`
+listener) and reconciles them against a `doc_urls` wire tally. An unattributable form POST now
+REFUSES; an attributable one (a `<button type=button>` calling `form.submit()`) is now GATED with a
+precondition and an Idempotency-Key.
 
 **How to read it.** A *hole* here means a claim the code does not deliver, or an unguarded path that can
 silently return wrong data / actuate the wrong element / fire or suppress a write. Deliberately excluded:
@@ -84,12 +96,12 @@ guards down would have prevented most of this list, and is the highest-leverage 
 
 ## Status at a glance
 
-| | 0.64.0 | 0.65.0 | 0.66.0 | 0.67.0 | 0.68.0 | open |
-|---|---|---|---|---|---|---|
-| **critical** | A1 | — | — | — | — | A2 |
-| **high** | A4, A11 | A12, A14, C2 | A5, A6, A7, A8, A9, A10 | — | A3 | — |
-| **medium** | A13 | — | — | B1, B2 | — | — |
-| **low** | — | C1 | — | — | — | — |
+| | 0.64.0 | 0.65.0 | 0.66.0 | 0.67.0 | 0.68.0 | 0.69.0 | open |
+|---|---|---|---|---|---|---|---|
+| **critical** | A1 | — | — | — | — | A2 | **none** |
+| **high** | A4, A11 | A12, A14, C2 | A5, A6, A7, A8, A9, A10 | — | A3 | — | **none** |
+| **medium** | A13 | — | — | B1, B2 | — | — | **none** |
+| **low** | — | C1 | — | — | — | — | **none** |
 
 (Severities in this table are the *verified* ones where the 2026-08-01 pass corrected the audit: A14 and C2
 up to high, B1 down to medium, C1 down to low.)
@@ -102,12 +114,14 @@ returned as an answer), **A13** (dropping the whole slot table skipped re-approv
 original session; the other 14 in the independent reproduction pass described above, each with a probe that
 was actually executed. Nothing here is now "a strong lead" only.
 
-**What remains: A2 alone.** It is the only finding needing genuinely new machinery — a capture-phase
-`submit` listener plus document-class request reconciliation in the recorder, so a form POST fired from a
-`<div>` or via `form.submit()` is captured at all. Its `<button type=button>` variant may be PARTLY
-closed by 0.66.0's wire promotion, which now marks a step mutating on wire evidence the classifier
-missed — **re-probe it before designing the fix** rather than assuming either way. The original probe
-and its four variants are described in the A2 entry below.
+**Nothing remains open.** All 20 surviving findings are fixed, each with a regression test confirmed to
+fail against its own pre-fix code. What is left is not defects but RESIDUALS, each recorded where the
+person who would hit it will look: the token-less positional-css retarget and the uncorroborated Tier-1
+`role+name~` (HEALING.md); the vision tier shipping a legible screenshot of a secret typed into a plain
+text field (`SlotSpec`); a top-frame document POST initiated by a third-party iframe's own form, which
+now fails loud (recorder.py); and the H9 value-contract layer still being gated on `spec.mutate is None`,
+so a write flow's readback value has no contract check — that last one was found while fixing A14, is NOT
+part of this audit, and has not been probed.
 
 ---
 
@@ -135,7 +149,7 @@ Ranked by expected harm = probability × blast radius × silence, not by how int
 ✅ **FIXED in 0.64.0** — **A1. A write can fire against the wrong row, and the run reports success.** *(critical, `locators.py:325`, `locators.py:108`)*
 Tier-3's row anchor matches a *substring* of the recorded row text, and the anchor is truncated to 60 chars — so it is really a prefix. Delete the row you recorded, and a sibling row sharing that prefix (same customer, same address, same product name — routine in order/invoice tables) matches uniquely and binds outright. The mutation gate cannot catch it because per-row forms are structurally identical, so the fingerprint matches byte-for-byte. **Failure:** cancel/refund/pay fires against a different customer's record, an Idempotency-Key is minted for it, `_replay_step` returns `ok=True`. Reproduced twice end-to-end. `heading` and `label` were hardened against exactly this class; `row` — the only source guarding per-row writes — was left on the loose matcher.
 
-**A2. A demonstrated write is dropped from the recipe and never fires again, while replay says "confirmed."** *(critical, `recorder.py:516`, `recorder.py:249`, `flows.py:2639`)*
+✅ **FIXED in 0.69.0** — **A2. A demonstrated write is dropped from the recipe and never fires again, while replay says "confirmed."** *(critical, `recorder.py:516`, `recorder.py:249`, `flows.py:2639`)*
 The recorder only reconciles fetch/XHR writes. A form POST (document-class) fired from a `<div>`, a bare `<a>`, or a `<button type=button>` calling `form.submit()` is captured as no step at all — or as a non-mutating one. **Failure:** a "save draft, then send" flow permanently loses the draft write on every replay and returns `{'status': 'confirmed'}`. The `<button type=button>` variant is worse and needs no exotic markup: the write is captured but flagged non-mutating, so on replay it re-fires **ungated, with no precondition check and no Idempotency-Key**. Reproduced with four variants plus a fetch/XHR control that correctly refused.
 
 ✅ **FIXED in 0.68.0** — **A3. Tier-1 `role+name~` is a substring match dressed as an identity anchor.** *(high, `locators.py:266`)*
