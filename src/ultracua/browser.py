@@ -33,6 +33,10 @@ class BrowserSession:
         dry_run: "object | None" = None,
     ) -> None:
         self.headless = settings.headless if headless is None else headless
+        # Runtime SECRET VALUES to scrub from every Observation this session produces (see
+        # `snapshot.capture`). Set by `run_cached(redact=...)`; empty by default, so a session built
+        # directly (tests, the recorder) behaves exactly as before.
+        self.redact: tuple = ()
         # Optional (width, height) for the browser window/viewport; falls back to the machine-level
         # ULTRACUA_WINDOW_SIZE default. Headed: sizes the real OS window and lets the page fill it;
         # headless: renders the page at this size. None -> Playwright's default (1280x720 viewport).
@@ -149,7 +153,7 @@ class BrowserSession:
     async def snapshot(self) -> Observation:
         assert self.page is not None
         try:
-            return await capture(self.page, settings.max_elements)
+            return await capture(self.page, settings.max_elements, self.redact)
         except Exception as exc:  # noqa: BLE001
             # A snapshot can race a navigation triggered by the previous action — Playwright's
             # in-page evaluate then fails with "Execution context was destroyed". Wait for the
@@ -160,7 +164,8 @@ class BrowserSession:
                 await self.page.wait_for_load_state("domcontentloaded", timeout=settings.nav_timeout_ms)
             except Exception:  # noqa: BLE001
                 pass
-            return await capture(self.page, settings.max_elements)
+            # the retry branch is the SIBLING that gets missed: it must redact too
+            return await capture(self.page, settings.max_elements, self.redact)
 
     async def act(self, action: Action) -> None:
         """Execute a canonical action. Playwright's built-in actionability checks

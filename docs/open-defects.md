@@ -34,6 +34,13 @@ path has), **A7** (a healed step types the caller's row, never the model's — a
 is refused when a row is bound), **A8** (the whole-flow confirm requires an absent->present
 TRANSITION, plus an authoring-time refusal).
 
+**Fixed in 0.67.0**, same standard: **B1** (a demoed password no longer reaches disk — blanked in
+the page at BOTH capture sites, since neither `domainOf` nor `specOf` carries the input type into
+Python; `record()` refuses an unbound credential field rather than caching a recipe that would
+replay an empty one) and **B2** (password values are masked in `SNAPSHOT_JS` and a spec's resolved
+`$secret_env` values are scrubbed from every Observation — element values AND page text — before one
+can reach a provider).
+
 **How to read it.** A *hole* here means a claim the code does not deliver, or an unguarded path that can
 silently return wrong data / actuate the wrong element / fire or suppress a write. Deliberately excluded:
 missing roadmap features, documented-and-enforced limits, and style. Severities are the audit's, corrected
@@ -69,12 +76,12 @@ guards down would have prevented most of this list, and is the highest-leverage 
 
 ## Status at a glance
 
-| | fixed in 0.64.0 | fixed in 0.65.0 | fixed in 0.66.0 | open |
-|---|---|---|---|---|
-| **critical** | A1 | — | — | A2 |
-| **high** | A4, A11 | A12, A14, C2 | A5, A6, A7, A8, A9, A10 | A3 |
-| **medium** | A13 | — | — | B1, B2 |
-| **low** | — | C1 | — | — |
+| | fixed in 0.64.0 | fixed in 0.65.0 | fixed in 0.66.0 | fixed in 0.67.0 | open |
+|---|---|---|---|---|---|
+| **critical** | A1 | — | — | — | A2 |
+| **high** | A4, A11 | A12, A14, C2 | A5, A6, A7, A8, A9, A10 | — | A3 |
+| **medium** | A13 | — | — | B1, B2 | — |
+| **low** | — | C1 | — | — | — |
 
 (Severities in this table are the *verified* ones where the 2026-08-01 pass corrected the audit: A14 and C2
 up to high, B1 down to medium, C1 down to low.)
@@ -87,11 +94,11 @@ returned as an answer), **A13** (dropping the whole slot table skipped re-approv
 original session; the other 14 in the independent reproduction pass described above, each with a probe that
 was actually executed. Nothing here is now "a strong lead" only.
 
-**Suggested order for what remains**: B1+B2 (secrets — one slice, both are capture-site fixes), then A3
-(a free Tier-1 reorder, but the drift bench has to be re-run to prove it), and A2 last: it is the only
-one needing genuinely new machinery (a capture-phase `submit` listener plus document-class request
-reconciliation). Note A2's `<button type=button>` variant may be PARTLY closed by 0.66.0's wire
-promotion — re-probe it before designing the fix rather than assuming either way.
+**Suggested order for what remains**: A3 (a free Tier-1 reorder — measured at zero corpus cost, but the
+drift bench has to be re-run to prove it), then A2, the only one needing genuinely new machinery (a
+capture-phase `submit` listener plus document-class request reconciliation). Note A2's
+`<button type=button>` variant may be PARTLY closed by 0.66.0's wire promotion — re-probe it before
+designing the fix rather than assuming either way.
 
 ---
 
@@ -162,10 +169,10 @@ The gate reads `spec.slots and ...`; the contracts gate one line below carries t
 
 ## Group B — confidentiality, not wrongness (different axis, fix soon)
 
-**B1. Demo-typed passwords land in the flow cache on disk in plaintext, and `flow inspect` prints them.** *(high, `recorder.py:279/310/679`, `cache.py:236`, `cli.py:301`)*
+✅ **FIXED in 0.67.0** — **B1. Demo-typed passwords land in the flow cache on disk in plaintext, and `flow inspect` prints them.** *(high, `recorder.py:279/310/679`, `cache.py:236`, `cli.py:301`)*
 The capture listener excludes only checkbox and radio; `input[type=password]` is stored with `el.value`. Reproduced: file mode `0o666`, plaintext password on disk, and `flow inspect` echoed it verbatim. `flow approve-all` reprints it fleet-wide, and replay re-types the frozen password every run. The recorder's own comment identifies this exact string as "a password / token / PII" and redacts it — but only from the LLM captioner, not from disk. A second variant: `record_demo` caches the un-scrubbed flow *before* the secret scrub runs, and when `writable_slots` is absent the corrective re-put never happens, leaving the plaintext permanently.
 
-**B2. The observation sent to the LLM carries every input's plaintext value, including passwords and resolved secret slots.** *(medium, `snapshot.py:117` → `providers/llm_agent.py:71`)*
+✅ **FIXED in 0.67.0** — **B2. The observation sent to the LLM carries every input's plaintext value, including passwords and resolved secret slots.** *(medium, `snapshot.py:117` → `providers/llm_agent.py:71`)*
 Confirmed by probe: the rendered prompt contained `value="hunter2-BANK_TOKEN-SECRET"`. Off the 0-LLM path (needs a heal or suffix-replan while the secret is still on the page), but `SlotSpec` says "NEVER passed in params, logged, or serialized," and `Observation` is documented as "sanitized." It is not.
 
 ---

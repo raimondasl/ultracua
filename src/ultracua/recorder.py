@@ -125,7 +125,19 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
     } catch (e) {}
     return null;
   };
-  const store = (action, el, value, ctx, scope, domain) => {
+  // Is this field carrying a SECRET? Decided HERE, in the page, because it is the last place that knows:
+  // neither `domainOf` nor `specOf` records an input's `type`, so by the time the event reaches Python the
+  // fact that this was a password field is already gone. Deliberately NARROW — the input type plus the
+  // standard autocomplete tokens for credentials. No name/id regex on "token"/"secret"/"cvv" in this cut:
+  // a false positive here BLANKS A REAL FIELD, which would be a wrongness bug traded for a privacy one.
+  const isSecretField = (el) => {
+    try {
+      if (!el || el.nodeType !== 1) return false;
+      if ((el.type || '').toLowerCase() === 'password') return true;
+      return /(?:current|new)-password|one-time-code/i.test(el.getAttribute('autocomplete') || '');
+    } catch (e) { return false; }
+  };
+  const store = (action, el, value, ctx, scope, domain, secret) => {
     if (el && el.nodeType !== 1) return;
     try {
       const seq = nextSeq();
@@ -138,7 +150,8 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
         setTimeout(() => { __ucturn = 0; }, 0);
       }
       const arr = JSON.parse(sessionStorage.getItem(KEY) || '[]');
-      arr.push({ action, spec: el ? specOf(el) : null, value, ctx, scope, seq, domain: domain || null });
+      arr.push({ action, spec: el ? specOf(el) : null, value, ctx, scope, seq, domain: domain || null,
+                 secret: !!secret });
       sessionStorage.setItem(KEY, JSON.stringify(arr));
     } catch (e) {}
   };
@@ -276,7 +289,11 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
       // A `type` is NOT a commit for per-write attribution (COMMIT = click/press/select), so an autosave-on-
       // change write fires in a turn with no commit (__ucturn===0) -> it is DEFERRED -> unattributed -> the
       // flow fails loud. No ctx/scope is needed on a `type`.
-      store('type', el, el.value, null, null, domainOf(el));  // checkbox/radio are captured by their click above
+      // SECRET fields are captured as a step with an EMPTY value. The step must still exist: dropping it
+      // would silently omit a fill, and replay would submit an empty credential — a wrongness bug traded
+      // for a privacy one. `record()` refuses to cache an unbound secret step, so it can't reach a replay.
+      const sec = isSecretField(el);
+      store('type', el, sec ? '' : el.value, null, null, domainOf(el), sec);  // checkbox/radio: via their click above
     }
   }, true);
   // Enter-submit on a TEXT input: the "type then Enter" pattern. We capture it ONLY when no synthetic
@@ -307,7 +324,10 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
     // cached order would be [press, type] and replay would submit an EMPTY field; for a formless input
     // `change` never fires at all, losing the value entirely.) Mark the element so the change listener above
     // doesn't duplicate the type. The PRESS carries the ctx+scope (it is the commit); the type does not.
-    store('type', el, el.value, null, null, domainOf(el));
+    // The SIBLING of the `change` listener's capture above — a form with no submit control takes THIS path
+    // instead, so a "type the password, hit Enter" login leaks here if only the other site is fixed.
+    const sec = isSecretField(el);
+    store('type', el, sec ? '' : el.value, null, null, domainOf(el), sec);
     enterCaptured.set(el, el.value);
     store('press', el, 'Enter', ctx, scope);
   }, true);
@@ -358,7 +378,10 @@ def _step_from_event(ev: dict, *, write_flow: bool = False) -> CachedStep:
     precond_scope = hash_scope(ev.get("scope")) if (mutating and (write_flow or is_form_submit)) else ""
     text = ev.get("value") if action in ("type", "select", "press", "scroll") else None
     return CachedStep(intent=intent, action=action, locator=spec, text=text,
-                      mutating=mutating, precond_scope=precond_scope, slot_domain=ev.get("domain"))
+                      mutating=mutating, precond_scope=precond_scope, slot_domain=ev.get("domain"),
+                      # The value is ALREADY empty for a secret field (blanked in the page, before it could
+                      # reach the exfil buffer). This flag records WHY it is empty.
+                      secret=bool(ev.get("secret")))
 
 
 def _coalesce_scrolls(steps: list[CachedStep]) -> list[CachedStep]:

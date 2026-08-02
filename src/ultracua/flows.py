@@ -137,7 +137,14 @@ class SlotSpec:
     `pattern` is a full-match regex; `min`/`max` bound a number; `max_length` bounds a string. `required`
     (default) rejects a missing value; a non-required slot falls back to the step's frozen literal. A
     `secret` slot's value is resolved from the env var named by `secret_env` at replay and is NEVER passed
-    in `params`, logged, or serialized (mirrors LoginSpec's env-only credential rule)."""
+    in `params`, logged, or serialized (mirrors LoginSpec's env-only credential rule).
+
+    That last promise is ENFORCED at four points, not merely asserted: the value is refused as a `params`
+    key and omitted from the MCP input schema; the recorder blanks a credential field at capture so no
+    plaintext reaches the cache; `flow inspect` masks the step; and `snapshot.capture(redact=...)` scrubs
+    the resolved value out of every Observation before it can reach a provider. The residual, stated rather
+    than hidden: the VISION tier sends a raw screenshot, where a secret typed into a plain text input is
+    legible. Don't pair a secret slot with vision grounding."""
 
     type: str = "string"
     enum: Optional[list] = None
@@ -942,7 +949,7 @@ async def _learn_once(
         max_steps=spec.max_steps, headless=spec.headless, scope=spec.scope,
         extra_headers=spec.headers, storage_state=spec.storage_state,
         finalize=_make_finalize(spec, router, out), pre_write=_make_pre_write(spec, out),
-        verify_replay=verify_replay,
+        verify_replay=verify_replay, redact=_secret_values(spec),
     )
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     # ONLY the flow THIS attempt authored counts. `cache.get(key)` also returns a PRE-EXISTING flow, which
@@ -1372,6 +1379,7 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="
         max_steps=spec.max_steps, headless=spec.headless, scope=spec.scope,
         extra_headers=spec.headers, storage_state=spec.storage_state, params=params,
         finalize=_make_finalize(spec, router, out, pin=pin), pre_write=_make_pre_write(spec, out),
+        redact=_secret_values(spec),   # B2: never ship a resolved secret to a provider
     )
     if report.mode == "miss":
         return False, None, "no learned flow — run learn first", "miss"
@@ -2640,6 +2648,38 @@ def _slotspec_from_domain(domain: Optional[dict]) -> SlotSpec:
     return SlotSpec(**kw)
 
 
+def _unbound_secret_steps(flow: "CachedFlow", spec: FlowSpec) -> list:
+    """Names of CREDENTIAL fields the demo typed into that are NOT bound to a SECRET slot.
+
+    A secret step reaches replay with `text=""` — the value never touched disk — so replaying it would
+    submit an EMPTY credential and the flow would fail somewhere confusing. The supported route is a
+    declared secret slot resolved from `$env` per run. Anything else is refused at authoring, loudly, with
+    the exact spec to add.
+
+    Covers BOTH ways it can go wrong: no slot at all, and a slot that exists but isn't `secret` — the second
+    is reachable on the read path, where `_mine_and_audit_slots` derives slots from captured site metadata
+    and so can only ever produce NON-secret ones."""
+    declared = spec.slots or {}
+    out = []
+    for s in flow.steps:
+        if not getattr(s, "secret", False):
+            continue
+        slot = declared.get(s.slot) if s.slot else None
+        if slot is None or not getattr(slot, "secret", False):
+            out.append((s.locator.name if s.locator is not None else None) or s.intent or "the field")
+    return out
+
+
+def _refuse_unbound_secrets(names: list, spec: FlowSpec) -> str:
+    example = names[0] if names else "password"
+    slug = "".join(c if c.isalnum() else "_" for c in example).strip("_").lower() or "password"
+    return (f"the demo typed into CREDENTIAL field(s) {names!r}. The value was NOT written to disk (the "
+            f"recorder blanks a password / one-time-code field at capture), so this recipe would replay an "
+            f"EMPTY credential. Declare it instead, so the value resolves from the environment per run and "
+            f"is never serialized: slots={{{slug!r}: SlotSpec(type='string', required=True, secret=True, "
+            f"secret_env='ULTRACUA_{slug.upper()}')}} and writable_slots=[{slug!r}].")
+
+
 def _bind_writable_slots(
     flow: "CachedFlow", spec: FlowSpec, names: set,
 ) -> "tuple[Optional[CachedFlow], dict, list, str]":
@@ -2691,6 +2731,16 @@ def _bind_writable_slots(
         if slot.secret and not slot.required:
             return None, {}, findings, (f"writable slot {name!r} is secret but not required — a missing "
                                         f"$env would type a blank secret onto the page; mark it required.")
+        if step.secret and not slot.secret:
+            # A CREDENTIAL field bound to a plain slot. Refuse rather than launder it: the value would
+            # become an ordinary tool argument — advertised in the MCP input schema, accepted in `params`,
+            # and echoed by `flow inspect` — which is precisely what `secret=True` exists to prevent.
+            return None, {}, findings, (f"writable slot {name!r} binds a CREDENTIAL field (the recorder "
+                                        f"captured it as a password / one-time-code input) to a "
+                                        f"non-secret slot. Declare it "
+                                        f"`SlotSpec(secret=True, required=True, secret_env=...)` so the "
+                                        f"value resolves from the environment and is never a tool "
+                                        f"argument.")
         upd = {"slot": name}
         if slot.secret:
             upd["text"] = ""   # never persist the demo's plaintext secret to the cache (resolved from $env)
@@ -2940,6 +2990,12 @@ async def record(
                 if not any(s.slot == n for s in final.steps):
                     _log.warning("flow %r: slot %r is declared but not in writable_slots — a param for it is "
                                  "refused at replay; add it to writable_slots to bind it", spec.name, n)
+        leaked = _unbound_secret_steps(final, spec)
+        if leaked:
+            cache.delete(key)
+            return RecordResult(spec, cached=False, reproduced=False, performed_write=wire_write,
+                                is_write=True, steps=list(final.steps), slot_findings=slot_findings,
+                                note=_refuse_unbound_secrets(leaked, spec))
         if final is not flow:
             cache.put(final)   # re-put ONLY when we changed the base flow (else record_demo's put stands)
         _reset_learn_baselines(cache, key)   # a re-authored UNAPPROVED recipe drops stale baselines
@@ -2990,6 +3046,15 @@ async def record(
         flow = marked
         cache.put(flow)   # persist the slot markers alongside the verified flow
 
+    # The SIBLING of the write path's refusal above. A read flow can type a credential too (a
+    # login-then-read recipe), and `mine_slots` can only ever derive a NON-secret slot from site
+    # metadata — so without this, a password field could be laundered into an ordinary parameter.
+    leaked = _unbound_secret_steps(flow, spec)
+    if leaked:
+        cache.delete(key)
+        return RecordResult(spec, cached=False, reproduced=True, performed_write=False,
+                            is_write=False, steps=list(flow.steps), slot_findings=slot_findings,
+                            note=_refuse_unbound_secrets(leaked, spec))
     _reset_learn_baselines(cache, key)   # a re-authored UNAPPROVED recipe drops stale baselines
     return RecordResult(spec, cached=True, reproduced=True, performed_write=False, is_write=False,
                         steps=list(flow.steps), slot_findings=slot_findings)

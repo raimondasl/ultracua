@@ -28,12 +28,21 @@ class Element(BaseModel):
     tag: str
     type: Optional[str] = None  # input type, if any
     value: Optional[str] = None  # current value of an input/textarea/select (so the agent
-    #                              can tell it already typed) — NOT part of the fingerprint
+    #                              can tell it already typed) — NOT part of the fingerprint.
+    #                              A password field reports a MASK, never its plaintext, and any runtime
+    #                              secret passed as `capture(redact=...)` is replaced with [REDACTED] —
+    #                              so "already typed" still reads true without shipping the value.
     bbox: Optional[list[float]] = None  # [x, y, w, h] in CSS px
 
 
 class Observation(BaseModel):
-    """A compact, sanitized view of the page — the LLM-path input."""
+    """A compact, sanitized view of the page — the LLM-path input.
+
+    SANITIZED is a real guarantee, not a label: `snapshot.capture` masks `input[type=password]` values
+    and scrubs the caller-supplied `redact` terms (a spec's resolved `$secret_env` values) from BOTH
+    element values and `text`, before this object exists. Redaction cannot manufacture drift — the
+    fingerprint basis is role/name/tag + url only.
+    """
 
     url: str
     title: str
