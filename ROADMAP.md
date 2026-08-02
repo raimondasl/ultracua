@@ -1142,7 +1142,9 @@ contained, and `BrowserSession` cannot double-close a browser it does not own.
 
 **Read that file before starting any new work.** A six-lens adversarial audit at 0.63.0 produced 20
 surviving findings; 4 were fixed in 0.64.0, 4 in 0.65.0, 6 in 0.66.0, 2 in 0.67.0, 1 in 0.68.0 and the
-last (A2) in 0.69.0 — **none remain open**. Every
+last (A2) in 0.69.0. A **round-2 re-audit of the ~1059 lines those fixes added** then found **10 more, 2
+critical** — mostly holes in the fixes themselves, including the discovery that **A1 is not actually
+fixed**. Every
 one carries `file:line`, a concrete failure scenario, and — since the 2026-08-01 reproduction pass — an
 executed probe. None is a lead any more; they are all reproduced facts.
 
