@@ -5,10 +5,10 @@ failing LOUD on drift.**
 
 ## Read this first
 
-**[docs/open-defects.md](docs/open-defects.md) — the standing defect register.** 1 open finding from an
-adversarial audit, every one independently reproduced with a probe, with `file:line` and concrete failure
-scenarios. Check it before starting new work and before touching anything it names; re-deriving it costs
-~25 minutes of fan-out.
+**[docs/open-defects.md](docs/open-defects.md) — the defect register.** **Zero open findings**: all 20 from
+the adversarial audit are fixed (0.64.0–0.69.0), each independently reproduced with a probe first and each
+with a regression test confirmed to fail against its own pre-fix code. Read it anyway before touching what
+it names — it records the RESIDUALS that were deliberately left, and the two findings the audit got wrong.
 
 ## The three inviolables
 

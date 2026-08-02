@@ -250,6 +250,43 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
       };
     }
   } catch (e) {}
+  // DOCUMENT-CLASS writes (a <form method=post> submission). These leave the browser as a NAVIGATION, not a
+  // fetch/XHR, so none of the three patches above sees them and Playwright reports them with
+  // `resource_type == "document"`. Without a marker they are invisible to the per-write reconciliation, and
+  // a form POST fired from a non-actionable element (a <div>, an href-less <a>) or from a
+  // `<button type=button>` calling `form.submit()` is then either captured as NO step or as a NON-mutating
+  // one — while a SEPARATE, correctly-gated write elsewhere in the same flow keeps the belt-and-suspenders
+  // `wire_write and not gated` refusal from firing. That masking is what let a demonstrated write be
+  // silently dropped from the recipe, or re-fired ungated and un-keyed on every replay.
+  //
+  // The two submission paths are DISJOINT, so no form is ever double-markered:
+  //   * `form.submit()` fires NO submit event — the prototype patch is the only thing that sees it;
+  //   * native submission (a submit button, Enter) and `requestSubmit()` fire the event WITHOUT calling
+  //     `.submit()` — the capture-phase listener is the only thing that sees those.
+  // `recordWire` already filters GET/HEAD, resolves against document.baseURI, drops the fragment and stamps
+  // `attributedSeq()`, so a form POST with no single commit in its turn correctly lands UNATTRIBUTED.
+  const markForm = (form) => {
+    try {
+      if (!form || form.nodeType !== 1) return;
+      // getAttribute, NOT the `.action` / `.method` IDL properties: a form containing a control NAMED
+      // "action" or "method" CLOBBERS them (`form.action` then returns that <input> element, not a string),
+      // which would resolve the marker to the wrong url and silently stop it matching the wire request —
+      // failing OPEN. The raw attributes cannot be clobbered. `recordWire` resolves relative urls against
+      // document.baseURI itself, and an absent action correctly means "submit to the current document".
+      recordWire((form.getAttribute('method') || 'GET').toUpperCase(),
+                 form.getAttribute('action') || document.baseURI, 'form');
+    } catch (e) {}
+  };
+  try {
+    const _fsubmit = HTMLFormElement.prototype.submit;
+    if (typeof _fsubmit === 'function') {
+      HTMLFormElement.prototype.submit = function () {
+        try { markForm(this); } catch (e) {}
+        return _fsubmit.apply(this, arguments);
+      };
+    }
+  } catch (e) {}
+  document.addEventListener('submit', (ev) => { try { markForm(ev.target); } catch (e) {} }, true);
   // Elements whose value we captured on Enter (see keydown) so the Enter-triggered `change` doesn't ALSO
   // record a duplicate `type` for the same value.
   const enterCaptured = new WeakMap();
@@ -510,12 +547,15 @@ async def record_demo(
     # fetch that emits a marker but never hits the wire) from offsetting a real worker write at a DIFFERENT url.
     # Redirect HOPS are excluded (redirected_from set): a method-preserving 307/308 redirect of an instrumented
     # fetch is the SAME logical write the single JS call already markered once. Form submits are navigations
-    # (resource_type "document") and beacons ("ping") are excluded — the former is classifier-gated, the latter
-    # marker-gated and surfaced inconsistently. (Residual: a NON-surfacing marker and a worker write at the
+    # (resource_type "document") and are tallied SEPARATELY in `doc_urls`, reconciled against the `form`
+    # markers — they used to be excluded outright as "classifier-gated", which was the A2 hole: a form POST
+    # fired from a <div> or a `<button type=button>` is not classifier-gated at all. Beacons ("ping") remain
+    # excluded (marker-gated, and surfaced inconsistently by Playwright). (Residual: a NON-surfacing marker and a worker write at the
     # EXACT same (method, url) still offset — irreducible without per-request correlation; and a WebSocket
     # write-suspect is outside this reconciliation — sockets carry no marker and can't be gated.)
     wrote: dict = {"hit": False}
     xhr_urls: dict = {}  # (METHOD, url) -> count of surfaced non-idempotent fetch/xhr writes (redirect hops excluded)
+    doc_urls: dict = {}  # (METHOD, url) -> the same, for DOCUMENT-class writes (a <form method=post> submit)
     nav = {"origin": None, "crossed": False}  # crossed=True iff a CROSS-origin main-frame navigation occurred
     page = session.page
     assert page is not None
@@ -546,6 +586,19 @@ async def record_demo(
                     if countable:
                         k = (req.method.upper(), req.url.split("#", 1)[0])
                         xhr_urls[k] = xhr_urls.get(k, 0) + 1
+                elif req.resource_type == "document" and req.redirected_from is None:
+                    # A form POST leaves as a NAVIGATION, so it never appears in `xhr_urls` and used to be
+                    # invisible to the reconciliation below — the A2 hole. Reconciled against the `form`
+                    # markers the init-script now emits, so an un-attributable form POST fails loud while a
+                    # normal submit-button POST form stays exactly as it was.
+                    #
+                    # DELIBERATELY NO top-frame filter here, unlike the fetch/xhr branch above. A
+                    # `target="<iframe>"` form POST — the shape that made this reproducible without the page
+                    # navigating away — is a SUB-frame document request INITIATED by the top frame, where the
+                    # init-script did run and did emit its marker. Excluding sub-frames would leave the hole
+                    # wide open for exactly the case that exercises it.
+                    k = (req.method.upper(), req.url.split("#", 1)[0])
+                    doc_urls[k] = doc_urls.get(k, 0) + 1
         except Exception:  # noqa: BLE001
             pass
 
@@ -642,7 +695,9 @@ async def record_demo(
     #       url seen on the wire MORE times than it was markered = an un-gateable worker write. Checked by
     #       COUNT (not the existence guard) so it catches a worker write even when another step is gated — the
     #       masking the old guard let through (`wire_write and not gated` is disarmed by any one gated step).
-    #       Form submits are navigations (excluded from `xhr_urls`) so a gated form submit never false-refuses.
+    #       Form submits are navigations, so they are counted in `doc_urls` and reconciled against the `form`
+    #       markers instead — same shortfall rule, same fail-loud direction. A gated submit-button POST form
+    #       emits its marker from the capture-phase `submit` listener, so it still never false-refuses.
     unattributed_writes = 0
     if mutate and wire_writes:
         by_seq = {ev["seq"]: i for i, ev in enumerate(events)
@@ -659,12 +714,22 @@ async def record_demo(
                     update={"mutating": True, "precond_scope": hash_scope(events[i]["scope"])})
     if mutate:
         marker_urls: dict = {}  # (method, url) -> fetch/xhr markers; keyed identically to xhr_urls
+        form_urls: dict = {}    # (method, url) -> `form` markers;   keyed identically to doc_urls
         for w in wire_writes:
-            if w.get("src") in ("fetch", "xhr") and is_write_request(w.get("method") or "", w.get("url") or ""):
-                k = ((w.get("method") or "").upper(), (w.get("url") or "").split("#", 1)[0])
+            if not is_write_request(w.get("method") or "", w.get("url") or ""):
+                continue
+            k = ((w.get("method") or "").upper(), (w.get("url") or "").split("#", 1)[0])
+            if w.get("src") in ("fetch", "xhr"):
                 marker_urls[k] = marker_urls.get(k, 0) + 1
+            elif w.get("src") == "form":
+                form_urls[k] = form_urls.get(k, 0) + 1
         for k, n_wire in xhr_urls.items():  # a url seen on the wire more than it was markered = worker write
             unattributed_writes += max(0, n_wire - marker_urls.get(k, 0))
+        # The DOCUMENT-class sibling. This MUST be paired with the `form` marker tally above: adding the
+        # `doc_urls` shortfall without it would make every legitimate `<button type=submit>` POST-form flow
+        # start false-refusing, since those writes are real, on the wire, and previously uncounted.
+        for k, n_wire in doc_urls.items():
+            unattributed_writes += max(0, n_wire - form_urls.get(k, 0))
     # INTENT CAPTION (best-effort, OFF the replay path): replace each placeholder intent with a concise,
     # goal-grounded label. `events`/`steps` are still 1:1 by index here (before scroll-coalescing), so each
     # captioned intent and its event's scope/ctx line up. In a DECLARED write flow ONLY, a better intent may

@@ -1112,8 +1112,8 @@ scarcest training commodity — ultracua's recorder captures them natively.
 ## Open defects — see [docs/open-defects.md](docs/open-defects.md)
 
 **Read that file before starting any new work.** A six-lens adversarial audit at 0.63.0 produced 20
-surviving findings; 4 were fixed in 0.64.0, 4 in 0.65.0, 6 in 0.66.0, 2 in 0.67.0 and 1 in
-0.68.0, and **1 remains open**: A2, a demonstrated write silently dropped from the recipe. Every
+surviving findings; 4 were fixed in 0.64.0, 4 in 0.65.0, 6 in 0.66.0, 2 in 0.67.0, 1 in 0.68.0 and the
+last (A2) in 0.69.0 — **none remain open**. Every
 one carries `file:line`, a concrete failure scenario, and — since the 2026-08-01 reproduction pass — an
 executed probe. None is a lead any more; they are all reproduced facts.
 

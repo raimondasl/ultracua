@@ -13,8 +13,8 @@ engine is the moat, and it is not yet hardened for unattended production.** Phas
 engine), A–C (the Flow API: define → learn → approve → replay → auth-refresh → health), and D
 (write flows) are shipped and merged, and the ops layer has since hardened (logging, CI,
 retry/backoff, fleet supervisor + freshness canary, a cross-process meta lock, and a standing
-locator-resilience benchmark). **692 tests**, all key-less (real headless Chromium against local
-fixtures, run in CI on Linux + Windows); version **0.68.1**. Secrets handling is a real strength:
+locator-resilience benchmark). **698 tests**, all key-less (real headless Chromium against local
+fixtures, run in CI on Linux + Windows); version **0.69.0**. Secrets handling is a real strength:
 credentials are env-sourced at runtime and **never persisted** — only the resulting `storage_state`
 cookies are saved (atomically).
 
@@ -117,7 +117,7 @@ A six-lens adversarial audit at 0.63.0 produced **20 surviving findings**. 4 wer
 2026-08-01 the remaining 14 were each attacked again by an independent verifier required to run a real
 probe, and **all 14 were CONFIRMED** — none was misdiagnosed the way A1 had been. 4 more (C2, A12, A14,
 C1) were fixed in 0.65.0, 6 (A5, A6, A7, A8, A9, A10) in 0.66.0, the two secrets items (B1, B2) in
-0.67.0 and A3 in 0.68.0, so **1 remains open** — A2, the critical one. The full report,
+0.67.0, A3 in 0.68.0 and the last one (A2) in 0.69.0, so **none remain open**. The full report,
 with `file:line`, concrete failure scenarios, verification status and a suggested order, is
 **[docs/open-defects.md](docs/open-defects.md)** — read it before starting new work.
 
@@ -169,7 +169,7 @@ its own merits, not slipped in as test tuning.
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
 phases have kept landing since: **#33–#35 CI (Phase J), #36 pinned 0-LLM reads (Phase H), #37 fleet
 supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 → **145** tests
-(key-less); version **0.22.0** *at the time* — it has since grown to **692 tests / 0.68.1** as the
+(key-less); version **0.22.0** *at the time* — it has since grown to **698 tests / 0.69.0** as the
 trust-hardening below landed. Original near-term list with the PR that landed each:
 
 1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`
