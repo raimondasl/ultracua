@@ -27,7 +27,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Optional, Union
 
-from .browser import BrowserSession
+from .browser import BrowserSession, _acquire_driver, _release_driver, driver_scope
 from .cache import CachedFlow, CachedStep, FlowCache, StepConfirm, flow_key, steps_hash
 from .conditions import condition_present
 from .config import flow_home, settings
@@ -2227,7 +2227,11 @@ async def run_all(
                 return FleetRun(name=name, ok=False, status="failed",
                                 ms=(time.perf_counter() - t0) * 1000.0, error=str(exc))
 
-    return await asyncio.gather(*[_one(n) for n in names])
+    # One driver for the whole fan-out. Every flow still gets its own browser (the docstring's
+    # "each replay uses its own browser" is unchanged) — this only stops N concurrent sessions from
+    # each launching, and then tearing down, their own Node driver.
+    async with driver_scope():
+        return await asyncio.gather(*[_one(n) for n in names])
 
 
 # --- row batch driver (H3 slice 2b) -----------------------------------------------------------
@@ -2401,6 +2405,12 @@ async def run_batch(
     # EXECUTE sequentially, in input order, applying the failure policy.
     report = []
     stopped = False
+    # Hold this loop's Playwright driver across the WHOLE batch. Each row still gets its own browser and
+    # its own context, so per-row isolation is untouched — but the ~364 ms driver start is paid once for
+    # the batch instead of once per row. Without a held reference the count falls to zero between rows and
+    # the driver restarts every time; measured, that is the difference between no win at all and ~2.9x on
+    # setup. Released in the `finally` below, so the failure policy and any raise still tear it down.
+    await _acquire_driver()
     try:
         for i, row in enumerate(rows):
             if stopped:
@@ -2444,6 +2454,7 @@ async def run_batch(
     finally:
         if ledger is not None:
             ledger.close()
+        await _release_driver()
 
     ok_count = sum(1 for r in report if r.status == "ok")
     failed = sum(1 for r in report if r.status == "failed")
@@ -2516,7 +2527,11 @@ async def canary_all(
         async with sem:
             return await canary(spec, cache=cache)
 
-    return await asyncio.gather(*[_one(n) for n in names])
+    # One driver for the whole fan-out. Every flow still gets its own browser (the docstring's
+    # "each replay uses its own browser" is unchanged) — this only stops N concurrent sessions from
+    # each launching, and then tearing down, their own Node driver.
+    async with driver_scope():
+        return await asyncio.gather(*[_one(n) for n in names])
 
 
 # --- recorder (Phase I) -----------------------------------------------------------------------

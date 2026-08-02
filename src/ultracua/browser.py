@@ -9,6 +9,12 @@ will reach for the raw CDPSession on the cached fast-path.
 
 from __future__ import annotations
 
+import asyncio
+import weakref
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from typing import AsyncIterator, Optional
+
 from playwright.async_api import (
     Browser,
     BrowserContext,
@@ -20,6 +26,82 @@ from playwright.async_api import (
 from .config import settings
 from .snapshot import capture
 from .types import Action, Observation
+
+# --- the shared Playwright DRIVER -------------------------------------------------------------
+# Starting the driver is a Node subprocess launch + handshake, and it dominates session setup:
+# MEASURED on this project, per session — driver start 364 ms, chromium.launch() 81 ms,
+# new_context()+new_page() 58 ms. So a session that starts its own driver pays ~600 ms, of which the
+# browser is barely an eighth.
+#
+# The driver is reusable across many browsers, so it is shared per EVENT LOOP. Per loop, not per process:
+# a `Playwright` object owns a transport bound to the loop that created it, and handing it to a different
+# loop (a second `asyncio.run`, which is what pytest-asyncio does per test) would use a dead transport.
+# Keyed weakly so a finished loop's entry simply disappears.
+#
+# WHY THE REFERENCE COUNT IS NOT ENOUGH ON ITS OWN, measured before this was written: with a plain
+# refcount, SERIAL use — one session at a time, which is exactly `run_batch`'s row loop — swings 1 -> 0 -> 1
+# and stops the driver between every session. Five serial sessions: 3129 ms per-session-driver vs 3029 ms
+# with a naive refcount (i.e. no win), vs 1092 ms when a reference is HELD across the run. So the win only
+# exists if a caller spanning several sessions holds one: see `driver_scope()`, used by the batch/fleet
+# verbs. A lone session still starts and stops its own driver, exactly as before.
+
+
+@dataclass
+class _DriverRef:
+    pw: Optional[Playwright] = None
+    refs: int = 0
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+_drivers: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, _DriverRef]" = weakref.WeakKeyDictionary()
+
+
+async def _acquire_driver() -> Playwright:
+    """Start (or join) THIS loop's driver and take a reference. Never returns another loop's driver."""
+    loop = asyncio.get_running_loop()
+    ref = _drivers.get(loop)
+    if ref is None:
+        # Get-or-create is SYNCHRONOUS — no await between the miss and the insert — so two coroutines on
+        # this loop cannot both install an entry. The `await` that actually starts the driver is under the
+        # per-entry lock below.
+        ref = _drivers[loop] = _DriverRef()
+    async with ref.lock:
+        if ref.pw is None:
+            ref.pw = await async_playwright().start()
+        ref.refs += 1
+        return ref.pw
+
+
+async def _release_driver() -> None:
+    """Drop a reference; stop the driver when the last one goes, so nothing is orphaned."""
+    loop = asyncio.get_running_loop()
+    ref = _drivers.get(loop)
+    if ref is None:
+        return
+    async with ref.lock:
+        ref.refs = max(0, ref.refs - 1)
+        if ref.refs or ref.pw is None:
+            return
+        pw, ref.pw = ref.pw, None
+        try:
+            await pw.stop()
+        except Exception:  # noqa: BLE001 — a driver already gone must not mask the caller's own error
+            pass
+
+
+@asynccontextmanager
+async def driver_scope() -> AsyncIterator[None]:
+    """Hold this loop's Playwright driver open across a SEQUENCE of sessions.
+
+    For any caller that creates several sessions one after another — `run_batch`'s rows, `run_all`'s fleet,
+    a best-of-N learn and its verify-by-replay — this is what turns the shared driver from a no-op into the
+    measured ~2.9x setup win, because it keeps the reference count off zero between them. Nestable (it is
+    just another reference), and it releases on the exception path."""
+    await _acquire_driver()
+    try:
+        yield
+    finally:
+        await _release_driver()
 
 
 class BrowserSession:
@@ -46,6 +128,9 @@ class BrowserSession:
         # own its lifecycle; otherwise launch (and later close) our own browser.
         self._shared_browser = browser
         self._owns_browser = browser is None
+        # Do we hold a reference on this loop's shared driver? Set in start(), cleared in close(), so a
+        # double close (or a close after a failed start) can never release a reference twice.
+        self._holds_driver = False
         # When set, record a Playwright HAR of all network activity to this path (flushed on
         # context close). This is the trace WebArena-Verified scores against (component:
         # benchmarks/webarena_env.py) — captured via the native record_har_* context options.
@@ -69,7 +154,8 @@ class BrowserSession:
     async def start(self) -> "BrowserSession":
         try:
             if self._shared_browser is None:
-                self._pw = await async_playwright().start()
+                self._pw = await _acquire_driver()   # shared per event loop; released in close()
+                self._holds_driver = True
                 launch_kwargs: dict = {"headless": self.headless}
                 if self._window_size is not None:
                     w, h = self._window_size
@@ -212,8 +298,13 @@ class BrowserSession:
             if self._owns_browser and self.browser is not None:
                 await self.browser.close()
         finally:
-            if self._owns_browser and self._pw is not None:
-                await self._pw.stop()
+            # Release the DRIVER reference rather than stopping the driver outright: another session (or an
+            # enclosing `driver_scope`) may still be using it. It is stopped when the last reference goes,
+            # so nothing is orphaned. Idempotent — `_holds_driver` is cleared first, so `close()` twice, or
+            # `close()` after a start() that raised, releases exactly once.
+            if self._holds_driver:
+                self._holds_driver = False
+                await _release_driver()
 
     async def __aenter__(self) -> "BrowserSession":
         return await self.start()

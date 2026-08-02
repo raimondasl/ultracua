@@ -13,8 +13,8 @@ engine is the moat, and it is not yet hardened for unattended production.** Phas
 engine), A–C (the Flow API: define → learn → approve → replay → auth-refresh → health), and D
 (write flows) are shipped and merged, and the ops layer has since hardened (logging, CI,
 retry/backoff, fleet supervisor + freshness canary, a cross-process meta lock, and a standing
-locator-resilience benchmark). **698 tests**, all key-less (real headless Chromium against local
-fixtures, run in CI on Linux + Windows); version **0.69.0**. Secrets handling is a real strength:
+locator-resilience benchmark). **707 tests**, all key-less (real headless Chromium against local
+fixtures, run in CI on Linux + Windows); version **0.70.0**. Secrets handling is a real strength:
 credentials are env-sourced at runtime and **never persisted** — only the resulting `storage_state`
 cookies are saved (atomically).
 
@@ -126,6 +126,30 @@ slot-less read flow), and **inviolable #1 — replay never calls an LLM — surv
 cluster precisely where a *written guarantee exists but is not enforced*, which is worse than an
 undocumented gap because the docs are what people plan around.
 
+## Session setup: the Playwright driver is shared per event loop (0.70.0)
+
+Measured decomposition of a `BrowserSession` start, because the intuition here is wrong: the **Node driver
+is 364 ms**, `chromium.launch()` only 81 ms, `new_context()+new_page()` 58 ms. Every session used to start
+and stop its own driver, so ~72% of setup was spent on the part that has nothing to do with isolation.
+
+The driver is now shared **per event loop** (not per process — a `Playwright` object's transport is bound to
+the loop that made it, and pytest-asyncio gives each test its own). Each session still launches its **own
+browser** with its own launch args, so `headless`, `window_size` and every isolation property are unchanged.
+
+**A reference count alone would have bought nothing**, which is the part worth remembering. Serial use — one
+session at a time, exactly `run_batch`'s row loop — swings the count 1 -> 0 -> 1 and restarts the driver every
+time. Five serial sessions: 3129 ms per-session-driver, 3029 ms with a naive refcount (**no win**), 1092 ms
+with a reference HELD across the run. So `run_batch`, `run_all` and `canary` hold a `driver_scope`; that is
+where the win actually comes from, and `tests/test_driver_reuse.py` pins it so removing a scope fails loudly
+rather than quietly costing performance.
+
+End to end on a real 8-row write batch: **8 driver starts -> 1, and 1328 -> 966 ms per row** (362 ms/row, which
+matches the 364 ms component measurement). Over 500 rows that is ~3 minutes of pure setup removed.
+
+`learn` was deliberately left unscoped: it is one-shot and LLM-dominated (~12 s), so 364 ms is ~3% and not
+worth re-indenting a control-flow block with several early returns. `parallel.run_many` already launches and
+shares its own browser, so it never touched this path.
+
 ## CI flakiness: what was measured, and what it ruled out
 
 The Windows CI job failed once with `net::ERR_NO_BUFFER_SPACE` (WSAENOBUFS) on `Page.goto`, in
@@ -169,7 +193,7 @@ its own merits, not slipped in as test tuning.
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
 phases have kept landing since: **#33–#35 CI (Phase J), #36 pinned 0-LLM reads (Phase H), #37 fleet
 supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 → **145** tests
-(key-less); version **0.22.0** *at the time* — it has since grown to **698 tests / 0.69.0** as the
+(key-less); version **0.22.0** *at the time* — it has since grown to **707 tests / 0.70.0** as the
 trust-hardening below landed. Original near-term list with the PR that landed each:
 
 1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`
