@@ -19,8 +19,7 @@
     <p id="s">cart</p>
     <script>
       document.getElementById("order").addEventListener("click", () => {
-        // Defer the write a full tick so the POST is initiated only after loc.click() returns.
-        setTimeout(() => {
+        const send = () =>
           fetch("https://api.example.test/order", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -28,7 +27,16 @@
           }).then(() => {
             document.getElementById("s").textContent = "ordered";
           });
-        }, 50);
+        // GATED mode (opt-in, set by a test before the click): do not fire on a timer at all — hand the
+        // write to the test as `window.__ucFire()`. A test that needs the POST to leave the browser
+        // STRICTLY AFTER the replay step finished can then trigger it itself, instead of racing a
+        // wall-clock timer against the engine's header-clear. See tests/test_press_gate.py.
+        if (window.__ucGate) {
+          window.__ucFire = send;
+          return;
+        }
+        // Default: defer the write a full tick so the POST is initiated only after loc.click() returns.
+        setTimeout(send, 50);
       });
     </script>
   </body>
