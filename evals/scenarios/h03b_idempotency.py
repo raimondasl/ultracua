@@ -162,7 +162,14 @@ async def gate_folds_slot_values(ctx: Ctx):
                          f"params={tuple(inspect.signature(idempotency_key).parameters)}"))
     # PARTIAL CREDIT (shipped): the gate already MINTS a key and SETS the Idempotency-Key header today,
     # so the frozen single-write dedupe surface is in place — slice 2 extends it, doesn't invent it.
-    mints_header = "idempotency_key(" in src and "set_extra_http_headers" in src and "Idempotency-Key" in src
+    # The header call is `set_transient_headers`, NOT `set_extra_http_headers`. Playwright's replaces the
+    # WHOLE header set, so injecting the key with it wiped `FlowSpec.headers` — the write went out with no
+    # Authorization / X-Tenant and they never came back for the rest of the run (finding A4, fixed 0.64.0).
+    # Inside this gate the MERGING overlay is the only correct call, so requiring it by name makes this
+    # check catch a revert to the clobbering form too. It previously grepped for the old name and so had
+    # been RED since 0.64.0 — invisible because the eval suite is manual and not part of CI.
+    mints_header = ("idempotency_key(" in src and "set_transient_headers" in src
+                    and "Idempotency-Key" in src)
     checks.append(expect(mints_header,
                          "shipped: the gate mints a key and sets the Idempotency-Key header on every write",
                          f"mints_header={mints_header}"))

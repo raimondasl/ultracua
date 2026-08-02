@@ -108,19 +108,47 @@ _SPECOF_JS = r"""
   // reserve the loose whole-subtree substring for row text (which has no cleaner signal).
   const LM = 'form,fieldset,section,article,aside,nav,dialog,[role=region],[role=group],[role=form],li,tr,[role=listitem]';
   const _ucnorm = (s) => (s || '').replace(/\s+/g, ' ').trim();
-  // A row's stable identity, best-effort and in preference order: an explicit id, any data-* value, or
-  // the first href/action inside it that carries something record-shaped. Returns null when the row offers
-  // nothing — a very common case, and one where we must NOT invent an identity.
+  // A row's stable identity. Returns null when the row offers none — a very common case, and one where we
+  // must NOT invent one, because a fabricated identity is worse than an absent one: the guard runs, reports
+  // satisfied, and protects nothing.
+  //
+  // PRECEDENCE, and it is load-bearing. This used to take ANY `data-*` in attribute order and return it
+  // BEFORE looking at the href — so on a design-system table stamping `data-testid="order-row"` on every
+  // row, the captured "identity" was present on every sibling and the guard became a no-op, while the real
+  // identity (`href:/cancel/3`) sat unread in the same row. Now:
+  //   1. an explicit `id`;
+  //   2. the first href/action inside the row — a URL usually EMBEDS the record key (`/cancel/3`), which is
+  //      the strongest thing a row offers;
+  //   3. a `data-*` ONLY if no sibling landmark carries the same attribute+value. That uniqueness test is
+  //      exactly what separates a per-record `data-order-id="3"` from a shared `data-testid="order-row"`,
+  //      and it is decidable here, at capture, from the page in front of us.
+  // `_ROW_OF_JS` in this same file re-implements this order for the post-bind containment check; the two
+  // MUST agree, which is why they are commented as a pair.
+  //
+  // RESIDUAL, stated rather than hidden: a POSITIONAL token (`data-index="2"`, `id="row-2"`) is unique
+  // among its siblings and so passes, yet renumbers when a row is deleted — the identity survives the
+  // record it named. Nothing observable in a single capture distinguishes that from a real key. Rows that
+  // also carry an href are covered, because the href now wins.
   const rowIdOf = (c) => {
     try {
       if (c.id) return 'id:' + c.id;
-      for (const a of Array.from(c.attributes || [])) {
-        if (a.name.indexOf('data-') === 0 && a.value) return a.name + ':' + a.value;
-      }
       const link = c.querySelector('a[href], form[action]');
       if (link) {
         const v = link.getAttribute('href') || link.getAttribute('action') || '';
         if (v && v !== '#' && !/^javascript:/i.test(v)) return 'href:' + v;
+      }
+      for (const a of Array.from(c.attributes || [])) {
+        if (a.name.indexOf('data-') !== 0 || !a.value) continue;
+        // Compare ATTRIBUTES directly rather than building a CSS selector from the value. A selector
+        // needs the value escaped, and getting that escaping wrong fails SILENTLY: the query throws, the
+        // identity is dropped, and the guard degrades without a word. (Measured, in this very change: a
+        // mis-escaped character class made the whole check throw, so every row anchor refused and the
+        // drift corpus lost 8 rows of 0-LLM survival.) getAttribute has no such edge.
+        let shared = 0;
+        for (const other of Array.from(document.querySelectorAll(LM))) {
+          if (other !== c && other.getAttribute && other.getAttribute(a.name) === a.value) shared++;
+        }
+        if (shared === 0) return a.name + ':' + a.value;   // unique among rows -> a real identity
       }
     } catch (e) {}
     return null;
@@ -255,8 +283,95 @@ async def _testid_contradicted(loc: Locator, testid: Optional[str]) -> bool:
         return True
 
 
+# The row that a bound element actually sits in — asked of the ELEMENT, not of the document. Returns the
+# same identity string `rowIdOf` produces at capture, or "" when the element is in no row / the row has no
+# identity. `_ROW_OF_JS` and `rowIdOf` MUST agree on precedence; they are deliberately adjacent so a change
+# to one is impossible to make without seeing the other.
+_ROW_OF_JS = r"""
+(el) => {
+  const LM = '""" + _LANDMARKS + r"""';
+  // MIRROR `anchorOf`'s walk exactly. Capture does NOT use the nearest landmark — it climbs (max 4 hops)
+  // until it reaches a ROW-LIKE container (li / tr / [role=listitem]) and takes THAT one's identity. The
+  // nearest landmark is very often a per-row <form> nested inside the <tr>, whose identity is a different
+  // string entirely; using it here made every cart-row drift refuse and cost 8 rows of 0-LLM survival on
+  // the drift corpus. (`anchor_source` is only 'row' when the walk got past any aria-label/heading
+  // landmark, so this function does not need to re-check those.)
+  let c = el.closest && el.closest(LM), hops = 0, row = null;
+  while (c && hops < 4) {
+    const role = c.getAttribute && c.getAttribute('role');
+    if (/^(li|tr)$/.test(c.tagName.toLowerCase()) || role === 'listitem') { row = c; break; }
+    c = c.parentElement ? c.parentElement.closest(LM) : null;
+    hops++;
+  }
+  if (!row) return '';
+  try {
+    if (row.id) return 'id:' + row.id;
+    const l = row.querySelector('a[href], form[action]');
+    if (l) {
+      const v = l.getAttribute('href') || l.getAttribute('action') || '';
+      if (v && v !== '#' && !/^javascript:/i.test(v)) return 'href:' + v;
+    }
+    for (const a of Array.from(row.attributes || [])) {
+      if (a.name.indexOf('data-') !== 0 || !a.value) continue;
+      let shared = 0;
+      for (const other of Array.from(document.querySelectorAll(LM))) {
+        if (other !== row && other.getAttribute && other.getAttribute(a.name) === a.value) shared++;
+      }
+      if (shared === 0) return a.name + ':' + a.value;
+    }
+  } catch (e) {}
+  return '';
+}
+"""
+
+async def _bound_row_id(loc: Locator) -> str:
+    """The identity of the row the BOUND element is in. "" on any failure -> the caller fails closed."""
+    try:
+        return await loc.evaluate(_ROW_OF_JS)
+    except Exception:  # noqa: BLE001 — detached/navigating: treat as unknown, which refuses
+        return ""
+
+
 async def resolve(page: Page, spec: LocatorSpec, unique: bool = False,
                   sink: Optional[dict] = None) -> Optional[Locator]:
+    """Resolve, then REFUSE if the element we bound is not in the recorded row (see `_resolve`).
+
+    THE ROW GUARD IS A CONTAINMENT CHECK, NOT AN EXISTENCE CHECK, and that distinction is the whole point.
+    Asking "does this token still exist somewhere in the DOM?" — which is what 0.64.0 asked — says nothing
+    about the element resolution actually returns. Two ordinary shapes made that a wrong-row WRITE:
+
+      * the recorded row SURVIVES but its own control is gone (an already-cancelled order renders a
+        `Cancelled` badge instead of a Cancel link). The token is present, so the old gate passed; the only
+        remaining `Cancel` belongs to a different customer, so Tier 1 bound it uniquely and outright.
+      * the recorded row is HIDDEN rather than removed (`display:none` / `[hidden]` — the ordinary SPA
+        client-side delete). The asymmetry is exact: `querySelectorAll` sees hidden rows, `get_by_role` does
+        not, so hiding the recorded row is PRECISELY what makes the sibling uniquely matchable.
+
+    In both, the mutation gate then compared `scope_fingerprint` of the element it had just bound — and
+    per-row forms are structurally identical, so it matched byte-for-byte and the write fired against
+    another record under the recorded row's Idempotency-Key. Measured end to end: `POST /cancel/7` where
+    `/cancel/3` was recorded, `_replay_step` returning ok=True.
+
+    Applied HERE, at the one place every tier's result funnels through, rather than at each `return` — the
+    recurring defect in this codebase is a guard added to one path and not its siblings, and `_resolve` has
+    five returns.
+    """
+    loc = await _resolve(page, spec, unique=unique, sink=sink)
+    if loc is None or not (spec.anchor_source == "row" and spec.anchor_id):
+        return loc
+    got = await _bound_row_id(loc)
+    if got == spec.anchor_id:
+        return loc
+    # The bind is real and unique — it is simply in the WRONG record. There is nothing to fall back to:
+    # any other candidate would be equally unrelated to the row that was recorded.
+    if sink is not None:
+        sink["bound_by"] = "none"
+        sink["row_mismatch"] = f"{spec.anchor_id!r} -> {got or 'no identified row'}"
+    return None
+
+
+async def _resolve(page: Page, spec: LocatorSpec, unique: bool = False,
+                   sink: Optional[dict] = None) -> Optional[Locator]:
     """Resolve a spec to a visible Playwright Locator, trying resilient strategies before brittle
     ones. Returns None on drift (nothing resolves). With `unique=True`, an ambiguous candidate
     (count != 1) is never accepted — used by clicks/pinned reads/the mutation gate, where picking the
@@ -424,30 +539,9 @@ async def resolve(page: Page, spec: LocatorSpec, unique: bool = False,
     # safety fix for a broad availability regression. That half stays open and is stated in HEALING.md.
     # Deliberately not applied to `heading`/`label` either: a renamed section heading is a COSMETIC drift
     # the resolver is required to survive (v1's `heading-renamed`), whereas a row vanishing is semantic.
-    if spec.anchor_source == "row" and spec.anchor_id:
-        try:
-            row_present = await page.evaluate(
-                r"""([sel, want]) => Array.from(document.querySelectorAll(sel)).some((c) => {
-                     try {
-                       if (c.id && ('id:' + c.id) === want) return true;
-                       for (const a of Array.from(c.attributes || [])) {
-                         if (a.name.indexOf('data-') === 0 && a.value &&
-                             (a.name + ':' + a.value) === want) return true;
-                       }
-                       const l = c.querySelector('a[href], form[action]');
-                       if (l) {
-                         const v = l.getAttribute('href') || l.getAttribute('action') || '';
-                         if (v && ('href:' + v) === want) return true;
-                       }
-                     } catch (e) {}
-                     return false;
-                   })""",
-                [_LANDMARKS, spec.anchor_id])
-        except Exception:  # noqa: BLE001 — navigating/detached: fail closed rather than guess
-            row_present = False
-        if not row_present:
-            _bound("none")
-            return None
+    # (The row guard itself lives in `resolve`, which wraps this function — it must run on the element
+    # actually BOUND, and this function has five returns. See `resolve`'s docstring for why the previous
+    # pre-flight EXISTENCE query here was not a guard at all.)
 
     # Tier 1: a confident unique match wins outright; record the first ambiguous for the lenient fallback.
     ambiguous_label = ""
