@@ -107,6 +107,10 @@ async def run_cached(
     reflect: bool = False,
     window_size: Optional[tuple[int, int]] = None,
     params: Optional[dict] = None,
+    # A8: probed ONCE, just before the FIRST write of the run actuates. The whole-flow (Phase D)
+    # confirm needs an absent->present TRANSITION for the same reason the per-write barrier does — a
+    # confirm that was already true is not evidence THIS write landed. Same plumbing shape as `prepare`.
+    pre_write: Optional[Prepare] = None,
     # H5: a `dryrun.DryRunArbiter`, not a bool — the CALLER owns the arbiter so it can read the held
     # writes afterwards, and so the object that made the hold guarantee is the one that reports it.
     dry_run: Optional[object] = None,
@@ -132,6 +136,7 @@ async def run_cached(
             url, key, cached, cache, heal_provider, headless, on_step,
             prepare, finalize, goal, governor, scope, browser, record_har_path, extra_headers,
             storage_state, window_size=window_size, params=params, dry_run=dry_run,
+            pre_write=pre_write,
         )
         if report.success or mode in ("replay", "repair") or report.mode == "escalate":
             return report
@@ -191,8 +196,11 @@ async def _author_steps(
 
     `performed_write` answers "did a write fire ON THE WIRE this pass?" — NOT just "is a mutating step in
     the recipe". Best-of-N / verify-by-replay must never re-run after a write (double-submit), and the
-    recipe's `mutating` flags miss Enter-submits and formless JS POSTs, so it also watches the network for
-    a write signature. That watcher counts a non-idempotent (POST/PUT/PATCH/DELETE) request when BOTH:
+    classifier misses Enter-submits, method-less `<form onSubmit>` commits and formless JS POSTs, so it also
+    watches the network for a write signature. That evidence is ALSO written back onto the step that caused
+    it (see the promotion loop at the end), so the recipe's `mutating` flags no longer miss what the wire
+    saw — every downstream write guard keys off that flag. The watcher counts a non-idempotent
+    (POST/PUT/PATCH/DELETE) request when BOTH:
       - it is NOT to a known telemetry/analytics host (`safety.is_write_request`) — so a click that also
         fires a GA/Segment/Sentry beacon isn't mistaken for a write; and
       - it fired inside the ACT WINDOW (from just before `session.act` through the verify snapshot, plus a
@@ -202,8 +210,10 @@ async def _author_steps(
     3rd-party payment/API host now counts, closing the gap where best-of-N could re-author and double-
     submit it; and it no longer hinges on `origin_of(page.url)`, which a mid-navigation blank URL could
     skew into missing a genuine same-origin write. Residual bound (the safe direction): a click-triggered
-    non-telemetry read-POST — a same/cross-origin GraphQL/RPC query — is over-counted as a write, which
-    only costs a re-sample, never a double-submit.
+    non-telemetry read-POST — a same/cross-origin GraphQL/RPC query — is over-counted as a write. Since that
+    evidence is now promoted onto the step, the cost is no longer just a wasted re-sample: the flow caches as
+    a write and must be DECLARED before MCP or `run_batch` will run it. Loud and correctable, which is the
+    direction to be wrong in.
 
     `block_mutations=True` (used by the replan path) refuses to EXECUTE any mutating action: a
     replay-triggered re-author must never perform a NEW write — it isn't approved and could
@@ -217,6 +227,13 @@ async def _author_steps(
     success = False
     no_progress = 0
     wrote = {"hit": False}  # did a write fire on the wire? (set by the request watcher + pre-act, below)
+    # WHICH step each wire write belongs to. The act window already establishes causality in TIME; this
+    # records the identity, so the evidence can be written back onto the step that caused it instead of
+    # being kept as a single pass-global bit. See the promotion loop at the end of the function.
+    wrote_by_step: set[int] = set()
+    cur = {"i": -1}                       # the loop index whose act window is open (-1 = none)
+    pos_of: dict[int, int] = {}           # loop index -> position in `steps` (a failed act appends nothing)
+    scope_of: dict[int, str] = {}         # loop index -> its PRE-act scope fingerprint, for a promotion
     # Act window: a request is attributed to a user action only while this is open (just before
     # `session.act` through the verify snapshot) or within `write_window_ms` after it closes. Outside
     # the window — during the initial snapshot / LLM `decide()` — requests are background noise and ignored.
@@ -230,6 +247,9 @@ async def _author_steps(
         try:
             if _in_act_window() and is_write_request(req.method, req.url):
                 wrote["hit"] = True
+                if cur["i"] >= 0:
+                    # A grace-tail hit lands on the last-opened index, which is its correct causal owner.
+                    wrote_by_step.add(cur["i"])
         except Exception:  # noqa: BLE001
             pass
 
@@ -315,11 +335,22 @@ async def _author_steps(
                     precond_scope = await scope_fingerprint(
                         session.page.locator(f'[data-ultracua-ref="{ref}"]').first
                     )
+        elif action.action in ("click", "type") and action.ref:
+            # NOT classified as a write — but the classifier is a heuristic and this step may commit one
+            # anyway: a `<form onSubmit={...}>` with no method attribute (the ubiquitous React shape) reads
+            # as `form_method="get"` and so returns False *without even trying the keyword fallback*, and a
+            # formless JS fetch-POST button has no form context at all. If the wire watcher attributes a
+            # write to this step we promote it below, and this is the precondition its gate will use — it
+            # can only be captured HERE, before the act, while the element is still live.
+            scope_of[i] = await scope_fingerprint(
+                session.page.locator(f'[data-ultracua-ref="{action.ref}"]').first
+            )
 
         ok, note = True, ""
         origin = origin_of(session.page.url)
         if mutating:  # flag BEFORE acting: a click that commits the write then times out still counts
             wrote["hit"] = True
+        cur["i"] = i               # attribute any wire write from here until the next act to THIS step
         act_window["open"] = True  # OPEN: from here through verify, a wire write is attributed to this act
         with tr.measure("act"):
             try:
@@ -356,6 +387,7 @@ async def _author_steps(
                     mutating=mutating,
                 )
             )
+            pos_of[i] = len(steps) - 1
         desc = action.action
         if action.ref:
             desc += f" {action.ref}"
@@ -374,6 +406,32 @@ async def _author_steps(
             page.remove_listener("request", _watch_request)
         except Exception:  # noqa: BLE001
             pass
+    # PROMOTE: a step that provably wrote on the wire IS a write, whatever the classifier said. The
+    # evidence was already being collected — it was just kept as one pass-global bit and used only to skip
+    # verify-by-replay and stop best-of-N, never written back onto the step. So a `<form onSubmit>` commit
+    # with no method attribute, or a formless JS fetch-POST button, cached `mutating=False`, and EVERY
+    # write guard downstream is keyed on that flag: the drift gate, the Idempotency-Key, the never-LLM-heal
+    # rule, the no-suffix-replan rule, MCP's readOnlyHint, `run_batch`'s write check and `flow approve
+    # --all`'s skip. All of them silently no-opped on a real write. The recorder has had the equivalent
+    # patch (and a test pinning it) since Phase I; this is its missing sibling on the learn path.
+    #
+    # ACCEPTED COST, stated rather than hidden: the watcher's documented residual — a click-triggered
+    # non-telemetry read-POST (a GraphQL/RPC query) — used to cost only a wasted re-sample. It now marks the
+    # flow a write, so an UNDECLARED one is refused from MCP and `run_batch` until a human declares it
+    # (`spec.mutate` + a confirm check) or records it. That is the fail-loud direction and the right trade;
+    # the escape hatch is to declare it, never to expose it silently.
+    for i in sorted(wrote_by_step):
+        p = pos_of.get(i)
+        if p is None or steps[p].mutating:
+            continue
+        steps[p] = steps[p].model_copy(update={
+            "mutating": True,
+            # Prefer the pre-act scope captured above; empty degrades to the whole-page
+            # `precond_fingerprint` gate, which is the documented fallback and is always populated.
+            "precond_scope": steps[p].precond_scope or scope_of.get(i, ""),
+        })
+        _log.info("learn: step %d %r wrote on the wire — caching it as a WRITE (the classifier said "
+                  "otherwise)", p, steps[p].intent)
     return steps, success, llm, traces, wrote["hit"] or any(s.mutating for s in steps)
 
 
@@ -633,6 +691,7 @@ async def _replay(
     window_size: Optional[tuple[int, int]] = None,
     params: Optional[dict] = None,
     dry_run: Optional[object] = None,
+    pre_write: Optional[Prepare] = None,
 ) -> FlowReport:
     session = await BrowserSession(
         headless=headless, browser=browser, record_har_path=record_har_path,
@@ -685,6 +744,15 @@ async def _replay(
                     text_contains=wc.confirm_text_contains, url_contains=wc.confirm_url_contains,
                     timeout_ms=0,
                 )
+            # WHOLE-FLOW confirm baseline (A8) — the same idea, one level up. `step_confirms` is optional,
+            # so for a single-write flow the whole-flow confirm is the ONLY barrier, and it was a bare
+            # post-hoc check: a JS-only regression that stops the POST leaves the DOM unchanged (so the
+            # mutation gate passes) and a persistent banner from a previous order satisfies it. Probed once,
+            # before the FIRST write of the run — the baseline must be the state before ANY write, not
+            # before the last one.
+            if pre_write is not None and step.mutating:
+                await pre_write(session)
+                pre_write = None
             ok, note, did_heal = await _replay_step(
                 session, step, provider, tr, goal, governor, scope, i, params=params,
                 dry_run=dry_run,
@@ -738,7 +806,15 @@ async def _replay(
                 # ONLY the broken tail from the current page rather than relearning the whole flow.
                 # Gated on a heal provider being present (auto mode) and the failed step being a READ
                 # — a write is never LLM-re-driven under drift (it could double-submit).
-                if provider is not None and not step.mutating:
+                #
+                # ...and NOT when the caller bound per-run values. `_author_steps` re-authors from `goal`
+                # alone, which never mentions the row, so the re-authored tail would run on values the
+                # MODEL chose while a downstream write still mints its Idempotency-Key from the caller's
+                # params — the same wrong-body-under-the-right-key hazard the heal now forces away, one
+                # branch over. `flows.replay` already refuses `params` + on_drift="relearn" for exactly
+                # this reason; that refusal lived in the wrapper and never in the mechanism, so the raw
+                # exported `run_cached`/`run_many` reached it unguarded.
+                if provider is not None and not step.mutating and not params:
                     _log.warning(
                         "replay: step %d %r failed (%s) — suffix-replanning the tail",
                         i, step.intent, note,
@@ -836,7 +912,9 @@ async def _replay_step(
     # actions (a `press` carries a KEY like "Enter", never a slot value). Pre-validated in
     # flows.validate_params; here we only stringify for the fill/select. No slot / no param -> frozen text.
     text = step.text
-    if step.slot and params and step.slot in params and step.action in ("type", "select"):
+    _parameterized = bool(step.slot and params and step.slot in params
+                          and step.action in ("type", "select"))
+    if _parameterized:
         text = str(params[step.slot])
 
     # MUTATION GATE — never blind-replay an irreversible action under page drift, and never let
@@ -938,7 +1016,8 @@ async def _replay_step(
                         return True, "", False
                     except Exception as exc:  # noqa: BLE001
                         note = f"{type(exc).__name__}"
-            return await _maybe_heal(session, step, provider, tr, goal, note)
+            return await _maybe_heal(session, step, provider, tr, goal, note,
+                                     bound_text=text, parameterized=_parameterized)
 
         if step.action in ("click", "type", "select") and step.locator is not None:
             with tr.measure("resolve"):
@@ -953,7 +1032,8 @@ async def _replay_step(
                 loc = await resolve(page, step.locator, unique=True, sink=tr.meta)
             if loc is None:
                 return await _maybe_heal(
-                    session, step, provider, tr, goal, "locator unresolved or ambiguous (drift)"
+                    session, step, provider, tr, goal, "locator unresolved or ambiguous (drift)",
+                    bound_text=text, parameterized=_parameterized,
                 )
             note = ""
 
@@ -992,7 +1072,8 @@ async def _replay_step(
                         return True, "", False
                     except Exception as exc:  # noqa: BLE001
                         note = f"act failed: {type(exc).__name__}"
-            return await _maybe_heal(session, step, provider, tr, goal, note)
+            return await _maybe_heal(session, step, provider, tr, goal, note,
+                                     bound_text=text, parameterized=_parameterized)
 
         return False, "unreplayable step", False
     finally:
@@ -1018,7 +1099,32 @@ async def _maybe_heal(
     tr: StepTrace,
     goal: str,
     note: str,
+    *,
+    bound_text: Optional[str] = None,
+    parameterized: bool = False,
 ) -> tuple[bool, str, bool]:
+    """Repair ONE drifted step with a single intent-keyed LLM call.
+
+    The heal may fix WHERE a step acts. It may never change WHETHER it writes, or WHAT value it types —
+    those are the two ways a repair turns into a wrong action:
+
+      * A WRITE. The recorded `step.mutating` flag is only the flag on the step we were TRYING to replay;
+        the model's proposal is a different action against a different element and was never classified at
+        all. So a drifted link could be re-grounded onto a submit button: the POST fires, the resulting
+        navigation makes `state_changed` trivially true so the heal is judged "good", and the submit button
+        is persisted with `mutating=False` — after which every 0-LLM replay re-fires it ungated and
+        un-deduped, forever. The sibling suffix-replan path guards this exact risk TWICE (a pre-act
+        classifier via `block_mutations`, and a post-hoc wire watcher); the heal had neither, and needs
+        both — the classifier alone cannot see a formless JS fetch-POST behind a bland name.
+      * A VALUE. `bound_text` is the caller's resolved row (`params[step.slot]`). Without it the heal
+        typed the MODEL's value while the sibling write step still minted its Idempotency-Key from the
+        caller's params — so the POST carried the model's body under row 500's key, and a later legitimate
+        replay of row 500 minted that same key and was deduped away by the backend. A silently wrong write
+        AND a silently suppressed one, from one substitution.
+
+    Refusing outright would kill legitimate locator-drift recovery for parameterized reads, so the value is
+    FORCED rather than the heal refused.
+    """
     if provider is None:
         return False, note, False
     if step.mutating:
@@ -1040,21 +1146,69 @@ async def _maybe_heal(
     # `heal_persisted` would count that as a durable recovery it is not.)
     if action.action in ("click", "type", "select") and action.ref:
         spec = await describe(session.page, action.ref)
-    with tr.measure("heal_act"):
+    # GUARD 1 (pre-act, classifier) — mirrors `_author_steps`'s `block_mutations`. Probe the ref BEFORE
+    # acting: a submit navigates and detaches it, so afterwards there is nothing left to classify.
+    hctx: dict = {}
+    if action.action == "click" and action.ref:
+        hctx = await mutation_context(
+            session.page.locator(f'[data-ultracua-ref="{action.ref}"]').first
+        )
+    if classify_mutation(action.action, action.intent, spec.name if spec else "", hctx):
+        return False, f"{note}; the heal proposed a MUTATING action — refusing (fail loud)", False
+    # Force the caller's row. The heal repairs the locator; it never chooses the value.
+    if parameterized and action.action in ("type", "select"):
+        if bound_text is None:
+            return False, f"{note}; refusing to heal a slot step with no bound value", False
+        action = action.model_copy(update={"text": bound_text})
+        tr.meta["heal_forced_value"] = True
+    # GUARD 2 (post-act, the wire) — mirrors the replan path's `_replan_wrote` watcher. The classifier
+    # above cannot see a formless `fetch(..., {method:'POST'})` behind a bland name; the network can.
+    wrote = {"hit": False}
+
+    def _watch(req) -> None:
         try:
-            await session.act(action)
-        except Exception as exc:  # noqa: BLE001
-            return False, f"{note}; heal act failed: {type(exc).__name__}", True
-    # Re-validate: a click that produced no observable state change likely bound the WRONG
-    # element — do NOT persist a possibly-corrupt locator into the cache (a `type` legitimately
-    # leaves url/fingerprint unchanged, so it's exempt from this check).
-    if action.action == "click":
-        after = await session.snapshot()
-        if not state_changed(obs, after):
-            return False, f"{note}; heal had no effect — not persisted", True
+            if is_write_request(req.method, req.url):
+                wrote["hit"] = True
+        except Exception:  # noqa: BLE001
+            pass
+
+    page = session.page
+    if page is not None:
+        page.on("request", _watch)
+    try:
+        with tr.measure("heal_act"):
+            try:
+                await session.act(action)
+            except Exception as exc:  # noqa: BLE001
+                return False, f"{note}; heal act failed: {type(exc).__name__}", True
+        if wrote["hit"]:
+            # Checked BEFORE the state-change re-validation below, which would otherwise report a
+            # fetch-POST that changed nothing as a bland "heal had no effect" — safe by accident, and
+            # silent about the fact that a WRITE just left the browser. The write itself cannot be undone.
+            # What CAN be prevented is persisting it as a non-mutating step, which is what turns one
+            # accident into an ungated, un-deduped write on every future 0-LLM replay. Returning here
+            # leaves `step.locator`/`step.text` exactly as they were.
+            _log.error("heal: the proposed action fired a WRITE on the wire — refusing to persist it")
+            return False, f"{note}; the heal fired a WRITE on the wire — refusing to persist it", False
+        # Re-validate: a click that produced no observable state change likely bound the WRONG
+        # element — do NOT persist a possibly-corrupt locator into the cache (a `type` legitimately
+        # leaves url/fingerprint unchanged, so it's exempt from this check).
+        if action.action == "click":
+            after = await session.snapshot()
+            if not state_changed(obs, after):
+                return False, f"{note}; heal had no effect — not persisted", True
+    finally:
+        if page is not None:
+            try:
+                page.remove_listener("request", _watch)
+            except Exception:  # noqa: BLE001
+                pass
     if spec is not None:
         step.locator = spec
-    if action.text is not None:
+    # NEVER overwrite a slot site's frozen literal with a model guess: a later run with NO params would
+    # then submit the model's value. The locator repair above is the durable part; the value is the
+    # caller's, per run.
+    if action.text is not None and not step.slot:
         step.text = action.text
     return True, f"healed ({note})", True
 

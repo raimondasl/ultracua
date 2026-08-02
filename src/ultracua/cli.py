@@ -328,7 +328,8 @@ def _flow_approve_all(args: argparse.Namespace) -> None:
     """
     from .cache import FlowCache, flow_key
     from .config import flow_home
-    from .flows import _contracts_hash, _load_meta, _slots_hash, approve, list_specs, load_spec
+    from .flows import (_contracts_hash, _load_meta, _slots_hash, approve, is_write_flow, list_specs,
+                        load_spec)
 
     names = list_specs()
     if not names:
@@ -347,7 +348,7 @@ def _flow_approve_all(args: argparse.Namespace) -> None:
         if cached is None:
             skipped.append((name, "not learned yet"))
             continue
-        if spec.mutate is not None or any(s.mutating for s in cached.steps):
+        if is_write_flow(spec, cached):
             skipped.append((name, "WRITE flow — review it individually (`flow inspect --name "
                                   f"{name}`) and approve by name"))
             continue

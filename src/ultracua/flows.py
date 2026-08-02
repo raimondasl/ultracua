@@ -341,6 +341,17 @@ class StaleApprovalError(FlowReplayError):
     retryable = False
 
 
+class UnkeyedWriteError(FlowReplayError):
+    """A flow DECLARED as a write plans zero Idempotency-Keys, so the retry-dedupe floor is absent.
+
+    Raised pre-browser at pre-flight, before anything actuates. NOT retryable — retryability is exactly
+    what is missing. A human must re-record the flow so its commit is captured as a real write, or move it
+    to a human-gated surface if the commit is a bare GET link that cannot be made retry-safe."""
+
+    code = "unkeyed_write"
+    retryable = False
+
+
 class WriteReadbackError(FlowReplayError):
     """The write LANDED and its completion signal was confirmed, but the confirmation READBACK
     (`spec.extract` — the order number, the reference id) could not be read.
@@ -646,6 +657,24 @@ def caption_for(provider_name: Optional[str] = None):
     return lambda g, s: caption_intents(router, g, s)  # noqa: E731
 
 
+def _make_pre_write(spec: FlowSpec, out: dict):
+    """The whole-flow confirm's BASELINE probe, or None when there is no whole-flow confirm to baseline.
+
+    Handed to `run_cached(pre_write=...)`, which calls it once, immediately before the run's FIRST write
+    actuates. `_make_finalize` then requires an absent->present TRANSITION rather than mere presence."""
+    if spec.mutate is None or not spec.mutate.has_confirm():
+        return None
+    m = spec.mutate
+
+    async def _pre(session) -> None:
+        out["_pre_confirm"] = await condition_present(
+            session.page, selector=m.confirm_selector, text_contains=m.confirm_text_contains,
+            url_contains=m.confirm_url_contains, timeout_ms=0,   # a single immediate check
+        )
+
+    return _pre
+
+
 def _make_finalize(spec: FlowSpec, router, out: dict, pin: Optional[dict] = None):
     async def _finalize(session):
         if spec.mutate is not None:
@@ -656,7 +685,15 @@ def _make_finalize(spec: FlowSpec, router, out: dict, pin: Optional[dict] = None
                 await session.page.wait_for_load_state("networkidle", timeout=8000)
             except Exception:  # noqa: BLE001
                 pass
-            confirmed = await condition_present(
+            # TRANSITION, not presence (A8). The per-write barrier has always required this; the
+            # whole-flow one — the ONLY barrier a single-write flow has, since `step_confirms` is optional
+            # — did a bare post-hoc check. So a JS-only regression that stops the POST read as "confirmed":
+            # the DOM is unchanged so the mutation gate passes, and a persistent banner from a PREVIOUS
+            # order satisfies the check. Under `run_batch(resume=...)` the un-landed row was then written to
+            # the ledger as committed and permanently skipped — against `ledger.py`'s stated invariant,
+            # "never a false skip of an un-landed write".
+            pre = bool(out.get("_pre_confirm"))
+            confirmed = (not pre) and await condition_present(
                 session.page, selector=m.confirm_selector,
                 text_contains=m.confirm_text_contains, url_contains=m.confirm_url_contains,
                 timeout_ms=m.timeout_ms,
@@ -680,7 +717,11 @@ def _make_finalize(spec: FlowSpec, router, out: dict, pin: Optional[dict] = None
                 out["extract_error"] = ex.error
                 out["truncated"] = ex.truncated
             out["data"], out["found"] = data, confirmed
-            out["error"] = None if confirmed else "write not confirmed (no completion signal on the page)"
+            out["error"] = None if confirmed else (
+                "the whole-flow confirm was ALREADY TRUE before the write ran, so it cannot show that "
+                "THIS write landed — pick a confirm the write itself creates (an order number, a "
+                "URL the commit navigates to), not a persistent status region" if pre else
+                "write not confirmed (no completion signal on the page)")
             return {"solved": confirmed, "data": data}
         if spec.extract is None:
             out["found"] = True  # navigate-only flow: reaching the end IS success
@@ -900,7 +941,8 @@ async def _learn_once(
         url=spec.start_url, goal=spec.goal, provider=provider, cache=cache, mode="learn",
         max_steps=spec.max_steps, headless=spec.headless, scope=spec.scope,
         extra_headers=spec.headers, storage_state=spec.storage_state,
-        finalize=_make_finalize(spec, router, out), verify_replay=verify_replay,
+        finalize=_make_finalize(spec, router, out), pre_write=_make_pre_write(spec, out),
+        verify_replay=verify_replay,
     )
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     # ONLY the flow THIS attempt authored counts. `cache.get(key)` also returns a PRE-EXISTING flow, which
@@ -913,6 +955,22 @@ async def _learn_once(
     # best-of-N loop uses it — this is the sibling path that didn't. `.get()` because the early returns
     # (miss / escalate / no-provider) carry no "cached" key, and falsy is correct for all of them.
     cached = cache.get(key) if report.extra.get("cached") else None
+    # FAIL LOUD rather than cache a flow that provably WROTE but has no gated step. `_author_steps` now
+    # promotes a wire-attributed write onto the step that caused it, so this only fires on the residual it
+    # cannot attribute: a write landing on a step whose act FAILED (nothing was appended to attribute it
+    # to), or outside every act window. Caching that would leave an ungated, un-keyed write in the recipe —
+    # exactly what the promotion exists to prevent. `record()` has had this refusal since Phase I; `learn()`
+    # is the sibling that never did.
+    if cached is not None and report.extra.get("performed_write") and not any(
+            s.mutating for s in cached.steps):
+        cache.delete(key)
+        return LearnResult(
+            spec=spec, cached=False, steps=list(cached.steps), data=out.get("data"), found=False,
+            performed_write=True,
+            note="a write fired on the wire during discovery but no step could be attributed to it — "
+                 "refusing to cache a write flow with zero gated steps (it would replay with no mutation "
+                 "gate, no precondition and no Idempotency-Key). Author it with `flow record`, which "
+                 "attributes each write to its commit.")
     # Phase G: attach per-write completion barriers (in commit order) to the LLM-authored mutating steps.
     # A mismatch refuses the flow (delete + cached=False) — never a half/mis-confirmed multi-write flow.
     if cached is not None and spec.mutate is not None and spec.mutate.step_confirms:
@@ -1218,6 +1276,19 @@ def _magnitude_gate(cache: FlowCache, key: str, eff: dict, data: Any, spec_name:
     return None
 
 
+def is_write_flow(spec: FlowSpec, cached_flow) -> bool:
+    """Does this flow WRITE? DECLARED (`spec.mutate`) or its cached steps in fact mutate.
+
+    THE single definition. It was transcribed independently in `mcpserver._is_write_flow`, `run_batch` and
+    `cli._flow_approve_all` — three copies of a predicate that decides whether an irreversible action gets a
+    human in the loop, so a future upgrade of the write SIGNAL would have to find all three. (This release
+    is such an upgrade: `_author_steps` now promotes a wire-attributed write onto its step, which changes
+    what `s.mutating` means and therefore what all three of those callers do.)"""
+    if spec.mutate is not None:
+        return True
+    return cached_flow is not None and any(getattr(s, "mutating", False) for s in cached_flow.steps)
+
+
 def _approval_recipe_stale(meta: FlowMeta, cached_flow) -> Optional[str]:
     """Does the approval still bind the steps on disk? `None` = yes; otherwise a human-readable reason.
 
@@ -1300,7 +1371,7 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="
         url=spec.start_url, goal=spec.goal, provider=provider, cache=cache, mode=mode,
         max_steps=spec.max_steps, headless=spec.headless, scope=spec.scope,
         extra_headers=spec.headers, storage_state=spec.storage_state, params=params,
-        finalize=_make_finalize(spec, router, out, pin=pin),
+        finalize=_make_finalize(spec, router, out, pin=pin), pre_write=_make_pre_write(spec, out),
     )
     if report.mode == "miss":
         return False, None, "no learned flow — run learn first", "miss"
@@ -1476,6 +1547,24 @@ def _preflight_row(
             raise FlowReplayError(
                 f"{spec.name!r}: on_drift='relearn' is refused for a write flow (re-authoring would "
                 f"re-perform the write) — re-learn manually and re-approve instead")
+        # THE MACHINE CORRECTNESS FLOOR. Every retry-dedupe guarantee this project makes rides on the
+        # per-write Idempotency-Key, and `flow._replay_step` only sets that header for a `mutating` step.
+        # A DECLARED write whose commit no step is marked mutating for therefore plans ZERO keys — and
+        # every mechanism built on them silently no-ops: the key never reaches the wire, `RunLedger`
+        # short-circuits on an empty key list so no ledger file is ever created, `run_batch(resume=...)`
+        # re-fires the commit on every resume with no human in the loop, and `dry_run` — which releases
+        # idempotent methods unheld — ACTUALLY FIRES a GET-link commit at the real server while reporting
+        # `writes_planned=0` and certifying itself clean. Refuse at the shared gate so all four surfaces
+        # inherit it. NOT fixed by synthesizing a key in `_plan_idempotency_keys`: its contract is
+        # byte-identity with the header the wire actually carries, and a preview of a key that is never
+        # sent is worse than an honest empty one.
+        if cached_flow is not None and not any(s.mutating for s in cached_flow.steps):
+            raise UnkeyedWriteError(
+                f"{spec.name!r}: declared a WRITE, but no recorded step is classified as mutating — so it "
+                f"would fire with NO Idempotency-Key and NO ledger entry, and a client retry or a resumed "
+                f"batch would re-fire it. Re-record it (`flow record --name {spec.name}`) so the commit is "
+                f"captured as a real write; if the commit is a bare GET link, it cannot be made "
+                f"retry-safe automatically and needs a human-gated surface.")
     # A relearn re-authors the flow from scratch, which does NOT carry `params` — the re-authored flow has
     # no slot-bound steps, so it would run the DEFAULT values and return data for them, silently ignoring the
     # per-run params (a silently-wrong read, inviolable #2). Refuse the combination rather than mislead.
@@ -2216,7 +2305,7 @@ async def run_batch(
     # STILL fires the write (flow._replay_step gates on `step.mutating`). Trusting spec.mutate alone would
     # let such a flow skip run_batch's max_rows blast-radius bound AND its duplicate-row (suppressed-write)
     # refusal while the wire writes — so ANY mutating step makes this a write batch.
-    is_mutate = spec.mutate is not None or any(s.mutating for s in cached_flow.steps)
+    is_mutate = is_write_flow(spec, cached_flow)
 
     # A batched write MUST be a DECLARED write. A flow learned as a "read" (spec.mutate=None) whose steps in
     # fact POST still FIRES the write on replay, but replay does NO write-landed confirm for it (its confirm
@@ -2703,11 +2792,27 @@ async def record(
     # key-less, so `record()` must not make a surprise LLM call. The `flow record` CLI builds the real
     # captioner (`caption_for`) and passes it; tests inject a fake. `provider_name` is unused here (kept for
     # signature stability) — the CLI owns captioner construction.
+    # A8, at AUTHORING time: probe the declared confirm on the entry page BEFORE the demo touches anything.
+    # If it already holds there, it is not unique to this write's outcome and replay's transition
+    # requirement would refuse the flow on every run — say so now, while the human is still here, rather
+    # than caching a recipe that can never confirm. Reuses `record_demo`'s existing `prepare` hook, which is
+    # the same post-navigation hook replay uses, so the probe sees the same DOM replay will.
+    pre_state: dict = {}
+
+    async def _probe_confirm(session) -> None:
+        if declared_write and spec.mutate.has_confirm():
+            m = spec.mutate
+            pre_state["confirm"] = await condition_present(
+                session.page, selector=m.confirm_selector, text_contains=m.confirm_text_contains,
+                url_contains=m.confirm_url_contains, timeout_ms=0,
+            )
+
     flow, wire_write, crossed_origin, unattributed_writes = await record_demo(
         spec.start_url, demo, goal=spec.goal, cache=cache, scope=spec.scope, headless=headless,
         storage_state=spec.storage_state, extra_headers=spec.headers,  # demo in the SAME context as verify
         mutate=declared_write,  # gate the demonstrated write step(s) at capture time
         caption=caption,        # best-effort intent labels (off the replay path); None -> placeholder intents
+        prepare=_probe_confirm,
     )
     detected_write = wire_write or any(s.mutating for s in flow.steps)
 
@@ -2753,6 +2858,20 @@ async def record(
                                 is_write=True, steps=list(flow.steps),
                                 note="a write flow needs a confirm check — set mutate.confirm_selector / "
                                      "confirm_text_contains / confirm_url_contains.")
+        if pre_state.get("confirm"):
+            # The declared confirm was ALREADY TRUE on the entry page, before the demo did anything. It
+            # therefore cannot distinguish "this write landed" from "this signal was already there" — which
+            # is exactly how a write that never fires reads as confirmed. Refuse now, with the human still
+            # watching, rather than cache a recipe every replay would refuse. Same wording as the per-write
+            # barrier's, because it is the same mistake one level up.
+            cache.delete(key)
+            return RecordResult(spec, cached=False, reproduced=False, performed_write=wire_write,
+                                is_write=True, steps=list(flow.steps),
+                                note="the declared confirm was already true on the entry page BEFORE the "
+                                     "demo — it is not unique to this write's outcome, so it cannot show "
+                                     "the write landed. Pick a signal the write itself creates (an order "
+                                     "number, a URL the commit navigates to), not a persistent status "
+                                     "region or a banner from a previous run.")
         # Fail-closed invariant guard: a recorded write must NEVER be cached UNGATED. Three ways that could
         # slip through, all refused here:
         #   - a mutating step with no precondition (empty precond_scope; the recorder never sets a whole-page

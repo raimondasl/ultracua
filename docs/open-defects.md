@@ -26,6 +26,14 @@ no-ops `run_batch(resume=...)`; A7 and A9 poison the *cache* as well as the run;
 **C2**, **A12** (+ its `history.py` twin and the missing `fsync` on all three sidecars), **A14**, **C1**
 (+ a `spec.slots and` short-circuit still living in `dry_run` — the A13 hole, one file over).
 
+**Fixed in 0.66.0**, same standard: **A9 + A5** (one fix — the learn loop already had the wire
+evidence and threw it away; it is now written back onto the step that caused it), **A10** (a
+declared write that plans zero Idempotency-Keys is refused at the shared gate, which also stops
+`dry_run` firing a GET-link commit for real), **A6** (the heal gets BOTH guards the sibling replan
+path has), **A7** (a healed step types the caller's row, never the model's — and the suffix-replan
+is refused when a row is bound), **A8** (the whole-flow confirm requires an absent->present
+TRANSITION, plus an authoring-time refusal).
+
 **How to read it.** A *hole* here means a claim the code does not deliver, or an unguarded path that can
 silently return wrong data / actuate the wrong element / fire or suppress a write. Deliberately excluded:
 missing roadmap features, documented-and-enforced limits, and style. Severities are the audit's, corrected
@@ -61,12 +69,12 @@ guards down would have prevented most of this list, and is the highest-leverage 
 
 ## Status at a glance
 
-| | fixed in 0.64.0 | fixed in 0.65.0 | open |
-|---|---|---|---|
-| **critical** | A1 | — | A2 |
-| **high** | A4, A11 | A12, A14, C2 | A3, A5, A6, A7, A8, A9, A10 |
-| **medium** | A13 | — | B1, B2 |
-| **low** | — | C1 | — |
+| | fixed in 0.64.0 | fixed in 0.65.0 | fixed in 0.66.0 | open |
+|---|---|---|---|---|
+| **critical** | A1 | — | — | A2 |
+| **high** | A4, A11 | A12, A14, C2 | A5, A6, A7, A8, A9, A10 | A3 |
+| **medium** | A13 | — | — | B1, B2 |
+| **low** | — | C1 | — | — |
 
 (Severities in this table are the *verified* ones where the 2026-08-01 pass corrected the audit: A14 and C2
 up to high, B1 down to medium, C1 down to low.)
@@ -79,12 +87,11 @@ returned as an answer), **A13** (dropping the whole slot table skipped re-approv
 original session; the other 14 in the independent reproduction pass described above, each with a probe that
 was actually executed. Nothing here is now "a strong lead" only.
 
-**Suggested order for what remains**: A9+A5 first — they turn out to be **one fix** (back-propagate the
-learn-time wire-write evidence onto the step that caused it in `_author_steps`), and that one fix also
-supplies the signal A10's refusal needs. Then A10, A6, A7, A8 (the write-safety cluster proper), then
-B1+B2 (secrets, one slice — both are capture-site fixes), then A3 (a free Tier-1 reorder, but the drift
-bench has to be re-run to prove it), and A2 last: it is the only one needing genuinely new machinery
-(a capture-phase `submit` listener plus document-class request reconciliation).
+**Suggested order for what remains**: B1+B2 (secrets — one slice, both are capture-site fixes), then A3
+(a free Tier-1 reorder, but the drift bench has to be re-run to prove it), and A2 last: it is the only
+one needing genuinely new machinery (a capture-phase `submit` listener plus document-class request
+reconciliation). Note A2's `<button type=button>` variant may be PARTLY closed by 0.66.0's wire
+promotion — re-probe it before designing the fix rather than assuming either way.
 
 ---
 
@@ -121,22 +128,22 @@ It sits above placeholder, exact-text and element id, and returns outright — s
 ✅ **FIXED in 0.64.0** — **A4. The Idempotency-Key wipes the flow's auth headers — and they never come back.** *(high, `flow.py:882`, `flow.py:1009`)*
 `set_extra_http_headers` replaces rather than merges. The write itself goes out with `X-Tenant`/`Authorization` stripped, and every request for the rest of the run loses them too. **Failure:** a payment POSTs against the server's default tenant instead of tenant 42, and the post-write confirm GET reads the wrong-context page. `replay()` returns `{"status": "confirmed"}`. Deterministic, no model involved, 100% reproducible for anyone using `spec.headers`. Reproduced against a real server. The one-line comment "clear the idempotency header" is itself wrong about what the call does.
 
-**A5. MCP advertises a POSTing flow as `readOnlyHint=True`.** *(high, `mcpserver/server.py:119-129`, `:338`)*
+✅ **FIXED in 0.66.0** — **A5. MCP advertises a POSTing flow as `readOnlyHint=True`.** *(high, `mcpserver/server.py:119-129`, `:338`)*
 Write detection keys off `step.mutating`, which the engine's own comment (`flow.py:192-194`) says misses formless JS POSTs. The correct signal (`performed_write`) is computed at learn time and thrown away. **Failure:** a bland-named button whose handler POSTs is learned as a read, bulk-approved by `flow approve --all`, and served without `--expose-writes`. An untrusted outer agent fires an irreversible POST on every call — no write prefix, no confirm, no key, no mutex, no ledger. `record()` refuses the identical flow; only `learn()` caches it.
 
-**A6. Self-heal can bind a write target and persist it as non-mutating — double-submitting forever.** *(high, `flow.py:1012-1057`)*
+✅ **FIXED in 0.66.0** — **A6. Self-heal can bind a write target and persist it as non-mutating — double-submitting forever.** *(high, `flow.py:1012-1057`)*
 `_maybe_heal` guards on the *recorded* flag only; the action the heal model returns is never classified. The sibling replan path guards this exact risk twice. **Failure:** an unapproved read flow (the configuration the docs recommend for unattended self-heal) re-grounds a drifted link onto a submit button. The POST fires, navigation makes `state_changed` trivially true so the heal is "good," the submit button is cached with `mutating=False`, and every subsequent 0-LLM replay re-fires it ungated and un-deduped. Full chain reproduced through the public `run_cached`.
 
-**A7. A healed `type` step types the model's value, not the caller's — and burns the row's idempotency key.** *(high, `flow.py:839` vs `:1031-1056`)*
+✅ **FIXED in 0.66.0** — **A7. A healed `type` step types the model's value, not the caller's — and burns the row's idempotency key.** *(high, `flow.py:839` vs `:1031-1056`)*
 `_maybe_heal` is never given `params`. **Failure:** `params={"qty": 500}`, the field drifts, the model types `3`. The POST body carries `qty=3` while the Idempotency-Key on the wire is the one minted for row 500 — so a later legitimate replay of row 500 mints the same key and is **deduped away by the backend**. A silently wrong write plus a silently suppressed one. Reachable only via the raw exported `run_cached`/`run_many`; every product wrapper is guarded today, but the guard lives in the wrapper, not the mechanism.
 
-**A8. The whole-flow confirm has no before/after baseline, so a write that never fires reads as "confirmed."** *(high, `flows.py:577-592`)*
+✅ **FIXED in 0.66.0** — **A8. The whole-flow confirm has no before/after baseline, so a write that never fires reads as "confirmed."** *(high, `flows.py:577-592`)*
 The per-write barrier snapshots pre-state; the whole-flow one — the only barrier a single-write flow has — does a bare post-hoc check. **Failure:** a JS-only regression stops the POST, the DOM is unchanged so the mutation gate passes, and a persistent banner from a previous order satisfies the confirm. Under `run_batch(resume=...)` the un-landed row is written to the ledger as committed and permanently skipped. `ledger.py:11` claims "never a false skip of an un-landed write."
 
-**A9. A commit behind a `method=get` (or method-less) form is learned as non-mutating.** *(high, `safety.py:89-93`, `flow.py:290`)*
+✅ **FIXED in 0.66.0** — **A9. A commit behind a `method=get` (or method-less) form is learned as non-mutating.** *(high, `safety.py:89-93`, `flow.py:290`)*
 `<form onSubmit={...}>` with no method attribute is the ubiquitous React shape. **Failure:** learn caches the commit with no gate, no `precond_scope`, no Idempotency-Key; under form drift the write re-fires blind instead of failing loud. `flow inspect` shows a write flow with zero write steps. The recorder has this exact patch (`recorder.py:345`) and is test-pinned; `learn()` has no counterpart.
 
-**A10. An MCP write flow with no mutating step gets zero idempotency keys — so the retry-dedupe and the ledger both no-op.** *(high, `flows.py:1453-1459`)*
+✅ **FIXED in 0.66.0** — **A10. An MCP write flow with no mutating step gets zero idempotency keys — so the retry-dedupe and the ledger both no-op.** *(high, `flows.py:1453-1459`)*
 **Failure:** a GET-link commit, correctly declared and exposed as a WRITE, called twice: both fired, no key on either, no ledger file ever created. The human elicit still fires each time, so it is not fully silent — but the documented "machine correctness floor" is simply absent, and the only signal is an unexplained empty key list in the preview.
 
 ✅ **FIXED in 0.64.0** — **A11. A pinned string read on a blank element returns `""` as the answer, and all three value gates pass.** *(high, `pin.py:59-66`)*
