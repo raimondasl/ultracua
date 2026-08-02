@@ -193,15 +193,43 @@ CLICK_STEPS = [
 ]
 
 
-def _order_recorder(captured: list):
+def _order_recorder(captured: list, gate: bool = False):
+    """`gate=True` puts the fixture in TEST-CONTROLLED mode: the click arms the write as
+    `window.__ucFire()` instead of firing it on a 50ms timer, so a test can decide exactly when the POST
+    leaves the browser (see `_fire_gated_write`)."""
+
     async def prepare(session) -> None:
         async def handler(route) -> None:
             captured.append(dict(route.request.headers))
             await route.fulfill(status=200, content_type="application/json", body="{}")
 
         await session.page.route("**/order", handler)
+        if gate:
+            await session.page.evaluate("() => { window.__ucGate = true; }")
 
     return prepare
+
+
+def _fire_gated_write():
+    """A `finalize` hook that releases the gated write and waits for it to actually leave the browser.
+
+    `finalize` runs pre-close but AFTER the whole step loop, so by the time this fires, `_replay_step`'s
+    `finally` has provably already cleared the Idempotency-Key — an ordering the engine guarantees rather
+    than one the test has to win a race for."""
+
+    async def finalize(session):
+        page = session.page
+        async with page.expect_request("**/order", timeout=5000):
+            await page.evaluate("() => window.__ucFire && window.__ucFire()")
+        return None
+
+    return finalize
+
+
+def _act_ms(report) -> float:
+    """The measured duration of the mutating step's `act` span — the bounded write-settle wait lives
+    inside it, so this is what distinguishes a write_settle_ms bound from an action_timeout_ms one."""
+    return next(s.ms for t in report.step_traces for s in t.spans if s.name == "act")
 
 
 async def test_idempotency_key_held_until_async_click_submit_fires(tmp_path: Path) -> None:
@@ -230,11 +258,24 @@ async def test_idempotency_key_held_until_async_click_submit_fires(tmp_path: Pat
 
 
 async def test_idempotency_key_dropped_when_settle_below_defer(tmp_path: Path, monkeypatch) -> None:
-    """LOAD-BEARING proof: with write_settle_ms BELOW the write's defer (5ms < the fixture's 50ms), the act
-    stops waiting before the deferred POST fires, the `finally` clears the header, and the write replays
-    WITHOUT the Idempotency-Key. Confirms it is the bounded WAIT — not merely the wrapper's existence — that
-    keeps the key in the happy-path test above (a regression dropping the bound back to action_timeout_ms
-    would still pass that test; this one fails)."""
+    """LOAD-BEARING proof that it is the BOUNDED WAIT — not merely the wrapper's existence — that keeps the
+    key on the happy path above. A regression restoring action_timeout_ms as the bound would still pass that
+    test; it must fail this one.
+
+    Two independent facts, asserted separately, neither of which races a wall clock:
+
+      1. THE BOUND. The write is gated (see `_order_recorder(gate=True)`), so NO request fires during the
+         act and `page.expect_request` necessarily runs to its timeout — which is
+         `min(action_timeout_ms, write_settle_ms)` = 5ms here, versus 5000ms if the bound regressed. The
+         act span separates those by three orders of magnitude.
+      2. THE CLEAR. `finalize` then releases the write, and `finalize` runs after the whole step loop — so
+         the engine GUARANTEES `_replay_step`'s `finally` has already cleared the header. The POST leaves
+         the browser without an Idempotency-Key because the clear provably preceded it.
+
+    This test previously asserted (2) by racing the header-clear against a 50ms page timer, which inverted
+    under machine load and failed in CI roughly 1 run in 5 — always in the SAFE direction (a spurious
+    Idempotency-Key is not a correctness problem), i.e. it was purely a test-robustness defect. The
+    production bound is unchanged."""
     monkeypatch.setattr(flow_mod, "settings", replace(flow_mod.settings, write_settle_ms=5))
     cache = FlowCache(root=tmp_path)
     learn = await run_cached(URL_CLICK_ASYNC, CLICK_GOAL, ScriptedProvider(list(CLICK_STEPS)), cache,
@@ -243,10 +284,21 @@ async def test_idempotency_key_dropped_when_settle_below_defer(tmp_path: Path, m
 
     caps: list = []
     replay = await run_cached(URL_CLICK_ASYNC, CLICK_GOAL, None, cache, mode="replay",
-                              prepare=_order_recorder(caps), headless=True)
+                              prepare=_order_recorder(caps, gate=True),
+                              finalize=_fire_gated_write(), headless=True)
     assert replay.success
-    # the deferred POST did NOT carry the key — the wait ended before it fired (and may not be captured at all).
-    assert not (caps and caps[0].get("idempotency-key", "").startswith("uca-"))
+
+    # (1) the act waited ~write_settle_ms (5ms), NOT action_timeout_ms (5000ms). MEASURED, both ways: the
+    # act runs 44-49ms here (the local click itself dominates; the 5ms timeout is subsumed by it), and
+    # 5025-5036ms with the bound deliberately regressed to action_timeout_ms. The 2500ms threshold sits
+    # ~50x above the passing case and ~2x below the failing one, so neither machine load nor a fast host
+    # can move it across.
+    act = _act_ms(replay)
+    assert act < 2500, f"the act waited {act:.0f}ms — the write-settle bound looks like action_timeout_ms"
+
+    # (2) the write fired AFTER the step, and carried no key.
+    assert caps, "the gated write never fired — the test proved nothing"
+    assert not caps[0].get("idempotency-key", "").startswith("uca-")
 
 
 # --- the timeout=0 "wait forever" footgun: a no-write mutating step must PROCEED, not hang ---------------
