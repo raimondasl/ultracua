@@ -1109,6 +1109,35 @@ scarcest training commodity — ultracua's recorder captures them natively.
 - **Live-health flow registry** — value gates entirely on network effects; sequence after H2 + H10
   generate the install base.
 
+## Deferred: caller-supplied browser reuse (`pool=`) — analysed, NOT implemented
+
+0.70.0 shares the Playwright DRIVER per event loop, which measurement showed is where most of the setup
+cost lives: driver start 364 ms vs `chromium.launch()` 81 ms and `new_context()+new_page()` 58 ms. Sharing
+the **browser** as well would take a session from ~230 ms to ~66 ms and, on an 8-wide `run_all` fan-out,
+1800 MB -> 646 MB and 32 -> 11 processes. That remainder is real but deliberately unbuilt, for a reason
+worth recording rather than rediscovering.
+
+**Do not accept a raw Playwright `Browser`.** It exposes no launch arguments (`_initializer` is `None`), so
+ultracua cannot validate what it was handed — and the mismatch is a **silent wrong write**, measured end to
+end: a spec declaring `headless=False` handed a headless browser silently dropped `window_size` from
+(900,600) to 800x600, crossed an 850 px responsive breakpoint, and clicked a *different* uniquely-resolving
+button that POSTed to `/order-MOBILE` instead of `/order-DESKTOP`. No exception, no drift, no escalate —
+inviolables #2 and #3 in one probe. `headless` and `window_size` are BROWSER-level launch args, while
+`storage_state`, HAR recording, routes and the H5 dry-run arbiter are context-level and unaffected;
+`window_size` is the worse half because it is not even on `FlowSpec` (it comes from `settings`), so a
+caller cannot see the disagreement.
+
+If this is ever built, the shape is an **ultracua-owned** `browser_pool()` async context manager — the only
+object that knows its own launch args — threaded as a keyword-only `pool=` onto exactly `replay`,
+`run_batch` and `run_all`, refusing loudly on a `headless`/`window_size` mismatch, on `dry_run` (H5's
+contract cannot describe a sibling context's browser dying mid-hold), on a concurrent write fleet (browser
+death would make every in-flight write indeterminate at once), and on `record()` entirely — the recorder
+*defines* the viewport replay must reproduce, and is headed by construction.
+
+What IS already measured as safe under a shared browser: context isolation is real against a live origin
+(cookies and localStorage do not cross), the dry-run arbiter holds identically, a renderer crash is
+contained, and `BrowserSession` cannot double-close a browser it does not own.
+
 ## Open defects — see [docs/open-defects.md](docs/open-defects.md)
 
 **Read that file before starting any new work.** A six-lens adversarial audit at 0.63.0 produced 20
