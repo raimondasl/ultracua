@@ -1,9 +1,8 @@
 # Open defects — the standing register
 
 **ROUND 1** (2026-07-31, at v0.63.0): 20 findings, all fixed in 0.64.0–0.69.0.
-**ROUND 2** (2026-08-02, scoped to everything written SINCE): 10 findings, 2 critical. **Both criticals
-(R1, R2) are fixed in 0.71.0 — A1 is now genuinely closed. 8 remain open**, listed at the bottom. Most are
-holes in the round-1 fixes.
+**ROUND 2** (2026-08-02, scoped to everything written SINCE): 10 findings, 2 critical — **all fixed**
+(R1/R2 in 0.71.0, R3–R10 in 0.72.0). Most were holes in the round-1 fixes.
 
 **What this is.** A six-lens adversarial audit of every implemented subsystem at v0.63.0, hunting for ways
 to violate the three inviolables. 20 findings survived a refutation pass and all 20 were fixed in 0.64.0–0.69.0. **That is round 1, and it
@@ -294,6 +293,25 @@ drift bench caught it (8 rows of survival lost, `invariants: FAILED`). Both side
 attributes directly, with no selector escaping anywhere. If you touch this guard, re-run the bench —
 a probe that only exercises the refusal path cannot tell a working guard from a broken one.
 
+**R3–R10 fixed in 0.72.0.** `run_all` routed through `is_write_flow` and now skips an UNDECLARED
+write whatever `--include-writes` says (there is no confirm barrier for one, so it cannot be
+verified). The heal's wire guard WAITS via `expect_request(write_settle_ms)` like both siblings it
+mirrors. Write attribution became a pure `_write_owner` rule: more than one live candidate is
+undecidable, so nobody is credited and the flow fails loud, exactly as the recorder's
+`attributedSeq` already does. A new `landed` flag on the error taxonomy arms the ledger for the one
+case the code POSITIVELY knows committed (`WriteReadbackError`) and only that one. A pre-true
+confirm is now `WriteUnverifiedError` — non-retryable, NOT `landed`, and it says the commit
+actuated. The extractor's page text is scrubbed, and `redact` now covers all five rendered fields
+(`url`, `title`, `text`, element `name` and `value`) with the fingerprint computed BEFORE redaction
+so it cannot manufacture drift. A transient meta read retries and never destroys a healthy sidecar.
+
+**Residual on R5, stated rather than closed.** `record()`'s confirm probe still covers the ENTRY
+page only; replay probes immediately before the first mutating step, which in a multi-page flow is a
+different page. Probing the true pre-commit page at authoring time needs the recorder to evaluate
+the confirm at each commit — a real slice, not a comment. The runtime backstop
+(`WriteUnverifiedError`) is what actually holds, and it now says the commit actuated and that re-
+running is not the remedy.
+
 ## Findings
 
 ### ✅ FIXED in 0.71.0 — R1. The row-identity gate checks that a token EXISTS somewhere in the DOM, not that the element it binds is in the recorded row — so a hidden row, or a surviving row whose own control is gone, still binds a different customer's Cancel
@@ -357,7 +375,7 @@ them `data-index`). The recorded row #3 is deleted; the guard finds `data-testid
 Idempotency-Key; the flow returns confirmed. Identical harm to A1, on a page whose rows a maintainer
 would inspect and correctly conclude do carry an identity token.
 
-### R3. The heal's new wire guard (A6 fix) has no settle window — a 25 ms deferred POST walks past it, and the write control is then cached as a read and re-fired ungated, un-keyed, on every 0-LLM replay
+### ✅ FIXED in 0.72.0 — R3. The heal's new wire guard (A6 fix) has no settle window — a 25 ms deferred POST walks past it, and the write control is then cached as a read and re-fired ungated, un-keyed, on every 0-LLM replay
 
 *high, lens `writes`, inviolable #3, reproduced by an independent refuter*
 
@@ -388,7 +406,7 @@ all) fires the POST with NO Idempotency-Key, no mutation gate, no precondition, 
 and `run_batch` would treat it as a read batch. Inviolables #2 and #3 both. Exactly the A6 harm
 chain that is marked FIXED in docs/open-defects.md, and not recorded as a residual anywhere.
 
-### R4. `_author_steps`' wire-write promotion credits the WRONG step: the real commit caches ungated and un-keyed while a benign neighbour gets the Idempotency-Key
+### ✅ FIXED in 0.72.0 — R4. `_author_steps`' wire-write promotion credits the WRONG step: the real commit caches ungated and un-keyed while a benign neighbour gets the Idempotency-Key
 
 *high, lens `writes`, inviolable #3, reproduced by an independent refuter*
 
@@ -416,7 +434,7 @@ failing loud), while the key that IS minted rides a request that writes nothing 
 window is (time from step i's act to step i+1's act), so it is wide with a fast/local provider or a
 grounding model and narrow behind a slow LLM.
 
-### R5. A8's authoring-time confirm probe checks the ENTRY page while replay's baseline checks the PRE-FIRST-WRITE page — `record()` blesses a flow whose every replay fires the write and then reports it unconfirmed
+### ✅ FIXED in 0.72.0 — R5. A8's authoring-time confirm probe checks the ENTRY page while replay's baseline checks the PRE-FIRST-WRITE page — `record()` blesses a flow whose every replay fires the write and then reports it unconfirmed
 
 *high, lens `writes`, inviolable #2, reproduced by an independent refuter*
 
@@ -442,7 +460,7 @@ of the false-skip A8 closed, and note the shipped control test
 (test_a_write_that_does_fire_still_confirms) only passes because its fixture sets
 `state['no_banner'] = True` to scrub the confirm artifact off the entry page on every later GET.
 
-### R6. `run_all` is the FOURTH transcription of the write predicate and was never converted to `is_write_flow` — the unattended "read flows only" fleet fires undeclared writes and reports green
+### ✅ FIXED in 0.72.0 — R6. `run_all` is the FOURTH transcription of the write predicate and was never converted to `is_write_flow` — the unattended "read flows only" fleet fires undeclared writes and reports green
 
 *high, lens `trust`, inviolable #3, reproduced by an independent refuter*
 
@@ -474,7 +492,7 @@ Every tick replays the flow and re-POSTs to /report, with no write-landed confir
 from a landed one. `run_batch` refuses the identical spec+cache; MCP would refuse to expose it; only
 the unattended cron surface runs it.
 
-### R7. The LLM extractor gets RAW page text — `redact` never reaches it, so a resolved secret is shipped to the model on an ORDINARY replay
+### ✅ FIXED in 0.72.0 — R7. The LLM extractor gets RAW page text — `redact` never reaches it, so a resolved secret is shipped to the model on an ORDINARY replay
 
 *high, lens `secrets`, confidentiality (no inviolable), reproduced by an independent refuter*
 
@@ -502,7 +520,7 @@ body text — plaintext credential included — to the configured third-party pr
 the same page reads `[REDACTED]`, so the operator has every reason to believe the redaction covered
 it. Nothing logs, warns, or records that a secret left the machine.
 
-### R8. A write the code KNOWS landed is never recorded in the retry-dedupe ledger when `WriteReadbackError` fires — and the CLI then prints a resume command that re-fires it
+### ✅ FIXED in 0.72.0 — R8. A write the code KNOWS landed is never recorded in the retry-dedupe ledger when `WriteReadbackError` fires — and the CLI then prints a resume command that re-fires it
 
 *high, lens `surfaces`, inviolable #3, reproduced by an independent refuter*
 
@@ -528,7 +546,7 @@ payee's backend does not honor `Idempotency-Key` the invoice is paid twice; if i
 duplicate is suppressed but the whole batch's ledger is now permanently blind to row 7. On the MCP
 surface the same state re-elicits a human confirm and re-fires on the outer agent's retry.
 
-### R9. `snapshot.capture(redact=…)` scrubs 2 of the 5 Observation fields the prompt renders — `Element.name`, `obs.url` and `obs.title` go to the model unredacted
+### ✅ FIXED in 0.72.0 — R9. `snapshot.capture(redact=…)` scrubs 2 of the 5 Observation fields the prompt renders — `Element.name`, `obs.url` and `obs.title` go to the model unredacted
 
 *medium, lens `secrets`, confidentiality (no inviolable), reproduced by an independent refuter*
 
@@ -553,7 +571,7 @@ https://app/settings?api_key=tok_live_51ABCDEF` and `[e0] button: Copy tok_live_
 credential reaches the provider four times in one prompt while the audit trail records a clean,
 redacted Observation.
 
-### R10. One TRANSIENT read error on a healthy meta sidecar destructively renames it and overwrites it with a quarantine — approval, contracts, shape, steps_hash and read_pin are permanently lost, and `release()`'s "re-arms under the SAME contracts" promise is then false
+### ✅ FIXED in 0.72.0 — R10. One TRANSIENT read error on a healthy meta sidecar destructively renames it and overwrites it with a quarantine — approval, contracts, shape, steps_hash and read_pin are permanently lost, and `release()`'s "re-arms under the SAME contracts" promise is then false
 
 *low, lens `trust`, inviolable #2, reproduced by an independent refuter *(symptom real, stated cause corrected by the refuter)**
 

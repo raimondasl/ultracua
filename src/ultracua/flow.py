@@ -187,6 +187,28 @@ async def _vision_decide(session: BrowserSession, goal: str, grounding: Any, tr:
     return await grounding.decide(goal, png, vp)
 
 
+def _write_owner(act_open: bool, cur_i: int, live_tails: "set[int]") -> int:
+    """Which step owns a wire write observed right now? -1 = credit nobody.
+
+    Pure, so the rule can be tested without racing a browser: the timing lives in the caller, the DECISION
+    lives here. `live_tails` is every step whose post-act grace still covers now; `cur_i` is the step whose
+    act window is open (if any).
+
+    A step's grace tail and later steps' act windows OVERLAP, so "the step that acted most recently" is not
+    the answer — a debounced or awaited POST from step i was landing on step i+1, gating a benign neighbour
+    while the real commit cached as a read, and disarming `_learn_once`'s "a write fired but nothing could
+    be attributed" refusal because `any(s.mutating)` had become true.
+
+    Exactly one candidate -> that step owns it. More than one -> undecidable from timing, which is the same
+    situation the recorder's `attributedSeq` already refuses on ("a turn holding more than one commit"):
+    it stamps seq=null and lets `record` fail loud. Credit nobody; the caller still records that a write
+    happened, so the flow is refused rather than cached with a mis-attributed gate."""
+    cands = set(live_tails)
+    if act_open and cur_i >= 0:
+        cands.add(cur_i)
+    return cands.pop() if len(cands) == 1 else -1
+
+
 async def _author_steps(
     session: BrowserSession, goal: str, provider: Optional[Provider], governor: PacingGovernor,
     max_steps: int, on_step: Optional[OnStep] = None, grounding: Optional[Any] = None,
@@ -242,18 +264,34 @@ async def _author_steps(
     # `session.act` through the verify snapshot) or within `write_window_ms` after it closes. Outside
     # the window — during the initial snapshot / LLM `decide()` — requests are background noise and ignored.
     act_window = {"open": False, "until": 0.0}
+    # EVERY closed step's grace tail, not just the most recent one. A single slot was not enough: with a
+    # `write_window_ms` of 2s and steps milliseconds apart, step 1 closing overwrote step 0's tail, so a
+    # write deferred past step 1's close was credited to step 1 — the same mis-attribution one step over.
+    # Entries are (step_index, expires_at); pruned lazily in `_owner`.
+    graces: list = []
     page = session.page
 
     def _in_act_window() -> bool:
         return act_window["open"] or time.monotonic() <= act_window["until"]
 
+    def _owner() -> int:
+        """Gather the live candidates, then defer to the pure rule in `_write_owner`."""
+        now = time.monotonic()
+        return _write_owner(act_window["open"], cur["i"], {i for i, until in graces if now <= until})
+
     def _watch_request(req):  # a non-idempotent, non-telemetry request fired in causal response = a write
         try:
-            if _in_act_window() and is_write_request(req.method, req.url):
-                wrote["hit"] = True
-                if cur["i"] >= 0:
-                    # A grace-tail hit lands on the last-opened index, which is its correct causal owner.
-                    wrote_by_step.add(cur["i"])
+            if not is_write_request(req.method, req.url):
+                return
+            if not _in_act_window():
+                return          # outside every window — background noise, not this run's doing
+            # A write DID fire in causal response to this run, so `performed_write` must say so even when
+            # we cannot say WHICH step: that flag is what stops best-of-N re-authoring after a write, and
+            # what makes `_learn_once` refuse a flow it could not attribute.
+            wrote["hit"] = True
+            owner = _owner()
+            if owner >= 0:
+                wrote_by_step.add(owner)
         except Exception:  # noqa: BLE001
             pass
 
@@ -374,6 +412,9 @@ async def _author_steps(
         # verify snapshot returns; the grace keeps it attributed to THIS action, not silently dropped.
         act_window["open"] = False
         act_window["until"] = time.monotonic() + settings.write_window_ms / 1000.0
+        now = time.monotonic()
+        graces[:] = [(gi, gu) for gi, gu in graces if now <= gu]      # prune expired tails
+        graces.append((i, act_window["until"]))                        # THIS step owns its own tail
         no_progress = 0 if (ok and changed) else no_progress + 1
 
         if ok:
@@ -1187,7 +1228,30 @@ async def _maybe_heal(
     try:
         with tr.measure("heal_act"):
             try:
-                await session.act(action)
+                # WAIT for the write, don't just glance. Reading `wrote["hit"]` the instant `act` returns is
+                # a zero-width window, and BOTH siblings this guard claims to mirror do wait: the learn
+                # watcher keeps its act window open through the verify snapshot plus a `write_window_ms`
+                # grace tail (its own comment: "a write's POST can race the post-act navigation and land
+                # just after the verify snapshot returns"), and `_replay_step` wraps every mutating
+                # actuation in `expect_request(..., timeout=write_settle_ms)`. Without it, any handler that
+                # defers its POST — a debounce, an `await` before the fetch, an autosave tick — walked
+                # straight past this guard and the write control was then persisted as a READ.
+                #
+                # `expect_request` gives the wait; the listener above is what records the hit (this also
+                # catches a write that fires DURING the act, which the wrapper alone would miss on a
+                # non-matching first request). A heal is already an LLM round-trip, so a bounded settle is
+                # noise against it — and on the no-write path the timeout is the only cost.
+                if page is None:
+                    await session.act(action)          # no page to watch; the listener is off too
+                else:
+                    try:
+                        async with page.expect_request(
+                            lambda r: is_write_request(r.method, r.url),
+                            timeout=max(1, min(settings.action_timeout_ms, settings.write_settle_ms)),
+                        ):
+                            await session.act(action)
+                    except PlaywrightTimeoutError:
+                        pass    # no write settled in the window — the ordinary, expected case
             except Exception as exc:  # noqa: BLE001
                 return False, f"{note}; heal act failed: {type(exc).__name__}", True
         if wrote["hit"]:

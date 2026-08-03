@@ -45,6 +45,7 @@ from .pin import find_pin, read_pin
 from .providers import build_router, get_provider
 from .recorder import caption_intents, record_demo
 from .safety import idempotency_key
+from .snapshot import REDACTED
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
@@ -277,6 +278,11 @@ class FlowReplayError(RuntimeError):
 
     code = "replay_error"
     retryable = False
+    # Did the WRITE already land when this was raised? Only ever True where the code POSITIVELY knows it
+    # did — it arms the retry-dedupe ledger, and `ledger.py`'s invariant is "never a false skip of an
+    # un-landed write", so a maybe is a no. Callers that own a ledger (run_batch, the MCP write surface)
+    # record the row on the way past instead of leaving the one case they KNOW committed unrecorded.
+    landed = False
 
 
 class DriftError(FlowReplayError):
@@ -359,6 +365,23 @@ class UnkeyedWriteError(FlowReplayError):
     retryable = False
 
 
+class WriteUnverifiedError(FlowReplayError):
+    """The commit ACTUATED, but the whole-flow confirm was already true before it ran — so nothing on the
+    page can distinguish a landed write from a signal that was already there.
+
+    NOT retryable: the write may have committed, so re-running risks a double-submit. NOT `landed` either:
+    it may equally not have, and recording it would be a false skip — `ledger.py`'s invariant is "never a
+    false skip of an un-landed write", and a keyed retry is the safer side of that trade. The human action
+    is to check the target system, then re-record with a confirm the write itself CREATES.
+
+    (`record()` probes for this at authoring time, but only on the ENTRY page — see its refusal. In a
+    multi-page flow the commit happens elsewhere, so this runtime check is the backstop that actually
+    holds.)"""
+
+    code = "write_unverified"
+    retryable = False
+
+
 class WriteReadbackError(FlowReplayError):
     """The write LANDED and its completion signal was confirmed, but the confirmation READBACK
     (`spec.extract` — the order number, the reference id) could not be read.
@@ -372,6 +395,7 @@ class WriteReadbackError(FlowReplayError):
 
     code = "write_readback"
     retryable = False
+    landed = True     # the confirm PASSED; only the readback missed — the side effect is certain
 
 
 def _classify_replay_failure(kind: str) -> type[FlowReplayError]:
@@ -381,6 +405,7 @@ def _classify_replay_failure(kind: str) -> type[FlowReplayError]:
         "escalate": EscalateError,
         "quarantine": FlowQuarantineError,
         "write_unreadable": WriteReadbackError,
+        "write_unverified": WriteUnverifiedError,
         "miss": FlowReplayError,  # no learned flow — an absence, not a drift
     }.get(kind, DriftError)
 
@@ -566,10 +591,36 @@ def _load_meta(cache: FlowCache, key: str) -> FlowMeta:
     """
     p = _meta_path(cache, key)
     if p.exists():
-        try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
-        except Exception as exc:  # noqa: BLE001 — corrupt/torn/unreadable
-            return _refuse_unreadable_meta(cache, key, p, f"{type(exc).__name__}: {exc}")
+        # A TRANSIENT read failure is not corruption, and the two must not share a branch. On Windows the
+        # classic case is an AV/indexer sharing violation (WinError 32) moments after `os.replace`; a
+        # network or removable store gives the same shape. Treating that as permanent DESTROYED a perfectly
+        # healthy sidecar on the first occurrence — renamed aside and replaced with a quarantine — and the
+        # documented recovery (`flow release`, then `flow approve`) then brought the flow back with
+        # `contracts=None`, `shape=None` and `read_pin=None`: its H9 value gate and shape gate silently
+        # gone, and the LLM extractor back on a replay that was pinned 0-LLM. Retrying costs milliseconds;
+        # being wrong costs the trust state the file exists to hold.
+        raw, io_error = None, None
+        for attempt in range(3):
+            try:
+                raw = json.loads(p.read_text(encoding="utf-8"))
+                io_error = None
+                break
+            except (ValueError, UnicodeDecodeError) as exc:
+                # PARSE failure — the bytes are there and they are not JSON. That is real corruption; a
+                # retry would read the same bytes. Fail over to the quarantine immediately.
+                return _refuse_unreadable_meta(cache, key, p, f"{type(exc).__name__}: {exc}")
+            except OSError as exc:
+                io_error = exc                      # could be transient: back off briefly and re-read
+                if attempt < 2:
+                    time.sleep(0.05 * (attempt + 1))
+        if io_error is not None:
+            # Still unreadable after retries. Do NOT destroy it — we never saw its bytes, so we cannot
+            # claim it is corrupt. Refuse this run loudly on a poisoned in-memory meta and leave the file
+            # exactly as it is for the next run (or a human) to read.
+            _log.error("flow meta %s could not be READ after 3 attempts (%s) — refusing this run on a "
+                       "quarantine, and leaving the file untouched (it may be perfectly healthy)", p,
+                       io_error)
+            return _poisoned_meta()
         if not isinstance(raw, dict):
             # Valid JSON, wrong document (a bare list/scalar from a truncated-then-patched file or a bad
             # hand-edit). Same treatment: it is not a meta, so it must not read as "no meta".
@@ -664,6 +715,30 @@ def caption_for(provider_name: Optional[str] = None):
     return lambda g, s: caption_intents(router, g, s)  # noqa: E731
 
 
+def _redacted_body_text(session, redact: tuple) -> "Any":
+    """The page's body text with the run's resolved secrets scrubbed, for the LLM extractor.
+
+    `snapshot.capture(redact=...)` was introduced as "the one place" every snapshot -> LLM path runs
+    through. The EXTRACTOR is a page-text -> LLM path that does not run through it: it reads
+    `page.inner_text("body")` directly and hands up to 12000 chars to the strong tier. And unlike the heal
+    and suffix-replan paths, it needs no drift at all — every replay of a read flow without a resolved
+    `read_pin`, and every write flow with a readback, makes this call.
+
+    The guard already existed 500 lines away in this same file: `_capture_audit` scrubs the IDENTICAL
+    page-text channel with the SAME `_secret_values(spec)` before it hits DISK. It simply was never applied
+    before the text hits the MODEL."""
+    async def _read() -> str:
+        try:
+            text = await session.page.inner_text("body")
+        except Exception:  # noqa: BLE001
+            return ""
+        for term in redact:
+            if term:
+                text = text.replace(term, REDACTED)
+        return text
+    return _read()
+
+
 def _make_pre_write(spec: FlowSpec, out: dict):
     """The whole-flow confirm's BASELINE probe, or None when there is no whole-flow confirm to baseline.
 
@@ -682,7 +757,8 @@ def _make_pre_write(spec: FlowSpec, out: dict):
     return _pre
 
 
-def _make_finalize(spec: FlowSpec, router, out: dict, pin: Optional[dict] = None):
+def _make_finalize(spec: FlowSpec, router, out: dict, pin: Optional[dict] = None,
+                   redact: tuple = ()):
     async def _finalize(session):
         if spec.mutate is not None:
             # WRITE flow: success is action-completion — the declared confirm check must hold,
@@ -707,10 +783,7 @@ def _make_finalize(spec: FlowSpec, router, out: dict, pin: Optional[dict] = None
             )
             data = None
             if spec.extract is not None:  # optionally also pull a confirmation number, etc.
-                try:
-                    text = await session.page.inner_text("body")
-                except Exception:  # noqa: BLE001
-                    text = ""
+                text = await _redacted_body_text(session, redact)
                 ex = await extract(router, spec.extract, text, schema=spec.extract_schema)
                 data = ex.data
                 # Keep the READBACK's own outcome on a SEPARATE channel from `found`. `out["found"]` must
@@ -724,10 +797,13 @@ def _make_finalize(spec: FlowSpec, router, out: dict, pin: Optional[dict] = None
                 out["extract_error"] = ex.error
                 out["truncated"] = ex.truncated
             out["data"], out["found"] = data, confirmed
+            out["confirm_pre_true"] = pre
             out["error"] = None if confirmed else (
-                "the whole-flow confirm was ALREADY TRUE before the write ran, so it cannot show that "
-                "THIS write landed — pick a confirm the write itself creates (an order number, a "
-                "URL the commit navigates to), not a persistent status region" if pre else
+                "the commit ACTUATED and its write may well have landed, but the whole-flow confirm was "
+                "ALREADY TRUE before it ran, so nothing here can tell a landed write from a signal that "
+                "was already on the page. DO NOT simply re-run this: check the target system for the "
+                "effect first. Then pick a confirm the write itself CREATES (an order number, a URL the "
+                "commit navigates to), not a persistent status region — and re-record." if pre else
                 "write not confirmed (no completion signal on the page)")
             return {"solved": confirmed, "data": data}
         if spec.extract is None:
@@ -745,10 +821,7 @@ def _make_finalize(spec: FlowSpec, router, out: dict, pin: Optional[dict] = None
             out["found"] = False
             out["error"] = "pinned read could not resolve or cleanly parse (page changed) — re-learn the flow"
             return {"solved": False}
-        try:
-            text = await session.page.inner_text("body")
-        except Exception:  # noqa: BLE001
-            text = ""
+        text = await _redacted_body_text(session, redact)
         ex = await extract(router, spec.extract, text, schema=spec.extract_schema)
         if ex.truncated and not ex.found:
             # The page was longer than the extractor's window AND the value wasn't in the visible portion:
@@ -948,7 +1021,8 @@ async def _learn_once(
         url=spec.start_url, goal=spec.goal, provider=provider, cache=cache, mode="learn",
         max_steps=spec.max_steps, headless=spec.headless, scope=spec.scope,
         extra_headers=spec.headers, storage_state=spec.storage_state,
-        finalize=_make_finalize(spec, router, out), pre_write=_make_pre_write(spec, out),
+        finalize=_make_finalize(spec, router, out, redact=_secret_values(spec)),
+        pre_write=_make_pre_write(spec, out),
         verify_replay=verify_replay, redact=_secret_values(spec),
     )
     key = flow_key(spec.goal, spec.start_url, spec.scope)
@@ -1378,7 +1452,8 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="
         url=spec.start_url, goal=spec.goal, provider=provider, cache=cache, mode=mode,
         max_steps=spec.max_steps, headless=spec.headless, scope=spec.scope,
         extra_headers=spec.headers, storage_state=spec.storage_state, params=params,
-        finalize=_make_finalize(spec, router, out, pin=pin), pre_write=_make_pre_write(spec, out),
+        finalize=_make_finalize(spec, router, out, pin=pin, redact=_secret_values(spec)),
+        pre_write=_make_pre_write(spec, out),
         redact=_secret_values(spec),   # B2: never ship a resolved secret to a provider
     )
     if report.mode == "miss":
@@ -1390,6 +1465,13 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="
         return False, None, f"replay failed (page drift?): {report.note or report.mode}", kind
     if (spec.extract is not None or spec.mutate is not None) and not out.get("found"):
         # a write flow gates `found` on the confirm check, so an unconfirmed write fails here
+        if out.get("confirm_pre_true"):
+            # NOT "drift". Drift means the run did not get where it meant to; here the commit ACTUATED and
+            # the confirm simply cannot report on it. Kept a distinct kind so it can never be re-driven:
+            # `relearn` would re-author a flow that already fired, and an auth-refresh retry would fire it
+            # again. Deliberately NOT `landed` — we do not KNOW it committed, and ledger.py's invariant is
+            # "never a false skip of an un-landed write", so a keyed retry is the safer side of that trade.
+            return False, None, f"{out.get('error')}", "write_unverified"
         return False, None, f"data not found / write not confirmed on replay: {out.get('error')}", "drift"
     if spec.mutate is not None and spec.extract is not None and not out.get("extract_found"):
         # The write CONFIRMED (above) but its readback missed. A distinct KIND from "drift", because the
@@ -1867,6 +1949,14 @@ async def replay(
                                                         params=params)
         if ok:
             return _ok(data)
+        if kind == "write_unverified":
+            # The commit actuated. Raise HERE, before `retry_ok` exists, so it can reach neither the
+            # auth-refresh retry nor the relearn path — both would fire it again. Recorded ok=FALSE (unlike
+            # the readback case): we do not know the write landed, so this is a genuine failure a human
+            # must look at, and a failure streak is the right signal.
+            _record_run(cache, key, ok=False, error=reason)
+            _log.error("flow %r: the commit actuated but cannot be verified — %s", spec.name, reason)
+            raise WriteUnverifiedError(f"{spec.name!r}: {reason}")
         if kind == "write_unreadable":
             # The write LANDED; only its readback failed. Raise HERE, before `retry_ok` is even computed,
             # so this can enter neither the auth-refresh retry nor the relearn path — both would re-fire a
@@ -2211,9 +2301,34 @@ async def run_all(
             spec = load_spec(name)
         except Exception as exc:  # noqa: BLE001 - a missing/malformed spec is a failed flow, not a crash
             return FleetRun(name=name, ok=False, status="failed", error=f"load failed: {exc}")
-        if spec.mutate is not None and not include_writes:
-            return FleetRun(name=name, ok=False, status="skipped", error="write flow (use --include-writes)")
-        meta = _load_meta(cache, flow_key(spec.goal, spec.start_url, spec.scope))
+        key = flow_key(spec.goal, spec.start_url, spec.scope)
+        # THE FOURTH TRANSCRIPTION. `is_write_flow` was extracted to stop this predicate existing in
+        # triplicate (mcpserver, run_batch, `flow approve --all`) — and `run_all`, the UNATTENDED cron
+        # driver, was the copy that got missed. It gated on `spec.mutate is not None` alone, so an
+        # UNDECLARED write — `spec.mutate=None` but a cached step `mutating=True` — was never skipped by
+        # `include_writes=False`.
+        #
+        # That population is not hypothetical, and this release is what creates it at scale: the wire
+        # promotion in `_author_steps` now marks a formless JS fetch-POST or a method-less `<form onSubmit>`
+        # commit as mutating on a flow LEARNED AS A READ. Such a flow then replayed on every scheduled tick
+        # with no confirm barrier (`_preflight_row` computes `is_mutate` from `spec.mutate` alone, so no
+        # UnkeyedWriteError either), and `_make_finalize`'s navigate-only branch reports `found=True`
+        # unconditionally — so the run looked fine whether or not the write landed.
+        if is_write_flow(spec, cache.get(key)):
+            if spec.mutate is None:
+                # An UNDECLARED write is skipped whatever `include_writes` says, exactly as `run_batch`
+                # already refuses one: with no `spec.mutate` there is no confirm barrier, so replay cannot
+                # tell whether the write landed. `--include-writes` is consent to run writes that can be
+                # VERIFIED, not consent to fire unverifiable ones on a schedule.
+                return FleetRun(name=name, ok=False, status="skipped",
+                                error="UNDECLARED write — a recorded step mutates but the spec declares no "
+                                      "write, so replay cannot verify it landed. Review it "
+                                      "(`flow inspect`) and declare it (mutate.confirm_*) or re-record. "
+                                      "--include-writes does NOT cover this.")
+            if not include_writes:
+                return FleetRun(name=name, ok=False, status="skipped",
+                                error="write flow (use --include-writes)")
+        meta = _load_meta(cache, key)
         if approved_only and not meta.approved:
             return FleetRun(name=name, ok=False, status="skipped", error="not approved")
         async with sem:  # only actual replays consume a browser slot; the skips above are free
@@ -2438,6 +2553,16 @@ async def run_batch(
                         and data.get("status") in ("confirmed", "already-done")):
                     ledger.record(i, preview_keys[i], data["status"])
             except FlowReplayError as exc:
+                # A raise is not automatically "nothing happened". `WriteReadbackError` means the confirm
+                # PASSED and only the readback missed — the payment went through. Leaving that row
+                # unrecorded made the ONE case we positively know committed the one case the ledger was not
+                # armed for, and `_flow_run_batch` then printed "to resume the rows that DIDN'T commit" for
+                # a row that did — instructing the operator to fire it again. Recorded on the way past.
+                # Only ever for `landed` errors: a MAYBE must stay unrecorded, because `ledger.py`'s
+                # invariant is "never a false skip of an un-landed write" and a keyed retry is the safer
+                # side of that trade.
+                if (getattr(exc, "landed", False) and ledger is not None and preview_keys[i]):
+                    ledger.record(i, preview_keys[i], getattr(exc, "code", "landed"))
                 report.append(BatchRowResult(index=i, status="failed", ok=False,
                                              ms=(time.perf_counter() - t0) * 1000.0, error=str(exc),
                                              idempotency_keys=preview_keys[i]))
@@ -2857,11 +2982,19 @@ async def record(
     # key-less, so `record()` must not make a surprise LLM call. The `flow record` CLI builds the real
     # captioner (`caption_for`) and passes it; tests inject a fake. `provider_name` is unused here (kept for
     # signature stability) — the CLI owns captioner construction.
-    # A8, at AUTHORING time: probe the declared confirm on the entry page BEFORE the demo touches anything.
-    # If it already holds there, it is not unique to this write's outcome and replay's transition
-    # requirement would refuse the flow on every run — say so now, while the human is still here, rather
-    # than caching a recipe that can never confirm. Reuses `record_demo`'s existing `prepare` hook, which is
-    # the same post-navigation hook replay uses, so the probe sees the same DOM replay will.
+    # A8, at AUTHORING time: probe the declared confirm on the ENTRY page, before the demo touches anything.
+    # If it already holds there, it is not unique to this write's outcome and replay would refuse the flow
+    # on every run — say so now, while the human is still here.
+    #
+    # SCOPE, stated because the first version of this comment claimed more than the code delivers: this
+    # covers the ENTRY page only. Replay probes its baseline immediately before the FIRST MUTATING STEP,
+    # which in a multi-page flow is a different page and a different URL — so a confirm that is absent at
+    # entry but already true where the commit happens (a `confirm_url_contains` covering the whole checkout
+    # section, a summary region on the review page) passes here and fails at replay, AFTER the write has
+    # left. That runtime case is the backstop and raises `WriteUnverifiedError`, which says so in as many
+    # words. Probing the true pre-commit page at authoring time needs the recorder to evaluate the confirm
+    # at each commit; that is a real slice, not a comment.
+    # Reuses `record_demo`'s existing `prepare` hook — the same post-navigation hook replay uses.
     pre_state: dict = {}
 
     async def _probe_confirm(session) -> None:
@@ -2932,7 +3065,7 @@ async def record(
             cache.delete(key)
             return RecordResult(spec, cached=False, reproduced=False, performed_write=wire_write,
                                 is_write=True, steps=list(flow.steps),
-                                note="the declared confirm was already true on the entry page BEFORE the "
+                                note="the declared confirm was already true on the ENTRY page, before the "
                                      "demo — it is not unique to this write's outcome, so it cannot show "
                                      "the write landed. Pick a signal the write itself creates (an order "
                                      "number, a URL the commit navigates to), not a persistent status "

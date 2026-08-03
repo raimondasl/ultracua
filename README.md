@@ -82,7 +82,7 @@ Hacker News (read-only) and is built to record: `uv run python examples/hn_diges
 | **[GUIDE.md](GUIDE.md)** | developer guide: the Flow API + CLI in depth (auth, write flows, record by demonstration, health, providers) |
 | **[HEALING.md](HEALING.md)** | how it self-heals (and deliberately doesn't) when a page's elements change: resilient locators, LLM heal/re-plan, and the fail-loud boundaries |
 | **[docs/comparison-stagehand.md](docs/comparison-stagehand.md)** | ultracua vs. Stagehand — a design-philosophy comparison (drift/self-heal, write safety, data correctness), dated + sourced |
-| **[docs/open-defects.md](docs/open-defects.md)** | the standing defect register — round 1 (20 findings) all fixed in 0.64.0–0.69.0; **round 2 re-audited the ~1059 lines written since and found 10 more, 2 critical**, mostly holes in round 1's fixes. **Read before starting new work.** |
+| **[docs/open-defects.md](docs/open-defects.md)** | the standing defect register — two adversarial rounds, 30 findings, all fixed in 0.64.0–0.72.0. Round 2 re-audited the ~1059 lines round 1's fixes ADDED and found 10 more, 2 critical, mostly holes in those fixes. Records the residuals deliberately left. **Read before starting new work.** |
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | how it works inside + how to contribute (engine, safety, tiers, benchmarks, layout) |
 | **[STATUS.md](STATUS.md)** | honest status, measured benchmarks, known fragilities |
 | **[ROADMAP.md](ROADMAP.md)** | what's next |

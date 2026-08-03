@@ -260,21 +260,37 @@ async def capture(page, max_elements: int, redact: tuple = ()) -> Observation:
     raw = await page.evaluate(SNAPSHOT_JS, max_elements)
     elements = [Element(**e) for e in raw["elements"]]
     text = raw.get("text", "")
-    if redact:
-        terms = [t for t in redact if t]
-        for e in elements:
-            if e.value:
-                for term in terms:
-                    e.value = e.value.replace(term, REDACTED)
-        for term in terms:
-            text = text.replace(term, REDACTED)
     url = page.url
     title = await page.title()
+
     # Fingerprint over the structural signal (role/name/tag + url), NOT coordinates or page text.
     # Sort the triples to an order-INVARIANT multiset before hashing: `elements` is in reading order
     # (for the agent + ref assignment), but a layout-only reshuffle — the sort reacting to a 1px nudge
     # — must NOT masquerade as drift. Real structural change (an element added/removed/renamed) still
     # changes the sorted multiset.
+    #
+    # COMPUTED BEFORE REDACTION, deliberately. `name` and `url` are both in this basis and both need
+    # scrubbing (below), so redacting first would change the fingerprint of any page carrying a secret and
+    # manufacture drift out of nothing — failing the mutation gate on every secret-bearing flow.
     basis = json.dumps(sorted([e.role, e.name, e.tag] for e in elements), ensure_ascii=False)
     fingerprint = xxhash.xxh64((url + "\n" + basis).encode("utf-8")).hexdigest()
+
+    if redact:
+        # ALL FIVE page-derived fields the prompt renders, not two. `llm_agent._render` puts `URL:`,
+        # `TITLE:`, `PAGE TEXT:`, and per element its accessible NAME and `value="…"` into the user turn.
+        # Scrubbing only value+text left three channels open, and they are not exotic: an accessible name
+        # carries the plaintext on the standard "Copy sk-live-…" button (a name is computed from text
+        # content for links and buttons), and a token in a query string — a magic link, `?api_key=`,
+        # `?otp=`, a secret slot filled into a GET form — rides `url`, which is rendered in EVERY prompt.
+        terms = [t for t in redact if t]
+        for e in elements:
+            for term in terms:
+                if e.value:
+                    e.value = e.value.replace(term, REDACTED)
+                if e.name:
+                    e.name = e.name.replace(term, REDACTED)
+        for term in terms:
+            text = text.replace(term, REDACTED)
+            url = url.replace(term, REDACTED)
+            title = title.replace(term, REDACTED)
     return Observation(url=url, title=title, elements=elements, text=text, fingerprint=fingerprint)
