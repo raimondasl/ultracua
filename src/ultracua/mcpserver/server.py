@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
-from ..cache import FlowCache, flow_key
+from ..cache import CacheUnreadableError, FlowCache, flow_key
 from ..ledger import RunLedger
 from ..obs import get_logger
 from ..safety import origin_of
@@ -149,45 +149,69 @@ def list_flow_tools(cache: Optional[FlowCache] = None, *, expose_writes: bool = 
         except Exception as exc:  # noqa: BLE001 — a malformed spec must not kill the tool list
             _log.warning("mcp: skipping unreadable spec %r: %s", spec_name, exc)
             continue
-        health = flows.health(spec, cache=cache)
-        if not (health.approved and health.cached):  # only human-approved, learned flows
+        try:
+            tool = _tool_for(spec, spec_name, cache, expose_writes=expose_writes, claimed=claimed)
+        except CacheUnreadableError as exc:
+            # This loop reads the cache TWICE — `health()` (which catches internally) and then
+            # `_is_write_flow`, a second read at a second moment that a transient sharing violation can
+            # fail on its own. Guard the whole body once rather than each read: an unreadable recipe must
+            # DROP OUT of the advertised tools, never fall through to `_is_write_flow` returning False and
+            # advertising an undeclared write as a read-only tool.
+            _log.error("mcp: skipping %r — cached recipe unreadable: %s", spec_name, exc)
             continue
-        if health.approval_stale:
-            # The approval bit is set but no longer binds the steps on disk (they were re-authored, or the
-            # flow predates the binding). Pre-flight would refuse every call with `stale_approval`, so don't
-            # advertise it at all — an unlisted tool an agent never calls beats a listed tool that always
-            # fails. Logged, not silent: an operator needs to know why their tool vanished.
-            _log.warning("mcp: skipping %r — approval no longer matches the flow's steps; review with "
-                         "`flow inspect --name %s` and re-approve", spec_name, spec_name)
-            continue
-        is_write = _is_write_flow(spec, cache)
-        if is_write:
-            # A write is exposed ONLY behind --expose-writes AND only if it's a DECLARED write with a confirm
-            # check. An undeclared write (mutating steps, no spec.mutate) has no confirm barrier -> replay
-            # can't verify it landed -> never exposed. A declared write missing a confirm would only ever
-            # refuse at preflight, so don't advertise it either.
-            if not (expose_writes and spec.mutate is not None and spec.mutate.has_confirm()):
-                continue
-        tname = _tool_name(spec_name)
-        if tname in claimed:
-            _log.warning("mcp: tool name %r from spec %r collides with spec %r — skipping the later one",
-                         tname, spec_name, claimed[tname])
-            continue
-        claimed[tname] = spec_name
-        # H2 stage 3: a slotted flow becomes a PARAMETERIZED tool (inputSchema from its non-secret slots).
-        # Secret slots resolve from $env, so they're omitted from the schema — note them in the description.
-        desc = spec.goal or spec_name
-        secret_envs = [s.secret_env for s in (spec.slots or {}).values()
-                       if getattr(s, "secret", False) and s.secret_env]
-        if secret_envs:
-            desc += f" (reads secret env var(s), not passed as arguments: {', '.join('$' + e for e in secret_envs)})"
-        if is_write:  # H2 stage 2: WARN loud — a write is irreversible + rides the operator's identity.
-            desc = (f"[WRITE — performs a real, irreversible action on {origin_of(spec.start_url)}; runs under "
-                    f"the operator's identity and needs an interactive confirm] " + desc)
-        tools.append(FlowTool(name=tname, spec_name=spec_name, description=desc, is_write=is_write,
-                              output_schema=spec.extract_schema,
-                              input_schema=slots_to_input_schema(spec.slots)))
+        if tool is not None:
+            tools.append(tool)
     return tools
+
+
+def _tool_for(spec, spec_name: str, cache: FlowCache, *, expose_writes: bool,
+              claimed: "dict[str, str]") -> "Optional[FlowTool]":
+    """Decide whether ONE spec is advertised, and as what. `None` = not advertised (reason logged).
+
+    Split out of `list_flow_tools` so every cache read on this path sits inside a single guarded call.
+    The loop reads the cache TWICE — `health()` and then `_is_write_flow` — at two different moments, so
+    guarding them one at a time leaves the second exposed to a transient sharing violation of its own.
+    """
+    from .. import flows
+
+    health = flows.health(spec, cache=cache)
+    if not (health.approved and health.cached):  # only human-approved, learned flows
+        return None
+    if health.approval_stale:
+        # The approval bit is set but no longer binds the steps on disk (they were re-authored, or the
+        # flow predates the binding). Pre-flight would refuse every call with `stale_approval`, so don't
+        # advertise it at all — an unlisted tool an agent never calls beats a listed tool that always
+        # fails. Logged, not silent: an operator needs to know why their tool vanished.
+        _log.warning("mcp: skipping %r — approval no longer matches the flow's steps; review with "
+                     "`flow inspect --name %s` and re-approve", spec_name, spec_name)
+        return None
+    is_write = _is_write_flow(spec, cache)
+    if is_write:
+        # A write is exposed ONLY behind --expose-writes AND only if it's a DECLARED write with a confirm
+        # check. An undeclared write (mutating steps, no spec.mutate) has no confirm barrier -> replay
+        # can't verify it landed -> never exposed. A declared write missing a confirm would only ever
+        # refuse at preflight, so don't advertise it either.
+        if not (expose_writes and spec.mutate is not None and spec.mutate.has_confirm()):
+            return None
+    tname = _tool_name(spec_name)
+    if tname in claimed:
+        _log.warning("mcp: tool name %r from spec %r collides with spec %r — skipping the later one",
+                     tname, spec_name, claimed[tname])
+        return None
+    claimed[tname] = spec_name
+    # H2 stage 3: a slotted flow becomes a PARAMETERIZED tool (inputSchema from its non-secret slots).
+    # Secret slots resolve from $env, so they're omitted from the schema — note them in the description.
+    desc = spec.goal or spec_name
+    secret_envs = [s.secret_env for s in (spec.slots or {}).values()
+                   if getattr(s, "secret", False) and s.secret_env]
+    if secret_envs:
+        desc += f" (reads secret env var(s), not passed as arguments: {', '.join('$' + e for e in secret_envs)})"
+    if is_write:  # H2 stage 2: WARN loud — a write is irreversible + rides the operator's identity.
+        desc = (f"[WRITE — performs a real, irreversible action on {origin_of(spec.start_url)}; runs under "
+                f"the operator's identity and needs an interactive confirm] " + desc)
+    return FlowTool(name=tname, spec_name=spec_name, description=desc, is_write=is_write,
+                    output_schema=spec.extract_schema,
+                    input_schema=slots_to_input_schema(spec.slots))
 
 
 async def call_flow_tool(

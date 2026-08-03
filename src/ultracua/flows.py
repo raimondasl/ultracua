@@ -28,7 +28,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Optional, Union
 
 from .browser import BrowserSession, _acquire_driver, _release_driver, driver_scope
-from .cache import CachedFlow, CachedStep, FlowCache, StepConfirm, flow_key, steps_hash
+from .cache import (CacheUnreadableError, CachedFlow, CachedStep, FlowCache, StepConfirm,
+                    flow_key, steps_hash)
 from .conditions import condition_present
 from .config import flow_home, settings
 from .contracts import (
@@ -251,7 +252,7 @@ class FlowHealth:
     """A flow's status for the fleet view."""
 
     name: str
-    status: str  # not-learned | never-run | healthy | failing | stale | quarantined
+    status: str  # not-learned | never-run | healthy | failing | stale | quarantined | unreadable
     cached: bool
     approved: bool
     runs: int
@@ -1404,7 +1405,16 @@ def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Op
     """
     cache = cache or _default_cache()
     key = flow_key(spec.goal, spec.start_url, spec.scope)
-    cached_flow = cache.get(key)
+    # `health()` backs `flow status` and the MCP tools/list loop, so ONE unreadable flow must not take down
+    # the fleet view — but it must not read as "not learned" either, which is what silently flattening it
+    # to None would do. Surface it as its own status.
+    try:
+        cached_flow = cache.get(key)
+    except CacheUnreadableError as exc:
+        _log.error("flow %r: cached recipe unreadable — %s", spec.name, exc)
+        return FlowHealth(name=spec.name, status="unreadable", cached=False, approved=False,
+                          runs=0, successes=0, consecutive_failures=0, last_run_ts=0.0, last_ok_ts=0.0,
+                          last_error=f"cached flow unreadable: {exc}")
     cached = cached_flow is not None
     meta = _load_meta(cache, key)
     # Is the approval still bound to the steps on disk? THE shared predicate, so the fleet view can SHOW a
@@ -2297,6 +2307,22 @@ async def run_all(
     sem = asyncio.Semaphore(concurrency or settings.concurrency)
 
     async def _one(name: str) -> FleetRun:
+        # ONE guard for the whole flow, not one per read. `cache.get` raises `CacheUnreadableError` rather
+        # than flattening a read failure into "not learned", and this body reads the cache in several
+        # places — the write gate here, and again inside `replay()`. Guarding them one at a time is how
+        # the first version of this was written, and it missed `replay()`'s: `except FlowReplayError`
+        # below does NOT catch a RuntimeError, and `gather` has no `return_exceptions`, so ONE unreadable
+        # recipe would cancel every OTHER flow's scheduled run on this cron tick. A boundary guard covers
+        # every read on the path, including ones added later. Loud for this flow, not for the fleet — and
+        # the flow is REFUSED, never run, because an unreadable recipe cannot be shown not to write.
+        try:
+            return await _one_guarded(name)
+        except CacheUnreadableError as exc:
+            _log.error("run-all %r: cached recipe unreadable — %s", name, exc)
+            return FleetRun(name=name, ok=False, status="failed",
+                            error=f"cached recipe unreadable, refusing to run it blind: {exc}")
+
+    async def _one_guarded(name: str) -> FleetRun:
         try:
             spec = load_spec(name)
         except Exception as exc:  # noqa: BLE001 - a missing/malformed spec is a failed flow, not a crash
@@ -2649,8 +2675,15 @@ async def canary_all(
             spec = load_spec(name)
         except Exception as exc:  # noqa: BLE001
             return CanaryResult(name, "error", f"load failed: {exc}")
-        async with sem:
-            return await canary(spec, cache=cache)
+        try:
+            async with sem:
+                return await canary(spec, cache=cache)
+        except CacheUnreadableError as exc:
+            # `run_all`'s sibling, and it has the identical `gather`-without-`return_exceptions` blast
+            # radius: `canary()` reads the cache, so one unreadable recipe would take down the whole
+            # freshness sweep. Reported as its own status, never as "not-learned" — that is the very
+            # confusion `CacheUnreadableError` exists to prevent.
+            return CanaryResult(name, "error", f"cached recipe unreadable: {exc}")
 
     # One driver for the whole fan-out. Every flow still gets its own browser (the docstring's
     # "each replay uses its own browser" is unchanged) — this only stops N concurrent sessions from

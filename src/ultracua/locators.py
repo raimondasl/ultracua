@@ -85,6 +85,94 @@ class LocatorSpec(BaseModel):
 # RECORDER (recorder.py) builds a recorded step's spec with the IDENTICAL css path + neighbor anchor as the
 # learn path — resolution PARITY by construction (a recorded spec resolves exactly as a learned one would),
 # and recorded steps gain the drift-resilient neighbor anchor they previously lacked.
+# THE row-identity function. Included verbatim by BOTH `_SPECOF_JS` (capture) and `_ROW_OF_JS` (the
+# replay containment check), so there is exactly one implementation and they cannot drift. Assumes
+# `LM` is already in scope — every includer defines it.
+_ROWID_JS = r"""
+  // A ROW'S IDENTITY — one implementation, shared verbatim by capture (`_SPECOF_JS`) and by the replay
+  // containment check (`_ROW_OF_JS`). It used to be two copies with a comment saying they MUST agree; they
+  // did not, and could not be made to reliably.
+  //
+  // THE INVARIANT, and it is the whole design: an identity must DISCRIMINATE. Preference order is only a
+  // hint about which candidate is likely best — the requirement is that no OTHER row produces the same
+  // string. Enforcing that once, over every candidate, is the fix for a defect that has now recurred
+  // twice: the test was written per-branch, so `data-*` was checked and `id`/`href` were not, and a table
+  // posting to one endpoint (`action="/cancel"` + a hidden record key) or carrying a shared decorative
+  // link per row produced an "identity" byte-identical on every row. The guard then ran, reported
+  // satisfied, and protected nothing — and on a row holding BOTH a shared link and a real per-record
+  // token it was strictly worse than having no preference order at all, because the shared link outranked
+  // the token.
+  //
+  // Candidates are also collected exhaustively (ALL hrefs in the row, not just the first), so one shared
+  // decorative link can no longer mask the per-record action sitting beside it.
+  //
+  // Returns null when no candidate discriminates. That is the honest answer and it disables the guard for
+  // that row — a fabricated identity is far worse, because it makes the guard claim protection it does
+  // not provide.
+  //
+  // RESIDUAL, unchanged and stated rather than hidden: a POSITIONAL token (`data-index="2"`, `id="row-2"`)
+  // discriminates among today's siblings yet renumbers when a row is deleted, so the identity outlives the
+  // record it named. Nothing observable in a single capture separates that from a real key.
+  const _rowCands = (c) => {
+    const out = [];
+    try {
+      if (c.id) out.push('id:' + c.id);
+      const links = c.querySelectorAll ? Array.from(c.querySelectorAll('a[href], form[action]')) : [];
+      for (const l of links) {
+        const v = l.getAttribute('href') || l.getAttribute('action') || '';
+        if (v && v !== '#' && !/^javascript:/i.test(v)) out.push('href:' + v);
+      }
+      for (const a of Array.from(c.attributes || [])) {
+        if (a.name.indexOf('data-') === 0 && a.value) out.push(a.name + ':' + a.value);
+      }
+      // HIDDEN form fields. The very common "one endpoint plus a record key" table
+      // (`action="/cancel"` + `<input type=hidden name=order value=3>`) puts the ONLY thing that
+      // distinguishes the rows here — without this the row honestly reports no identity and the guard
+      // cannot run at all. Restricted to hidden fields on purpose: a VISIBLE input's value is user data
+      // (a quantity, a price) and changing it does not make the row a different record, which is the same
+      // reason row TEXT is not an identity. Being generous with candidates is safe precisely because the
+      // discrimination test below drops anything a sibling row also produces — a per-page CSRF token,
+      // identical in every row's form, is filtered out by construction rather than by a denylist.
+      const hidden = c.querySelectorAll ? Array.from(c.querySelectorAll('input[type=hidden][name]')) : [];
+      for (const h of hidden) {
+        const n = h.getAttribute('name'), v = h.getAttribute('value');
+        if (n && v) out.push('hidden:' + n + '=' + v);
+      }
+    } catch (e) {}
+    return out;
+  };
+  const rowIdOf = (c) => {
+    try {
+      const mine = _rowCands(c);
+      if (!mine.length) return null;
+      // What every OTHER row offers. Two queries total, then containment tests — no CSS selector is built
+      // from a page-controlled value, because mis-escaping one fails SILENTLY (measured: a bad character
+      // class made the whole check throw, so every row anchor refused and the corpus lost 8 rows).
+      const taken = new Set();
+      for (const other of Array.from(document.querySelectorAll(LM))) {
+        if (other === c) continue;
+        if (other.id) taken.add('id:' + other.id);
+        for (const a of Array.from(other.attributes || [])) {
+          if (a.name.indexOf('data-') === 0 && a.value) taken.add(a.name + ':' + a.value);
+        }
+      }
+      for (const l of Array.from(document.querySelectorAll('a[href], form[action]'))) {
+        if (c.contains(l)) continue;          // my own link is not evidence that the value is shared
+        const v = l.getAttribute('href') || l.getAttribute('action') || '';
+        if (v && v !== '#' && !/^javascript:/i.test(v)) taken.add('href:' + v);
+      }
+      for (const h of Array.from(document.querySelectorAll('input[type=hidden][name]'))) {
+        if (c.contains(h)) continue;
+        const n = h.getAttribute('name'), v = h.getAttribute('value');
+        if (n && v) taken.add('hidden:' + n + '=' + v);
+      }
+      for (const v of mine) if (!taken.has(v)) return v;   // first candidate that DISCRIMINATES
+    } catch (e) {}
+    return null;                                          // cannot prove discrimination -> claim nothing
+  };
+"""
+
+
 _SPECOF_JS = r"""
   const cssPath = (e) => {
     const parts = [];
@@ -108,51 +196,7 @@ _SPECOF_JS = r"""
   // reserve the loose whole-subtree substring for row text (which has no cleaner signal).
   const LM = 'form,fieldset,section,article,aside,nav,dialog,[role=region],[role=group],[role=form],li,tr,[role=listitem]';
   const _ucnorm = (s) => (s || '').replace(/\s+/g, ' ').trim();
-  // A row's stable identity. Returns null when the row offers none — a very common case, and one where we
-  // must NOT invent one, because a fabricated identity is worse than an absent one: the guard runs, reports
-  // satisfied, and protects nothing.
-  //
-  // PRECEDENCE, and it is load-bearing. This used to take ANY `data-*` in attribute order and return it
-  // BEFORE looking at the href — so on a design-system table stamping `data-testid="order-row"` on every
-  // row, the captured "identity" was present on every sibling and the guard became a no-op, while the real
-  // identity (`href:/cancel/3`) sat unread in the same row. Now:
-  //   1. an explicit `id`;
-  //   2. the first href/action inside the row — a URL usually EMBEDS the record key (`/cancel/3`), which is
-  //      the strongest thing a row offers;
-  //   3. a `data-*` ONLY if no sibling landmark carries the same attribute+value. That uniqueness test is
-  //      exactly what separates a per-record `data-order-id="3"` from a shared `data-testid="order-row"`,
-  //      and it is decidable here, at capture, from the page in front of us.
-  // `_ROW_OF_JS` in this same file re-implements this order for the post-bind containment check; the two
-  // MUST agree, which is why they are commented as a pair.
-  //
-  // RESIDUAL, stated rather than hidden: a POSITIONAL token (`data-index="2"`, `id="row-2"`) is unique
-  // among its siblings and so passes, yet renumbers when a row is deleted — the identity survives the
-  // record it named. Nothing observable in a single capture distinguishes that from a real key. Rows that
-  // also carry an href are covered, because the href now wins.
-  const rowIdOf = (c) => {
-    try {
-      if (c.id) return 'id:' + c.id;
-      const link = c.querySelector('a[href], form[action]');
-      if (link) {
-        const v = link.getAttribute('href') || link.getAttribute('action') || '';
-        if (v && v !== '#' && !/^javascript:/i.test(v)) return 'href:' + v;
-      }
-      for (const a of Array.from(c.attributes || [])) {
-        if (a.name.indexOf('data-') !== 0 || !a.value) continue;
-        // Compare ATTRIBUTES directly rather than building a CSS selector from the value. A selector
-        // needs the value escaped, and getting that escaping wrong fails SILENTLY: the query throws, the
-        // identity is dropped, and the guard degrades without a word. (Measured, in this very change: a
-        // mis-escaped character class made the whole check throw, so every row anchor refused and the
-        // drift corpus lost 8 rows of 0-LLM survival.) getAttribute has no such edge.
-        let shared = 0;
-        for (const other of Array.from(document.querySelectorAll(LM))) {
-          if (other !== c && other.getAttribute && other.getAttribute(a.name) === a.value) shared++;
-        }
-        if (shared === 0) return a.name + ':' + a.value;   // unique among rows -> a real identity
-      }
-    } catch (e) {}
-    return null;
-  };
+""" + _ROWID_JS + r"""
   const anchorOf = (e) => {
     let c = e.closest(LM), hops = 0;
     while (c && hops < 4) {
@@ -290,12 +334,15 @@ async def _testid_contradicted(loc: Locator, testid: Optional[str]) -> bool:
 _ROW_OF_JS = r"""
 (el) => {
   const LM = '""" + _LANDMARKS + r"""';
-  // MIRROR `anchorOf`'s walk exactly. Capture does NOT use the nearest landmark — it climbs (max 4 hops)
-  // until it reaches a ROW-LIKE container (li / tr / [role=listitem]) and takes THAT one's identity. The
-  // nearest landmark is very often a per-row <form> nested inside the <tr>, whose identity is a different
-  // string entirely; using it here made every cart-row drift refuse and cost 8 rows of 0-LLM survival on
-  // the drift corpus. (`anchor_source` is only 'row' when the walk got past any aria-label/heading
-  // landmark, so this function does not need to re-check those.)
+""" + _ROWID_JS + r"""
+  // Find the row the BOUND element sits in, by the SAME walk `anchorOf` uses at capture. Not the nearest
+  // landmark: that is very often a per-row <form> nested inside the <tr>, whose identity is a different
+  // string entirely. (`anchor_source` is only 'row' when the capture walk got past any aria-label/heading
+  // landmark, so this does not need to re-check those.)
+  //
+  // `rowIdOf` itself is INCLUDED above, not re-implemented. The previous version was a second copy with a
+  // comment saying the two must agree; they did not, and that divergence cost 8 rows of corpus survival
+  // once and a wrong-row write another time. One text, two includers.
   let c = el.closest && el.closest(LM), hops = 0, row = null;
   while (c && hops < 4) {
     const role = c.getAttribute && c.getAttribute('role');
@@ -304,23 +351,7 @@ _ROW_OF_JS = r"""
     hops++;
   }
   if (!row) return '';
-  try {
-    if (row.id) return 'id:' + row.id;
-    const l = row.querySelector('a[href], form[action]');
-    if (l) {
-      const v = l.getAttribute('href') || l.getAttribute('action') || '';
-      if (v && v !== '#' && !/^javascript:/i.test(v)) return 'href:' + v;
-    }
-    for (const a of Array.from(row.attributes || [])) {
-      if (a.name.indexOf('data-') !== 0 || !a.value) continue;
-      let shared = 0;
-      for (const other of Array.from(document.querySelectorAll(LM))) {
-        if (other !== row && other.getAttribute && other.getAttribute(a.name) === a.value) shared++;
-      }
-      if (shared === 0) return a.name + ':' + a.value;
-    }
-  } catch (e) {}
-  return '';
+  return rowIdOf(row) || '';
 }
 """
 
