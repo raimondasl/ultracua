@@ -621,6 +621,85 @@ the pinned 0-LLM read is silently back on the LLM extractor.
 
 ---
 
+# Why a 757-test suite kept missing these — measured, 0.75.0
+
+The obvious hypothesis was that the suite is weak. **It is not, and the measurement says so.**
+
+**Mutation test.** Nine deliberate defects, each a class this project has actually shipped, each applied
+in its own git worktree and run against the suite: the R3.2 refusal removed, the wire-vs-classifier
+check dropped, `cache.get` failing open, the row-identity discrimination test removed, the
+Idempotency-Key dropped on replay, the precondition gate disabled, `is_write_request` blinded, MCP
+exposing unapproved flows, the promotion loop's silent drop. **All nine were caught**, most within a
+targeted subset in under four minutes.
+
+Two follow-ups also came back clean. Entry-point coverage is not the problem — 88 `run_cached` call
+sites, 131 `replay`, 120 `record` across 25 files, so tests are not knocking on the wrong door. And an
+AST scan that flagged three tests as "unable to fail" was WRONG: they call `_preflight_row` expecting it
+not to raise, and mutating that function to always raise fails all three. The heuristic did not count
+"a call that must not raise" as an assertion. Recorded because a wrong measurement asserted confidently
+is the same failure mode this register keeps documenting, and it was made here.
+
+## The actual answer
+
+**Mutation testing can only probe guards that EXIST. Every defect this project has shipped was a guard
+that was MISSING.** So a 9/9 mutation score is entirely consistent with the observed failure rate — the
+two measure different things.
+
+The suite is **regression-shaped**: one bespoke test per known defect, each asserting a specific
+scenario. That makes it excellent at proving known bugs stay fixed, and structurally incapable of
+failing for a bug nobody has thought of. The corroborating fact is stark: **~44 findings across three
+adversarial audit rounds, and not one of them was discovered by the test suite.** Every one came from an
+audit; the suite's role has been to hold the fix afterwards.
+
+Four of the nine mutations were caught by exactly ONE test, three of those in the single file added with
+the fix. So a guard is often only as covered as the one test written beside it — and if that test is
+subtly wrong (one of them was: it passed against pre-fix source until corrected), the guard is
+effectively uncovered.
+
+## What was added, and the evidence it is worth having
+
+`tests/test_write_safety_invariants.py` states inviolable #3 as a PROPERTY over a generated
+cross-product (commit mechanism x position x classifier bait x classifier visibility, 24 cells), rather
+than as 24 scenarios:
+
+    If a POST reached the server while learning, then EITHER the flow was refused,
+    OR the recipe has a gated step AND every POST on replay carries an Idempotency-Key.
+    AND a commit the classifier can see for itself must remain learnable.
+
+That second clause is not decoration. Without it the property is satisfied by refusing everything, which
+is exactly the regression the first attempt at the R3.2 safety fix shipped.
+
+**Value, measured against the real bug that attempt introduced** (refuse on `unattributed` alone, no
+consistency check):
+
+    existing write-safety files (54 tests)   ALL PASS
+    the invariant matrix                     8 of 24 cells FAIL, naming the property and the shapes
+
+The full suite did catch that bug — through `test_press_gate`, a login-flow file, seventeen minutes in,
+as an opaque `assert learn.success`. The matrix catches it in under a minute with a message saying which
+property broke and for which shapes.
+
+## Two things this exercise proved about building the matrix itself
+
+Both were caught by instrumenting the cells rather than trusting them, and both would have made the file
+look thorough while testing nothing:
+
+  1. The first draft gave the commit step the intent "place the order" — so `classify_mutation` gated
+     every cell from the words alone and the classifier-blind case, where every real defect has lived,
+     was never exercised.
+  2. Varying only the intent was still not enough: the control's ACCESSIBLE NAME feeds the classifier
+     too, so a button labelled "Place order" is gated however blandly the intent is worded.
+
+**A matrix is only as good as the axis you forgot.** Print what each cell actually exercised before
+believing it.
+
+## How to use this file
+
+When a defect is found in write safety, add a DIMENSION here rather than a new bespoke test. A failing
+cell is a real defect: the flow either cached a write with nothing gated, replayed one un-keyed, or
+refused a flow that must stay learnable.
+
+
 # Round 3 — the 2026-08-03 re-audit of everything written since v0.70.0
 
 **Scope.** `git diff 9d7de9c..HEAD -- src/` — 387 insertions across 6 files (flows.py +187,

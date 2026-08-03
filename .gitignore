@@ -31,3 +31,6 @@ node_modules/
 
 # Manual eval suite outputs (evals/ is run manually, never CI)
 evals/results/
+
+# Workflow-tool worktrees (mutation runs, isolated agents) — never committed
+.claude/worktrees/

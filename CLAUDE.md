@@ -46,6 +46,21 @@ Violating any of these is a blocking defect, not a trade-off:
 - Keep large/working data off `C:` (`D:\ultracua-data`). `.env`, `.ultracua`, `.scratch` are gitignored;
   `baselines/` is committed.
 
+## The suite is regression-shaped — measured, and it matters
+
+Nine mutation tests (one per defect class this project has shipped) are ALL caught, entry-point coverage
+is broad, and the tests flagged as unfalsifiable turned out to be fine. The suite is not weak. But
+**mutation testing only probes guards that exist, and every defect here has been a guard that was
+MISSING** — ~44 findings across three audit rounds, *not one discovered by the suite*. It proves known
+bugs stay fixed; it cannot fail for a bug nobody has thought of.
+
+So when you fix something in write safety, add a DIMENSION to
+`tests/test_write_safety_invariants.py` — which asserts the inviolable as a property over a
+cross-product — rather than only a bespoke test beside the fix. And note both halves are load-bearing:
+without the "must remain learnable" clause the property is satisfied by refusing everything, which is a
+regression that actually shipped. When you build such a matrix, PRINT what each cell exercised before
+believing it; two drafts of that file looked thorough while testing nothing.
+
 ## Two habits that have repeatedly paid off
 
 **Reproduce before fixing.** Several reported defects have been misdiagnosed — the symptom real, the stated
