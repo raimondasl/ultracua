@@ -5,11 +5,25 @@ failing LOUD on drift.**
 
 ## Read this first
 
-**[docs/open-defects.md](docs/open-defects.md) — the standing defect register.** Two rounds, 30 findings,
-all fixed (0.64.0–0.72.0). Round 2 is the one to read: it re-audited the ~1059 lines round 1's fixes ADDED
-and found 10 more, 2 critical — **mostly holes in those fixes**, including that A1 was never actually
-closed. The pattern below struck the very changes written to prevent it. Read it before touching what it
-names, and note the residuals it records.
+**[docs/open-defects.md](docs/open-defects.md) — the standing defect register.** THREE rounds. Rounds 1–2
+(30 findings) are fixed; **round 3 found 11 more in the 387 lines those fixes added, 1 critical, and
+refuted NONE of them.** Two are regressions the fixes introduced. Defect density in fix code measured ~3x
+the code it replaced, so **a patch on a patch is the thing to be most suspicious of here** — three round-3
+findings are the same shape as the finding they were fixing, one level down. When you close something,
+change the shape so the invariant is enforced ONCE rather than adding another per-branch test.
+
+**Two of round 3 were answered that way in 0.73.0** (R3.1, R3.4): two transcriptions of a JS snippet
+became one, and a return type that could only say "absent" learned to say "unreadable". **A third
+(R3.2, write attribution) was built, audited before merge, measured to have introduced a CRITICAL
+regression, and reverted** — read that section before touching attribution, because it rules out every
+purely temporal design and points at the causal signal `recorder.py` has had since Phase I. **Nine
+remain open.**
+
+**Audit the fix, not just the code it fixes.** The reverted redesign was green — 754 tests,
+`drift_bench` clean, every regression test verified to fail against the pre-fix source — and still
+critically wrong. Three rounds running, fix code has been the defect source; the only thing that has
+ever caught it is an adversarial pass aimed squarely at the new code. Run one before you open the PR,
+not one release later.
 
 ## The three inviolables
 
@@ -23,8 +37,9 @@ Violating any of these is a blocking defect, not a trade-off:
 
 - **`uv` for everything.** `uv run --no-sync pytest tests/... -q`, `uv run --no-sync python -m benchmarks.X`.
   Never bare `uv sync` (it strips groups) — use `uv sync --all-groups`.
-- The full suite is **key-less** — real headless Chromium against local fixtures, no API key, ~15 min.
-  It must be green before a commit.
+- The full suite is **key-less** — real headless Chromium against local fixtures, no API key, ~18 min
+  (it grew from ~15 when 0.73.0 added a per-step attribution drain to the learn path). It must be green
+  before a commit.
 - **One slice per PR**, branched off `main`, single-sourced version bump in `pyproject.toml` first
   (then `uv sync --all-groups`). The user reviews and merges; don't merge.
 - Secrets are env-resolved and **never** serialized, logged or written to disk. Never paste a key value.

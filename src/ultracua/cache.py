@@ -29,6 +29,11 @@ from .types import ActionType
 SCHEMA_VERSION = 4  # v4: reading-order snapshot (changes ref order + fingerprint basis) + AccName names
 
 
+class CacheUnreadableError(RuntimeError):
+    """A cached flow EXISTS on disk but could not be read. Distinct from "no cached flow", because callers
+    treat the latter as "not learned" — and one safety predicate turns that into "not a write"."""
+
+
 class StepConfirm(BaseModel):
     """Per-write action-completion check (Phase G multi-write) — the per-step echo of `MutateSpec.confirm_*`.
 
@@ -229,13 +234,43 @@ class FlowCache:
         return self.root / f"{key}.json"
 
     def get(self, key: str) -> Optional[CachedFlow]:
+        """The cached flow, or None if there ISN'T ONE. Raises `CacheUnreadableError` if there is one and
+        we could not read it — those are different facts and collapsing them is a fail-OPEN.
+
+        `None` is read by callers as "not learned", and at least one safety predicate keys off exactly
+        that: `is_write_flow(spec, cache.get(key))` returns False for None, so "the file could not be read
+        right now" became "this is not a write" and an undeclared write ran on the scheduled fleet. The
+        fault class is real and documented on the sibling sidecar — the meta loader carries a retry loop
+        specifically for Windows AV/indexer sharing violations (WinError 32) on this same directory.
+
+        So a transient OSError is RETRIED, and a persistent one raises rather than being flattened into a
+        miss. A CORRUPT entry still returns None: the bytes are there and they are not a flow, so it is
+        genuinely unusable and every caller's "no cached flow" path is the right one (replay reports
+        `mode == "miss"` and fails loud). Callers that must survive one bad flow — `health()` and the MCP
+        `tools/list` loop — catch the error and degrade VISIBLY instead of silently reporting not-learned.
+        """
         p = self._path(key)
-        if not p.exists():
-            return None
+        raw, io_error = None, None
+        for attempt in range(3):
+            try:
+                if not p.exists():
+                    return None                      # genuinely absent — the ordinary pre-learn state
+                raw = p.read_text(encoding="utf-8")
+                io_error = None
+                break
+            except OSError as exc:
+                io_error = exc
+                if attempt < 2:
+                    time.sleep(0.05 * (attempt + 1))
+        if io_error is not None:
+            raise CacheUnreadableError(
+                f"the cached flow at {p} exists but could not be read after 3 attempts ({io_error}). "
+                f"Refusing rather than treating it as 'not learned' — that reading would let an "
+                f"undeclared write through a surface that skips writes.") from io_error
         try:
-            flow = CachedFlow.model_validate_json(p.read_text(encoding="utf-8"))
+            flow = CachedFlow.model_validate_json(raw)
         except Exception:
-            return None  # corrupt entry -> miss
+            return None  # corrupt entry -> miss (the bytes are there and are not a flow; fail-loud downstream)
         if flow.schema_version != SCHEMA_VERSION:
             return None  # incompatible -> miss (re-learn)
         if self.ttl_seconds is not None and (time.time() - flow.created_ts) > self.ttl_seconds:

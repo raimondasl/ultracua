@@ -14,7 +14,7 @@ import sys
 from dataclasses import asdict
 from typing import Optional
 
-from .cache import FlowCache, flow_key
+from .cache import CacheUnreadableError, FlowCache, flow_key
 from .config import settings
 from .flow import run_cached
 from .providers import get_provider
@@ -350,7 +350,14 @@ def _flow_approve_all(args: argparse.Namespace) -> None:
             skipped.append((name, f"unreadable spec: {exc}"))
             continue
         key = flow_key(spec.goal, spec.start_url, spec.scope)
-        cached = cache.get(key)
+        try:
+            cached = cache.get(key)
+        except CacheUnreadableError as exc:
+            # Same rule as the unreadable-spec branch above, applied to the sibling read: one bad file
+            # must not abort a bulk approve. It is SKIPPED, never approved — `is_write_flow` below decides
+            # whether this flow needs individual review, and an unreadable recipe cannot answer that.
+            skipped.append((name, f"cached recipe unreadable — refusing to bulk-approve it blind: {exc}"))
+            continue
         if cached is None:
             skipped.append((name, "not learned yet"))
             continue
