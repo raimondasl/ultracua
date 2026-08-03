@@ -731,6 +731,81 @@ this register keeps naming. Two candidate designs for the next slice:
 Whichever is chosen, share ONE implementation with the recorder rather than transcribing it — that is
 the whole lesson of R3.1, one file over.
 
+**R3.2's SAFETY HALF is closed in 0.74.0, and it was worse than this register said.** The attribution
+RULE is still wrong — that is the open part, above — but the belief that its wrongness was *fail-safe*
+was itself wrong, and that has been fixed.
+
+*What was actually true on 0.73.0.* The claim was: nothing gets attributed, so nothing is marked
+`mutating`, so `_learn_once` refuses. It refuses only when `not any(s.mutating for s in cached.steps)`
+— an INFERENCE — and `classify_mutation` marks a step mutating from its INTENT TEXT alone. Measured,
+with the real commit on a later step:
+
+    intent of the benign sibling = "look at the panel"   -> refused (loud, safe)
+    intent of the benign sibling = "submit the search"   -> CACHED
+        [(0, 'submit the search', True), (1, 'continue', False)]
+
+The gate, the precondition and the Idempotency-Key attach to a step that never writes, and the real
+commit caches as a READ — no gate, no precondition, no key, and heal- and replan-eligible because
+`not step.mutating`. An inviolable-#3 violation, silent, reachable by nothing more exotic than an LLM
+writing the word "submit" in a step's intent.
+
+*The rule that replaced it is a CONSISTENCY check, not an attribution.* R3.2 is still open and this
+does not close it. When a wire write cannot be attributed, the wire and the classifier must at least
+AGREE about where it is: the step that was IN FLIGHT when the write fired must be one the recipe gates.
+Agreement means the Idempotency-Key, the precondition and the drift gate sit on a row that really was
+mid-flight when a write left the browser. Disagreement means they sit on the wrong row, and the flow is
+refused. Two independent signals cross-checked is a weaker claim than attribution and a sound one.
+
+*Getting the BALANCE right is the whole difficulty, and the first version of this fix failed the other
+way.* It refused on "unattributed" alone. But fill-a-field-then-submit — the ORDINARY shape of a write
+flow — has its commit on a later step, which R3.2 leaves unattributable, while `classify_mutation`
+gates that step perfectly well. Measured: refusing on "unattributed" alone failed every
+`test_press_gate` login flow, i.e. it would have made essentially every real write flow unlearnable.
+Those flows are fine, and the consistency rule keeps them: wire and classifier agree.
+
+    silent-wrong  : write fires while step 1 is in flight, recipe gates step 0  -> DISAGREE -> refuse
+    ordinary flow : write fires while step 1 is in flight, recipe gates step 1  -> AGREE    -> cache
+
+Structurally identical to `any(s.mutating)`, and separable only by which step was in flight — which is
+the fact the old inference threw away.
+
+*And the refusal moved into the MECHANISM.* It lived in `flows._learn_once`; `ultracua run` and the
+daemon call `flow.run_cached` directly and never reach that function, so the guard covered one of three
+callers. It is now in `_learn`, which all three go through. Guard-in-the-wrapper is this register's
+most-repeated defect shape, and it was sitting in the guard for it.
+
+Also closed while in there: the promotion loop's `p = pos_of.get(i); if p is None: continue`. A write
+can be positively ATTRIBUTED to a step whose act then failed, so no step was appended to carry its gate
+— and that branch dropped it silently. It is exactly as unattributable as one nobody claimed, and now
+refuses.
+
+*Residual, stated and NOT closed.* A write deferred out of its own step into a neighbour that happens
+to be classifier-mutating passes the consistency check. That is R3.2's residual exactly; this slice
+makes the failure safe where the two signals disagree, and claims nothing where they agree by accident.
+It closes when attribution becomes causal.
+
+*The cost, measured rather than asserted.* `safety.is_write_request` counts any non-idempotent,
+non-telemetry request as a write, so a click-triggered GraphQL/JSON-RPC **read**-POST is over-counted —
+a documented residual. Such a read flow is therefore not learnable, and an earlier draft of this
+entry claimed that was "not new" because `flows.learn` already refused it. An audit of this very change
+called that measurably false, and it was. What was actually measured on 0.73.0:
+
+    GraphQL read flow, no step's intent trips the classifier   -> flows.learn already REFUSED
+    GraphQL read flow, one step's intent says "submit the …"   -> flows.learn CACHED it, as
+        [('submit the filter', mutating=True), ('load more products', mutating=False)]
+
+So the second shape is newly refused. But note WHAT it used to do: it cached with the gate, the
+precondition and the Idempotency-Key on a step that issues no request at all, while the POST rode the
+ungated step beside it. That is the same silent-wrong this slice exists to close, wearing a read flow's
+clothes. The honest statement is not "nothing changes" — it is that the flows which newly refuse are
+exactly the flows that used to cache mis-gated.
+
+Do NOT "fix" the GraphQL case by narrowing what counts as a write (a read-endpoint allowlist, a
+response-shape probe, an inline-handler heuristic). A design panel judged that class and flagged it as
+reintroducing precisely the silent-wrong being removed here: anything that decides a POST is benign
+without proof will eventually decide a commit is benign. The residual closes when attribution becomes
+causal, not when detection becomes cleverer.
+
 **R3.4 — the fact became expressible in the type.** `FlowCache.get` returned `Optional[CachedFlow]`
 and flattened every failure into `None`, which reads as "not learned" everywhere — and
 `is_write_flow(spec, cache.get(key))` is False for `None`, so a file the OS declined to hand over
@@ -1148,4 +1223,49 @@ practice, the finding is refuted and should be recorded as such.
 `drain`, so the exclusivity mechanism exists — it just needs to bound attribution to the drained
 window rather than to a 2s tail that outlives it. Do not add a second slot; that is the patch R4
 tried.
+
+### R3.13. A refusal is NON-TERMINAL: nothing is remembered, so every `mode="auto"` invocation re-authors the flow and re-fires the write un-keyed
+
+*medium, lens `over-refusal`, confirmed 2/2 by the audit and then MEASURED against the shipped code —
+RECORDED, NOT FIXED in 0.74.0. Not a regression: measured identical before and after.*
+
+**Where.** `src/ultracua/flow.py` (`_learn`'s refusal), `src/ultracua/flows.py:_learn_once`.
+
+**Mechanism.** A refused flow caches nothing and records nothing, so the next `mode="auto"` run finds no
+recipe, learns again, drives the browser again, and the page fires the same write again. Best-of-N
+inside one call is already guarded (`_learn_n` breaks on `performed_write`); this is strictly an
+ACROSS-INVOCATION hazard.
+
+**Measured, three `mode="auto"` invocations of the same refusing flow** (the R3.2 disagreement shape: a
+benign step whose intent trips the keyword classifier, real commit on the next step):
+
+    0.74.0   run1 learn  success=False unattributed=True  cached=False   POSTs=1
+             run2 learn  success=False unattributed=True  cached=False   POSTs=2
+             run3 learn  success=False unattributed=True  cached=False   POSTs=3
+             TOTAL 3 POSTs, 0 carrying an Idempotency-Key
+
+    0.73.0   run1 learn  success=True                     cached=True    POSTs=1
+             run2 replay success=True                     cached=True    POSTs=2
+             run3 replay success=True                     cached=True    POSTs=3
+             TOTAL 3 POSTs, 0 carrying an Idempotency-Key
+
+**Identical write counts. The difference is only what the tool SAYS while doing it.** 0.73.0 cached the
+flow with the gate and the Idempotency-Key on the step that issues no request, so every replay fired the
+real commit un-keyed anyway — and reported success. 0.74.0 fires the same number of un-keyed writes and
+reports the refusal. So this slice does not worsen the hazard, and does not fix it either; it makes it
+visible, which is a precondition for fixing it.
+
+**Note the earlier draft of this entry was wrong**, and how. It was written from the audit's
+reproduction, which used a `<form method=post>` submit — a shape that does NOT refuse under the shipped
+consistency rule (the classifier gates the submit step and the wire agrees), so it demonstrated nothing
+about the shipped code. Re-measuring on a shape that actually refuses is what produced the numbers
+above, and is what changed the conclusion from "widened by 0.74.0" to "unchanged by it". Reproduce
+against the code you are shipping, not against the draft the finding was written for.
+
+**Fix shape.** A persistent refusal marker, and the machinery exists: `FlowMeta.quarantine`, already
+used by `_poisoned_meta()` for an unreadable sidecar. Quarantining the key on refusal makes the second
+invocation refuse WITHOUT driving a browser. That is a real behaviour change — quarantine feeds
+`health()`, the MCP tool list, `run_all`'s skip logic and the CLI — so it wants its own slice and its
+own audit. Check the siblings while there: `record()` refuses the same class with the same
+non-terminal property.
 

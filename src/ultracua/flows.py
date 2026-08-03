@@ -1037,12 +1037,40 @@ async def _learn_once(
     # best-of-N loop uses it — this is the sibling path that didn't. `.get()` because the early returns
     # (miss / escalate / no-provider) carry no "cached" key, and falsy is correct for all of them.
     cached = cache.get(key) if report.extra.get("cached") else None
-    # FAIL LOUD rather than cache a flow that provably WROTE but has no gated step. `_author_steps` now
-    # promotes a wire-attributed write onto the step that caused it, so this only fires on the residual it
-    # cannot attribute: a write landing on a step whose act FAILED (nothing was appended to attribute it
-    # to), or outside every act window. Caching that would leave an ungated, un-keyed write in the recipe —
-    # exactly what the promotion exists to prevent. `record()` has had this refusal since Phase I; `learn()`
-    # is the sibling that never did.
+    # An unattributable write is now refused by `flow._learn` ITSELF, which never caches it — so this
+    # surface only has to REPORT it. That move matters: `ultracua run` and the daemon call `run_cached`
+    # directly and never reach this function, so a guard living only here protected one of three callers.
+    if report.extra.get("write_unattributed"):
+        # DELETE any flow already on disk under this key. `_learn` refused, so it cached nothing THIS
+        # run — but a previous learn may have left a recipe there, and that recipe is exactly the kind
+        # this refusal exists to distrust (an older pass that mis-gated the same write). The guard this
+        # replaced did `cache.delete(key)`; dropping it would silently keep serving the stale flow to
+        # replay while reporting cached=False.
+        stale = cache.get(key)
+        if stale is not None:
+            cache.delete(key)
+            _log.warning("learn %r: refused an unattributable write and DELETED the previously cached "
+                         "flow under the same key — it may carry the same mis-placed gate", spec.name)
+        return LearnResult(
+            spec=spec, cached=False, steps=list(stale.steps) if stale else [], data=out.get("data"),
+            found=False, performed_write=True,
+            note="a write fired on the wire during discovery but no step could be attributed to it — "
+                 "refusing to cache it, because the write would replay with no mutation gate, no "
+                 "precondition and no Idempotency-Key, or with those attached to a step that never "
+                 "writes. `learn()` can only attribute a write that fires from its own action; a "
+                 "DEFERRED one (a debounce, a timer, an awaited round-trip) cannot be tied to a cause "
+                 "and is refused here — and `record()` refuses it too, for the same reason. Such a flow "
+                 "is not authorable today; see docs/open-defects.md R3.2.")
+    # BELT AND BRACES, and possibly now UNREACHABLE — kept deliberately, and labelled honestly rather
+    # than defended. This used to be the ONLY guard, and as the sole guard it was wrong twice over: it
+    # asks `not any(s.mutating)`, an INFERENCE that any sibling step whose intent text trips the keyword
+    # classifier makes false (measured: an intent of "submit the search" disarmed it and cached a flow
+    # whose real commit was marked a read), and it sat on a surface two of three callers never reach.
+    # `_learn` now refuses in the mechanism whenever a wire write cannot be reconciled with the recipe,
+    # which should subsume every case this branch caught. "Should" is doing real work in that sentence:
+    # it is a claim about a control-flow argument, not something measured, so the branch stays. If a
+    # later change proves it dead, DELETE it — do not leave a guard nobody can reach implying cover it
+    # does not give.
     if cached is not None and report.extra.get("performed_write") and not any(
             s.mutating for s in cached.steps):
         cache.delete(key)
@@ -1052,7 +1080,7 @@ async def _learn_once(
             note="a write fired on the wire during discovery but no step could be attributed to it — "
                  "refusing to cache a write flow with zero gated steps (it would replay with no mutation "
                  "gate, no precondition and no Idempotency-Key). Author it with `flow record`, which "
-                 "attributes each write to its commit.")
+                 "attributes each write that fires directly from its own action.")
     # Phase G: attach per-write completion barriers (in commit order) to the LLM-authored mutating steps.
     # A mismatch refuses the flow (delete + cached=False) — never a half/mis-confirmed multi-write flow.
     if cached is not None and spec.mutate is not None and spec.mutate.step_confirms:
