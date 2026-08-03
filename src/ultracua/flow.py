@@ -213,12 +213,12 @@ async def _author_steps(
     session: BrowserSession, goal: str, provider: Optional[Provider], governor: PacingGovernor,
     max_steps: int, on_step: Optional[OnStep] = None, grounding: Optional[Any] = None,
     block_mutations: bool = False,
-) -> "tuple[list[CachedStep], bool, int, list[StepTrace], bool]":
+) -> "tuple[list[CachedStep], bool, int, list[StepTrace], bool, bool]":
     """Drive the agent from the CURRENT page to author replayable steps toward `goal`.
 
     The shared discovery loop: `_learn` calls it after navigating to the start URL; the suffix-replan
     in `_replay` calls it from a mid-flow page to re-author just the broken tail. Returns
-    (steps, success, llm_calls, traces, performed_write).
+    (steps, success, llm_calls, traces, performed_write, write_unattributed).
 
     `performed_write` answers "did a write fire ON THE WIRE this pass?" — NOT just "is a mutating step in
     the recipe". Best-of-N / verify-by-replay must never re-run after a write (double-submit), and the
@@ -253,6 +253,14 @@ async def _author_steps(
     success = False
     no_progress = 0
     wrote = {"hit": False}  # did a write fire on the wire? (set by the request watcher + pre-act, below)
+    # Refuse-worthy state: a wire write this pass could not be reconciled with the recipe. Set by the
+    # end-of-function consistency check below, and by the promotion loop when an ATTRIBUTED write has no
+    # step to carry its gate.
+    unattributed = {"hit": False}
+    # Loop indices that were IN FLIGHT when an unattributed wire write was seen (the act window open, or
+    # its grace tail). Deliberately NOT an attribution — R3.2 is precisely that we cannot attribute from
+    # timing — but it is enough to catch the wire and the classifier DISAGREEING about where the write is.
+    acting_at_write: set[int] = set()
     # WHICH step each wire write belongs to. The act window already establishes causality in TIME; this
     # records the identity, so the evidence can be written back onto the step that caused it instead of
     # being kept as a single pass-global bit. See the promotion loop at the end of the function.
@@ -292,6 +300,13 @@ async def _author_steps(
             owner = _owner()
             if owner >= 0:
                 wrote_by_step.add(owner)
+            else:
+                # Attribution could not name an owner. Record WHICH STEP WAS IN FLIGHT anyway — the last
+                # act opened (its window may be open, or the write may be in its grace tail). This is not
+                # a claim about causality, and must never be used as one; it is the raw fact needed for
+                # the wire-vs-classifier consistency check at the end of this function.
+                if cur["i"] >= 0:
+                    acting_at_write.add(cur["i"])
         except Exception:  # noqa: BLE001
             pass
 
@@ -467,7 +482,16 @@ async def _author_steps(
     # the escape hatch is to declare it, never to expose it silently.
     for i in sorted(wrote_by_step):
         p = pos_of.get(i)
-        if p is None or steps[p].mutating:
+        if p is None:
+            # The write WAS attributed — to a step whose act then failed, so nothing was appended to
+            # `steps` and there is no row to carry the gate. Silently continuing here loses a write we
+            # positively identified: the flow would cache without it, and replay would fire it ungated,
+            # un-keyed and with no precondition. It is exactly as unattributable as one nobody claimed.
+            unattributed["hit"] = True
+            _log.warning("learn: a wire write was attributed to step %d, whose act failed — no cached "
+                         "step can carry its gate; refusing the flow", i)
+            continue
+        if steps[p].mutating:
             continue
         steps[p] = steps[p].model_copy(update={
             "mutating": True,
@@ -477,7 +501,41 @@ async def _author_steps(
         })
         _log.info("learn: step %d %r wrote on the wire — caching it as a WRITE (the classifier said "
                   "otherwise)", p, steps[p].intent)
-    return steps, success, llm, traces, wrote["hit"] or any(s.mutating for s in steps)
+
+    # WIRE vs CLASSIFIER: they must at least AGREE about which step the write belongs to.
+    #
+    # This is not attribution, and must not be mistaken for it — R3.2 is exactly that we cannot attribute
+    # from timing, and it is still open. It is a CONSISTENCY check between two independent signals, which
+    # is a weaker claim and a sound one: `acting_at_write` is which step was in flight when the wire saw a
+    # write, `gated` is where `classify_mutation` put the gate. When they intersect, the recipe's gate sits
+    # on a step that really was mid-flight when a write left the browser, and the flow is coherent even
+    # though nothing was positively attributed. When they do NOT, the gate is on a step that was not
+    # acting — so the Idempotency-Key, the precondition and the drift gate are all on the wrong row.
+    #
+    # Both directions are load-bearing, and the earlier version of this fix got the balance wrong by
+    # refusing on `unattributed` alone:
+    #   * REFUSING TOO MUCH kills the product. Fill-a-field-then-press-Enter is the ordinary shape of a
+    #     write flow, its commit is never the first step, and R3.2 leaves that write unattributed — but
+    #     `classify_mutation` marks the press step correctly, so the flow IS properly gated. Measured:
+    #     refusing on `unattributed` alone failed every `test_press_gate` login flow.
+    #   * REFUSING TOO LITTLE is R3.2's silent-wrong. Measured: a benign step whose intent text reads
+    #     "submit the search" is classified mutating, the real commit fires on the NEXT step, and the old
+    #     `any(s.mutating)` inference cached it with the gate on the step that never writes.
+    # The two are structurally identical to `any(s.mutating)` and distinguishable only by which step was
+    # in flight, which is what this check reads.
+    #
+    # Residual, stated: a write DEFERRED out of its own step and into a neighbour that happens to be
+    # classifier-mutating passes this check. That is the same residual R3.2 has and this slice does not
+    # claim to close — it needs the causal signal, not a better reading of the clock.
+    if acting_at_write and not wrote_by_step:
+        gated = {i for i, p in pos_of.items() if steps[p].mutating}
+        if not gated or not (acting_at_write & gated):
+            unattributed["hit"] = True
+            _log.warning("learn: a wire write fired while step(s) %s were in flight, but the recipe gates "
+                         "step(s) %s — the classifier and the wire disagree about where the write is, so "
+                         "the gate cannot be trusted", sorted(acting_at_write), sorted(gated))
+    return (steps, success, llm, traces, wrote["hit"] or any(s.mutating for s in steps),
+            unattributed["hit"])
 
 
 async def _verify_by_replay(
@@ -554,7 +612,7 @@ async def _learn(
         if reflections:
             author_goal = goal + "\n\nLESSONS FROM PRIOR FAILED ATTEMPTS (do not repeat these mistakes):\n" + \
                 "\n".join(f"- {r}" for r in reflections)
-        steps, success, llm, step_traces, performed_write = await _author_steps(
+        steps, success, llm, step_traces, performed_write, write_unattributed = await _author_steps(
             session, author_goal, provider, governor, max_steps, on_step=on_step, grounding=grounding,
         )
         traces.extend(step_traces)
@@ -578,6 +636,33 @@ async def _learn(
         extra = {"finalize": fin} if finalize else {}
         final_text = await _body_text(session)
         cached_here = False
+        learn_note = ""
+        # REFUSE HERE, IN THE MECHANISM. A wire write that no step could be held responsible for must
+        # never be cached: the recipe would replay it with no mutation gate, no precondition and no
+        # Idempotency-Key — or, worse, with all three attached to a DIFFERENT step that never writes.
+        #
+        # This guard used to live only in `flows._learn_once`, and lived there as an INFERENCE ("no step
+        # is mutating"). Both halves were wrong. The inference is disarmed by any sibling step whose
+        # intent text trips the keyword classifier — measured, "submit the search" was enough — and the
+        # placement misses every caller that reaches `run_cached` directly, which is `ultracua run` and
+        # the daemon. Guard in the wrapper rather than the mechanism is this codebase's most-repeated
+        # defect shape; the refusal belongs where the evidence is.
+        #
+        # Refusing looks exactly like a failed verify-by-replay (success=False, nothing cached, a reason
+        # in `extra`), so every existing caller already handles it.
+        if write_unattributed:
+            success = False
+            extra["write_unattributed"] = True
+            # Also on `note`: `extra` is not surfaced by the daemon's client, and a bare success=False
+            # with no reason is indistinguishable from "the agent gave up" — which is the fail-loud
+            # inviolable read as fail-quiet.
+            learn_note = (
+                "a write fired on the wire that no step could be attributed to — refusing to cache it "
+                "(it would replay ungated, un-keyed and without a precondition, or with those on a step "
+                "that never writes). Record it with `flow record`.")
+            _log.warning("learn: a write fired on the wire that no step could be attributed to — NOT "
+                         "caching the flow (it would replay ungated, un-keyed and without a "
+                         "precondition). Record it with `flow record` instead.")
         if success and steps:
             candidate = CachedFlow(key=key, goal=goal, start_url=url, steps=steps, created_ts=time.time())
             # VERIFY-BY-REPLAY: a flow can look "solved" in-session yet not reproduce — its cached
@@ -604,6 +689,7 @@ async def _learn(
         # fire on the wire? Best-of-N uses both to stop the loop and to NEVER re-author after a write.
         extra["cached"] = cached_here
         extra["performed_write"] = performed_write
+        extra.setdefault("write_unattributed", write_unattributed)
         used = _router.totals.since(_usnap) if _router is not None else None
         if used is not None:
             extra["usage"] = used.as_dict(settings.model)
@@ -614,7 +700,7 @@ async def _learn(
         )
         return FlowReport(
             mode="learn", success=success, traces=traces, llm_calls=llm,
-            final_text=final_text, extra=extra,
+            final_text=final_text, extra=extra, note=learn_note,
         )
     finally:
         await session.close()
@@ -869,7 +955,8 @@ async def _replay(
                         "replay: step %d %r failed (%s) — suffix-replanning the tail",
                         i, step.intent, note,
                     )
-                    new_steps, authored_ok, replan_llm, replan_traces, _replan_wrote = await _author_steps(
+                    (new_steps, authored_ok, replan_llm, replan_traces, _replan_wrote,
+                     _replan_unattr) = await _author_steps(
                         session, goal, provider, governor, settings.max_steps, on_step=on_step,
                         block_mutations=True,  # a replay-repair must never perform a NEW write
                     )
