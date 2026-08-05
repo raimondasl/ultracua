@@ -5,25 +5,33 @@ failing LOUD on drift.**
 
 ## Read this first
 
-**[docs/open-defects.md](docs/open-defects.md) — the standing defect register.** THREE rounds. Rounds 1–2
+**[docs/open-defects.md](docs/open-defects.md) — the standing defect register.** FOUR rounds. Rounds 1–2
 (30 findings) are fixed; **round 3 found 11 more in the 387 lines those fixes added, 1 critical, and
-refuted NONE of them.** Two are regressions the fixes introduced. Defect density in fix code measured ~3x
+refuted NONE of them** (nine still open); round 4 was a pre-merge audit that PARKED a change rather than
+ship it. Two are regressions the fixes introduced. Defect density in fix code measured ~3x
 the code it replaced, so **a patch on a patch is the thing to be most suspicious of here** — three round-3
 findings are the same shape as the finding they were fixing, one level down. When you close something,
 change the shape so the invariant is enforced ONCE rather than adding another per-branch test.
 
 **Two of round 3 were answered that way in 0.73.0** (R3.1, R3.4): two transcriptions of a JS snippet
 became one, and a return type that could only say "absent" learned to say "unreadable". **A third
-(R3.2, write attribution) was built, audited before merge, measured to have introduced a CRITICAL
-regression, and reverted** — read that section before touching attribution, because it rules out every
-purely temporal design and points at the causal signal `recorder.py` has had since Phase I. **Nine
-remain open.**
+(R3.2, write attribution) has now defeated three attempts** — 0.73.0's drain (reverted), 0.74.0's first
+refusal draft (over-refused), and a 0.76.0 causal-attribution branch that was green and still wrong
+(**parked**, see `docs/parked/README.md`). Read that history before touching attribution: it rules out
+every purely temporal design, and it shows that green is not evidence here.
 
-**Audit the fix, not just the code it fixes.** The reverted redesign was green — 754 tests,
-`drift_bench` clean, every regression test verified to fail against the pre-fix source — and still
-critically wrong. Three rounds running, fix code has been the defect source; the only thing that has
-ever caught it is an adversarial pass aimed squarely at the new code. Run one before you open the PR,
-not one release later.
+**WORK FROM THE PLAN.** `docs/correctness-plan.md` sequences every open finding, test hole and unpinned
+residual into slices, worst user harm first, with the dependencies between them made explicit (the net
+gets strengthened before it is relied on; a hole-widener never lands before its hole-fix). Picking items
+ad hoc re-creates orderings the plan exists to prevent. `docs/correctness-survey.md` is the 58-item
+inventory it must dispose of.
+
+**Audit the fix, not just the code it fixes.** Both the reverted 0.73.0 redesign (754 tests green,
+`drift_bench` clean, every regression test verified RED against pre-fix source) and the parked 0.76.0
+branch (785 tests, same clean bench) were critically wrong. **Green is not evidence in this codebase.**
+Four rounds running, fix code has been the defect source, and the only instrument that has ever caught
+it is an adversarial pass aimed squarely at the new code — three for three. Run one before you open the
+PR, not one release later.
 
 ## The three inviolables
 
@@ -42,6 +50,10 @@ Violating any of these is a blocking defect, not a trade-off:
   before a commit.
 - **One slice per PR**, branched off `main`, single-sourced version bump in `pyproject.toml` first
   (then `uv sync --all-groups`). The user reviews and merges; don't merge.
+- **Re-run `uv sync --all-groups` after any branch switch that changes the version.** The venv keeps the
+  metadata of whatever was installed last, so `test_version_is_single_sourced_from_pyproject` fails with
+  a real-looking assertion (`'0.76.0' == '0.75.0'`) that is purely environmental. Diagnose it before
+  believing it — and before "fixing" the version to match a stale venv.
 - Secrets are env-resolved and **never** serialized, logged or written to disk. Never paste a key value.
 - Keep large/working data off `C:` (`D:\ultracua-data`). `.env`, `.ultracua`, `.scratch` are gitignored;
   `baselines/` is committed.
@@ -51,7 +63,7 @@ Violating any of these is a blocking defect, not a trade-off:
 Nine mutation tests (one per defect class this project has shipped) are ALL caught, entry-point coverage
 is broad, and the tests flagged as unfalsifiable turned out to be fine. The suite is not weak. But
 **mutation testing only probes guards that exist, and every defect here has been a guard that was
-MISSING** — ~44 findings across three audit rounds, *not one discovered by the suite*. It proves known
+MISSING** — ~60 findings across four audit rounds, *not one discovered by the suite*. It proves known
 bugs stay fixed; it cannot fail for a bug nobody has thought of.
 
 So when you fix something in write safety, add a DIMENSION to

@@ -156,7 +156,8 @@ Expose your **approved read flows** as tools to any MCP client — Claude, Curso
 the assistant makes **one deterministic, verified tool call** instead of driving a browser step by step:
 
 ```bash
-uv sync --group mcp                 # one-time: install the optional MCP SDK
+uv sync --all-groups                # one-time: installs the optional MCP SDK (and everything
+                                    # else). `--group mcp` alone would DROP the other groups.
 uv run ultracua flow serve-mcp      # stdio MCP server; wire this command into your client's mcpServers
 ```
 
@@ -644,7 +645,8 @@ ULTRACUA_LLM_BACKEND=anthropic ULTRACUA_TIER=fast \
   uv run ultracua --url https://example.com --goal "..."
 ```
 
-For the OpenAI / Gemini backends, install their SDKs (`uv sync --group providers`) and set the
+For the OpenAI / Gemini backends, install their SDKs (`uv sync --all-groups` — `--group providers`
+alone would drop the other groups and break the suite) and set the
 relevant key (`OPENAI_API_KEY` / `GEMINI_API_KEY`). Resilience knobs: `ULTRACUA_LLM_MAX_RETRIES`
 (default 3), `ULTRACUA_LLM_TIMEOUT_S` (default 60). The design of this layer is in
 [ARCHITECTURE.md](ARCHITECTURE.md#multi-provider-llm-layer).

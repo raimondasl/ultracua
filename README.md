@@ -31,7 +31,9 @@ benchmark numbers, and the known gaps live in **[STATUS.md](STATUS.md)**.
 ## Setup
 
 ```bash
-uv sync                              # create the venv + install deps (uv manages Python too)
+uv sync --all-groups                 # create the venv + install deps (uv manages Python too)
+                                     # NOT bare `uv sync` — it strips the bench/providers/mcp
+                                     # groups and the test suite then fails to import
 uv run playwright install chromium   # one-time browser download
 ```
 
@@ -82,7 +84,9 @@ Hacker News (read-only) and is built to record: `uv run python examples/hn_diges
 | **[GUIDE.md](GUIDE.md)** | developer guide: the Flow API + CLI in depth (auth, write flows, record by demonstration, health, providers) |
 | **[HEALING.md](HEALING.md)** | how it self-heals (and deliberately doesn't) when a page's elements change: resilient locators, LLM heal/re-plan, and the fail-loud boundaries |
 | **[docs/comparison-stagehand.md](docs/comparison-stagehand.md)** | ultracua vs. Stagehand — a design-philosophy comparison (drift/self-heal, write safety, data correctness), dated + sourced |
-| **[docs/open-defects.md](docs/open-defects.md)** | the standing defect register — two adversarial rounds, 30 findings, all fixed in 0.64.0–0.72.0. Round 2 re-audited the ~1059 lines round 1's fixes ADDED and found 10 more, 2 critical, mostly holes in those fixes. Records the residuals deliberately left. **Read before starting new work.** |
+| **[docs/open-defects.md](docs/open-defects.md)** | the standing defect register — **four** adversarial rounds. Rounds 1–2 (30 findings) are fixed; round 3 found 11 more in the 387 lines those fixes added and **nine remain open**; round 4 was a pre-merge audit that parked a change rather than ship it. Records every residual deliberately left. **Read before starting new work.** |
+| **[docs/correctness-plan.md](docs/correctness-plan.md)** | the active plan to close every open finding, test hole and unpinned residual — worst user harm first, test-first, one slice per PR. Work from this rather than picking findings ad hoc. |
+| **[docs/correctness-survey.md](docs/correctness-survey.md)** | the measured inventory the plan is built on: 58 items across the register, CI/eval machinery, the user-facing surface and the accepted residuals in `src/`. |
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | how it works inside + how to contribute (engine, safety, tiers, benchmarks, layout) |
 | **[STATUS.md](STATUS.md)** | honest status, measured benchmarks, known fragilities |
 | **[ROADMAP.md](ROADMAP.md)** | what's next |
