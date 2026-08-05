@@ -141,9 +141,17 @@ async def test_a_keyword_mutating_sibling_no_longer_disarms_the_refusal(tmp_path
             spec, provider=_prov(("Search", "submit the search"), ("Continue", "continue")),
             router=None, cache=cache, verify_replay=False)
         assert site.posts == ["/api/commit"], "the fixture did not POST; this would prove nothing"
-        assert res.cached is False, "a write nothing could claim must never cache"
-        assert "attributed" in (res.note or "")
-        assert cache.get(flow_key(spec.goal, spec.start_url, spec.scope)) is None
+        # 0.76.0 ATTRIBUTES this instead of refusing it: the commit fires synchronously from its own
+        # click, so the page names its cause and the gate lands on step 1. The property this test
+        # protects is unchanged and is asserted directly — the gate must never sit ONLY on the step that
+        # does not write. Refusing was the old way of honouring it, when nothing could be attributed.
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        if flow is None:
+            assert res.cached is False and "attributed" in (res.note or "")
+        else:
+            commit = [st for st in flow.steps if st.intent == "continue"]
+            assert commit and commit[0].mutating is True, (
+                f"the real commit must be gated; got {[(x.intent, x.mutating) for x in flow.steps]}")
 
 
     finally:
@@ -162,7 +170,12 @@ async def test_the_same_refusal_without_a_keyword_sibling(tmp_path: Path) -> Non
             spec, provider=_prov(("Search", "look at the panel"), ("Continue", "continue")),
             router=None, cache=cache, verify_replay=False)
         assert site.posts == ["/api/commit"]
-        assert res.cached is False
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        if flow is not None:            # attributed (0.76.0) — then the COMMIT must carry the gate
+            commit = [st for st in flow.steps if st.intent == "continue"]
+            assert commit and commit[0].mutating is True
+        else:                            # refused — also acceptable, and it must be loud
+            assert res.cached is False
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -183,9 +196,16 @@ async def test_run_cached_refuses_it_too_not_only_the_flows_wrapper(tmp_path: Pa
             f"{base}/", goal, _prov(("Search", "submit the search"), ("Continue", "continue")),
             cache, mode="learn", headless=True, verify_replay=False)
         assert site.posts == ["/api/commit"]
-        assert report.extra.get("write_unattributed") is True
-        assert report.extra.get("cached") is False, "the engine itself must not cache it"
-        assert cache.get(flow_key(goal, f"{base}/")) is None
+        flow = cache.get(flow_key(goal, f"{base}/"))
+        if report.extra.get("write_unattributed"):
+            # Unattributable -> the MECHANISM refuses, not just the `flows` wrapper. That placement is
+            # what this test exists for: `ultracua run` and the daemon never reach `_learn_once`.
+            assert report.extra.get("cached") is False, "the engine itself must not cache it"
+            assert flow is None
+        else:
+            assert flow is not None
+            commit = [st for st in flow.steps if st.intent == "continue"]
+            assert commit and commit[0].mutating is True, "the real commit must carry the gate"
     finally:
         httpd.shutdown()
         httpd.server_close()

@@ -51,6 +51,7 @@ from .browser import BrowserSession
 from .cache import CachedFlow, CachedStep, FlowCache, flow_key
 from .llm.types import LLMRequest, Message, TextBlock, ToolDef
 from .locators import _SPECOF_JS, LocatorSpec
+from .attribution import WIRE_ATTRIB_JS
 from .safety import classify_mutation, is_write_request, origin_of
 from .snapshot import _ACCNAME_JS, _MUTATION_CTX_JS, _ROLEOF_JS, SCOPE_JS, hash_scope
 
@@ -77,23 +78,11 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
                      '[role=listbox],[role=option],[role=switch],[onclick]';
   // SYNCHRONOUS exfiltration: append to a sessionStorage queue (durable across same-origin navigation).
   // The read+clear on the Python side is atomic in-page, so no event is lost between push and drain.
-  const KEY = '__ucbuf';
-  // `seq` is a monotonic id stamped on every event. It lives in sessionStorage (NOT a local) so it stays
-  // UNIQUE across a same-origin navigation — the init-script re-runs on each page and a per-load local counter
-  // would restart at 0 and collide with the prior page's ids in the concatenated event stream. `__uclast`/
-  // `__ucturn` drive PER-WRITE ATTRIBUTION (see attributedSeq): `__uclast` is the seq of the most-recent commit
-  // (click/press/select), and `__ucturn` counts the commits in the CURRENT synchronous turn (reset on the next
-  // macrotask). A wire-write is attributed ONLY to a turn that holds EXACTLY ONE commit; everything else
-  // (deferred, or a nested synthetic commit sharing the turn) is left unattributed so `record` fails LOUD.
-  let __uclast = null, __ucturn = 0;
-  const COMMIT = { click: 1, press: 1, select: 1 };
-  const nextSeq = () => {
-    let n = 0;
-    try { n = parseInt(sessionStorage.getItem('__ucseq') || '0', 10) || 0; } catch (e) {}
-    n += 1;
-    try { sessionStorage.setItem('__ucseq', String(n)); } catch (e) {}
-    return n;
-  };
+  // --- shared causal attribution: buffer, seq, turn, wire patches -----------------------
+  // Spliced in verbatim from `attribution.WIRE_ATTRIB_JS`. It used to live here, and the learn
+  // path had no equivalent — R3.2. One definition now, because the two must agree exactly:
+  // `rowIdOf` was the same hazard and its two copies had silently diverged (R3.1).
+  """ + WIRE_ATTRIB_JS + r"""
   // H3 slice 1c: a value-bearing field's LEGAL DOMAIN from site metadata (inert unless the step is later
   // mined into a slot). Fail-safe (a recorder read must never alter page behaviour): a <select>'s option
   // values, an <input>/<textarea>'s pattern/required/max_length/min/max, and any <datalist> suggestions.
@@ -140,153 +129,13 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
   const store = (action, el, value, ctx, scope, domain, secret) => {
     if (el && el.nodeType !== 1) return;
     try {
-      const seq = nextSeq();
-      if (COMMIT[action]) {
-        __uclast = seq;
-        __ucturn += 1;
-        // The turn ends when control returns to the event loop: reset on the next MACROTASK, so the count
-        // stays live through this turn's synchronous code AND its microtask continuations, but a later
-        // timer/await-network continuation runs in a fresh turn with __ucturn back to 0 (its write is deferred).
-        setTimeout(() => { __ucturn = 0; }, 0);
-      }
-      const arr = JSON.parse(sessionStorage.getItem(KEY) || '[]');
-      arr.push({ action, spec: el ? specOf(el) : null, value, ctx, scope, seq, domain: domain || null,
-                 secret: !!secret });
-      sessionStorage.setItem(KEY, JSON.stringify(arr));
+      // `noteCommit` owns the seq and the turn bookkeeping (shared with the learn path); this call site
+      // owns only the RECORD SHAPE, which is recorder-specific (specOf / scope / domain / secret).
+      const seq = noteCommit(action);
+      pushRec({ action, spec: el ? specOf(el) : null, value, ctx, scope, seq, domain: domain || null,
+                secret: !!secret });
     } catch (e) {}
   };
-  // PER-WRITE ATTRIBUTION. Patch the wire-write entry points — fetch / XMLHttpRequest.send /
-  // navigator.sendBeacon — so each NON-IDEMPOTENT request pushes a `__wirewrite` marker tying it to the commit
-  // that caused it. The Python side then gates EXACTLY that commit (no counting heuristic), so a submit click
-  // whose write is SUPPRESSED (preventDefault / HTML5-validation-blocked) can't mask a separate formless POST.
-  // Installed by add_init_script, which runs BEFORE any page script on every document — so a page can't first
-  // capture an un-patched reference. Each patch is FAIL-SAFE: it calls through to the native impl with the
-  // original `this`/args and returns or throws unchanged, recording inside try/catch — a recorder bug never
-  // alters page behaviour. A WEB-WORKER / SERVICE-WORKER fetch/xhr write emits NO marker (the init-script
-  // doesn't run there) but its request surfaces to Playwright, and the Python side fails LOUD on the per-url
-  // shortfall (see the `xhr_urls` reconciliation), so such an un-instrumentable write is refused, never cached
-  // ungated. SUB-FRAME (iframe) writes are DELIBERATELY excluded from that reconciliation: the init-script
-  // bails in sub-frames, so counting their requests would false-refuse the many pages with a 3rd-party iframe
-  // (chat/ad/analytics) that POSTs — and an iframe interaction is never a recorded main-frame step anyway.
-  // (Residuals, all irreducible without per-request correlation: a WebSocket write-suspect carries no marker
-  // and isn't reconciled — sockets can't be gated; an iframe/cross-realm write TRIGGERED by a recorded
-  // main-frame action — e.g. via postMessage — could cache ungated; a non-surfacing marker and a worker write
-  // at the EXACT same (method,url) still offset; a page that re-grabs the native impl from another realm;
-  // `fetch.toString()` no longer reads `[native code]`. CSP/SRI don't apply — browser-injected.)
-  const WRITE_METHODS = { POST: 1, PUT: 1, PATCH: 1, DELETE: 1 };
-  // Attribute a write to a commit ONLY when the cause is UNAMBIGUOUS: a SINGLE commit fired in the write's own
-  // SYNCHRONOUS turn (its synchronous code + microtasks), i.e. __ucturn === 1. Otherwise stamp seq=null so the
-  // Python side leaves the write UNATTRIBUTED and `record` fails LOUD (refuse to cache) rather than gate the
-  // wrong step:
-  //   - __ucturn === 0  -> a DEFERRED write (timer / awaited round-trip / load-or-interval handler). Its cause
-  //     can't be proven in-page: a load-armed write coincides indistinguishably with an unrelated click, and a
-  //     timer write may land after a LATER actuation. (Recovering the legit `await fetch(...); fetch(POST)`
-  //     single-click case would need causal scheduling-time capture — patching setTimeout/Promise — too
-  //     invasive to do without altering page behaviour; fail-loud is the safe choice.)
-  //   - __ucturn > 1    -> a NESTED synthetic commit shares the turn (wrapper -> hidden control); we can't tell
-  //     which commit issued the write.
-  const attributedSeq = () => (__ucturn === 1 ? __uclast : null);
-  // `src` (fetch/xhr/beacon) tags which entry point fired the marker. The Python side reconciles the
-  // fetch+xhr markers against the fetch/xhr requests Playwright saw on the wire: a write from a web worker /
-  // cross-realm context (which this init-script can't reach) surfaces as a fetch/xhr request with NO marker,
-  // so a shortfall = an un-gateable worker write -> fail loud. Beacons are excluded from that reconciliation
-  // (Playwright surfaces sendBeacon inconsistently, and workers can't sendBeacon).
-  const recordWire = (method, url, src) => {
-    try {
-      const m = (method || 'GET').toUpperCase();
-      if (!WRITE_METHODS[m]) return;   // GET/HEAD can't be a state-changing write -> not worth a marker
-      // Resolve to the ABSOLUTE url (and drop the fragment, which never goes on the wire) so the marker's url
-      // matches the request url Playwright reports — the Python side reconciles markers to wire requests by
-      // (method, url). Resolve against document.baseURI (NOT location.href): the browser resolves a relative
-      // fetch/XHR url against the document base, which a <base href> element overrides — so baseURI is what
-      // matches the wire url. A relative or bad url that can't resolve stays as-is (it then matches no wire
-      // request, which only makes the reconciliation MORE conservative — fail loud, never fail open).
-      let u = String(url || '');
-      try { u = new URL(u, document.baseURI).href; } catch (e) {}
-      const hi = u.indexOf('#'); if (hi >= 0) u = u.slice(0, hi);
-      const seq = attributedSeq();
-      const arr = JSON.parse(sessionStorage.getItem(KEY) || '[]');
-      arr.push({ action: '__wirewrite', method: m, url: u, src: src,
-                 seq: (typeof seq === 'number' ? seq : null) });
-      sessionStorage.setItem(KEY, JSON.stringify(arr));
-    } catch (e) {}
-  };
-  try {
-    const _fetch = window.fetch;
-    if (typeof _fetch === 'function') {
-      window.fetch = function (input, init) {
-        try {
-          const method = (init && init.method) ||
-                         (input && typeof input === 'object' && input.method) || 'GET';
-          // fetch accepts a string, a Request (string `.url`), OR a URL object (no `.url` — String() gives
-          // its href). Mis-reading a URL object as '' collapsed the marker to the page root and false-refused.
-          const url = (typeof input === 'string') ? input
-                    : (input && typeof input.url === 'string') ? input.url
-                    : (input != null ? String(input) : '');
-          recordWire(method, url, 'fetch');
-        } catch (e) {}
-        return _fetch.apply(this, arguments);
-      };
-    }
-  } catch (e) {}
-  try {
-    const _open = XMLHttpRequest.prototype.open;
-    const _send = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function (method, url) {
-      try { this.__ucm = method; this.__ucu = url; } catch (e) {}
-      return _open.apply(this, arguments);
-    };
-    XMLHttpRequest.prototype.send = function () {
-      try { recordWire(this.__ucm, this.__ucu, 'xhr'); } catch (e) {}   // record at send -> __ucturn is current
-      return _send.apply(this, arguments);
-    };
-  } catch (e) {}
-  try {
-    if (navigator.sendBeacon) {
-      const _beacon = navigator.sendBeacon;
-      navigator.sendBeacon = function (url) {
-        try { recordWire('POST', url, 'beacon'); } catch (e) {}            // a beacon is always a POST
-        return _beacon.apply(navigator, arguments);
-      };
-    }
-  } catch (e) {}
-  // DOCUMENT-CLASS writes (a <form method=post> submission). These leave the browser as a NAVIGATION, not a
-  // fetch/XHR, so none of the three patches above sees them and Playwright reports them with
-  // `resource_type == "document"`. Without a marker they are invisible to the per-write reconciliation, and
-  // a form POST fired from a non-actionable element (a <div>, an href-less <a>) or from a
-  // `<button type=button>` calling `form.submit()` is then either captured as NO step or as a NON-mutating
-  // one — while a SEPARATE, correctly-gated write elsewhere in the same flow keeps the belt-and-suspenders
-  // `wire_write and not gated` refusal from firing. That masking is what let a demonstrated write be
-  // silently dropped from the recipe, or re-fired ungated and un-keyed on every replay.
-  //
-  // The two submission paths are DISJOINT, so no form is ever double-markered:
-  //   * `form.submit()` fires NO submit event — the prototype patch is the only thing that sees it;
-  //   * native submission (a submit button, Enter) and `requestSubmit()` fire the event WITHOUT calling
-  //     `.submit()` — the capture-phase listener is the only thing that sees those.
-  // `recordWire` already filters GET/HEAD, resolves against document.baseURI, drops the fragment and stamps
-  // `attributedSeq()`, so a form POST with no single commit in its turn correctly lands UNATTRIBUTED.
-  const markForm = (form) => {
-    try {
-      if (!form || form.nodeType !== 1) return;
-      // getAttribute, NOT the `.action` / `.method` IDL properties: a form containing a control NAMED
-      // "action" or "method" CLOBBERS them (`form.action` then returns that <input> element, not a string),
-      // which would resolve the marker to the wrong url and silently stop it matching the wire request —
-      // failing OPEN. The raw attributes cannot be clobbered. `recordWire` resolves relative urls against
-      // document.baseURI itself, and an absent action correctly means "submit to the current document".
-      recordWire((form.getAttribute('method') || 'GET').toUpperCase(),
-                 form.getAttribute('action') || document.baseURI, 'form');
-    } catch (e) {}
-  };
-  try {
-    const _fsubmit = HTMLFormElement.prototype.submit;
-    if (typeof _fsubmit === 'function') {
-      HTMLFormElement.prototype.submit = function () {
-        try { markForm(this); } catch (e) {}
-        return _fsubmit.apply(this, arguments);
-      };
-    }
-  } catch (e) {}
-  document.addEventListener('submit', (ev) => { try { markForm(ev.target); } catch (e) {} }, true);
   // Elements whose value we captured on Enter (see keydown) so the Enter-triggered `change` doesn't ALSO
   // record a duplicate `type` for the same value.
   const enterCaptured = new WeakMap();

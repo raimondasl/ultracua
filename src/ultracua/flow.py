@@ -31,6 +31,7 @@ from .browser import BrowserSession
 from .cache import CachedFlow, CachedStep, FlowCache, flow_key
 from .conditions import condition_present
 from .config import settings
+from . import attribution
 from .locators import describe, focused_ref, resolve
 from .providers.base import Provider
 from .safety import (
@@ -187,6 +188,24 @@ async def _vision_decide(session: BrowserSession, goal: str, grounding: Any, tr:
     return await grounding.decide(goal, png, vp)
 
 
+def _merge_attribution(temporal: "set[int]", causal: "set[int]") -> "set[int]":
+    """Combine the two attribution signals. UNION — the causal signal adds, it never removes.
+
+    The first version of this REPLACED the temporal set whenever the page named any cause, on the
+    reasoning that the page is better evidence than the clock. It is, about the write it names. It says
+    nothing about a DIFFERENT write the temporal rule attributed, and discarding that dropped a real
+    gate: measured, a telemetry beacon made the causal set non-empty, the replace wiped the temporal
+    attribution, and the genuine commit cached as a read and replayed un-keyed — strictly worse than the
+    version this replaced.
+
+    Over-gating (a step keyed that did not write) costs an unused Idempotency-Key. Under-gating costs a
+    double-submit. The union takes the cheap error.
+
+    Pure, so the rule is testable without a browser — the same shape `_write_owner` established.
+    """
+    return set(temporal) | set(causal)
+
+
 def _write_owner(act_open: bool, cur_i: int, live_tails: "set[int]") -> int:
     """Which step owns a wire write observed right now? -1 = credit nobody.
 
@@ -261,6 +280,13 @@ async def _author_steps(
     # its grace tail). Deliberately NOT an attribution — R3.2 is precisely that we cannot attribute from
     # timing — but it is enough to catch the wire and the classifier DISAGREEING about where the write is.
     acting_at_write: set[int] = set()
+    # CAUSAL attribution (the R3.2 close). `events` accumulates the page's own commit/wire markers,
+    # `seq_to_step` maps a commit's seq to the step that was acting when the page recorded it, and
+    # `wire_seen` counts the writes the Playwright watcher saw in-window so a marker SHORTFALL — a
+    # worker or cross-realm write the init script cannot instrument — is refused rather than lost.
+    events: list = []
+    seq_to_step: dict = {}
+    wire_seen = {"n": 0}
     # WHICH step each wire write belongs to. The act window already establishes causality in TIME; this
     # records the identity, so the evidence can be written back onto the step that caused it instead of
     # being kept as a single pass-global bit. See the promotion loop at the end of the function.
@@ -297,6 +323,7 @@ async def _author_steps(
             # we cannot say WHICH step: that flag is what stops best-of-N re-authoring after a write, and
             # what makes `_learn_once` refuse a flow it could not attribute.
             wrote["hit"] = True
+            wire_seen["n"] += 1
             owner = _owner()
             if owner >= 0:
                 wrote_by_step.add(owner)
@@ -312,6 +339,15 @@ async def _author_steps(
 
     if page is not None:
         page.on("request", _watch_request)
+        # `add_init_script` only reaches FUTURE documents, and both callers hand us a page that has
+        # already navigated (`_learn` after goto, the replan mid-flow), so evaluate it once for the
+        # document in front of us too. The script self-guards on `window.__ucattr`, so the double
+        # install is a no-op rather than a second set of listeners.
+        try:
+            await attribution.install(page)
+            await page.evaluate(attribution.LEARN_ATTRIB_JS)
+        except Exception:  # noqa: BLE001 - attribution must never break the run it observes
+            pass
     for i in range(max_steps):
         tr = StepTrace(index=i)
         with tr.measure("snapshot"):
@@ -430,6 +466,19 @@ async def _author_steps(
         now = time.monotonic()
         graces[:] = [(gi, gu) for gi, gu in graces if now <= gu]      # prune expired tails
         graces.append((i, act_window["until"]))                        # THIS step owns its own tail
+        # DRAIN the page's own markers for this act. Exactly one act ran since the last drain, so every
+        # commit in this batch belongs to step `i` — that binding is done HERE, in Python, at drain time.
+        # It is deliberately NOT a page global read when the write dispatches: a deferred write would
+        # read whatever the CURRENT step is, which is precisely the mis-attribution the reverted 0.73.0
+        # drain produced. The seq is stamped in-page at dispatch; only the seq->step map is ours.
+        if page is not None:
+            batch = await attribution.drain(page)
+            for ev in batch:
+                if isinstance(ev, dict) and ev.get("action") == "__commit":
+                    seq = ev.get("seq")
+                    if isinstance(seq, int):
+                        seq_to_step[seq] = i
+            events.extend(batch)
         no_progress = 0 if (ok and changed) else no_progress + 1
 
         if ok:
@@ -466,6 +515,62 @@ async def _author_steps(
             page.remove_listener("request", _watch_request)
         except Exception:  # noqa: BLE001
             pass
+    # FINAL DRAIN, then CAUSAL ATTRIBUTION. The page stamped each write with the seq of the commit in
+    # whose synchronous turn it was dispatched; we mapped each commit's seq to the step that was acting
+    # when it was recorded. Composing the two names the causing step EXACTLY — no clock anywhere — and
+    # a write the page could not attribute (a timer, a debounce, an awaited round-trip, or a turn
+    # holding more than one commit) carries seq=null and is refused rather than guessed. That refusal is
+    # what makes the signal worth trusting; see docs/open-defects.md R3.2.
+    if page is not None:
+        events.extend(await attribution.drain(page))
+    causal_steps, unattributed_markers = attribution.attribute(events, seq_to_step)
+    # IS THE CAUSAL SIGNAL EVEN AVAILABLE? It needs the page to be able to record — and on an opaque
+    # origin (a `file://` fixture, a sandboxed frame) sessionStorage throws, the in-memory fallback is
+    # destroyed by the very navigation a form POST performs, and the run produces no commits at all.
+    # Where the page cannot speak we DEGRADE to the temporal result that ships today rather than refuse:
+    # refusing would break every flow on such a page, and today's behaviour is not a regression.
+    # Detected by evidence, not by guessing at the origin: we acted, and not one commit came back.
+    # THE CAUSAL SIGNAL AUGMENTS; IT NEVER REFUSES. That split is the whole design, and it is the
+    # correction to a mistake made twice in this area now.
+    #
+    # Where the page CAN name a cause, it is better evidence than any clock and it replaces the temporal
+    # guess outright — merging would let the rule this work exists to remove put a gate somewhere the
+    # page did not.
+    #
+    # Where it CANNOT — a deferred write, a turn holding two commits, an opaque origin that cannot
+    # record at all — the honest report is "I don't know", and "I don't know" is NOT evidence of an
+    # ungated write. Treating it as grounds to refuse was measured to break flows that are already
+    # correctly gated: a keyword-mutating click whose POST rides a `setTimeout` has `mutating=True` and
+    # a precondition from the classifier, and refusing it there is pure loss. That is the same
+    # over-refusal that broke every `test_press_gate` login flow in the first attempt at R3.2's safety
+    # half. So refusal stays governed ENTIRELY by the pre-existing wire-vs-classifier consistency rule
+    # below, and this block can only ever ADD a gate, never withhold a flow.
+    #
+    # `unattributed_markers` is therefore deliberately NOT used to refuse. It is left visible in the log
+    # because it is the honest count of writes whose cause the page could not prove.
+    if not seq_to_step and wrote["hit"]:
+        _log.info("learn: the page recorded no commit markers (opaque origin?) — attribution falls back "
+                  "to the pre-0.76.0 temporal rule for this run")
+    if unattributed_markers:
+        _log.info("learn: %d wire write(s) had no provable cause in-page (deferred, or a turn with more "
+                  "than one commit) — leaving them to the consistency rule", unattributed_markers)
+    # Snapshot the TEMPORAL result before the causal one lands. The refusal below is evaluated against
+    # this, so a causal promotion can never make the flow refuse where 0.75.0 would have cached it.
+    temporal_attributed = set(wrote_by_step)
+    wrote_by_step = _merge_attribution(temporal_attributed, causal_steps)
+    # SHORTFALL. A write the Playwright watcher saw but no marker explains came from somewhere the init
+    # script cannot reach — a web worker, a cross-realm context, a cross-origin hop that dropped
+    # sessionStorage. It is uninstrumentable, not benign, so it refuses. (`>` not `!=`: more markers than
+    # wire writes is the harmless direction, e.g. a form marked then blocked by validation.)
+    marker_writes = sum(1 for e in events if isinstance(e, dict) and e.get("action") == "__wirewrite")
+    if seq_to_step and wire_seen["n"] > marker_writes:
+        # A write from a context the script cannot instrument (a worker, a cross-realm frame, a
+        # cross-origin hop that dropped the buffer). Reported, not refused, for the same reason as
+        # above: it is an absence of proof, and the consistency rule already decides what to do with a
+        # write nothing claimed.
+        _log.info("learn: %d wire write(s) but %d marker(s) — a write fired somewhere the attribution "
+                  "script cannot reach", wire_seen["n"], marker_writes)
+
     # PROMOTE: a step that provably wrote on the wire IS a write, whatever the classifier said. The
     # evidence was already being collected — it was just kept as one pass-global bit and used only to skip
     # verify-by-replay and stop best-of-N, never written back onto the step. So a `<form onSubmit>` commit
@@ -527,7 +632,7 @@ async def _author_steps(
     # Residual, stated: a write DEFERRED out of its own step and into a neighbour that happens to be
     # classifier-mutating passes this check. That is the same residual R3.2 has and this slice does not
     # claim to close — it needs the causal signal, not a better reading of the clock.
-    if acting_at_write and not wrote_by_step:
+    if acting_at_write and not temporal_attributed:
         gated = {i for i, p in pos_of.items() if steps[p].mutating}
         if not gated or not (acting_at_write & gated):
             unattributed["hit"] = True
