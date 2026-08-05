@@ -174,6 +174,15 @@ re-plan or re-learn rather than silently re-deriving the flow every run.
   re-baseline the value contracts a human blessed. So an approved flow fails loud instead, and recovery is a
   deliberate human action:
 
+  **It is also refused on ANY flow with a step marked as writing — approved or not.** Re-authoring re-runs
+  the flow, which re-performs the write. Note this is keyed off the recorded `mutating` mark rather than a
+  declared `mutate`, and that mark OVER-counts: the classifier falls back to a substring match, so a read
+  flow that clicks a control named "Payment history" or "Show borders" is marked too, and loses `relearn`.
+  That is deliberate and fail-safe — the alternative is re-driving a possible commit under uncertainty —
+  but it means `--on-drift relearn` is not available for a meaningful share of ordinary read flows. Use
+  `flow inspect --name X` to see which step carries the mark; plain replay (`--on-drift raise`, the
+  default) is unaffected.
+
   ```bash
   uv run ultracua flow record --name daily-orders     # or: flow learn --name daily-orders
   uv run ultracua flow inspect --name daily-orders    # review what changed

@@ -398,9 +398,11 @@ fails loudly.
 replay first; then a **suffix-replan repair** that re-authors *only the broken tail* from the current
 page while keeping the working prefix (so a locator/navigation change fixes itself without re-running
 the whole flow, and re-caches); and finally a full re-author from scratch (which also handles a change
-in the data's *shape*, since the steps still replay in that case). Write flows refuse `relearn`
+in the data's *shape*, since the steps still replay in that case). Flows that WRITE refuse `relearn`
 entirely — re-driving a write under uncertainty could double-submit, so they fail loud for a human to
-re-learn and re-approve.
+re-learn and re-approve. "Writes" here means a declared `mutate` **or** any recorded step marked
+`mutating`, which includes flows the classifier marked from wording alone; see HEALING.md for what that
+costs ordinary read flows and how to see which step is marked.
 
 ### Value contracts — fail loud on wrong-but-plausible data (H9)
 
@@ -597,7 +599,8 @@ uv run ultracua flow run-all --alert-webhook https://hooks.slack.com/…   # POS
 Safe defaults for unattended use: **read flows only** (write flows are skipped unless
 `--include-writes`, since a blanket run shouldn't fire purchases) and **approved flows only**
 (`--include-unapproved` to override). `--concurrency N` caps how many run at once (each uses its own
-browser); `--on-drift relearn` re-authors read flows that drifted. The same API is `run_all_flows()`
+browser); `--on-drift relearn` re-authors drifted read flows that carry no step marked as writing (the
+rest fail loud — re-authoring would re-perform the write). The same API is `run_all_flows()`
 in Python, returning a `FleetRun` per flow.
 
 **Catch rot early with `flow canary`.** `run-all` actually replays everything (and performs reads);

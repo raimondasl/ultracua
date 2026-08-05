@@ -1399,6 +1399,99 @@ def is_write_flow(spec: FlowSpec, cached_flow) -> bool:
     return cached_flow is not None and any(getattr(s, "mutating", False) for s in cached_flow.steps)
 
 
+def _auth_retry_allowed(spec: FlowSpec, cached_flow, *, auth_refresh: bool,
+                        parameterizing: bool) -> tuple[bool, str]:
+    """May a drifted replay be re-run from the start after refreshing auth, and if not, WHY NOT?
+    THE single definition of both halves (R3.5).
+
+    The retry re-runs the WHOLE flow from `start_url`, so it re-actuates anything the first attempt already
+    actuated. That is free for a read and a double-submit for a write — which makes `is_write_flow` (the
+    wire-or-declaration predicate) the right question, and `spec.mutate is not None` the wrong one. The
+    old inline expression asked the wrong one, so an UNDECLARED write — `spec.mutate is None` but a cached
+    step `mutating=True`, which is what the learn path's wire promotion produces for a formless fetch-POST
+    — scored True and re-fired its commit under a byte-identical Idempotency-Key, on an endpoint that
+    never asked for that header. A DECLARED write is refused the same retry in as many words.
+
+    Extracted rather than widened in place for two reasons, both of which are this project's documented
+    failure shapes. First, the three sites that ask about the DECLARATION legitimately dereference
+    `spec.mutate`; a predicate widened where it sat would turn refusals into AttributeErrors one level
+    down. Second, this must be correct STANDALONE — not correct because some gate upstream refused the
+    undeclared case first. A guard whose correctness depends on a distant sibling is how R3.5 arose.
+
+    Note the asymmetry, which is deliberate and is the reason this is a retry gate rather than a flow-level
+    refusal: `step.mutating` OVER-counts. `safety.classify_mutation` falls back to an unbounded substring
+    match, so ordinary read navigations ("Payment history" -> `pay`, "Show borders" -> `order`, "the Sent
+    folder" -> `send`) cache as mutating; the wire promotion likewise over-counts a click-triggered
+    GraphQL/RPC read-POST (`flow.py`'s stated residual). Refusing every such flow outright would break a
+    large population of working READS whose only remedy — declare `mutate` — demands a write-completion
+    signal a read cannot produce. The bounded cost this DOES impose on that population, stated rather than
+    glossed: they lose the auth-refresh retry (a loud failure on an expired session instead of a silent
+    re-login), and — because the same over-count drives the sibling relearn gate in `_preflight_row` —
+    they are refused `on_drift='relearn'` outright. Both are fail-safe and both are recoverable by hand.
+
+    `parameterizing` is a REQUIRED keyword with no default, deliberately. Before this was extracted it was
+    a local already in scope at the decision site and could not be forgotten; a defaulted argument would
+    reintroduce that risk silently — a caller that omitted it would send every parameterized write the
+    wrong remedy, and no test could see the omission. Required means omitting it is a TypeError.
+
+    RETURNS `(allowed, reason)`, not a bare bool, and that is structural rather than stylistic. When this
+    returned only a bool, the caller re-derived the REASON from `spec.mutate` by hand — and when the
+    recipe-count arm below was added, the reason chain was not, so a flow refused for having two mutating
+    steps was told it lacked a precheck it actually had, and handed a remedy that does nothing. Same
+    defect shape as R3.5 (declaration standing in for reality), reproduced twelve lines from the fix for
+    R3.5. Returning the reason with the decision is what makes the next arm impossible to add halfway."""
+    if not (auth_refresh and spec.login is not None):
+        return False, ""            # no auth-refresh path exists at all — nothing to explain
+    if not is_write_flow(spec, cached_flow):
+        return True, ""             # a read is idempotent — re-running it is free
+    # It WRITES. Only a DECLARED, SINGLE-commit flow with a whole-flow precheck can be retried safely: the
+    # precheck re-checks first and skips if the write already landed.
+    if spec.mutate is None:
+        return False, (
+            "not retrying after auth refresh — a recorded step is marked as WRITING and this flow "
+            f"declares no write, so a re-run from the start could re-fire it with no confirm barrier to "
+            f"detect that. Run `flow login --name {spec.name}`, then replay. `flow inspect --name "
+            f"{spec.name}` shows WHICH step is marked (the mark can come from the wire or from the step's "
+            f"wording; which of the two it was is not recorded)")
+    # MULTI-COMMIT, asked of the RECIPE as well as the declaration. A whole-flow precheck models only the
+    # LAST write, so on a flow that commits twice a retry re-fires an already-landed earlier one. Asking
+    # `is_multiwrite()` alone answers "did the human declare more than one BARRIER" — and `record()`
+    # explicitly permits a flow with two mutating steps and no `step_confirms` at all, which therefore
+    # read as a single write and was granted the retry. Settled here by counting what will actually fire.
+    cached_writes = sum(1 for s in (cached_flow.steps if cached_flow is not None else [])
+                        if getattr(s, "mutating", False))
+    # ARM ORDER IS MESSAGE QUALITY, NOT LOGIC — every arm here returns False, so `allowed` is
+    # order-independent. The order preserved below is the one the caller's chain used (multiwrite ->
+    # parameterized -> no-precheck) with the new recipe-count arm inserted after `parameterizing`, and
+    # that placement is deliberate: a PARAMETERIZED write provably cannot carry a precheck (pre-flight
+    # refuses the combination as row-blind), so telling it that "a whole-flow precheck cannot tell whether
+    # an earlier write landed" explains it in terms of a mechanism it is forbidden to have, and drops the
+    # guidance that actually applies — its row-keyed Idempotency-Key makes a manual re-run safe.
+    if spec.mutate.is_multiwrite():
+        return False, ("not retrying a MULTI-WRITE flow after auth refresh (a re-run would re-fire an "
+                       "already-landed earlier write; per-write resume is not yet supported) — run "
+                       "`flow login` then replay")
+    if parameterizing:
+        # A parameterized write can't carry a precheck (row-blind — refused at pre-flight), so don't
+        # advise one; its retry-safety is the row-keyed Idempotency-Key (same row -> same key -> the
+        # backend dedupes), which makes a manual re-run after re-login safe.
+        return False, ("not retrying a parameterized write after auth refresh (would risk a "
+                       "double-submit) — run `flow login` then replay this row; its row-keyed "
+                       "Idempotency-Key dedupes the re-run")
+    if cached_writes > 1:
+        return False, (
+            f"not retrying after auth refresh — {cached_writes} recorded steps are marked as WRITING, so "
+            f"a whole-flow precheck (which only models the LAST write) cannot tell whether an earlier one "
+            f"already landed, and a re-run would re-fire it. This is about the RECIPE, not the "
+            f"declaration: `flow inspect --name {spec.name}` shows which steps are marked — if only one "
+            f"of them really writes, re-record so the others are not. Otherwise run `flow login` then "
+            f"replay")
+    if not spec.mutate.has_precheck():
+        return False, ("not retrying a write after auth refresh without an idempotency precheck (would "
+                       "risk a double-submit) — add mutate.precheck_* or run `flow login` then replay")
+    return True, ""
+
+
 def _approval_recipe_stale(meta: FlowMeta, cached_flow) -> Optional[str]:
     """Does the approval still bind the steps on disk? `None` = yes; otherwise a human-readable reason.
 
@@ -1648,14 +1741,23 @@ def _preflight_row(
     violation. Single source of truth — a batch validates every row through this BEFORE actuating any, and
     each actuation re-runs it inside `replay()`, so a guard change lands once and both paths inherit it.
 
-    Guards, in order: 0-LLM pre-flight (`validate_params`); a write needs a confirm check; `on_drift=
-    'relearn'` is refused for a write and for any parameterized replay (a re-author drops params → frozen
-    defaults); the approval gate; the three approval BINDINGS — slot schema (a domain widened since approve()
+    Guards, in order: 0-LLM pre-flight (`validate_params`); a DECLARED write needs a confirm check;
+    `on_drift='relearn'` is refused for any flow that WRITES — `is_write_flow`, i.e. declared OR a
+    recorded step marked mutating, because a re-author re-runs the flow and re-performs the commit — and
+    for any parameterized replay (a re-author drops params → frozen defaults); the unkeyed-write floor;
+    the approval gate; the three approval BINDINGS — slot schema (a domain widened since approve()
     must re-approve), value contracts, and the RECIPE itself (`cache.steps_hash`: the cached steps must still
     be the ones a human reviewed); the binding guard (a supplied slot must bind a type/select step, else its
     value folds into the idempotency key without being typed); the precheck refusal (a parameterized write
     can't lean on a row-blind one-shot precheck)."""
-    is_mutate = spec.mutate is not None
+    # Named `declares_write`, not `is_mutate`, because the DISTINCTION is load-bearing and was the whole of
+    # R3.5. This asks "did a human DECLARE a write, and therefore configure its barriers" — which is the
+    # right question for every gate below, all of which are about the coherence of a declaration and all of
+    # which dereference `spec.mutate`. It is NOT the right question for "would acting again re-fire a
+    # write"; that one is `is_write_flow`, and it lives in `_auth_retry_allowed`. Widening the predicate
+    # HERE would be a defect, not a fix: the three dereferences below would become AttributeErrors, and it
+    # would refuse a large population of ordinary READS (see `_auth_retry_allowed` for the measurement).
+    declares_write = spec.mutate is not None
     parameterizing = params is not None
     # H9: a quarantined flow refuses EVERY future run, 0-LLM, before any browser or arg validation — a
     # persisted wrong-value quarantine dominates (a bad arg is moot while the flow is known to return wrong
@@ -1666,15 +1768,39 @@ def _preflight_row(
             f"{spec.name!r}: quarantined — {meta.quarantine.get('reason')}. Investigate the value, then "
             f"`flow release` (or relax the contract via spec.contracts + re-approve).")
     resolved = validate_params(spec, params)  # 0-LLM pre-flight: raises on any out-of-domain value
-    if is_mutate:
-        if not spec.mutate.has_confirm():
-            raise FlowReplayError(
-                f"{spec.name!r}: a write flow needs a confirm check — set "
-                f"mutate.confirm_selector / confirm_text_contains / confirm_url_contains")
-        if on_drift == "relearn":
-            raise FlowReplayError(
-                f"{spec.name!r}: on_drift='relearn' is refused for a write flow (re-authoring would "
-                f"re-perform the write) — re-learn manually and re-approve instead")
+    # RELEARN RE-PERFORMS THE WRITE, so this refusal must ask whether the flow WRITES — not whether a
+    # human said so. Keyed off the declaration it had a hole the size of R3.5's, and worse: an UNAPPROVED,
+    # UNDECLARED write satisfied neither this arm (no `spec.mutate`) nor the approved-flow arm below, so
+    # it re-authored — re-running the commit — and then returned NORMALLY with a recorded SUCCESS, because
+    # the `{"status": "confirmed"}` envelope also keys off the declaration. A green run, a green health
+    # record, and a commit that fired more than once: inviolables #2 and #3 in one call.
+    #
+    # Be honest about the cost, because `step.mutating` over-counts (decision D0 was rejected for exactly
+    # that reason): this refuses the RUN, up front, for any flow carrying a mutating-marked step whenever
+    # `on_drift='relearn'` is asked for — including reads the classifier merely misread. Sampled, ~6 in 10
+    # ordinary read navigations are marked. What makes that acceptable where a flow-level refusal was not:
+    # no fleet surface is affected (`run_all` already skips these on the same predicate, and `run_batch` /
+    # `preflight_keys` / `dry_run` / MCP all pass `on_drift='raise'`), approved flows were already refused
+    # relearn, plain replay is untouched, and the named remedy WORKS — `learn()` does not funnel through
+    # here, so "re-learn manually" is a real path. The rejected refusal had no working remedy at all.
+    # Placed between the two declared-write guards ON PURPOSE, rather than ahead of both: this is exactly
+    # where the declaration-only version of it used to sit, so a DECLARED write still reports its missing
+    # confirm check first (the more actionable of the two) and still reports an unkeyable commit second.
+    # Widening a guard should not silently reshuffle the messages of the population it already covered.
+    if declares_write and not spec.mutate.has_confirm():
+        raise FlowReplayError(
+            f"{spec.name!r}: a write flow needs a confirm check — set "
+            f"mutate.confirm_selector / confirm_text_contains / confirm_url_contains")
+    if on_drift == "relearn" and is_write_flow(spec, cached_flow):
+        raise FlowReplayError(
+            f"{spec.name!r}: on_drift='relearn' is refused for a flow that writes — re-authoring re-runs "
+            f"the flow, which re-performs the write"
+            + ("" if declares_write else
+               " (no `mutate` is declared, but a recorded step is marked as writing, so replay has no "
+               "confirm barrier that could tell you whether it fired twice)")
+            + f". Re-learn manually and re-approve instead; `flow inspect --name {spec.name}` shows which "
+              f"step is marked.")
+    if declares_write:
         # THE MACHINE CORRECTNESS FLOOR. Every retry-dedupe guarantee this project makes rides on the
         # per-write Idempotency-Key, and `flow._replay_step` only sets that header for a `mutating` step.
         # A DECLARED write whose commit no step is marked mutating for therefore plans ZERO keys — and
@@ -1707,7 +1833,7 @@ def _preflight_row(
     # `require_approved=False` is NOT sufficient: the gate is unconditional for a WRITE flow.
     # Every skipped gate is NAMED in the report, so a dry run of an unapproved or re-authored
     # recipe can never be mistaken for a run of an approved one.
-    if not skip_approval_gates and (require_approved or is_mutate) and not meta.approved:
+    if not skip_approval_gates and (require_approved or declares_write) and not meta.approved:
         raise FlowReplayError(f"{spec.name!r}: flow not approved — learn it, verify it, then approve")
     # The approval is bound to the slot schema. A slotted flow whose domain changed since approve() (e.g. a
     # payee enum loosened to any string) must refuse until re-approved — a stale approval must never
@@ -1777,7 +1903,7 @@ def _preflight_row(
     # PRECHECK SAFETY: the one-shot idempotency precheck (`mutate.precheck_*`) probes a FIXED url/marker with
     # NO row awareness. On a PARAMETERIZED write a generic end-state left by one row would make a DIFFERENT
     # row's write skip as "already-done" — a silently suppressed write. Its retry-safety is the row-keyed key.
-    if is_mutate and parameterizing and spec.mutate.has_precheck():
+    if declares_write and parameterizing and spec.mutate.has_precheck():
         raise FlowReplayError(
             f"{spec.name!r}: a parameterized write can't use a one-shot precheck (mutate.precheck_*) — the "
             f"precheck is row-blind and could skip a distinct row's write as already-done. Remove the precheck "
@@ -1827,8 +1953,8 @@ async def dry_run(spec: FlowSpec, params: Optional[dict] = None, *,
     re-authored recipe can never be mistaken for a run of an approved one:
       * the approval gates. This IS the pre-approval artifact; gating it on approval makes it useless for
         the only case it exists for. Note `require_approved=False` is NOT sufficient — the gate is
-        UNCONDITIONAL for a write flow (`require_approved or is_mutate`), which is every flow that matters
-        here.
+        UNCONDITIONAL for a write flow (`require_approved or declares_write`), which is every flow that
+        matters here.
       * `_already_committed` (the one-shot idempotency precheck): it opens a SECOND BrowserSession with no
         arbiter attached. GET-only today, but an unprotected browser in a mode that promises none exist is
         not a risk worth carrying — and an "already-done" short-circuit would return with no artifact.
@@ -1936,7 +2062,6 @@ async def replay(
     cache = cache or _default_cache()
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     meta = _load_meta(cache, key)
-    is_mutate = spec.mutate is not None
     parameterizing = params is not None  # caller opted into the param path (vs a frozen replay)
     # H3 slice 2a/2b: run the shared 0-LLM, NO-BROWSER preflight gate — resolve + validate this row's params
     # and run every trust guard (confirm-required, relearn-incompatibility, approval, schema-hash, slot
@@ -1947,6 +2072,12 @@ async def replay(
     cached_flow = cache.get(key)
     params = _preflight_row(spec, params, meta=meta, cached_flow=cached_flow,
                             require_approved=require_approved, on_drift=on_drift)
+    # Named for the question it answers, and used ONLY for questions about the declaration: the write
+    # envelope `{"status": "confirmed"}` (which means "the declared confirm barrier held", so an undeclared
+    # flow must not claim it) and the operator-facing messages that dereference `spec.mutate`. The question
+    # "would acting again re-fire a write" is NOT this predicate — that is `_auth_retry_allowed`, keyed off
+    # `is_write_flow`. Conflating the two is exactly R3.5.
+    declares_write = spec.mutate is not None
 
     # Idempotency precheck (opt-in, one-shot writes): if the end-state already holds, skip the write.
     if await _precheck_done(spec):
@@ -1969,8 +2100,8 @@ async def replay(
 
     def _ok(data):
         _record_run(cache, key, ok=True)
-        _log.info("flow %r: replay ok%s", spec.name, " (write confirmed)" if is_mutate else "")
-        return {"status": "confirmed", "data": data} if is_mutate else data
+        _log.info("flow %r: replay ok%s", spec.name, " (write confirmed)" if declares_write else "")
+        return {"status": "confirmed", "data": data} if declares_write else data
 
     def _do_quarantine(why: str) -> "FlowQuarantineError":
         # H9: a value-contract violation is DETERMINISTIC wrong data — re-login / re-author can't fix it, and a
@@ -2005,17 +2136,14 @@ async def replay(
             raise WriteReadbackError(f"{spec.name!r}: {reason}")
         if kind == "quarantine":
             raise _do_quarantine(reason)   # first attempt: never enters the auth-refresh / relearn paths
-        # The session may have expired — re-login (refresh cookies) and retry once. A WRITE flow is
-        # NOT retried unless it has an idempotency precheck: a first attempt may have committed the
-        # write before failing its confirm check, and a blind retry would double-submit. With a
-        # precheck we re-check first and skip if the write already landed.
-        # A write flow is retried after auth-refresh only if a re-run can't double-submit: a SINGLE-write flow
-        # with a whole-flow precheck (re-check first, skip if already landed). A MULTI-WRITE flow is NEVER
-        # auto-retried — a whole-flow precheck only models the LAST write, so a retry would re-fire an
-        # already-landed earlier write (per-write resume that would make this safe is a deferred slice). It
-        # fails loud instead, exactly as a single write without a precheck.
-        retry_ok = auth_refresh and spec.login is not None and (
-            not is_mutate or (spec.mutate.has_precheck() and not spec.mutate.is_multiwrite()))
+        # The session may have expired — re-login (refresh cookies) and retry once. The retry re-runs the
+        # WHOLE flow from `start_url`, so it re-actuates whatever the first attempt already did: free for a
+        # read, a double-submit for a write. `_auth_retry_allowed` is the single definition of when that is
+        # safe, keyed off `is_write_flow` (wire OR declaration) rather than the declaration alone — which
+        # is R3.5: this line used to read `spec.mutate is not None`, so an UNDECLARED write was handed the
+        # retry that a declared one is refused, and re-fired its commit.
+        retry_ok, declined_because = _auth_retry_allowed(
+            spec, cached_flow, auth_refresh=auth_refresh, parameterizing=parameterizing)
         if retry_ok:
             try:
                 await refresh_auth(spec, headless=spec.headless)
@@ -2030,21 +2158,12 @@ async def replay(
                 kind = kind2  # the post-refresh failure kind is the operative one now
             except Exception as exc:  # noqa: BLE001 - any refresh failure -> fall through to relearn/raise
                 reason = f"{reason}; auth refresh failed: {type(exc).__name__}: {exc}"
-        elif is_mutate and auth_refresh and spec.login is not None:
-            if spec.mutate.is_multiwrite():
-                reason = (f"{reason}; not retrying a MULTI-WRITE flow after auth refresh (a re-run would "
-                          f"re-fire an already-landed earlier write; per-write resume is not yet supported) "
-                          f"— run `flow login` then replay")
-            elif parameterizing:
-                # A parameterized write can't carry a precheck (row-blind — refused above), so don't advise
-                # one; its retry-safety is the row-keyed Idempotency-Key (same row -> same key -> the backend
-                # dedupes the re-run), so a manual re-run after re-login is safe.
-                reason = (f"{reason}; not retrying a parameterized write after auth refresh (would risk a "
-                          f"double-submit) — run `flow login` then replay this row; its row-keyed "
-                          f"Idempotency-Key dedupes the re-run")
-            else:
-                reason = (f"{reason}; not retrying a write after auth refresh without an idempotency precheck "
-                          f"(would risk a double-submit) — add mutate.precheck_* or run `flow login` then replay")
+        elif declined_because:
+            # The decision and its explanation come from ONE place. They used to be two: `retry_ok` was an
+            # inline expression here and the reasons were a hand-derived `elif` chain below it, so when the
+            # gate grew an arm the chain did not — and a flow refused for having two mutating steps was
+            # told it lacked a precheck it actually had, with a remedy that does nothing.
+            reason = f"{reason}; {declined_because}"
         if kind == "quarantine":
             # The post-auth-refresh attempt hit a value-contract violation — persist + fail loud BEFORE the
             # relearn block (a relearn would re-seed contracts from the wrong page and bypass the quarantine).
@@ -2365,9 +2484,14 @@ async def run_all(
         # That population is not hypothetical, and this release is what creates it at scale: the wire
         # promotion in `_author_steps` now marks a formless JS fetch-POST or a method-less `<form onSubmit>`
         # commit as mutating on a flow LEARNED AS A READ. Such a flow then replayed on every scheduled tick
-        # with no confirm barrier (`_preflight_row` computes `is_mutate` from `spec.mutate` alone, so no
-        # UnkeyedWriteError either), and `_make_finalize`'s navigate-only branch reports `found=True`
+        # with no confirm barrier, and `_make_finalize`'s navigate-only branch reports `found=True`
         # unconditionally — so the run looked fine whether or not the write landed.
+        #
+        # THIS SKIP IS LOAD-BEARING — do not delete it as redundant. R3.5 (0.77.0) considered pushing an
+        # undeclared-write refusal down into the shared `_preflight_row` gate, which would have made this
+        # skip a duplicate; that was measured to over-refuse a large population of ordinary reads and was
+        # REVERTED (decision D0, blocked). So this remains the only thing standing between an unattended
+        # cron tick and an unverifiable commit.
         if is_write_flow(spec, cache.get(key)):
             if spec.mutate is None:
                 # An UNDECLARED write is skipped whatever `include_writes` says, exactly as `run_batch`

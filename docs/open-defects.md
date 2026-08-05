@@ -1199,6 +1199,109 @@ failed (page drift?): replay` — a message that never mentions that the commit 
 twice. The declared-write control on the identical fixture, identical cached recipe, identical
 drift, fires once and says why.
 
+**FIXED in 0.77.0** (plan slice S2), regression test confirmed RED against the pre-fix source —
+verbatim: `the commit fired 2 times (keys=['uca-8e4d01d65220b115dd25cc01',
+'uca-8e4d01d65220b115dd25cc01'], auth refreshes=1)`.
+
+The fix: `_auth_retry_allowed(spec, cached_flow, auth_refresh=…)`, one definition of when a drifted
+replay may be re-run from `start_url`, keyed off `is_write_flow` (wire OR declaration). A read retries
+freely; a DECLARED single write with a whole-flow precheck retries (the precheck detects that the commit
+already landed); everything else — including the undeclared write — does not, and now says so in the
+operator-facing reason, which the pre-fix code never did because the branch could not be reached.
+
+**Plus the arm this entry originally scoped OUT, which turned out to be the worse half.** The exclusion
+above reads: "`on_drift='relearn'` is refused for any APPROVED flow regardless of declaration". True, and
+it covers the wrong population — the flows that can run undeclared are the UNAPPROVED ones. An
+unapproved undeclared write satisfied neither the declared-write arm (no `spec.mutate`) nor the
+approved-flow arm, so it re-authored: `replay()` re-ran the flow from `start_url`, re-firing the commit
+with the same byte-identical key, and then **returned normally with a recorded SUCCESS**, because the
+`{"status": "confirmed"}` envelope also keys off the declaration. A green run, a green health record, and
+a commit that fired more than once — inviolables #2 and #3 in one call, and strictly worse than the
+retry arm this finding is named for, since the retry at least raised. Reachable from `ultracua flow
+replay --name X --on-drift relearn`, which the CLI help actively routes operators toward. The relearn
+refusal now asks `is_write_flow` instead of the declaration. That costs the misclassified-read population
+only the opt-in self-healing mode, and only while `--on-drift relearn` is asked for; a plain replay is
+untouched. Found by the second adversarial pass, on the reworked fix — the sibling `if`/`elif` pair
+twenty lines apart, in the function the first pass had already been through.
+
+**And one more declaration-standing-in-for-reality bug, inside the new predicate itself.**
+`MutateSpec.is_multiwrite()` is `len(step_confirms) > 1` — a question about the DECLARATION — while
+`record()` explicitly permits a declared write with two mutating steps and no `step_confirms` at all.
+Such a flow read as a single write, so a whole-flow precheck earned it the retry; the precheck probes
+only the LAST write's marker, so after write #1 lands the re-run re-fires it. Verbatim the harm the
+multiwrite exclusion exists to prevent. `_auth_retry_allowed` now counts the mutating steps in the
+recipe as well. Note the shape: R3.5's own conflation, one field over, reproduced inside the fix for
+R3.5 — which is this register's structural finding operating on itself.
+
+**Two rejected fixes are the substance of this entry.**
+
+**(1) What the survey and the plan both prescribed is a defect.** "Convert the funnel surface to
+`is_write_flow(spec, cached)` — the exact conversion 0.72.0 did on the four surfaces that funnel THROUGH
+it." Done literally, that breaks the write path: THREE sites downstream of that binding dereference
+`spec.mutate` (`has_confirm()`, `has_precheck()`, `is_multiwrite()`), so a widened predicate turns a
+refusal into an `AttributeError`. The patch reproducing the class it closes, one level down — this
+project's signature failure, sitting inside its own remediation plan.
+
+**(2) The flow-level refusal was built, went green, and is WRONG.** The natural reading of the sibling
+guards (`run_batch` at flows.py:2556 and `run_all` at flows.py:2437 both refuse an undeclared write
+outright; MCP never advertises one) is "push that refusal down into `_preflight_row`, the gate all four
+funnel through". That was implemented, the full targeted suite passed (105 tests), and a new
+24-cell matrix dimension mutation-measured at 20/24 detection. **All of that was true and the change was
+still unshippable**, which is the fourth consecutive time green has been worthless here.
+
+An adversarial pass measured what it refused. `is_write_flow` trusts `step.mutating`, and that flag
+OVER-counts badly: `safety.classify_mutation` falls back to an unbounded substring match over
+`intent + accessible name`, with no word boundaries. Verified directly —
+
+| step | classified | because |
+|---|---|---|
+| click "Payment history" | mutating | `pay` |
+| click "Show borders" | mutating | `order` |
+| click "the Sent folder" | mutating | `send` |
+| click "Deleted items" | mutating | `delete` |
+| click "Subscribers" | mutating | `subscribe` |
+
+8 of 10 sampled ordinary read navigations classified True. Such flows CACHE (the wire-vs-classifier
+consistency check only fires when there is wire evidence to reconcile) and they replay fine today. A
+flow-level refusal breaks every one of them on `flows.replay()`, `ultracua flow replay` and `dry_run` —
+and **neither remedy such a refusal can name works for that population**: `flow record` re-derives the
+identical verdict through the same classifier and then refuses, and its refusal path DELETES the cached
+recipe, so following the printed advice destroys the working flow; and declaring `mutate` demands a
+write-completion
+confirm signal a read cannot produce, disables the H9 read-side contract/magnitude rails
+(`_attempt_replay` runs them only when `spec.mutate is None`), changes `replay()`'s return type, drops
+the flow out of the default cron fleet, and has no `unset-mutate` verb to undo. The second false-positive
+source is the wire promotion's own stated residual: a click-triggered GraphQL/RPC read-POST, i.e. every
+GraphQL-backed SPA read.
+
+That is the 0.74.0 over-refusal regression one population over — the one this file already records as
+having actually shipped. **The guard therefore sits on the RETRY, not on the flow.** Declining one
+auth-refresh retry costs a misclassified read nothing but a loud failure on an expired session; it costs
+a genuine undeclared write its double-submit. Refusing the flow is decision D0, and it is now BLOCKED on
+telling the two populations apart — see `docs/correctness-plan.md`.
+
+**Test-side, three things the same passes corrected.** The enforcement test was a regex over three
+literal variable names — theatre, and blind to `writes = spec.mutate is not None`, which the fix's own
+rename had just made the house style. It now walks the AST, matches the PREDICATE
+(`is`/`is not`/`==`/`!=`/`not …`/`bool(…)`, **including buried inside a larger boolean, which is the form
+R3.5 actually had**), allows it only under names that mean the declaration, asserts it scanned a non-zero
+number of files, and carries a positive control sharing its matcher — which caught `not spec.mutate is
+None` slipping past the first version on its first run. Its LIMIT is now stated in the test rather than
+overclaimed in the docs: it catches BINDINGS, not every inline use, because the raw predicate is
+legitimate in ~20 places where the question really is the declaration, and an allowlist longer than the
+rule is not a rule. It narrows the next transcription's blast radius; it does not make the predicate
+inexpressible, and nothing should say it does. The matrix dimension asserts the retry property rather
+than a refusal. And the missing liveness cell — a misclassified READ must still pre-flight clean — is now
+a test, with its own premise asserted so it fails loudly rather than vacuously the day the classifier is
+tightened.
+
+**A sibling gap found by this slice's sibling check, filed not fixed.** `run_audit` (flows.py:2320) skips
+write flows on `spec.mutate is not None` alone, so an undeclared write is captured and judged in
+contradiction of its own "never captured, never judged" invariant. Fixing it needs a
+`CacheUnreadableError` guard around the `cache.get` (an R3.4 shape), so it is a slice, not a one-liner.
+**R4.10**, sequenced in `docs/correctness-plan.md`. Note this is NOT neutralized by the fix that shipped:
+the flow-level refusal would have made it unreachable, and the retry-level guard does not.
+
 ### R3.6. The redaction covers the Observation but not `LocatorSpec` — `describe()` writes the same page-derived secret to the flow cache in plaintext, on both learn and heal
 
 *high, lens `secrets`, confidentiality (no inviolable), reproduced by an independent refuter*

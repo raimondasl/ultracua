@@ -25,6 +25,9 @@ Dimensions crossed here — each is a place a real defect has lived:
   * HOW it commits (formless fetch / real form POST / XHR) — A9/A5: the classifier misses two of three
   * WHAT ELSE looks mutating (a benign sibling whose intent trips the keyword classifier) — R3.2's
     silent-wrong, where the gate lands on the step that never writes
+  * WHETHER THE WRITE WAS DECLARED (slice S2, R3.5) — every shape here is an UNDECLARED write, and none
+    of them may be handed the auth-refresh retry, which re-runs the flow from the start and re-fires the
+    commit; a DECLARED single write with a precheck still may be
 
 Add a dimension here rather than a new bespoke test the next time a defect is found in this area. A cell
 that fails is a real defect: the flow wrote without a gate, gated the WRONG step, or replayed a write
@@ -219,6 +222,55 @@ async def test_a_learned_write_is_never_cached_ungated_or_replayed_unkeyed(case,
             f"({flow.steps[commit_index].intent!r}). The Idempotency-Key, the precondition and the "
             f"drift gate all ride the wrong row; the real commit replays ungated. "
             f"steps={[(s.intent, s.mutating) for s in flow.steps]}")
+
+        # SLICE S2 / R3.5 — THE SAME RECIPE, SEEN FROM THE `flows` LAYER.
+        #
+        # Every cell above is an UNDECLARED write: a cached step mutates, and no `spec.mutate` declares
+        # it. The auth-refresh retry re-runs the whole flow from `start_url`, so for any of these shapes
+        # it would re-actuate the commit — which is what it did, under a byte-identical Idempotency-Key,
+        # until `_auth_retry_allowed` started keying off `is_write_flow` instead of the declaration.
+        #
+        # It belongs in the MATRIX rather than only beside the fix because the property is about the
+        # SHAPES: whatever commit style a future dimension adds, it inherits this automatically.
+        #
+        # Note what is deliberately NOT asserted here — that these flows are REFUSED. A flow-level
+        # refusal was built for this slice and measured to break a large population of ordinary reads
+        # (`classify_mutation` falls back to an unbounded substring match), so the guard is on the retry.
+        # See `tests/test_undeclared_write_retry.py` and decision D0.
+        from ultracua import flows as flows_mod
+
+        undeclared = flows_mod.FlowSpec(
+            name=goal, goal=goal, start_url=f"{base}/", headless=True,
+            login=flows_mod.LoginSpec(url=f"{base}/login"))
+        assert flows_mod._auth_retry_allowed(undeclared, flow, auth_refresh=True, parameterizing=False)[0] is False, (
+            f"{_ids(case)}: this recipe WRITES (gated steps={gated}) but declares no write, and the "
+            f"auth-refresh retry would still re-run it from the start — re-firing the commit with no "
+            f"confirm barrier able to detect it, under the same Idempotency-Key")
+        # ...and the LIVENESS half, without which the property is satisfied by never retrying anything.
+        # A DECLARED write carrying a whole-flow precheck may be retried — but ONLY if the recipe commits
+        # once, because a whole-flow precheck models just the LAST write and cannot tell whether an
+        # earlier one already landed.
+        #
+        # This arm is where the cost of counting `mutating` steps becomes visible, which is the point of
+        # putting it in the matrix. The `bait` cells give the benign sibling a mutating-sounding intent
+        # ("submit the filter"), so the classifier marks TWO steps and the flow loses its retry even
+        # though it commits once. That is the over-count, priced per cell rather than argued: it is
+        # fail-safe (a loud failure, never a double-submit) and it is real.
+        retryable = flows_mod.FlowSpec(
+            name=goal, goal=goal, start_url=f"{base}/", headless=True,
+            login=flows_mod.LoginSpec(url=f"{base}/login"),
+            mutate=flows_mod.MutateSpec(confirm_text_contains="committed",
+                                        precheck_text_contains="committed"))
+        allowed, why = flows_mod._auth_retry_allowed(retryable, flow, auth_refresh=True, parameterizing=False)
+        if len(gated) == 1:
+            assert allowed is True, (
+                f"{_ids(case)}: a declared write whose recipe commits ONCE (gated={gated}) lost its "
+                f"expired-session recovery — the property is now satisfied by never retrying: {why}")
+        else:
+            assert allowed is False and "marked as WRITING" in why, (
+                f"{_ids(case)}: the recipe has {len(gated)} mutating steps (gated={gated}), so a "
+                f"whole-flow precheck cannot tell whether an earlier one landed — the retry must be "
+                f"declined AND must say why: allowed={allowed} why={why!r}")
 
         # ...and the write must actually ride a key on a 0-LLM replay.
         site.posts.clear()

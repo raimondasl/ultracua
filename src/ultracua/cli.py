@@ -1013,7 +1013,7 @@ def _flow_main(argv) -> None:
     pr.add_argument("--require-approved", dest="require_approved", action="store_true",
                     help="refuse to run a flow that hasn't been approved.")
     pr.add_argument("--on-drift", dest="on_drift", default="raise", choices=["raise", "relearn"],
-                    help="raise = fail loud on drift (default); relearn = re-author the flow instead. NOTE: relearn is REFUSED on an APPROVED flow (it would run steps no human reviewed) — unapprove first, or use --include-unapproved.")
+                    help="raise = fail loud on drift (default); relearn = re-author the flow instead. NOTE: relearn is REFUSED on an APPROVED flow (it would run steps no human reviewed), and on ANY flow with a step marked as writing, approved or not (re-authoring re-runs the flow, which re-performs the write). Use `flow inspect --name X` to see which steps are marked; recover with `flow learn`/`flow record`, then re-approve.")
     pr.add_argument("--no-auth-refresh", dest="auth_refresh", action="store_false",
                     help="don't re-login on drift (default: refresh an expired session and retry).")
     pr.add_argument("--verbose", "-v", action="store_true", help="log replay/heal/drift events (INFO).")
@@ -1103,7 +1103,7 @@ def _flow_main(argv) -> None:
     pra.add_argument("--concurrency", type=int, default=None,
                      help="max flows run at once (default ULTRACUA_CONCURRENCY).")
     pra.add_argument("--on-drift", dest="on_drift", default="raise", choices=["raise", "relearn"],
-                     help="relearn is REFUSED on APPROVED flows (it would run un-reviewed steps); with the default approved-only fleet it would fail every flow.")
+                     help="relearn is REFUSED on APPROVED flows (it would run un-reviewed steps), and on any flow with a step marked as writing (re-authoring re-performs the write); with the default approved-only fleet it would fail every flow.")
     pra.add_argument("--allow-empty", dest="allow_empty", action="store_true",
                      help="do not fail when the flow store resolves to zero flows.")
     pra.add_argument("--json", dest="json", help="write a machine-readable run record to this path.")
