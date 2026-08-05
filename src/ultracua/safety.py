@@ -22,7 +22,58 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator, Optional
 from urllib.parse import urlsplit
 
-# Keywords marking a step as state-mutating (irreversible side effect).
+# ======================================================================================================
+#  THE KEYWORD CLASSIFIER IS A BAD SIGNAL. IT IS NOT GETTING FIXED. DO NOT BUILD A REFUSAL ON IT.
+# ======================================================================================================
+#
+# Measured, both directions, on the list below (`_keyword_mutating`, a bare substring test):
+#
+#     ordinary READ-ONLY controls that classify as MUTATING     18 of 64   (28%)
+#     genuine WRITE controls it catches, with no form context    15 of 33   (45%)
+#     keywords that are substrings of ordinary words             15 of 20   (75%)
+#
+# "Show borders" -> `order`. "Sender" -> `send`. "Bookmarks" -> `book`. "Payment history" -> `pay`.
+# "Confirmation number" -> `confirm`. Meanwhile "Save", "Apply", "Continue", "Add to cart", "Approve",
+# "Issue refund" and "Merge" are all real commits that read as READS.
+#
+# AND IT CANNOT BE REPAIRED BY A BETTER MATCHING RULE. Measured, three ways:
+#
+#     rule                        read false-positives fixed    genuine writes that LOSE their gate
+#     substring (this one)                     --                             0
+#     word boundary                          17/20                        16/21
+#     affix + inflection aware                3/20                           0
+#
+# Word boundaries un-gate ordinary inflections and affixes of real commits — "Reorder", "Resend",
+# "Unpublish", "Ordering", "Submitting form" — trading a loud over-refusal for a SILENT under-gate, which
+# is the wrong direction on inviolable #3. The safe affix-aware variant keeps every write and removes
+# almost nothing, because the surviving false positives are DEVERBAL NOUNS: payment, sender, subscriber,
+# publisher, confirmation, transfers, bookings. Those are morphologically identical to the inflected
+# verb. "Transfers" (a list you read) versus "Transferring funds" (a commit) is not separable by any
+# string rule — it needs part-of-speech or semantics, which is a different project.
+#
+# SO WHY IS IT STILL HERE? Because it is the ONLY signal available BEFORE acting. `flow.py`'s
+# `block_mutations` (the replan path) must refuse to PERFORM a write during a replay-triggered re-author,
+# and it has to decide that pre-act — wire evidence is post-hoc by construction, since observing the
+# request requires making it. Deleting the keyword fallback would blind that refusal completely and let
+# the re-author fire an unapproved write. The recorder's undeclared-write refusal has the same shape.
+# It is a bad signal kept for the one job where no better signal can exist.
+#
+# WHAT THIS MEANS FOR CALLERS — the rule that matters:
+#
+#     A `mutating` mark is a GUESS, not evidence. It is sound to be conservative because of one
+#     (gate it, key it, refuse to re-author it). It is NOT sound to refuse a FLOW because of one.
+#
+# That distinction is register finding R3.5 and decision D0, and it has already been learned the
+# expensive way: a flow-level refusal keyed off this signal was built, passed 105 targeted tests and a
+# 24-cell invariant matrix, and would have broken a large population of ordinary read flows whose only
+# offered remedies both fail. See `docs/open-defects.md` (R3.5) and `docs/correctness-plan.md` (D0,
+# blocked indefinitely). The cache stores the mark but NOT which of keyword/form-method/wire set it, so
+# nothing downstream can tell a guess from evidence — that provenance is the one real improvement
+# available, and it belongs with S6/AB-1, which needs the same primitive.
+#
+# Before touching this list, re-run the measurement. `tests/test_write_classification.py` pins the known
+# false positives and false negatives so a well-meaning tightening fails loudly instead of silently
+# un-gating a commit.
 MUTATING_KEYWORDS = (
     "submit", "pay", "buy", "purchase", "order", "checkout", "send", "delete",
     "remove", "confirm", "transfer", "book", "subscribe", "register", "publish",
