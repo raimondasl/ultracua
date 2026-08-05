@@ -51,14 +51,43 @@ checked → suite + drift_bench green → adversarial audit → PR.
 Ordering argument: S2/S3 are fully silent double-submits; R3.13's re-fires at least print a refusal
 each run, and its fix (quarantine) must not land before skip-visibility exists, so it comes after S7a.
 
-- **S2. R3.5 — undeclared write double-POSTs via the auth-refresh retry.** Convert the FIFTH
-  transcription of the write predicate (`replay()`/`_preflight_row`) to `is_write_flow`. Two
-  critique-driven additions: (a) an enforcement test that FAILS if a raw `spec.mutate is not None`
-  write-predicate appears anywhere in src/ outside `is_write_flow` — the sixth transcription becomes a
-  red test, not a round-4 finding; (b) this is a USER-VISIBLE change — undeclared-write flows become
-  refused on `flow replay` and the API too. That is the intended conservative direction, but it is
-  **Decision D0** below, made explicitly, and the refusal message must name the remedy (`flow record`
-  or declare `mutate`).
+- **S2. R3.5 — undeclared write double-POSTs via the auth-refresh retry.** ✅ **DONE in 0.77.0**, via
+  `_auth_retry_allowed` — one definition of when a drifted replay may be re-run, keyed off
+  `is_write_flow` rather than the declaration. The enforcement test landed too, rebuilt as an AST scan
+  with a positive control after the regex version was shown to be theatre.
+
+  **THIS SLICE'S OWN PRESCRIPTION WAS WRONG, TWICE, AND THAT IS THE LESSON FOR EVERY SLICE BELOW.**
+
+  *Wrong the first way:* "convert the fifth transcription to `is_write_flow`" is a defect — three sites
+  downstream of that binding dereference `spec.mutate`, so widening it in place turns a refusal into an
+  `AttributeError`. The patch reproducing the class it closes, one level down, sitting inside this plan's
+  own text.
+
+  *Wrong the second way, and worse:* the natural correction — push the siblings' flow-level refusal down
+  into `_preflight_row` — was built, went green (105 targeted tests, a new 24-cell matrix dimension
+  measured at 20/24 detection), and is **unshippable**. `step.mutating` over-counts: `classify_mutation`
+  falls back to an unbounded substring match, so 8 of 10 sampled ordinary read navigations classify as
+  mutating ("Payment history" → `pay`, "Show borders" → `order`). Refusing those flows breaks a large
+  working population, and neither remedy the refusal names can rescue it — `flow record` re-derives the
+  same verdict *and deletes the recipe*, declaring `mutate` demands a confirm signal a read cannot
+  produce. That is the 0.74.0 over-refusal regression one population over.
+
+  *Wrong a third way, caught by auditing the REWORK:* the retry-level fix, green again, still left
+  `on_drift='relearn'` re-performing an undeclared write on an UNAPPROVED flow — and that path returns
+  NORMALLY with a recorded success, so it is worse than the arm the finding is named for. This entry's
+  own scope note had excluded relearn because it "is refused for any APPROVED flow", which covers the
+  wrong half. Closed in the same slice. A second bug of the identical shape (declaration standing in for
+  reality) was found INSIDE the new predicate: `is_multiwrite()` counts declared barriers, not the
+  mutating steps that actually fire.
+
+  **Three process consequences, which are the transferable part.** (a) Green was worthless three times in
+  this one slice; only the adversarial passes caught it, each time. Do not treat a passing suite plus a
+  measured matrix as evidence — measure what a refusal REFUSES, on the real classifier, before writing it
+  up. (b) **Audit the rework, not just the original.** The second pass found a CRITICAL the first pass had
+  walked past, in the same function, because the fix had changed under it. One adversarial pass per slice
+  is not enough when the fix is redesigned mid-slice. (c) Every remaining slice's fix shape in this
+  document was written in the same voice as S2's, by the same process, without that measurement. Treat
+  each as a hypothesis, not an instruction. Full record in `docs/open-defects.md` under R3.5.
 - **S3. R3.3 — a landed write re-fires on resume.** NOT "arm the ledger for ShapeDriftError too" —
   that is the per-exception-class patch shape that created R3.3 (the critique caught the plan repeating
   it). Respecified: set `landed` at the single point where the confirm TRANSITION is observed in
@@ -93,7 +122,39 @@ Moved ahead of secrets/CLI per critique: these are silent wrong-TARGET writes sh
 the harm class the register has rated critical every time it appeared. Each is reproduce-first and
 adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable; deciding late is not.
 
-- **D0.** (from S2) Undeclared-write flows refuse everywhere — confirm scope.
+- **D0.** (from S2) Undeclared-write flows refuse everywhere — confirm scope. ⛔ **DECIDED, 0.77.0: DO
+  NOT, and it is BLOCKED, not merely deferred.** It was implemented and reverted. A flow-level refusal
+  keyed off `is_write_flow` refuses a large population of ordinary READS, because `step.mutating`
+  over-counts from two independent sources: `classify_mutation`'s unbounded substring fallback (8 of 10
+  sampled read navigations classify mutating) and the wire promotion's stated read-POST residual (every
+  GraphQL-backed SPA read). Neither remedy a refusal can name works for that population — `flow record`
+  re-derives the verdict and deletes the recipe; declaring `mutate` demands a write-completion signal a
+  read cannot produce, and is a one-way door.
+
+  **Unblocking condition, in order.** D0 becomes decidable only once an undeclared write can be told
+  apart from a misclassified read. That needs, at minimum: (i) word-boundary matching in
+  `safety.MUTATING_KEYWORDS` — currently `"borders"` matches `order`; (ii) a persisted distinction
+  between a step marked mutating by KEYWORD GUESS and one marked by WIRE EVIDENCE, so a refusal can key
+  off evidence rather than a guess; (iii) then re-run the measurement. (ii) overlaps **S6/AB-1** (the
+  causal signal as a refusal oracle) and inherits its blocker on **S17**.
+
+  **What the deferral actually costs that population, stated precisely — an earlier draft of this bullet
+  said "one auth-refresh retry and nothing else", which the same commit falsified.** They lose (a) the
+  auth-refresh retry, and (b) `on_drift='relearn'` entirely, since relearn re-performs the write and its
+  gate keys off the same over-counting signal. (b) is an up-front refusal of the whole RUN, not just of
+  the healing. It is bounded — no fleet surface is affected (`run_all` already skips these flows on the
+  identical predicate before `replay()` is reached; `run_batch`, `preflight_keys`, `dry_run` and MCP all
+  pass `on_drift="raise"`), approved flows were already refused relearn, and the named remedy
+  (`flow learn`/`flow record` by hand, which does not funnel through `_preflight_row`) genuinely works —
+  which is exactly what distinguishes it from the rejected flow-level refusal, whose remedies did not.
+  **Do not re-attempt D0 without redoing the refused-population measurement first** — it went green,
+  with a measured 20/24 matrix, and was still wrong.
+- **R4.10.** (found by S2's sibling check, filed not fixed) `run_audit` (flows.py:2320) skips write flows
+  on `spec.mutate is not None` alone, so an undeclared write is captured and judged in contradiction of
+  its own "never captured, never judged" invariant. Its fix needs a `CacheUnreadableError` guard around
+  the `cache.get` (R3.4 shape), so it is a slice, not a one-liner. Sequence it with S4 (the other
+  trust-sidecar-load slice); it must not land before that. Note it is NOT neutralized by what S2 shipped:
+  the rejected flow-level refusal would have made it unreachable, the retry-level guard does not.
 - **D2.** Refuse sole-candidate fuzzy (`role+name~`) binds for MUTATING steps (AB-2).
 - **D3.** Reject purely positional row-identity tokens (`data-index`, `id="row-N"`) (AB-3).
 - **D4.** Learn-path WebSocket parity with the recorder (AB-8): a sent WS frame during learn is a

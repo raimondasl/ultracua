@@ -137,10 +137,10 @@ _docs/open-defects.md (1351 lines, read end to end) at v0.75.0: Rounds 1-2 (30 f
 **Where.** src/ultracua/flows.py:1620 (_preflight_row), :1901 (replay), :1979-1981 (retry_ok); reachable via 'ultracua flow replay --name X' (cli.py:247) and the flows.replay() API; register: open-defects.md:1071-1099
 
 
-**Evidence.** Reproduced by independent refuter, double-POST measured. Two sub-arms explicitly excluded: on_drift='relearn' refused for approved flows; run_all/run_batch/MCP now refuse the flow outright — reachable surfaces are flow replay and the library API only.
+**Evidence.** Reproduced by independent refuter, double-POST measured. Two sub-arms were explicitly excluded, and ONE OF THOSE EXCLUSIONS WAS WRONG: "on_drift='relearn' refused for approved flows" is true but covers the wrong population — the flows that can run undeclared are the UNAPPROVED ones, and for those relearn re-performed the write AND returned success. Found while auditing the fix in 0.77.0 and closed there. The other exclusion holds: run_all/run_batch/MCP do refuse the flow outright, so the reachable surfaces were flow replay and the library API.
 
 
-**Disposition / fix shape.** Convert the funnel surface (replay/_preflight_row) to is_write_flow(spec, cached) — the exact conversion 0.72.0 did on the four surfaces that funnel THROUGH it. Guard-in-the-mechanism, not per-caller; siblings already converted show the shape.
+**Disposition / fix shape.** ✅ RESOLVED in 0.77.0 (slice S2) — but NOT by the fix shape written here, and the difference is the finding. "Convert the funnel surface to is_write_flow" is itself a defect (three sites downstream dereference spec.mutate → AttributeError). Its natural correction — push the siblings' flow-level refusal into _preflight_row — was built, went green, and is unshippable: step.mutating over-counts (classify_mutation's unbounded substring fallback marks 8 of 10 sampled ordinary read navigations as mutating), so it refuses a large working read population whose stated remedies both fail. What landed is _auth_retry_allowed: the guard is on the auth-refresh RETRY, keyed off is_write_flow, not on the flow. Flow-level refusal is decision D0 and is now BLOCKED on classifier precision. Full record in docs/open-defects.md under R3.5.
 
 
 ### `R3.6` (high)
