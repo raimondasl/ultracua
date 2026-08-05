@@ -27,7 +27,14 @@ Dimensions crossed here — each is a place a real defect has lived:
     silent-wrong, where the gate lands on the step that never writes
 
 Add a dimension here rather than a new bespoke test the next time a defect is found in this area. A cell
-that fails is a real defect: the flow either wrote without a gate, or replayed a write un-keyed.
+that fails is a real defect: the flow wrote without a gate, gated the WRONG step, or replayed a write
+un-keyed.
+
+**The gate must be on the step that WROTE** (slice S1, closing R4.6/H1). The first version of this file
+asserted only that SOME step was gated, and round 4 showed what that permits: a telemetry beacon
+promoted an inert click to `mutating`, the genuine commit cached as a read, and all 24 cells stayed
+green. See the measurement at that assertion — on today's code the property is already protected, but
+only as a side effect of two unrelated guards, and it halves the moment either is weakened.
 """
 
 from __future__ import annotations
@@ -180,11 +187,37 @@ async def test_a_learned_write_is_never_cached_ungated_or_replayed_unkeyed(case,
                 f"and must still be learnable — refusing it makes the ordinary write flow unauthorable")
             return
 
-        # CACHED. Then something must carry the gate...
+        # CACHED. Then the gate must be on the step that WROTE — not merely on SOME step.
+        #
+        # Slice S1, closing R4.6. The measurement behind it, because the naive version of this claim was
+        # wrong and had to be corrected. Mutation: relocate every gate onto step 0.
+        #
+        #   guards intact                          old 8/24 fail, new 8/24 — NO delta
+        #   Idempotency-Key made flow-scoped AND
+        #   the consistency check relaxed          old 6/24 fail, new 12/24 — detection DOUBLES
+        #
+        # So on today's code a misplaced gate is already caught, but only EMERGENTLY: the wire-vs-
+        # classifier consistency rule refuses the flow, or the per-step key makes the replayed POST come
+        # back unkeyed three assertions later. Neither of those guards is about gate placement, and when
+        # they are weakened — a flow-scoped key and a relaxed consistency rule are both plausible
+        # refactors — wrong-gate detection halves. This assertion makes the property ASSERTED rather than
+        # emergent, and names the actual defect instead of reporting it as a missing Idempotency-Key.
+        #
+        # It is also the guard that would have caught round 4's clobber, where causal attribution moved
+        # the gate onto a telemetry-firing step WITHOUT tripping the consistency rule.
+        #
+        # Over-gating is permitted deliberately: a spare Idempotency-Key on a step that does not write
+        # costs nothing, a missing one costs a double-submit. So this asserts membership, not equality.
         gated = [i for i, s in enumerate(flow.steps) if s.mutating]
         assert gated, (
             f"{_ids(case)}: a POST reached the server during learn and the flow cached with NO mutating "
             f"step — it will replay with no gate, no precondition and no Idempotency-Key. "
+            f"steps={[(s.intent, s.mutating) for s in flow.steps]}")
+        commit_index = 0 if commit_first else 1
+        assert commit_index in gated, (
+            f"{_ids(case)}: the gate is on step(s) {gated} but the step that WROTE is {commit_index} "
+            f"({flow.steps[commit_index].intent!r}). The Idempotency-Key, the precondition and the "
+            f"drift gate all ride the wrong row; the real commit replays ungated. "
             f"steps={[(s.intent, s.mutating) for s in flow.steps]}")
 
         # ...and the write must actually ride a key on a 0-LLM replay.
