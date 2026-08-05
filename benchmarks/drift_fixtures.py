@@ -279,6 +279,110 @@ ORDER_PAGE = """<!doctype html><html><head><meta charset=utf-8><title>Place orde
 # ---------------------------------------------------------------------------------------------------
 # The server
 # ---------------------------------------------------------------------------------------------------
+# --- ROW-IDENTITY SHAPES (slice S1b) ------------------------------------------------------------------
+# The corpus was blind to every shape the row-identity work touches: `_cart_rows` gives each row a
+# DISTINCT href, so `rowIdOf` always finds a discriminating token and the interesting cases never arise.
+# Three slices name drift_bench as their adjudicator (S9/R3.7, D2/AB-2, D3/AB-3) and would have been
+# adjudicated on fixtures that cannot express what they change — "byte-identical baseline" would have
+# been a guarantee about cases the bench never runs.
+#
+# Every label below avoids `safety.MUTATING_KEYWORDS` for the same reason `_cart_rows` does: a mutating
+# classification routes the click through the write gate and would measure that instead of the locator.
+
+_DONE_HREF = "/done"
+_WRONG_HREF = "/wrong"
+
+
+def _row_target(i: int) -> tuple:
+    """(oracle, href, aria) for row i — row 3 is the target, as in `_cart_rows`."""
+    if i == 3:
+        return "go", _DONE_HREF, ' aria-label="Details for widget 3"'
+    return f"row{i}", _WRONG_HREF, ""
+
+
+def _shared_action_rows() -> str:
+    """Every row submits to the SAME endpoint and carries the SAME testid; the only per-record token is a
+    hidden input. This is the shape R3.1's discrimination rule was built for — and the shape where a
+    priority order over `href` alone fabricates an identity that every sibling also has."""
+    out = []
+    for i in range(1, 13):
+        oracle, href, aria = _row_target(i)
+        out.append(
+            '    <tr data-testid="cart-row"><td>Widget %d</td>'
+            '<td><form method="get" action="/details">'
+            '<input type="hidden" name="widget" value="%d">'
+            '<a href="/done" data-oracle="%s"%s>Details</a>'
+            '</form></td></tr>' % (i, i, oracle, aria))
+    return "\n".join(out)
+
+
+SHARED_ACTION_PAGE = (
+    '<!doctype html><html><head><meta charset=utf-8><title>Shared</title></head><body>\n'
+    '  <h1>Cart</h1>\n  <table><tbody>\n' + _shared_action_rows() +
+    '\n  </tbody></table>\n</body></html>')
+
+
+def _positional_rows() -> str:
+    """The rows' ONLY distinguishing tokens are positional: `data-index` and `id="row-N"`. Both
+    discriminate among today's siblings, so the uniqueness rule accepts them — and both RENUMBER when a
+    row is deleted, so the recorded identity outlives the record it named (AB-3, decision D3). Nothing
+    else here tells the rows apart: same testid, same href, same label."""
+    out = []
+    for i in range(1, 13):
+        oracle, _href, aria = _row_target(i)
+        out.append(
+            '    <tr id="row-%d" data-index="%d" data-testid="cart-row"><td>Widget %d</td>'
+            '<td><a href="/done" data-oracle="%s"%s>Details</a></td></tr>'
+            % (i, i, i, oracle, aria))
+    return "\n".join(out)
+
+
+POSITIONAL_PAGE = (
+    '<!doctype html><html><head><meta charset=utf-8><title>Positional</title></head><body>\n'
+    '  <h1>Cart</h1>\n  <table><tbody>\n' + _positional_rows() +
+    '\n  </tbody></table>\n</body></html>')
+
+
+def _nested_action_rows() -> str:
+    """The control sits inside a NESTED action list — `tr > td > ul.actions > li > a` — and the inner
+    `li` has empty collapsed text apart from the control itself. `anchorOf` skips a row-like container
+    whose collapsed text is empty and keeps climbing to the `tr`; `_ROW_OF_JS` stops at the first `li`
+    unconditionally, so capture and bind can name DIFFERENT containers and the guard refuses a page that
+    never drifted (R3.7, slice S9)."""
+    out = []
+    for i in range(1, 13):
+        oracle, href, aria = _row_target(i)
+        out.append(
+            '    <tr><td>Widget %d</td><td><ul class="actions"><li>'
+            '<a href="%s" data-oracle="%s"%s>Details</a></li></ul></td></tr>'
+            % (i, href, oracle, aria))
+    return "\n".join(out)
+
+
+NESTED_ACTION_PAGE = (
+    '<!doctype html><html><head><meta charset=utf-8><title>Nested</title></head><body>\n'
+    '  <h1>Cart</h1>\n  <table><tbody>\n' + _nested_action_rows() +
+    '\n  </tbody></table>\n</body></html>')
+
+
+# A SUBSTRING DECOY for the fuzzy Tier-1 anchor (AB-2, decision D2). The target learns uniquely via
+# `aria-label="Save the document"`; `strip_aria_label` then collapses its name to the visible "Save",
+# which SUBSTRING-matches the decoy "Save draft" as well. The documented residual is that a SOLE
+# surviving fuzzy candidate binds OUTRIGHT with no corroboration, and the decoy is first in DOM order —
+# so a wrong bind here lands in `silent_wrong`, which is the number decision D2 has to move.
+#
+# Note the pristine arm proved the hazard is real before any mutation: with the target labelled just
+# "Save", the learn bound "Save draft" outright, because Playwright's role-name matching is substring
+# by default. Hence the more specific label — the ambiguity must arrive as DRIFT, as it does in
+# `_cart_rows`, or the scenario cannot be learned at all.
+FUZZY_DECOY_PAGE = (
+    '<!doctype html><html><head><meta charset=utf-8><title>Decoy</title></head><body>\n'
+    '  <h1>Editor</h1>\n'
+    '  <div><a href="/wrong" data-oracle="wrong-decoy">Save draft</a></div>\n'
+    '  <div><a href="/done" data-oracle="go" aria-label="Save the document">Save</a></div>\n'
+    '</body></html>')
+
+
 _PAGES = {
     "/": V1_ANCHOR_PAGE,
     "/span": V1_SPAN_PAGE,
@@ -287,6 +391,10 @@ _PAGES = {
     "/shop2": SHOP_PAGE2,
     "/cart": CART_PAGE,
     "/order-form": ORDER_PAGE,
+    "/shared-action": SHARED_ACTION_PAGE,
+    "/positional": POSITIONAL_PAGE,
+    "/nested-action": NESTED_ACTION_PAGE,
+    "/fuzzy-decoy": FUZZY_DECOY_PAGE,
 }
 
 # The terminal pages. `data-uca-mark` appends a marker to the trail on load (see `_ACTLOG_JS`), so "did the
@@ -507,6 +615,65 @@ SCENARIOS: tuple = (
         "pristine_anchors": ("role+name", "role+name~", "css", "anchor"),
         "steps": [{"action": "click", "role": "link", "name": "Details for widget 3",
                    "intent": "open the third widget's details"},
+                  {"action": "done", "intent": "done"}],
+        "golden": ["go", "DONE"], "source": "generated",
+    },
+    # --- ROW-IDENTITY SCENARIOS (slice S1b) -----------------------------------------------------------
+    # Added so the three slices that name drift_bench as their adjudicator can actually be adjudicated.
+    # Before these, the corpus gave every row a distinct href, so the row guard always found a
+    # discriminating token and none of the cases below could arise. Each scenario's target is row 3,
+    # matching `cart-row`, so the numbers are read the same way.
+    {
+        # R3.1's shape: one shared endpoint + one shared testid, per-record identity ONLY in a hidden
+        # input. If the discrimination rule regresses to a priority order, the captured "identity" is a
+        # token every sibling has and the guard silently protects nothing.
+        "name": "row-shared-action", "path": "/shared-action",
+        "goal": "open the third widget's details",
+        "target_sel": '[data-oracle="go"]',
+        "pristine_anchors": ("role+name", "role+name~", "css", "anchor"),
+        "steps": [{"action": "click", "role": "link", "name": "Details for widget 3",
+                   "intent": "open the third widget's details"},
+                  {"action": "done", "intent": "done"}],
+        "golden": ["go", "DONE"], "source": "generated",
+    },
+    {
+        # AB-3 / decision D3: the only per-row tokens are POSITIONAL (`data-index`, `id="row-N"`). They
+        # discriminate today and renumber tomorrow, so an identity captured here outlives the record it
+        # named. This scenario is what a D3 narrowing would be measured against — accept-and-be-wrong
+        # versus refuse-and-lose-survival, adjudicated rather than argued.
+        "name": "row-positional", "path": "/positional",
+        "goal": "open the third widget's details",
+        "target_sel": '[data-oracle="go"]',
+        "pristine_anchors": ("role+name", "role+name~", "css", "anchor"),
+        "steps": [{"action": "click", "role": "link", "name": "Details for widget 3",
+                   "intent": "open the third widget's details"},
+                  {"action": "done", "intent": "done"}],
+        "golden": ["go", "DONE"], "source": "generated",
+    },
+    {
+        # R3.7 / slice S9: the control sits in a nested icon-list, so `anchorOf` (which skips a row-like
+        # container with empty collapsed text) and `_ROW_OF_JS` (which stops at the first `li`) can name
+        # DIFFERENT containers. The symptom is a refusal on a page that never drifted, which shows up
+        # here as lost survival on the PRISTINE arm — the one place a false refusal cannot hide.
+        "name": "row-nested-action", "path": "/nested-action",
+        "goal": "open the third widget's details",
+        "target_sel": '[data-oracle="go"]',
+        "pristine_anchors": ("role+name", "role+name~", "css", "anchor"),
+        "steps": [{"action": "click", "role": "link", "name": "Details for widget 3",
+                   "intent": "open the third widget's details"},
+                  {"action": "done", "intent": "done"}],
+        "golden": ["go", "DONE"], "source": "generated",
+    },
+    {
+        # AB-2 / decision D2: "Save draft" CONTAINS "Save". Strip the exact name and the fuzzy
+        # `role+name~` candidate matches the decoy too; the documented residual is that a SOLE surviving
+        # fuzzy candidate binds outright with no corroboration. A wrong bind here is a `silent_wrong`
+        # row, which is exactly the number D2 must move.
+        "name": "fuzzy-decoy", "path": "/fuzzy-decoy", "goal": "save the document",
+        "target_sel": '[data-oracle="go"]',
+        "pristine_anchors": ("role+name", "role+name~", "css", "anchor"),
+        "steps": [{"action": "click", "role": "link", "name": "Save the document",
+                   "intent": "save the document"},
                   {"action": "done", "intent": "done"}],
         "golden": ["go", "DONE"], "source": "generated",
     },

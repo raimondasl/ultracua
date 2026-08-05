@@ -9,13 +9,53 @@ is produced by `drift_sandbox.py` (scripted/**key-less**) and `recorder_ceiling.
 
 | File | Bench | Captured | Headline |
 |---|---|---|---|
-| `drift_v2.json` | **drift-bench v2** (6 scenarios, 115 rows × 2 arms) | 2026-07-30 | 0-LLM survival **falls 10/12 → 0/6** across mutation intensity k=1…7 (k50=6); **23 recovery-eligible rows where v1 had 0**; heal MECHANISM **14/14**, replan **2/10**; **1 published wrong-bind** (the *token-less* positional retarget, 0.9% of rows — its token-bearing half closed in 0.62.0) — the key-less CI gate |
+| `drift_v2.json` | **drift-bench v2** (10 scenarios, 171 rows × 2 arms) | 2026-08-05 | 0-LLM survival **falls 10/12 → 0/6** across mutation intensity k=1…7 (k50=6); **23 recovery-eligible rows where v1 had 0**; heal MECHANISM **14/14**, replan **2/10**; **1 published wrong-bind** (the *token-less* positional retarget, 0.9% of rows — its token-bearing half closed in 0.62.0) — the key-less CI gate |
 | `demo.json` | demo-shop (4-step) | 2026-06-19 | 5/5 replay, speedup **86.3× ± 20.9**, ~$0.27 — no discovery variance (cost/speedup reference) |
 | `miniwob.json` | MiniWoB++ ×10 (N=1) | 2026-06-19 | replay success **52% ± 13%** (40–70%), pass^k=0, ~$4.24 — the discovery-reliability reference |
 | `miniwob_bestof3.json` | MiniWoB++ ×10 (**N=3 best-of-N**) | 2026-06-20 | **60% ± 0%** (6/10 every rep), ~$6.58 (1.55×) — best-of-N vs the N=1 baseline: +8 pts and **variance → 0** |
 | `miniwob_reflect3.json` | MiniWoB++ ×10 (**N=3 + reflexion**) | 2026-06-20 | **52% ± 4%** (mostly 5/10), ~$8.32 — reflexion measured **net-harmful** vs best-of-N (−8 pts, +26% cost) |
 | `drift.json` | drift-sandbox v1 (2 scenarios, 17 DOM drifts) | 2026-06-23 | **0-LLM resilience 12/12 (100%)** cosmetic drifts, **wrong-binds 0** — **SUPERSEDED by `drift_v2.json`**, which ports all 17 rows verbatim and gates this record's outcomes element-wise as its `v1_parity` block. Kept as the historical reference and a manually runnable cross-check; the CI gate now lives in v2 |
 | `recorder_ceiling.json` | recorder ceiling (MiniWoB++, 3 tasks × 3 seeds) | 2026-06-24 | **recorder 9/9 vs LLM authoring 4/9** on the *same* seeds — recorder solves all garbled-label instances 0-LLM, **re-grounding by role+name+css (ids stripped)**; the LLM (N=1) solves only single-target and **misses every multi-target selection** (the grounding ceiling) |
+
+## The 2026-08-05 re-baseline — four row-identity shapes the corpus was blind to
+
+**Deliberate re-baseline** (slice S1b of `docs/correctness-plan.md`). Three planned slices name this
+bench as their adjudicator — S9/R3.7 (the row-guard container walk), D2/AB-2 (fuzzy sole-candidate
+binds) and D3/AB-3 (positional row tokens) — and the corpus could not express any of them. Every
+`_cart_rows` row carried a DISTINCT `href`, so the row guard always found a discriminating token and
+the interesting cases never arose. "Byte-identical to baseline" would have been a guarantee about
+cases the bench never ran.
+
+Four scenarios added, all targeting row 3 so they read like `cart-row`:
+
+| scenario | the shape, and the slice it lets us adjudicate |
+|---|---|
+| `row-shared-action` | one shared endpoint + one shared `data-testid`; per-record identity ONLY in a hidden input — R3.1's discrimination rule, and where a priority order fabricates an identity every sibling has |
+| `row-positional` | the only per-row tokens are `data-index` / `id="row-N"`: they discriminate today and RENUMBER on delete, so the identity outlives the record (**D3**) |
+| `row-nested-action` | the control sits in `tr > td > ul.actions > li`, where `anchorOf` climbs past an empty-text container and `_ROW_OF_JS` stops at the first `li` (**S9**) |
+| `fuzzy-decoy` | "Save draft" substring-matches "Save" once `strip_aria_label` collapses the target's name; a SOLE surviving fuzzy candidate binds outright (**D2**) |
+
+The rows share one `href` where the shape requires the href to be non-discriminating; a wrong-row bind
+is still caught, because the act trail records the CLICKED element's `data-oracle` ("row7" where the
+golden trail expects "go").
+
+**What moved, and what it means.**
+
+| | before | after |
+|---|---|---|
+| corpus | 115 rows | 171 rows |
+| `silent_wrong` | 2 (0.87%) | **2 (0.58%)** — same absolute; no new wrong bind |
+| heal MECHANISM | 14/14 (1.00) | 25/26 (0.96) — one decline, newly exercised |
+| replan MECHANISM | 2/10 (0.20) | 2/18 (0.11) |
+| predicted agreement | 92.6% | 84.3% |
+
+The two numbers that matter are the first two: **the new shapes produced no new wrong bind**, so the
+current row-identity rule handles all four. The mechanism and agreement rates FELL because the added
+rows are genuinely harder, not because anything regressed — a rate over a harder corpus is not
+comparable to the same rate over an easier one, which is precisely why this file records the corpus
+size beside every rate. The `fuzzy-decoy` scenario's pristine arm also proved AB-2's hazard is real
+before any mutation: with the target labelled simply "Save", the pristine learn bound "Save draft"
+outright, because Playwright's role-name matching is substring by default.
 
 ## drift-bench v2 — what it measures, and what it does not
 
