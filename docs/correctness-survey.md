@@ -423,6 +423,31 @@ _Verification machinery inventory (branch feat/shared-causal-attribution, pyproj
 **Disposition / fix shape.** The paid/live arms being manual is a deliberate design (key-less CI), not a defect — but the variance harness's standing-regression-gate function shares the eval problem: a gate that is only run when a human remembers gates nothing. If any baseline in baselines/ is meant to be load-bearing for LLM-learn quality, it currently has no automatic consumer; either say so in baselines/README.md or give it a scheduled paid run with a budget cap (evals/run.py --budget already models this pattern).
 
 
+### `H7` (medium) — a load-dependent flake in `test_record.py::test_record_write_deferred_write_outside_its_turn_is_refused`
+
+**What.** Fails intermittently in the FULL suite and never in isolation. Measured while landing slice
+S1 (a tests-only change in two unrelated files, which cannot affect it):
+
+    in isolation, 5 runs                    5 passed
+    whole file on main, 3 runs              32 passed x3
+    whole file with the S1 diff, 3 runs     32 passed x3
+    inside the full 781-test suite          1 failure, then clean on re-run
+
+**Where.** `tests/test_record.py::test_record_write_deferred_write_outside_its_turn_is_refused`.
+
+**Why it matters more than an ordinary flake.** It guards the DEFERRED-write refusal — the boundary
+R3.2 has now defeated three attempts at, and the exact property slice S6 will rely on as its oracle. A
+guard that goes green under load for reasons unrelated to the code it guards is a guard that will
+eventually go green while broken. It also erodes the plan's own gate: "full suite green before a
+commit" is only meaningful if a red run means something.
+
+**Disposition.** Its own de-flake slice (S17), NOT a fix bolted onto an unrelated PR, and NOT
+`pytest-rerunfailures` — the register's earlier de-flake work established the rule that the production
+bound must not be weakened and the flake must be understood before it is silenced. Start by
+reproducing under artificial load (the suite's own concurrency is the trigger), then decide whether the
+test's timing assumption or the mechanism's settle window is the thing that is wrong. S6 must not be
+built on this test until it is deterministic.
+
 ---
 
 ## User-facing surfaces audited by reading: cli.py (all 17 flow subcommands + root command), mcpserver/server.py,

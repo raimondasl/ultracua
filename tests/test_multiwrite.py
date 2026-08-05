@@ -101,6 +101,13 @@ async def test_multiwrite_barrier_both_confirm(tmp_path) -> None:
         flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
         writes = [s for s in flow.steps if s.mutating]
         assert len(writes) == 2 and all(w.confirm and w.confirm.has_confirm() for w in writes)
+        # ...and they must be the steps that ACTUALLY WROTE, not merely two steps. Counting alone is the
+        # same hole slice S1 closed in the invariant matrix (H5): with the gates on the wrong two rows
+        # this assertion passes, and the per-write confirm barriers are then anchored to rows that issue
+        # no request. The demo clicks "Submit step 1" then "Submit step 2"; nothing else writes.
+        assert [w.intent for w in writes] == ["click Submit step 1", "click Submit step 2"], (
+            f"the gates are on {[w.intent for w in writes]}, but the steps that wrote are the two "
+            f"submits — a barrier on a row that issues no request confirms nothing")
 
         approve(spec, cache=cache)
         result = await replay(spec, cache=cache)

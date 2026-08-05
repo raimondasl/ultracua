@@ -75,7 +75,8 @@ each run, and its fix (quarantine) must not land before skip-visibility exists, 
   clearing requires a human act. Two critique additions: the quarantine reason must distinguish
   deterministic refusal classes from possibly-transient ones, and the matrix gains a "refuses once
   transiently, invoked again" learnability cell. Touches health/MCP/run_all → its own audit.
-- **S6. AB-1 — the causal signal as a refusal oracle only.** The register's "cheapest correct option",
+- **S6. AB-1 — the causal signal as a refusal oracle only.** *(blocked on S17 — its oracle is the
+  deferred-write refusal test, which is currently flaky under load.)* The register's "cheapest correct option",
   scoped conservatively: share the recorder's `__ucturn`/`attributedSeq` machinery (ONE implementation
   — R3.1's lesson) and use it ONLY to detect "a wire write occurred whose cause the page cannot prove"
   → refuse loudly. No attribution, no augmentation, no seq→step map — which removes the parked
@@ -137,6 +138,12 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   either direction fails a test. AB-10 (possibly-dead belt-and-braces branch): coverage probe; delete
   if dead.
 - **S16. Scheduled mutation sweep.** The nine known mutants become a script + a weekly CI schedule.
+- **S17. De-flake `test_record_write_deferred_write_outside_its_turn_is_refused` (H7).** Found while
+  landing S1: it fails intermittently in the full suite and never in isolation (5/5 isolated, 3/3 whole
+  file both with and without the S1 diff, 1 failure inside the 781-test run). It guards the DEFERRED
+  -write refusal — the exact property **S6** uses as its oracle — so **S6 must not be built on it until
+  it is deterministic**. Reproduce under artificial load first; do not silence with reruns, and do not
+  weaken the production bound (the register's earlier de-flake work set that rule).
 
 ## Phase 7 — Documentation truth
 
