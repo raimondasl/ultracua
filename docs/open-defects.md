@@ -7,6 +7,16 @@
 refuted** — see the bottom of this file. Two are REGRESSIONS introduced by the round-2 fixes. Defect
 density in fix code is ~3x that of the code being fixed. A twelfth (R3.12) was added afterwards, found
 by applying this file's own sibling rule while redesigning R3.2; it is recorded as NOT reproduced.
+**ROUND 4** (2026-08-04, pre-merge on the causal-attribution attempt): 20 candidates, 2 defects
+CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch was **PARKED, not
+shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
+green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
+
+**THE PLAN.** `docs/correctness-plan.md` sequences every open item here — plus the test-machinery
+holes, CLI/API truthfulness defects and unpinned residuals found by the survey in
+`docs/correctness-survey.md` — into slices, worst user harm first. Work from it rather than picking
+findings ad hoc; its ordering encodes dependencies the individual entries do not.
+
 **Round 3's response was three REDESIGNS, not three patches** (R3.1, R3.2, R3.4 in 0.73.0): its own
 finding was that patching each item is what produced round 3, so those three were changed in shape —
 one implementation instead of two, exclusive intervals instead of arbitrated overlapping ones, and a
@@ -698,6 +708,97 @@ believing it.
 When a defect is found in write safety, add a DIMENSION here rather than a new bespoke test. A failing
 cell is a real defect: the flow either cached a write with nothing gated, replayed one un-keyed, or
 refused a flow that must stay learnable.
+
+
+# Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
+
+**Scope.** The uncommitted `feat/shared-causal-attribution` work (would-be 0.76.0): extracting the
+recorder's `__ucturn` signal into `src/ultracua/attribution.py` and using it on the learn path to
+ATTRIBUTE writes. Five lenses, 20 candidates, independent refuters per finding defaulting to REFUTE.
+
+**The headline is the process fact, not any single finding.** The branch was GREEN — 785 tests,
+`drift_bench` byte-identical, the flaky press-gate guard 10/10 clean — and the audit still found it
+defective, twice over. **That is the third consecutive time a fully-green change in this exact area was
+wrong**, after 0.73.0's drain (reverted) and 0.74.0's first refusal draft (over-refused, caught by the
+suite only via an unrelated login-flow file). The work was PARKED rather than fixed-and-shipped; see
+`docs/parked/README.md` and branch `feat/shared-causal-attribution`.
+
+## Convergence, which is itself the signal
+
+Five independent lenses landed on the same two lines. That concentration is why the parking decision
+was easy: the defects were not incidental, they were the design.
+
+    flow.py:462 (seq_to_step)         flagged 5x   3 critical, 2 high
+    flow.py:542-543 (the REPLACE)     flagged 5x   3 critical, 2 high
+    attribution.py:334 (no filter)    flagged 2x   1 critical, 1 high
+
+## R4.1 — Telemetry beacons became "causal writes" and displaced the real gate — FIXED on the parked branch
+
+*high/critical, confirmed 2/2 by execution.* `recordWire` marks every non-idempotent request regardless
+of host, including `navigator.sendBeacon` (always a POST). `attribute()` counted them all. **Both
+sibling consumers already filter** — `flow._watch_request` and the recorder's marker loop both call
+`safety.is_write_request` — and the new one did not. The register's most-repeated shape, one more time.
+
+Measured end to end, page with a GA beacon on step 0 and a genuine classifier-blind commit on step 1:
+
+    0.75.0            steps [(0,'filter',False), (1,'continue',True)]   correct
+    branch as written steps [(0,'filter',True),  (1,'continue',False)]  gate on the analytics click;
+                                                                        real commit cached as a READ
+    branch + filter   steps [(0,'filter',False), (1,'continue',True)]   correct
+
+Strictly worse than the version it replaced. Fixed on the branch by filtering markers through
+`is_write_request` inside `attribute()`, exactly as the siblings do.
+
+## R4.2 — The causal set REPLACED the temporal set, deleting gates the temporal rule had earned — FIXED on the parked branch
+
+*critical, flagged by five lenses.* `wrote_by_step = set(causal_steps)` discarded temporal
+attributions whenever the page named ANY cause. Combined with R4.1 a beacon was enough to make
+`causal_steps` non-empty and wipe the real gate. Fixed by `_merge_attribution` — UNION, never remove.
+Over-gating costs an unused Idempotency-Key; under-gating costs a double-submit.
+
+## R4.3 — Cross-origin seq collision silently rebinds a gate — OPEN (parked)
+
+*critical, flagged by four lenses.* `seq` is allocated in `sessionStorage`, which is **per-origin**, but
+`seq_to_step` is one flat dict resolved at the end of the run. After a cross-origin hop the counter
+restarts at 1, and a later step's commit silently overwrites an earlier step's entry — the write is
+then credited to the wrong step. Structural fix: resolve markers to steps AT DRAIN TIME per batch,
+never accumulate a global map. **Not attempted.**
+
+## R4.4 — A swallowed drain rebinds a step's commits to the NEXT step — OPEN (parked)
+
+*high, flagged twice.* `attribution.drain` returns `[]` on any exception (a navigation destroying the
+execution context is the ordinary case). Markers left in the buffer are read by a LATER drain and bound
+to whichever step drained them. Same structural fix as R4.3. **Not attempted.**
+
+## R4.5 — A page-initiated synthetic click launders a deferred write into a confident attribution — OPEN (parked)
+
+*medium.* The learn listener registers a commit for any click, including one the PAGE dispatches. A
+deferred write whose handler synthesises a click can therefore acquire a fresh, confidently-attributed
+turn. **In scope for slice S6** — it applies to the refusal-oracle design too, and needs a RED test.
+
+## R4.6 — The invariant matrix asserts only that SOME step is gated, never that the gate is on the step that WROTE — OPEN
+
+*medium, and the reason the matrix did not catch R4.1/R4.2.* `tests/test_write_safety_invariants.py`
+checks `gated = [i for i,s in enumerate(flow.steps) if s.mutating]; assert gated` — satisfied by a gate
+on any step, including one that issues no request. **Closed by plan slice S1** (Phase 1), before any
+slice relies on the matrix as a gate.
+
+## Also recorded
+
+- **R4.7** *(low)* `recordWire` bypasses `pushRec`, so wire markers have no in-memory fallback despite
+  the documented contract — on an opaque origin the commit records and the write does not.
+- **R4.8** *(high, process)* Nothing in the suite pinned the AUGMENT-NEVER-REFUSE rule; the only test
+  that would have caught its removal did so by winning a race. Pinned on the branch afterwards.
+- **R4.9** *(medium)* `test_run_cached_refuses_it_too_not_only_the_flows_wrapper` no longer exercises
+  its stated property after the tests were relaxed for the new behaviour.
+
+## What this round changes about how the next attempt is run
+
+The conservative half of R3.2 continues as plan slice **S6**: the causal signal used ONLY as a refusal
+oracle — "a wire write occurred whose cause the page cannot prove" → refuse loudly — with no
+attribution and no seq→step map, which removes R4.3 and R4.4 **by construction** rather than by
+patching them. R4.5 remains in scope. Any future attempt to ATTRIBUTE (rather than merely refuse) must
+start from R4.3/R4.4 and from `docs/parked/README.md`, not from the diff.
 
 
 # Round 3 — the 2026-08-03 re-audit of everything written since v0.70.0

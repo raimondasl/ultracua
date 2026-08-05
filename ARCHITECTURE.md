@@ -199,7 +199,7 @@ uv run python -m benchmarks.write_flow_bench                       # key-less
 uv run python -m benchmarks.write_flow_bench --provider anthropic
 
 # MiniWoB++ (public, seed-deterministic; in the `bench` group).
-uv sync --group bench
+uv sync --all-groups          # `--group bench` alone drops the other groups
 uv run --group bench python -m benchmarks.miniwob_bench             # key-less oracle
 uv run --group bench python -m benchmarks.miniwob_bench --provider anthropic --all
 
