@@ -45,6 +45,13 @@ Violating any of these is a blocking defect, not a trade-off:
 
 - **`uv` for everything.** `uv run --no-sync pytest tests/... -q`, `uv run --no-sync python -m benchmarks.X`.
   Never bare `uv sync` (it strips groups) — use `uv sync --all-groups`.
+- **CI runs the suite on ubuntu AND windows; local runs here are windows-only.** A green local suite is
+  therefore half the evidence. The browser fixtures are where this bites: anything whose page state is
+  revealed inside a `fetch(...).then(...)` races the agent's next observation, and Linux loses that race
+  where Windows wins it. It has already shipped once — an S3 fixture captured a 1-step recipe on ubuntu
+  and the test failed with a meaningless "DID NOT RAISE". **Reveal fixture state synchronously, and pin
+  the premise** (assert the recipe has the steps the test depends on) so a lost race fails LOUD instead
+  of silently testing nothing.
 - The full suite is **key-less** — real headless Chromium against local fixtures, no API key, ~18 min
   (it grew from ~15 when 0.73.0 added a per-step attribution drain to the learn path). It must be green
   before a commit.
