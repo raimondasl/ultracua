@@ -577,13 +577,25 @@ usually the whole diagnosis for *"why does it say no flows?"*.
 ## Run a fleet
 
 Once you have several saved flows, **`ultracua flow run-all`** is the supervisor: it replays every
-saved flow once (concurrently), prints a consolidated report, and **exits non-zero if any flow
-failed** — so you point cron / Task Scheduler at it and alert on the exit code.
+saved flow once (concurrently), prints a consolidated report, and **exits non-zero unless work actually
+happened** — so you point cron / Task Scheduler at it and alert on the exit code.
+
+**Exit 1** — a flow failed, *or* was refused a run by something no human chose (an UNDECLARED write, a
+trust sidecar that could not be read, a quarantine). **Exit 2** — nothing ran: every flow was skipped, so
+this fleet is not monitoring anything. **Exit 0** — at least one flow ran and nothing needs a human.
+
+A skip you *configured* stays quiet on its own: a declared write flow without `--include-writes` is a
+standing choice, and going red nightly for it is how an alert channel earns its `|| true`. What is never
+quiet is a flow leaving the fleet without you deciding it should — that used to print `[SKIP]`, exit 0
+and post nothing, so a dashboard nobody had read since a site redesign reported healthy indefinitely.
+
+The `--alert-webhook` payload carries exactly what the exit code is non-zero for, and each entry names
+its `status`, so "failed" and "never ran" stay distinguishable at the other end.
 
 ```bash
 uv run ultracua flow run-all                      # read + approved flows only (safe default)
 uv run ultracua flow run-all --json fleet.json    # also write a machine-readable run record
-uv run ultracua flow run-all --alert-webhook https://hooks.slack.com/…   # POST on any failure
+uv run ultracua flow run-all --alert-webhook https://hooks.slack.com/…   # POST on anything loud
 ```
 
 ```

@@ -699,6 +699,12 @@ def _flow_audit(args: argparse.Namespace) -> None:
     if args.verbose:
         for name, why in run.skipped:
             print(f"  [skipped    ] {name:<24} {why}")
+    for name, why in run.errors:
+        # UNCONDITIONAL. `skipped` holds the by-design cases (a write flow is never judged), which is
+        # noise at INFO; `errors` holds flows we were asked to audit and could not look at. Hiding those
+        # behind --verbose would leave `flow audit` printing a clean-looking summary for a fleet it never
+        # examined — the exact shape this slice removes from `run-all`.
+        print(f"  [NOT AUDITED] {name:<24} {why}")
     print(f"\n== judged {run.judged}, {run.quarantined} quarantined, {run.advisories} advisory, "
           f"{run.unjudged} unjudged ({run.calls} LLM call(s)) ==")
     if run.no_llm:
@@ -711,12 +717,16 @@ def _flow_audit(args: argparse.Namespace) -> None:
     raise SystemExit(run.exit_code)
 
 
-def _post_alert(url: str, failed: list) -> None:
+def _post_alert(url: str, alerts: list) -> None:
+    """Post whatever `fleet_verdict` judged loud. NOT "the failures" — a fleet where nothing ran alerts
+    with its SKIPPED flows, and calling those failures in the payload would be the same lie one layer
+    down. The `failed` key keeps its name for webhooks already parsing it; `status` says which it is."""
     import urllib.request
 
-    lines = "\n".join(f"- {r.name}: {r.error}" for r in failed)
-    payload = {"text": f"ultracua: {len(failed)} flow(s) failed\n{lines}",
-               "failed": [{"name": r.name, "error": r.error} for r in failed]}
+    lines = "\n".join(f"- {r.name} [{getattr(r, 'status', '?')}]: {r.error}" for r in alerts)
+    payload = {"text": f"ultracua: {len(alerts)} flow(s) need attention\n{lines}",
+               "failed": [{"name": r.name, "status": getattr(r, "status", None), "error": r.error}
+                          for r in alerts]}
     try:
         req = urllib.request.Request(
             url, data=json.dumps(payload).encode("utf-8"),
@@ -731,7 +741,7 @@ def _post_alert(url: str, failed: list) -> None:
 def _flow_run_all(args: argparse.Namespace) -> None:
     from pathlib import Path
 
-    from .flows import run_all
+    from .flows import fleet_verdict, run_all
 
     results = asyncio.run(run_all(
         approved_only=not args.include_unapproved, include_writes=args.include_writes,
@@ -748,15 +758,22 @@ def _flow_run_all(args: argparse.Namespace) -> None:
     failed = [r for r in results if r.status == "failed"]
     skipped = sum(1 for r in results if r.status == "skipped")
     print(f"\n== {ok} ok, {len(failed)} failed, {skipped} skipped (of {len(results)}) ==")
+    # ONE verdict, both channels. They used to carry a copy of the condition each (`if failed and
+    # args.alert_webhook`, `SystemExit(1 if failed else 0)`), which is why a third bucket satisfying
+    # neither was invisible in both — cron reported green over a fleet that had run nothing for weeks.
+    verdict = fleet_verdict(results, allow_empty=getattr(args, "allow_empty", False))
     if args.json:
         record = {"ok": ok, "failed": len(failed), "skipped": skipped, "total": len(results),
+                  "exit_code": verdict.exit_code, "verdict": verdict.summary,
                   "flows": [{"name": r.name, "status": r.status, "ms": round(r.ms), "error": r.error}
                             for r in results]}
         Path(args.json).write_text(json.dumps(record, indent=2), encoding="utf-8")
         print(f"wrote {args.json}")
-    if failed and args.alert_webhook:
-        _post_alert(args.alert_webhook, failed)
-    raise SystemExit(1 if failed else 0)  # cron alerts on a non-zero exit
+    if verdict.exit_code:
+        print(verdict.summary)
+    if verdict.alerts and args.alert_webhook:
+        _post_alert(args.alert_webhook, verdict.alerts)
+    raise SystemExit(verdict.exit_code)  # cron alerts on a non-zero exit
 
 
 def _coerce_cell(value, slot):

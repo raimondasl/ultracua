@@ -455,7 +455,14 @@ built on this test until it is deterministic.
 _User-facing surfaces audited by reading: cli.py (all 17 flow subcommands + root command), mcpserver/server.py, flows.py (learn/replay/run_all/run_batch/canary/audit), daemon/server.py, README/STATUS/GUIDE vs docs/open-defects.md. R3.9 is verified still open: `flow run-all` exits 0 and posts no webhook when every flow was skipped. Two additional exit-code lies found beyond the register: the root `ultracua` command always exits 0 (even success=False, note never printed), and `flow learn` exits 0 on a failed/refused learn while dropping LearnResult.note (including the unattributable-write refusal text). `flow canary` exits 0 on an all-not-learned fleet. R3.11 (RecursionError escaping _load_meta's "never raises" contract into `flow status` and MCP tools/list) verified still present in code. MCP annotations (readOnlyHint/destructiveHint) are backed by the shared is_write_flow predicate and the write rail is genuinely defended; its main lie surface is silent tool-list shrinkage (stderr-log-only skips). README.md:85 mis-describes the defect register as "30 findings, all fixed" when round 3 has ~9 open. replay/run_batch/dry-run/audit exit semantics verified honest._
 
 
-### `CLI-1` (high)
+### `CLI-1` (high) — ✅ FIXED in 0.80.0 (S7a), with R3.9
+
+**Disposition taken.** The survey's own question ("decide whether skipped-that-was-not-human-chosen
+should be a distinct exit code / webhook event") was answered: not a distinct code per class, but a
+single `fleet_verdict` both channels consume, with QUIET as an allowlist so a new status is loud by
+default. Exit 1 loud, **exit 2 nothing ran** (the `EmptyFlowStoreError` precedent this entry pointed at),
+0 otherwise. `--allow-empty` still buys exit 0 for a fleet home holding zero flows — and only that.
+GUIDE.md:577-581 and README.md:75, both quoted as evidence below, were corrected in the same commit.
 
 **What.** VERIFIED R3.9: `flow run-all` exits 0 and the alert webhook stays silent when the whole fleet was skipped — exit is `SystemExit(1 if failed else 0)` and webhook fires only `if failed`; FleetRun status 'skipped' (not-approved, write-without---include-writes, and the UNDECLARED-write skip a flow can enter with no human act via wire promotion) feeds neither channel. `0 ok, 0 failed, N skipped` prints and cron reports green.
 

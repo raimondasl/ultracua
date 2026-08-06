@@ -38,6 +38,7 @@ from ultracua.flows import (
     _meta_path,
     _save_meta,
     approve,
+    fleet_verdict,
     is_write_flow,
     record,
     run_all,
@@ -72,8 +73,13 @@ async def test_run_all_skips_an_undeclared_write(tmp_path: Path, monkeypatch) ->
     approve(spec, cache=cache)
 
     runs = await run_all(cache=cache, include_writes=False)
-    assert [r.status for r in runs] == ["skipped"], runs
+    # NOT RUN is the invariant, and it is unchanged. The STATUS changed in 0.80.0: `failed` here means
+    # "refused a run", the same call `_one`'s unreadable-recipe guard already made, because a flow enters
+    # this branch with no human act and `skipped` fed neither channel cron watches (R3.9).
+    assert [r.status for r in runs] == ["failed"], runs
+    assert not runs[0].ok
     assert "UNDECLARED write" in (runs[0].error or "")
+    assert fleet_verdict(runs).exit_code != 0, "and it must reach cron, not just the console"
 
 
 async def test_run_all_skips_an_undeclared_write_even_with_include_writes(tmp_path: Path,
@@ -87,8 +93,10 @@ async def test_run_all_skips_an_undeclared_write_even_with_include_writes(tmp_pa
     approve(spec, cache=cache)
 
     runs = await run_all(cache=cache, include_writes=True)
-    assert [r.status for r in runs] == ["skipped"], runs
+    assert [r.status for r in runs] == ["failed"], runs      # see the note above on the 0.80.0 status
+    assert not runs[0].ok
     assert "UNDECLARED write" in (runs[0].error or "")
+    assert fleet_verdict(runs).exit_code != 0
 
 
 def test_the_write_predicate_has_one_definition(tmp_path: Path) -> None:

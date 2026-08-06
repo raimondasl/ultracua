@@ -1589,10 +1589,21 @@ whose entire job is to be loud. The allowlist is now qualified by class.
   mutation then clears the REAL on-disk quarantine — a wrong-value quarantine a human was told to
   investigate, released while the log names something else. The fix's own thesis ("a read that could not
   read must not authorize a write") applies here and was only applied to the second read.
-* **R4.14** — `audit_flows`' candidate loop has no per-flow guard at all: `_quarantine`, `audit.judge` (an
-  LLM call) and `audit.drop` can each abort the fleet run, discarding the findings of every flow already
-  judged. `run_all` has exactly this guard. A first attempt at adding it shipped `exit 0, nothing to
-  report` — whatever lands must increment `unjudged` and print skips unconditionally.
+* **R4.14 — ✅ FIXED in 0.80.0 (S7a)** — `audit_flows`' candidate loop has no per-flow guard at all:
+  `_quarantine`, `audit.judge` (an LLM call) and `audit.drop` can each abort the fleet run, discarding the
+  findings of every flow already judged. `run_all` has exactly this guard. A first attempt at adding it
+  shipped `exit 0, nothing to report` — whatever lands must increment `unjudged` and print skips
+  unconditionally.
+
+  **How the second attempt avoided the first one's failure.** The guard is at the per-flow BOUNDARY in
+  both halves of the loop (the gather does four disk reads and was guarded on the first alone; the judge
+  half does a network call, two sink writes and a delete) — but the part that mattered was the REPORTING.
+  Failures go to a new `AuditRun.errors` list, not to `skipped`: `skipped` is the by-design bucket ("a
+  write flow is never judged") which the CLI hides behind `--verbose`, so routing failures there would
+  have printed a clean-looking summary for a fleet that was never examined — the guard wearing the
+  clothes of the failure it prevents. `errors` prints unconditionally as `[NOT AUDITED]`, and every path
+  that appends to it also increments `unjudged`, so `exit_code` needs no new clause of its own. Two
+  conditions for one fact is how this fleet's exit code and its webhook drifted apart to begin with.
 * **R4.15** — `cli._flow_dispatch` catches only `EmptyFlowStoreError`, so `MetaUnreadableError` reaches
   the user as a Python traceback on six verbs (`approve`, `unapprove`, `release`, `learn`, `record`,
   `audit`), burying its remedy text. `flow replay` and `run-batch` render it cleanly. Also: `Path.exists()`
@@ -1622,7 +1633,59 @@ whose entire job is to be loud. The allowlist is now qualified by class.
 
 Sequence all of these with S7a, which is the next slice touching these surfaces.
 
-### R3.9. The new unconditional skip has no escape hatch and is invisible to the cron contract the surface documents — `run-all` exits 0 and the alert webhook stays silent for a fleet that ran nothing
+### ✅ FIXED in 0.80.0 (the VISIBILITY half; the escape-hatch half is argued below and stays open) — R3.9. The new unconditional skip has no escape hatch and is invisible to the cron contract the surface documents — `run-all` exits 0 and the alert webhook stays silent for a fleet that ran nothing
+
+**What shipped (S7a), and the shape it took.** The finding names two defects and they have different
+answers, so they are recorded separately rather than closed together:
+
+* **Visibility — FIXED.** `fleet_verdict(results, *, allow_empty=False)` is now the single definition of
+  what cron is told, and BOTH channels consume it. They previously carried a copy of the condition each
+  (`SystemExit(1 if failed else 0)`, `if failed and args.alert_webhook`), which is the mechanism of the
+  finding: a third bucket satisfying neither was invisible in both. Quiet is an **allowlist**
+  (`{"ok", "skipped"}`), not a list of loud statuses — that inversion is what makes a `FleetRun` status
+  added tomorrow loud by default, and enumerating the loud ones is exactly how `skipped` came to feed
+  nothing. Exit 1 = something loud; **exit 2 = nothing ran**, on the `EmptyFlowStoreError` precedent
+  whose own comment already covers this case ("never 0, which is what made a wrong-cwd cron job look
+  healthy forever"); 0 = work happened.
+* **The escape hatch — STILL OPEN, and deliberately not invented here.** There is none to offer: for the
+  population this hits (a monitoring READ whose fetch-POST the wire promotion marks `mutating`),
+  declaring `spec.mutate` demands a confirm a read cannot satisfy and `flow record` re-derives the same
+  verdict. A flag to run them would be consent to fire unverifiable writes on a schedule, which the skip
+  exists to refuse. The real lever is D0's (ii) — persist WHY a step was marked mutating — which is
+  blocked on S6/S17. **Until then, visibility IS the whole of the remedy**, and the refusal text now says
+  so instead of naming remedies that do not work for this population.
+
+**Two skip classes were reclassified, not one.** The undeclared write became `failed` ("refused a run"),
+matching what `_one`'s unreadable-recipe guard thirty lines up already did for the same reason. The
+second was found by the sibling check and is the S4 shape one reader over: `run_all` decided whether to
+run a flow at all from `_load_meta`, which after S4 can SYNTHESISE `approved=False` from a sidecar it
+could not read — byte-identical to a human's `flow unapprove`. So one AV sharing violation dropped a
+flow from the tick under a reason naming a human act that never happened. It reads provenance now. The
+corrupt branch needed a third case: it PERSISTS a quarantine, so from the second tick on the sidecar
+reads back cleanly and the flow would go quiet forever, one tick after it went loud.
+
+**What the fix had to be stopped from breaking, and this is the load-bearing half.** "Alert on
+everything" satisfies every test above and is a regression: an operator with one declared write flow in
+the store would go red nightly for a standing configuration choice, and that alert reaches `|| true`
+within a week — the channel dies for everyone. A chosen skip beside real work stays quiet, pinned.
+The same trap one level in: **an existing test caught that `--allow-empty` was being overridden** by the
+"nothing ran" rule. That flag is documented consent for a fleet home holding zero flows; it is NOT
+consent for a store that resolved flows and ran none of them. One word apart, now pinned both ways.
+
+**Three existing tests had to change, and one of them was passing for the wrong reason.**
+`test_run_all_classifies_ok_failed_skipped`'s write-flow case was never learned or approved, so it
+reached the write branch only because the write gate happened to run before the approval check — it
+would have reported "write flow" with the mutate spec removed. The reorder exposed it; the fixture now
+learns and approves that flow, so the assertion means what it says. The other two are the round-2
+undeclared-write pins, whose invariant (NOT RUN) is unchanged and which now also assert the run is loud.
+
+**The sibling that was NOT fixed here, named so S7b cannot miss it.** `_flow_canary` has the identical
+shape — `stale = status in ("stale", "error")`, so an all-`not-learned` fleet exits 0 (CLI-4). It is
+already sequenced in S7b and is left there rather than pulled in ad hoc, but it is now a
+KNOWN-IDENTICAL shape rather than an independent finding: whatever S7b does there should be
+`fleet_verdict`'s treatment, not a third hand-rolled condition.
+
+*Original finding follows.*
 
 *low, lens `surfaces`, inviolable #2, reproduced by an independent refuter *(symptom real, stated cause corrected by the refuter)**
 

@@ -102,13 +102,17 @@ def test_post_alert_posts_payload(monkeypatch) -> None:
         return _Resp()
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    failed = [types.SimpleNamespace(name="f1", error="drift"),
-              types.SimpleNamespace(name="f2", error="boom")]
-    cli._post_alert("https://hook.example", failed)
+    # The payload carries whatever `fleet_verdict` judged loud, and each entry SAYS which it is: a fleet
+    # where nothing ran alerts with its skipped flows, so a payload that called them all failures would
+    # be the same lie the exit code just stopped telling.
+    alerts = [types.SimpleNamespace(name="f1", status="failed", error="drift"),
+              types.SimpleNamespace(name="f2", status="skipped", error="boom")]
+    cli._post_alert("https://hook.example", alerts)
     assert captured["url"] == "https://hook.example" and captured["method"] == "POST"
-    assert captured["body"]["failed"] == [{"name": "f1", "error": "drift"},
-                                          {"name": "f2", "error": "boom"}]
-    assert "2 flow(s) failed" in captured["body"]["text"]
+    assert captured["body"]["failed"] == [{"name": "f1", "status": "failed", "error": "drift"},
+                                          {"name": "f2", "status": "skipped", "error": "boom"}]
+    assert "2 flow(s) need attention" in captured["body"]["text"]
+    assert "[skipped]" in captured["body"]["text"], "a human reading the alert must see which is which"
 
 
 def test_post_alert_swallows_errors(monkeypatch, capsys) -> None:
