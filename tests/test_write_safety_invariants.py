@@ -242,7 +242,8 @@ async def test_a_learned_write_is_never_cached_ungated_or_replayed_unkeyed(case,
         undeclared = flows_mod.FlowSpec(
             name=goal, goal=goal, start_url=f"{base}/", headless=True,
             login=flows_mod.LoginSpec(url=f"{base}/login"))
-        assert flows_mod._auth_retry_allowed(undeclared, flow, auth_refresh=True, parameterizing=False)[0] is False, (
+        assert flows_mod._auth_retry_allowed(
+            undeclared, flow, auth_refresh=True, parameterizing=False, landed=False)[0] is False, (
             f"{_ids(case)}: this recipe WRITES (gated steps={gated}) but declares no write, and the "
             f"auth-refresh retry would still re-run it from the start — re-firing the commit with no "
             f"confirm barrier able to detect it, under the same Idempotency-Key")
@@ -261,7 +262,25 @@ async def test_a_learned_write_is_never_cached_ungated_or_replayed_unkeyed(case,
             login=flows_mod.LoginSpec(url=f"{base}/login"),
             mutate=flows_mod.MutateSpec(confirm_text_contains="committed",
                                         precheck_text_contains="committed"))
-        allowed, why = flows_mod._auth_retry_allowed(retryable, flow, auth_refresh=True, parameterizing=False)
+        allowed, why = flows_mod._auth_retry_allowed(retryable, flow, auth_refresh=True,
+                                                     parameterizing=False, landed=False)
+        # SLICE S3 / R3.3 — the same recipe, once the write is KNOWN to have committed. Whatever else is
+        # true of a cell, a run whose confirm TRANSITION was observed must never be re-run from the start:
+        # that re-fires the commit. Asserted for every shape so a future commit style inherits it, and
+        # placed beside the retry arm because the two decisions share one predicate.
+        #
+        # SCOPE, stated so this is not mistaken for more than it is: `landed` is passed as a CONSTANT
+        # here, so these cells pin how the retry gate CONSUMES the evidence, not how `landed` is
+        # COMPUTED — which is where all four versions of the R3.3 fix were wrong. The computation is a
+        # property over six distinct run shapes in `tests/test_landed_arms_the_ledger.py`; it cannot live
+        # in this matrix, because none of these cells declares `spec.mutate` with a confirm barrier and
+        # the arming is undefined without one.
+        landed_allowed, landed_why = flows_mod._auth_retry_allowed(
+            retryable, flow, auth_refresh=True, parameterizing=False, landed=True)
+        assert landed_allowed is False and "committed" in landed_why, (
+            f"{_ids(case)}: this run's write is known to have landed and the auth-refresh retry would "
+            f"still re-run the flow from start_url, firing it again: allowed={landed_allowed} "
+            f"why={landed_why!r}")
         if len(gated) == 1:
             assert allowed is True, (
                 f"{_ids(case)}: a declared write whose recipe commits ONCE (gated={gated}) lost its "

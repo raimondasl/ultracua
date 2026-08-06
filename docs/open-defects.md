@@ -1100,7 +1100,7 @@ advertises `readOnlyHint=True` and `run_batch` treats it as a read batch. Moving
 step 0 promotes correctly — which is precisely why the existing suite (tests/test_write_signal.py)
 does not see this: every one of its write fixtures puts the commit at step 0.
 
-### R3.3. The `landed` rail arms the ledger for `WriteReadbackError` but not for its sibling `ShapeDriftError` — the case where the code knows the write committed AND the readback succeeded is still unarmed, so the CLI's resume re-fires it
+### ✅ FIXED in 0.78.0 — R3.3. The `landed` rail arms the ledger for `WriteReadbackError` but not for its sibling `ShapeDriftError` — the case where the code knows the write committed AND the readback succeeded is still unarmed, so the CLI's resume re-fires it
 
 *high, lens `ledger`, inviolable #3, reproduced by an independent refuter*
 
@@ -1137,6 +1137,133 @@ ledger is permanently blind to row 7 and every further resume re-fires it; if it
 key window has expired), the invoice is paid twice. On the MCP write surface the same state leaves
 `ledger.record` unreached, so an outer agent's retry re-elicits and re-fires (not separately probed
 — the predicate at server.py:283 is byte-identical and `ShapeDriftError.landed` is False).
+
+**FIXED in 0.78.0** (plan slice S3), regression tests confirmed RED against the pre-fix source — **after
+SIX adversarial passes and SIX versions of the predicate, five of which were wrong.** Passes 2–5 each
+found a critical that the previous pass had approved, because the fix had changed underneath it; pass 6
+was the first clean one. Every wrong version passed the full suite and `drift_bench`. If you are about
+to change this predicate, read the five failure modes below first — they are not hypothetical, each was
+reproduced with a live browser against a local fixture.
+
+**The fix is positional, not typological** — which is the whole point, and the plan was right to insist
+on it. "Also arm `ShapeDriftError`" is the shape that CREATED this finding: R8 armed one class, and the
+failure return that grew one line below it was never armed. Arming a second class only resets the clock
+for the third.
+
+So `landed` is a CONJUNCTION of two independently-sourced facts, and each is computed where it is known:
+`_make_finalize` publishes `out["write_landed"] = confirmed and "_pre_confirm" in out` (the A8 baseline
+ran, and the confirm then transitioned), and _attempt_replay ANDs that with ll_writes_ok — EVERY step the
+cached recipe marks `mutating` produced a trace that ran and SUCCEEDED, read from `report.traces`.
+The quantifier is `all` over the RECIPE: `any` and counting-against-traces each shipped a critical. Every failure return then leaves
+through a nested `_fail(reason, kind)` closure carrying it. `replay()` ORs the
+value across its three attempt sites and stamps every outgoing `FlowReplayError` at ONE place: its
+existing `except FlowReplayError` handler. Four raise sites, one arming point.
+
+The MCP write surface needed no code change — it reads `getattr(exc, "landed", False)`, so instance
+stamping reaches it — but both consumers' comments described the old per-class rule and now state that
+`landed` is positional and must not be narrowed back to a class check.
+
+**The layer that matters is the structural one, and it was measured rather than assumed.** Three landed:
+the E2E (the payment fires, `ShapeDriftError` carries `landed=True`), a property over every failure kind
+downstream of the evidence point, and an AST scan requiring every `return` in `_attempt_replay` to be
+either the success tuple or a `_fail(...)` call. Mutation on the third: reinstate one raw tuple return
+that STILL carries `landed` correctly — behaviour unchanged, both behavioural tests stay green, only the
+AST guard fails. That is exactly the case worth catching, because R3.3 was never about the returns that
+existed when R8 was written; it was about the one added below them afterwards.
+
+**THE FIRST VERSION OF THIS FIX WAS CRITICALLY WRONG, and the reason generalises.** It set `landed` at a
+POSITION — just past the `not out.get("found")` check — which sits BELOW the `not report.success` guard.
+But `finalize` runs UNCONDITIONALLY (`flow.py` calls it outside the step loop), so the confirm's
+transition can be observed on a run whose `report.success` is False because a LATER step drifted. A
+trailing "Print receipt" / "Back to list" / "Continue" is the canonical shape of a write flow, so that
+population is LARGER than the shape gate this finding was filed for. Reproduced end to end by the second
+adversarial pass: **two payments for one operator request** — no ledger row, and the slice's own new
+retry stop, keyed off the wrong `landed`, let the auth-refresh path re-run the flow from `start_url`.
+
+**AND THE SECOND VERSION WAS WRONG TOO, in the OPPOSITE and worse direction.** Reading the evidence as
+`out["found"] and not out["confirm_pre_true"]` looked like the fix — but `_pre_confirm` is written by a
+hook `flow.py` calls only when the step loop REACHES a mutating step, so its ABSENCE means "the run
+never got to the write", and `bool(out.get("_pre_confirm"))` cannot tell that apart from "measured, and
+clean". A run that fired ZERO writes, failing before the commit while a stale banner from a previous
+order satisfied the confirm, therefore armed. Reproduced by the third adversarial pass: 0 POSTs,
+`landed=True`. `run_batch` would write a ledger row, every `--resume` would report "already committed —
+not re-fired", and **the invoice would never be paid, silently and permanently** — the direction
+`ledger.py` explicitly forbids, and a REGRESSION, since unarmed the resume re-runs the row and pays it.
+
+That is this project's own absent-vs-unreadable trap (R3.1, R3.4) for the third time: a two-state
+boolean answering a three-state question, with the third state read as the safe one. The arming now
+requires POSITIVE proof the baseline ran (`"_pre_confirm" in out`), and is computed where all three
+facts are known rather than re-derived at a distance.
+
+**AND THE THIRD VERSION WAS WRONG TOO, same direction, one entry further in.** "Positive proof the
+baseline ran" is not proof the WRITE ran: `pre_write` is called BEFORE `_replay_step` attempts the
+action, so merely REACHING a mutating step creates the key — the click, the mutation gate and the POST
+all happen after. And the two probes are asymmetric by construction: the baseline is a single
+instantaneous check while the finalize confirm POLLS for seconds. So on a run whose write step itself
+drifted (a renamed commit control, a mutation-gate refusal — and mutating steps are never healed),
+anything matching the confirm that painted inside that window read as a transition. Reproduced by the
+fourth adversarial pass and independently here: **0 POSTs, `landed=True`**, with the operator told "the
+write DID commit". `flow.py` already had the missing guard ONE LINE OVER — the per-step commit barrier
+gates its identical transition check on `ok` — so this is the register's own predictor, a guard on a
+sibling path never applied to the mechanism.
+
+**AND THE FOURTH VERSION WAS WRONG TOO — the quantifier.** Adding "a mutating step ran and succeeded"
+used `any()`. Two criticals, both reproduced with zero writes on the wire. (a) A recipe with a SECOND
+mutating step arms off that sibling while the real commit fails — and the exploit needs nothing exotic,
+because `classify_mutation` matches `pay` inside "Payment history", a false positive this repo PINS BY
+NAME in `tests/test_write_classification.py` and measures at ~28% of ordinary read controls. (b) On a
+genuine multi-write, write #1 landing armed the whole ROW while write #2 never fired, so a resume
+suppressed it permanently — inviolable #3's second clause, and a verbatim contradiction of `ledger.py`'s
+"a multi-write row that died mid-flow is not recorded and re-fires all its writes on resume".
+
+The claim that licensed that version — "parity with the success path" — was FALSE, and it was false
+because it was checked shallowly. The success path reaches `ledger.record` only via `report.success`,
+and the step loop breaks on the first failure, so EVERY mutating step ran and succeeded there. `any()`
+required one. The arming now counts against the CACHED RECIPE: every step the recipe marks mutating must
+have produced a trace that ran and succeeded. (Counting against the traces instead would make `all([])`
+vacuously true and re-open the never-reached-the-write hole from two versions earlier.)
+
+**Five fixes, four wrong, and the through-line is one sentence.** R3.3 is "the exception's CLASS is the
+wrong proxy"; the plan answered "the POSITION is the right proxy"; then "the collapsed boolean is the
+evidence"; then "the baseline's presence is the evidence"; then "some mutating step succeeded". All five
+were proxies, and each correction shipped a defect in the OPPOSITE direction to the one before. **When a
+finding says a proxy is wrong, check whether your replacement is also a proxy** — when a boolean stands
+in for an observation, ask what its False means when the observation never happened, and when you reach
+for a quantifier over a collection, ask which collection and why `any` rather than `all`.
+
+**The residual, stated rather than hidden.** A click that SUCCEEDS but fires no request, with a
+late-painting confirm, still arms. That is A8's documented residual, and it is now genuinely the same
+residual the SUCCESS path carries — same `confirmed`, same all-steps-ok requirement. Parity with the
+success path is the claim, and this time it was verified against `report.success`'s own semantics rather
+than assumed. Nothing stronger is reachable without threading the wire signal from `_replay_step`, which
+is S6/AB-1 territory.
+
+**Two further changes the adversarial passes forced, both now part of this fix.** (1) A SECOND
+double-submit: `replay()` hard-stops `write_unverified` and `write_unreadable` before `retry_ok` is
+computed — "both would re-fire a committed write" — and `shape` had no such stop, falling through to a
+precheck that can return False while the commit HAS landed. The evidence now lives inside
+`_auth_retry_allowed` as a required `landed` argument, checked before the write arms and after the
+auth-path precondition. (2) DISCLOSURE: arming fixes the machine loop, but the human one still read
+"nothing happened", because under R8 arming and disclosure were coincident by accident (the one armed
+class's message already said "the write WAS confirmed"). The failure `reason` now states the commit
+before `_record_run`, so it reaches `health.last_error`, the CLI row line, `BatchRowResult.error` and
+the MCP message from one place — and it deliberately does NOT promise a ledger row, because `replay()`
+owns no ledger and three of its callers have none.
+
+**R4.12 (filed, not fixed).** `learn()` passes `pre_write=_make_pre_write(spec, out)` to `run_cached`,
+but `run_cached` forwards `pre_write` only to `_replay` — `_learn` has no such parameter, so the
+argument goes nowhere. On the LEARN path a declared write's whole-flow confirm is therefore still a bare
+presence check, and a stale banner lets an un-landed write cache as a verified flow. That is A8's own
+hole on the sibling path, and it means the `_pre_confirm` channel S3 now treats as evidence is populated
+on one of two code paths. Not introduced here; found by the sibling check while closing the false-arm
+regression. It does NOT affect the arming (which requires the key's presence, absent on the learn path
+→ never armed), but it does weaken learn-time write verification. Sequence with S4.
+
+**R4.11 (filed, not fixed).** After an auth-refresh retry, `kind = kind2` and the early `write_unreadable`
+/ `write_unverified` raises are not re-checked, so a POST-REFRESH `write_unreadable` falls through to the
+generic tail and is recorded `ok=False` — contradicting `WriteReadbackError`'s own docstring, which
+states the run is recorded a SUCCESS precisely so a failure streak cannot invite the retry that must not
+happen. Pre-dates this slice; found while verifying the `ok=False` comment. Sequence with S4.
 
 ### ✅ FIXED in 0.73.0 (REDESIGNED) — R3.4. run_all's NEW write predicate fails OPEN: `FlowCache.get` swallows every read error into `None`, and `is_write_flow(spec, None)` is False — one transient read blip on the cached-flow file and the unattended fleet fires the undeclared write and prints [OK]
 

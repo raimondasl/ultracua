@@ -799,6 +799,25 @@ def _make_finalize(spec: FlowSpec, router, out: dict, pin: Optional[dict] = None
                 out["truncated"] = ex.truncated
             out["data"], out["found"] = data, confirmed
             out["confirm_pre_true"] = pre
+            # THE WRITE-LANDED EVIDENCE (R3.3), settled HERE — the one place that knows all three facts:
+            # whether the baseline was taken at all, what it said, and whether the condition holds now.
+            #
+            # `_pre_confirm` is written by the `pre_write` hook, which `flow.py` calls only when the step
+            # loop REACHES a step with `mutating=True`. So its ABSENCE means "the run never got to the
+            # write", and `bool(out.get("_pre_confirm"))` cannot tell that apart from "measured, and the
+            # banner was clean". Reading the collapsed boolean at a distance armed runs that fired ZERO
+            # writes whenever a stale banner satisfied the confirm — a resume would then skip the row as
+            # already committed and the invoice would never be paid. That is the direction `ledger.py`
+            # forbids ("never a false skip of an un-landed write"), and it is the same absent-vs-
+            # unreadable trap R3.1 and R3.4 were closed on: a two-state answer to a three-state question.
+            #
+            # `"_pre_confirm" in out` is positive proof the baseline RAN. Combined with `confirmed` this
+            # is an observed absent->present transition across the BASELINE->FINALIZE window — which is
+            # NOT the same as "across the write", and saying so cost a critical. The baseline is probed
+            # before the action is attempted, so this fires for a run whose write step then failed. The
+            # missing conjunct (a mutating step actually ran and succeeded) lives in the step loop and is
+            # applied by the caller in `_attempt_replay`; this half is deliberately only half.
+            out["write_landed"] = bool(confirmed and "_pre_confirm" in out)
             out["error"] = None if confirmed else (
                 "the commit ACTUATED and its write may well have landed, but the whole-flow confirm was "
                 "ALREADY TRUE before it ran, so nothing here can tell a landed write from a signal that "
@@ -1400,7 +1419,7 @@ def is_write_flow(spec: FlowSpec, cached_flow) -> bool:
 
 
 def _auth_retry_allowed(spec: FlowSpec, cached_flow, *, auth_refresh: bool,
-                        parameterizing: bool) -> tuple[bool, str]:
+                        parameterizing: bool, landed: bool) -> tuple[bool, str]:
     """May a drifted replay be re-run from the start after refreshing auth, and if not, WHY NOT?
     THE single definition of both halves (R3.5).
 
@@ -1429,10 +1448,18 @@ def _auth_retry_allowed(spec: FlowSpec, cached_flow, *, auth_refresh: bool,
     re-login), and — because the same over-count drives the sibling relearn gate in `_preflight_row` —
     they are refused `on_drift='relearn'` outright. Both are fail-safe and both are recoverable by hand.
 
-    `parameterizing` is a REQUIRED keyword with no default, deliberately. Before this was extracted it was
-    a local already in scope at the decision site and could not be forgotten; a defaulted argument would
-    reintroduce that risk silently — a caller that omitted it would send every parameterized write the
-    wrong remedy, and no test could see the omission. Required means omitting it is a TypeError.
+    `parameterizing` and `landed` are REQUIRED keywords with no defaults, deliberately. Before this was
+    extracted they were locals already in scope at the decision site and could not be forgotten; a
+    defaulted argument would reintroduce that risk silently — a caller omitting `parameterizing` sends
+    every parameterized write the wrong remedy, and a caller omitting `landed` re-runs a flow whose write
+    already committed. Neither omission is visible to a test. Required means omitting it is a TypeError.
+
+    `landed` (R3.3) dominates every other arm and is checked first among them: a re-run from `start_url`
+    re-fires a commit we positively observed land. `replay()` already hard-stops the two sibling landed
+    kinds before this predicate is reached; keying the third off the EVIDENCE rather than off its failure
+    `kind` is what makes a future landed failure inherit the stop. It is checked *after* the
+    auth-path precondition, so a flow with no `login` still gets the deliberate empty reason rather than
+    an explanation phrased around a refresh it never had.
 
     RETURNS `(allowed, reason)`, not a bare bool, and that is structural rather than stylistic. When this
     returned only a bool, the caller re-derived the REASON from `spec.mutate` by hand — and when the
@@ -1440,8 +1467,23 @@ def _auth_retry_allowed(spec: FlowSpec, cached_flow, *, auth_refresh: bool,
     steps was told it lacked a precheck it actually had, and handed a remedy that does nothing. Same
     defect shape as R3.5 (declaration standing in for reality), reproduced twelve lines from the fix for
     R3.5. Returning the reason with the decision is what makes the next arm impossible to add halfway."""
+    # THE WRITE ALREADY COMMITTED THIS CALL (R3.3). Checked first, and keyed off the EVIDENCE rather than
+    # off the failure's `kind`, because it dominates every other consideration: a re-run from `start_url`
+    # re-fires a commit we positively observed land. `replay()` already hard-stops the two sibling landed
+    # kinds (`write_unverified`, `write_unreadable`) before this predicate is even reached, saying so in
+    # as many words — "both would re-fire a committed write". `shape` is the third, carrying STRICTLY
+    # stronger evidence than `write_unreadable` (the confirm transitioned AND the readback was clean),
+    # and it had no stop: it fell through to the precheck arm below, whose `_precheck_done` probe can
+    # legitimately return False while the commit has landed (the end-state marker may not have rendered
+    # yet), and the whole flow re-ran. Putting it HERE rather than adding a third `if kind == …` stop is
+    # what makes a future landed failure inherit it — the same positional discipline as the arming.
     if not (auth_refresh and spec.login is not None):
         return False, ""            # no auth-refresh path exists at all — nothing to explain
+    if landed:
+        return False, ("not retrying after auth refresh — this run's write is KNOWN to have committed "
+                       "(the confirm transition was observed before the failure), so a re-run from the "
+                       "start would fire it a second time. The failure that followed is real and needs "
+                       "looking at, but the write itself must not be re-driven")
     if not is_write_flow(spec, cached_flow):
         return True, ""             # a read is idempotent — re-running it is free
     # It WRITES. Only a DECLARED, SINGLE-commit flow with a whole-flow precheck can be retried safely: the
@@ -1563,8 +1605,8 @@ def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Op
     )
 
 
-async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="replay", provider=None,
-                          params=None):
+async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, cached_flow, mode="replay",
+                          provider=None, params=None):
     """One replay attempt. Returns (ok, data, reason, kind).
 
     `kind` classifies a failure for the typed taxonomy: "" (ok) | "miss" | "escalate" | "shape" |
@@ -1576,6 +1618,24 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="
     `params` (H3) are the pre-validated per-run slot values substituted at the fill/type/select sites.
     """
     out: dict = {}
+    # THE WRITE-LANDED EVIDENCE, tracked positionally rather than per exception class (R3.3).
+    #
+    # R8 added `FlowReplayError.landed` and set it True on ONE class, `WriteReadbackError`. But the
+    # evidence that a write committed is not a property of a failure's TYPE — it is a property of WHERE
+    # the failure happened. Everything below the confirm-transition check has that evidence; anything
+    # that arms one class at a time is a patch that has to be re-applied for the next failure return
+    # added under it, which is exactly how the shape gate ended up unarmed while sitting one line further
+    # down than the case that was armed.
+    #
+    # So: one flag, set once at the evidence point, and EVERY failure return goes out through `_fail` so
+    # it carries the value as of that moment. Adding a new failure return below the evidence point
+    # inherits the arming with nothing to remember.
+    landed = False        # may a resume SKIP this whole row (every recipe write ran ok)
+    committed = False     # did ANYTHING commit (the first recipe write ran ok) — the disclosure gate
+
+    def _fail(reason: str, kind: str):
+        return False, None, reason, kind, landed, committed
+
     # A learned pin anchors the OLD final page; a repaired flow may end elsewhere, so only trust the
     # pin on a pure replay — let the LLM extractor re-read the live value when we re-plan the tail.
     pin = meta.read_pin if (spec.pin_read and mode == "replay") else None
@@ -1587,13 +1647,107 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="
         pre_write=_make_pre_write(spec, out),
         redact=_secret_values(spec),   # B2: never ship a resolved secret to a provider
     )
+    # ===== THE WRITE-LANDED EVIDENCE, read from `out` — NOT inferred from position =====
+    #
+    # `finalize` runs UNCONDITIONALLY (`flow.py` calls it outside the step loop), so the confirm's
+    # absent->present transition can have been observed on a run whose `report.success` is False because
+    # a LATER step drifted — a trailing "Print receipt" / "Back to list" / "Continue", which is the
+    # canonical shape of a write flow. Measured: the payment fires once, the confirm transitions, and the
+    # attempt returns kind="drift".
+    #
+    # The first version of this fix set the flag at a POSITION (just past the `not found` check), below
+    # the `not report.success` guard — so that whole population reported `landed=False` after a
+    # demonstrated commit, no ledger row was written, and the retry stop keyed off it let the
+    # auth-refresh path re-run the flow from `start_url`. Two payments for one request.
+    #
+    # THE LESSON, kept because it cost three criticals. R3.3 is "the exception's CLASS is the wrong
+    # proxy". The plan answered "the POSITION of the return is the right proxy". The next draft answered
+    # "`found and not confirm_pre_true` IS the evidence". All three were proxies, and the second and third
+    # each shipped a defect in the OPPOSITE direction to the first. When a finding says a proxy is wrong,
+    # check whether your replacement is also a proxy — and when a boolean stands in for an observation,
+    # ask what its False means when the observation never happened.
+    #
+    # THE WRITE-LANDED EVIDENCE — a conjunction of two facts that live in two places, deliberately.
+    #
+    #   `out["write_landed"]`  (from `_make_finalize`) — the A8 baseline was taken AND the confirm then
+    #                          transitioned absent->present. Only finalize can know this.
+    #   `all_writes_ok`        (from `report.traces`)  — EVERY step the CACHED RECIPE marks
+    #                          `mutating` ran and SUCCEEDED. Only the step loop can know this.
+    #                          Both halves of that phrasing cost a critical: `any` instead of
+    #                          `all`, and counting against the traces instead of the recipe.
+    #
+    # Both are required, and the second is the one three drafts of this fix missed. `pre_write` is called
+    # BEFORE `_replay_step` attempts the action, so merely REACHING a mutating step puts `_pre_confirm`
+    # in `out`; the click, the mutation gate and the POST all happen after. And the probes are asymmetric
+    # — the baseline is a single instantaneous check while the finalize confirm POLLS for seconds — so on
+    # a run whose write step drifted, anything matching the confirm that paints inside that window reads
+    # as a "transition" with zero writes. Measured: 0 POSTs, armed. That is the catastrophic direction
+    # (a resume then SKIPS an unpaid row) and a regression on pre-0.78.0 behaviour.
+    #
+    # `flow.py` already had this guard one line over: the per-step commit barrier gates its identical
+    # transition check on `ok`. The whole-flow arming did not — a guard on a sibling path never applied
+    # to the mechanism, which is this register's own stated predictor.
+    #
+    # THE RESIDUAL, stated rather than hidden: a click that SUCCEEDS but fires no request, with a
+    # late-painting confirm, still arms. That is A8's documented residual — and it is precisely the
+    # residual the SUCCESS path already carries, since that path records a ledger row off the same
+    # `confirmed`. Parity with the success path is the claim here; nothing stronger is available without
+    # threading the wire signal, which is S6/AB-1 territory.
+    # THE QUANTIFIER IS THE WHOLE THING, and `any` was wrong — this is the fourth version of this
+    # predicate and the fourth defect, so the reasoning is written out rather than assumed.
+    #
+    # Counted against the CACHED RECIPE, not against the traces. Two failures come from getting that
+    # wrong. With `any`, a recipe carrying a SECOND mutating step — routinely a classifier false positive,
+    # since `classify_mutation` matches `pay` inside "Payment history" (pinned in
+    # `tests/test_write_classification.py`, ~28% of read controls per CLAUDE.md) — arms off that sibling
+    # while the real commit step FAILED and nothing POSTed. And on a genuine multi-write, write #1
+    # landing armed the whole ROW while write #2 never fired, so a resume suppressed it: inviolable #3's
+    # second clause, and a direct contradiction of `ledger.py`'s own "a multi-write row that died mid-flow
+    # is not recorded and re-fires all its writes on resume".
+    #
+    # Counting against the traces instead would also make `all([])` vacuously true — re-opening the
+    # "never reached the write" hole from two versions ago. So: every step the RECIPE says writes must
+    # have produced a trace that RAN and SUCCEEDED. Absent trace (loop broke earlier) => refuse.
+    #
+    # This is parity with the SUCCESS path ABOUT THE WRITES, which is the bar — and the qualifier is not
+    # pedantry. `report.success` requires EVERY step ok; this requires every MUTATING step ok, which is
+    # deliberately weaker so that a post-commit READ step drifting still arms (that is R3.3 itself). An
+    # earlier draft dropped the qualifier and claimed flat "exact parity" while requiring only `any` —
+    # the claim was checked shallowly and was false, which is how
+    # both of the above shipped. If you weaken this, the success path is the thing to compare against.
+    # TWO PREDICATES, because there are two consumers asking DIFFERENT questions — and collapsing them
+    # onto one boolean is the same defect shape as this whole finding, one conjunct down.
+    #
+    #   `landed`    -> may a RESUME SKIP THIS WHOLE ROW? Needs EVERY recipe write to have run ok, because
+    #                  `ledger.py` checkpoints at whole-flow granularity.
+    #   `committed` -> did ANYTHING commit, i.e. must a human be told not to re-submit by hand? Needs
+    #                  only the first write. The step loop breaks on the first failure, so "the first
+    #                  recipe write ran ok" is exactly "at least one write committed".
+    #
+    # They diverge on a multi-write whose later write drifted, and on the very common shape of a trailing
+    # step the classifier misread as mutating ("Back to orders" -> `order`, "Confirmation number" ->
+    # `confirm` — confirmation-page vocabulary IS write vocabulary). Gating disclosure on `landed` went
+    # silent in exactly those cases: the machine loop stays safe (a resume re-fires under the same
+    # Idempotency-Key), but the operator reads a bare `[FAIL] … page drift` and pays by hand, through the
+    # one channel with no dedupe floor.
+    recipe_writes = [i for i, s in enumerate((cached_flow.steps if cached_flow is not None else []))
+                     if getattr(s, "mutating", False)]
+    # Keyed on the trace's OWN `index` (the step it belongs to), not its position in the list — a
+    # position-based join silently misaligns the moment the loop emits anything but one trace per step
+    # in order, and would then read one step's success as another's.
+    ran_ok = {getattr(t, "index", None) for t in (getattr(report, "traces", None) or [])
+              if t.meta.get("ok")}
+    all_writes_ok = bool(recipe_writes) and all(i in ran_ok for i in recipe_writes)
+    landed = bool(out.get("write_landed") and all_writes_ok)
+    committed = bool(out.get("write_landed") and recipe_writes and recipe_writes[0] in ran_ok)
+
     if report.mode == "miss":
-        return False, None, "no learned flow — run learn first", "miss"
+        return _fail("no learned flow — run learn first", "miss")
     if not report.success:
         # An interstitial/CAPTCHA wall comes back as mode="escalate" — a distinct KIND (human needed),
         # not ordinary locator drift.
         kind = "escalate" if report.mode == "escalate" else "drift"
-        return False, None, f"replay failed (page drift?): {report.note or report.mode}", kind
+        return _fail(f"replay failed (page drift?): {report.note or report.mode}", kind)
     if (spec.extract is not None or spec.mutate is not None) and not out.get("found"):
         # a write flow gates `found` on the confirm check, so an unconfirmed write fails here
         if out.get("confirm_pre_true"):
@@ -1602,8 +1756,8 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="
             # `relearn` would re-author a flow that already fired, and an auth-refresh retry would fire it
             # again. Deliberately NOT `landed` — we do not KNOW it committed, and ledger.py's invariant is
             # "never a false skip of an un-landed write", so a keyed retry is the safer side of that trade.
-            return False, None, f"{out.get('error')}", "write_unverified"
-        return False, None, f"data not found / write not confirmed on replay: {out.get('error')}", "drift"
+            return _fail(f"{out.get('error')}", "write_unverified")
+        return _fail(f"data not found / write not confirmed on replay: {out.get('error')}", "drift")
     if spec.mutate is not None and spec.extract is not None and not out.get("extract_found"):
         # The write CONFIRMED (above) but its readback missed. A distinct KIND from "drift", because the
         # remedy is the opposite one: the side effect already landed, so this must never be retried or
@@ -1612,12 +1766,11 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="
         why = out.get("extract_error") or "the value was not on the confirmation page"
         if out.get("truncated"):
             why += " (the page text was truncated before extraction, so the value may be past the cut)"
-        return (False, None,
-                f"the write WAS confirmed and must NOT be retried, but its confirmation readback failed: "
-                f"{why}", "write_unreadable")
+        return _fail(f"the write WAS confirmed and must NOT be retried, but its confirmation readback "
+                     f"failed: {why}", "write_unreadable")
     data = out.get("data")
     if check_shape and meta.shape is not None and not _shape_matches(meta.shape, _shape_of(data)):
-        return False, None, f"data shape changed vs the learned flow (expected {meta.shape})", "shape"
+        return _fail(f"data shape changed vs the learned flow (expected {meta.shape})", "shape")
     # H9 VALUE checks (deterministic, 0-LLM). READ flows only (a write flow's meta.contracts stays None),
     # gated on the same `check_shape` trust switch as the shape gate. Both layers quarantine identically.
     if check_shape and spec.mutate is None:
@@ -1626,14 +1779,14 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="
         if eff:
             reason = check_contracts(eff, data, truncated=bool(out.get("truncated")))
             if reason is not None:
-                return False, None, reason, "quarantine"
+                return _fail(reason, "quarantine")
         # Layer 2: deterministic MAGNITUDE defense (scalar numbers vs a rolling baseline) — catches a wrong-but-
         # same-sign move like 129→40. PURE replay ONLY: a mode=="repair" suffix-replan intermediate never
         # accrues or fires (a re-authored baseline is reset on learn/relearn). Runs after layer 1.
         if mode == "replay":
             reason = _magnitude_gate(cache, key, eff, data, spec.name)
             if reason is not None:
-                return False, None, reason, "quarantine"
+                return _fail(reason, "quarantine")
         # H9 judge: capture an evidence artifact for the LATER, out-of-band `flow audit`. This writes a file;
         # it NEVER calls an LLM, never blocks, and never fails a replay. Only reached once BOTH deterministic
         # gates passed (a run that already quarantined needs no judge and its artifact would be the most
@@ -1641,7 +1794,7 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, mode="
         if mode == "replay" and spec.audit:
             _capture_audit(cache, key, spec, meta, report, data, eff=eff,
                            truncated=bool(out.get("truncated")))
-    return True, data, "", ""
+    return True, data, "", "", landed, committed
 
 
 def _validate_one(spec: FlowSpec, name: str, slot: SlotSpec, value: Any) -> Any:
@@ -2113,9 +2266,17 @@ async def replay(
         _log.warning("flow %r: QUARANTINED — %s", spec.name, why)
         raise FlowQuarantineError(f"{spec.name!r}: {why}")
 
+    # STICKY across attempts, on purpose. If ANY attempt in this call observed the confirm transition,
+    # the write committed — a later attempt failing earlier cannot un-commit it. The ledger's invariant
+    # is "never a false skip of an UN-landed write", and OR-ing evidence can only ever add a row that did
+    # land, never one that did not.
+    landed_any = False
+    committed_any = False   # weaker, and deliberately separate — see `_attempt_replay`'s two predicates
     try:
-        ok, data, reason, kind = await _attempt_replay(spec, router, cache, key, meta, check_shape,
-                                                        params=params)
+        ok, data, reason, kind, landed, committed = await _attempt_replay(
+            spec, router, cache, key, meta, check_shape, cached_flow=cached_flow, params=params)
+        landed_any = landed_any or landed
+        committed_any = committed_any or committed
         if ok:
             return _ok(data)
         if kind == "write_unverified":
@@ -2143,15 +2304,19 @@ async def replay(
         # is R3.5: this line used to read `spec.mutate is not None`, so an UNDECLARED write was handed the
         # retry that a declared one is refused, and re-fired its commit.
         retry_ok, declined_because = _auth_retry_allowed(
-            spec, cached_flow, auth_refresh=auth_refresh, parameterizing=parameterizing)
+            spec, cached_flow, auth_refresh=auth_refresh, parameterizing=parameterizing,
+            landed=landed_any)
         if retry_ok:
             try:
                 await refresh_auth(spec, headless=spec.headless)
                 if await _precheck_done(spec):  # the first attempt's write may have landed
                     _record_run(cache, key, ok=True)
                     return {"status": "already-done", "data": None}
-                ok, data, reason2, kind2 = await _attempt_replay(spec, router, cache, key, meta,
-                                                                 check_shape, params=params)
+                ok, data, reason2, kind2, landed2, committed2 = await _attempt_replay(
+                    spec, router, cache, key, meta, check_shape, cached_flow=cached_flow,
+                    params=params)
+                landed_any = landed_any or landed2
+                committed_any = committed_any or committed2
                 if ok:
                     return _ok(data)
                 reason = f"{reason}; after auth refresh: {reason2}"
@@ -2181,9 +2346,12 @@ async def replay(
             # Cheapest repair first: re-author ONLY the broken tail from the current page, keeping the
             # working prefix (suffix-replan). This fixes locator/path drift without re-running the whole
             # flow. It can't fix data-SHAPE drift (the steps still replay) — that falls to a full relearn.
-            ok, data, reason3, _kind3 = await _attempt_replay(
-                spec, router, cache, key, meta, check_shape, mode="repair", provider=provider, params=params
+            ok, data, reason3, _kind3, landed3, committed3 = await _attempt_replay(
+                spec, router, cache, key, meta, check_shape, cached_flow=cached_flow,
+                mode="repair", provider=provider, params=params
             )
+            landed_any = landed_any or landed3
+            committed_any = committed_any or committed3
             if ok:
                 _log.info("flow %r: drift repaired by suffix-replan (prefix preserved)", spec.name)
                 return _ok(data)
@@ -2192,10 +2360,56 @@ async def replay(
             if res.cached and res.found:
                 return _ok(res.data)
             reason = f"replay drifted ({reason}); suffix-replan failed ({reason3}); re-learn failed ({res.note})"
+        # DISCLOSE THE COMMIT before anything is recorded or raised, so the one string reaches every
+        # surface: `health`'s `last_error` (via `_record_run` on the next line), the exception message,
+        # and through that the CLI row line, `BatchRowResult.error` and the MCP `ToolOutcome.message`.
+        #
+        # Arming the ledger fixes the MACHINE loop; without this the human one still reads "nothing
+        # happened". Under R8 arming and disclosure were coincident by ACCIDENT — the single armed class
+        # was `WriteReadbackError`, whose message already says "the write WAS confirmed". Arming by
+        # evidence breaks that coincidence: a drifted or shape-changed run reports only that, so
+        # `[FAIL] row 7 … page drift` invites paying invoice 7 by hand — a duplicate that never touches
+        # the Idempotency-Key floor, because it goes through a different channel entirely.
+        #
+        # It deliberately does NOT promise a ledger row. `replay()` owns no ledger: recording happens in
+        # `run_batch` (only with `resume=...`) and on the MCP write surface. `ultracua flow replay`,
+        # `run_all --include-writes` and `run_batch(resume=None)` all reach here with no ledger anywhere,
+        # so a sentence like "a --resume will skip this row" would be a safety claim the emitter cannot
+        # make — and acting on it would re-fire the payment.
+        # Gated on `committed_any`, NOT `landed_any`. The ledger question ("may a resume skip this whole
+        # row") and the human question ("did anything commit") are different, and they diverge on a
+        # multi-write whose later write drifted and on a trailing step the classifier misread as
+        # mutating. Gating disclosure on the stricter one went silent in exactly those cases — the ones
+        # where the operator, seeing a bare failure, re-submits by hand through a channel with no
+        # Idempotency-Key floor.
+        if committed_any:
+            reason = (f"{reason} — NOTE: the write DID commit on this run (its confirm was observed). "
+                      f"Do NOT re-submit it by hand; fix the failure above and re-run only through a "
+                      f"surface that dedupes (a keyed `--resume`, or the same row's Idempotency-Key)")
+        # ok=FALSE even when the write landed — a DELIBERATE divergence from the `write_unreadable`
+        # branch above, which records ok=True. There the flow is healthy and only the readback missed, so
+        # a failure streak would push an operator toward re-running the one thing that must not be re-run.
+        # Here the flow is genuinely BROKEN — it drifted, its data shape moved, or a post-refresh failure
+        # landed here — and needs a human, so the failure streak is the correct signal: `health` must not
+        # report a flow as fine because its commit happened to go through. The commit itself is disclosed
+        # by the `reason` above, which `_record_run` carries into `last_error`, so nothing is hidden.
         _record_run(cache, key, ok=False, error=reason)
         _log.warning("flow %r: replay FAILED — %s", spec.name, reason)
         raise _classify_replay_failure(kind)(f"{spec.name!r}: {reason}")
-    except FlowReplayError:
+    except FlowReplayError as exc:
+        # THE SINGLE ARMING POINT (R3.3). Every FlowReplayError leaving `replay()` passes through here,
+        # so the write-landed evidence is stamped in ONE place instead of being remembered at each of the
+        # four raise sites — which is the mistake this finding IS: R8 armed one exception class, and the
+        # failure return that grew one line below it was never armed.
+        #
+        # Only ever set TRUE here. `landed_any` is False unless some attempt observed the confirm
+        # TRANSITION, so this can never manufacture evidence; and a class that already declares
+        # `landed = True` (WriteReadbackError) keeps it. The consumers are `run_batch`'s ledger arming
+        # and the MCP write surface, both of which read `getattr(exc, "landed", False)`.
+        # Stamp the ATTRIBUTE only. The human-readable disclosure is folded into `reason` above, before
+        # `_record_run`, so it reaches `health` too — and so nothing here has to mutate `exc.args`.
+        if landed_any and not exc.landed:
+            exc.landed = True
         raise  # the failure above is already recorded in health
     except Exception as exc:  # noqa: BLE001 - an unexpected crash (browser/extract) is still a failed run
         _record_run(cache, key, ok=False, error=f"{type(exc).__name__}: {exc}")
@@ -2731,14 +2945,20 @@ async def run_batch(
                         and data.get("status") in ("confirmed", "already-done")):
                     ledger.record(i, preview_keys[i], data["status"])
             except FlowReplayError as exc:
-                # A raise is not automatically "nothing happened". `WriteReadbackError` means the confirm
-                # PASSED and only the readback missed — the payment went through. Leaving that row
-                # unrecorded made the ONE case we positively know committed the one case the ledger was not
-                # armed for, and `_flow_run_batch` then printed "to resume the rows that DIDN'T commit" for
-                # a row that did — instructing the operator to fire it again. Recorded on the way past.
-                # Only ever for `landed` errors: a MAYBE must stay unrecorded, because `ledger.py`'s
-                # invariant is "never a false skip of an un-landed write" and a keyed retry is the safer
-                # side of that trade.
+                # A raise is not automatically "nothing happened". `exc.landed` means the write's confirm
+                # TRANSITION was observed before this failure — the payment went through. Leaving such a
+                # row unrecorded made the ONE case we positively know committed the one case the ledger
+                # was not armed for, and `_flow_run_batch` then printed "to resume the rows that DIDN'T
+                # commit" for a row that did — instructing the operator to fire it again. Recorded on the
+                # way past. Only ever for `landed` errors: a MAYBE must stay unrecorded, because
+                # `ledger.py`'s invariant is "never a false skip of an un-landed write" and a keyed retry
+                # is the safer side of that trade.
+                #
+                # R3.3: `landed` is POSITIONAL, not typological — `replay()` stamps it on every error
+                # raised past the evidence point. The first version of this arming keyed off one
+                # exception CLASS, so a committed row that surfaced as `ShapeDriftError` (confirm
+                # transitioned, readback CLEAN, only the value's shape moved) went unrecorded and was
+                # re-fired by every subsequent resume. Do not narrow this back to a class check.
                 if (getattr(exc, "landed", False) and ledger is not None and preview_keys[i]):
                     ledger.record(i, preview_keys[i], getattr(exc, "code", "landed"))
                 report.append(BatchRowResult(index=i, status="failed", ok=False,

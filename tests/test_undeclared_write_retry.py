@@ -324,7 +324,7 @@ def test_the_auth_refresh_retry_is_refused_for_anything_that_writes() -> None:
     wrong = []
     for label, kw, cached, expected in _cases(flows_mod):
         spec = flows_mod.FlowSpec(name="p", goal="g", start_url="http://x.invalid/", headless=True, **kw)
-        got, why = flows_mod._auth_retry_allowed(spec, cached, auth_refresh=True, parameterizing=False)
+        got, why = flows_mod._auth_retry_allowed(spec, cached, auth_refresh=True, parameterizing=False, landed=False)
         if got is not expected:
             wrong.append(f"{label}: may_retry={got}, expected {expected}")
         elif got is False and not why:
@@ -357,7 +357,7 @@ def test_a_declined_retry_names_the_reason_that_actually_applies() -> None:
         name="p", goal="g", start_url="http://x.invalid/", headless=True, login=login,
         mutate=M(confirm_text_contains="ok", precheck_text_contains="done"))
 
-    allowed, why = flows_mod._auth_retry_allowed(spec, two_writes, auth_refresh=True, parameterizing=False)
+    allowed, why = flows_mod._auth_retry_allowed(spec, two_writes, auth_refresh=True, parameterizing=False, landed=False)
     assert allowed is False
     assert "2 recorded steps are marked as WRITING" in why, (
         f"the flow HAS a precheck and was refused for having two mutating steps, so the reason must name "
@@ -368,8 +368,7 @@ def test_a_declined_retry_names_the_reason_that_actually_applies() -> None:
     # count message explains it in terms of a precheck it is FORBIDDEN to have (pre-flight refuses the
     # combination as row-blind) and drops the guidance that does apply — the row-keyed Idempotency-Key.
     # Mutation-checked: with `parameterizing` hard-coded to False, this is the assertion that fails.
-    allowed, why = flows_mod._auth_retry_allowed(spec, two_writes, auth_refresh=True,
-                                                 parameterizing=True)
+    allowed, why = flows_mod._auth_retry_allowed(spec, two_writes, auth_refresh=True, parameterizing=True, landed=False)
     assert allowed is False
     assert "row-keyed" in why and "Idempotency-Key dedupes" in why, (
         f"a parameterized write was refused with a reason that does not mention the one thing that makes "
@@ -385,9 +384,9 @@ def test_the_retry_is_refused_outright_without_auth_refresh_or_a_login() -> None
     with_login = flows_mod.FlowSpec(name="p", goal="g", start_url="http://x.invalid/", headless=True,
                                     login=flows_mod.LoginSpec(url="http://x.invalid/login"))
     no_login = flows_mod.FlowSpec(name="p", goal="g", start_url="http://x.invalid/", headless=True)
-    assert flows_mod._auth_retry_allowed(with_login, read, auth_refresh=True, parameterizing=False)[0] is True
-    assert flows_mod._auth_retry_allowed(with_login, read, auth_refresh=False, parameterizing=False)[0] is False
-    assert flows_mod._auth_retry_allowed(no_login, read, auth_refresh=True, parameterizing=False)[0] is False
+    assert flows_mod._auth_retry_allowed(with_login, read, auth_refresh=True, parameterizing=False, landed=False)[0] is True
+    assert flows_mod._auth_retry_allowed(with_login, read, auth_refresh=False, parameterizing=False, landed=False)[0] is False
+    assert flows_mod._auth_retry_allowed(no_login, read, auth_refresh=True, parameterizing=False, landed=False)[0] is False
 
 
 def test_a_misclassified_read_is_not_refused_anywhere(tmp_path: Path) -> None:
@@ -425,7 +424,7 @@ def test_a_misclassified_read_is_not_refused_anywhere(tmp_path: Path) -> None:
     # ...and it keeps its expired-session recovery: the retry gate only declines a flow the wire or the
     # declaration says WRITES — which, for this population, is exactly what we are choosing not to trust
     # at flow level. It IS declined here, and that is the accepted cost, stated rather than hidden.
-    assert flows_mod._auth_retry_allowed(spec, cached, auth_refresh=True, parameterizing=False)[0] is False, (
+    assert flows_mod._auth_retry_allowed(spec, cached, auth_refresh=True, parameterizing=False, landed=False)[0] is False, (
         "expected the misclassified read to lose its auth-refresh retry — that is the accepted, bounded "
         "cost of keying the retry gate off `is_write_flow`. If this changed, the trade changed too.")
     # ...and the OTHER half of that cost, which the docstring above used to omit: the same over-count

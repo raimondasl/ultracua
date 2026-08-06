@@ -299,11 +299,16 @@ async def call_flow_tool(
                 data = await flows.replay(spec, params=params, require_approved=True, on_drift="raise",
                                           check_shape=True, cache=cache)
             except flows.FlowReplayError as exc:
-                # A raise is not automatically "nothing happened". `WriteReadbackError` means the confirm
-                # PASSED and only the readback missed, so the side effect is certain — and leaving it
-                # unrecorded defeats this rail's stated job verbatim ("a client timeout retry must not
+                # A raise is not automatically "nothing happened". `exc.landed` means the write's confirm
+                # TRANSITION was observed before the failure, so the side effect is certain — and leaving
+                # it unrecorded defeats this rail's stated job verbatim ("a client timeout retry must not
                 # double-write"), in the one case the process is alive and positively knows it committed.
                 # Only for `landed` errors: a maybe stays unrecorded (ledger.py: "never a false skip").
+                #
+                # Do NOT re-derive this from the exception CLASS. `landed` is positional, not
+                # typological: `flows.replay` stamps it on every error raised after the evidence point,
+                # whatever the class. Keying off `WriteReadbackError` alone is R3.3, which left a
+                # committed row unarmed because its failure happened to surface as `ShapeDriftError`.
                 if keys and getattr(exc, "landed", False):
                     ledger.record(0, keys, getattr(exc, "code", "landed"))
                 return ToolOutcome(False, code=getattr(exc, "code", "replay_error"),

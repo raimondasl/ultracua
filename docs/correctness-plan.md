@@ -88,11 +88,30 @@ each run, and its fix (quarantine) must not land before skip-visibility exists, 
   is not enough when the fix is redesigned mid-slice. (c) Every remaining slice's fix shape in this
   document was written in the same voice as S2's, by the same process, without that measurement. Treat
   each as a hypothesis, not an instruction. Full record in `docs/open-defects.md` under R3.5.
-- **S3. R3.3 — a landed write re-fires on resume.** NOT "arm the ledger for ShapeDriftError too" —
-  that is the per-exception-class patch shape that created R3.3 (the critique caught the plan repeating
-  it). Respecified: set `landed` at the single point where the confirm TRANSITION is observed in
-  `_attempt_replay`, so every failure raised after that evidence — present and future classes —
-  inherits it. Matrix dimension: "any post-confirm-transition failure arms the ledger."
+- **S3. R3.3 — a landed write re-fires on resume.** ✅ **DONE in 0.78.0.** Every failure return carries
+  the evidence via a `_fail` closure, and `replay()` stamps every outgoing `FlowReplayError` at ONE point
+  (its existing `except` handler) rather than at four raise sites.
+
+  **This slice's prescription was WRONG, like S2's** — an earlier draft of this bullet claimed it "was
+  right as written", which the paragraph below contradicts. It said "set `landed` at the single POINT
+  where the confirm transition is observed", and that position was the first of five criticals: the
+  transition is not observed there.
+
+  The invariant layer went further than "matrix dimension". The behavioural property covers the failure
+  kinds that exist today, but R3.3 was never about those — it was about the return ADDED below the
+  evidence point afterwards. So the load-bearing test is an AST scan requiring every `return` in
+  `_attempt_replay` to be the success tuple or a `_fail(...)` call. Measured: reinstate one raw tuple
+  return that still carries `landed` correctly — behaviour unchanged, both behavioural tests green, only
+  the AST guard fails. Prefer that shape wherever a fix's real risk is "the next person adds an exit".
+
+  **But the plan's own wording ("set `landed` at the single POINT where the confirm transition is
+  observed") contained the critical.** The transition is not observed at that point — `finalize` runs
+  unconditionally, so it can have happened on a run that later failed a step, and the position sits below
+  the `not report.success` guard. The second adversarial pass reproduced two payments for one request.
+  R3.3 says "the exception's CLASS is the wrong proxy"; this plan answered "the POSITION is the right
+  proxy"; both are proxies. **When a finding says a proxy is wrong, check whether your replacement is
+  also a proxy** — read the evidence. That is now three slices running where the plan's prescribed fix
+  shape was itself defective, so the standing caution above is not rhetorical.
 - **S4. R3.8 — one transient error destroys the trust sidecar.** Respecified per critique: the fix is
   load PROVENANCE, not a field check — `_update_meta` must know whether `_load_meta` returned parsed
   file contents or a synthesized/poisoned meta, and refuse the read-modify-write entirely on the
