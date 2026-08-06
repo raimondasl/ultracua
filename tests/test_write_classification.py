@@ -24,6 +24,52 @@ _FORMS = """<!doctype html><html><body>
 </body></html>"""
 
 
+# --- the keyword fallback's KNOWN LIMITS, pinned ----------------------------------------------
+# These two tests exist to keep `safety.py`'s neon sign TRUE, and to make a well-meaning tightening of
+# the keyword list fail loudly instead of silently un-gating a real commit.
+#
+# They are NOT a claim that the current behaviour is desirable — it is not; the classifier is wrong in
+# both directions and no matching rule fixes it (measurement in `safety.py`). They pin it because both
+# error directions are load-bearing somewhere:
+#
+#   * the false POSITIVES are why a flow-level refusal keyed off `mutating` is decision D0, rejected —
+#     if these stop firing, the refused population changed and D0 must be re-measured, not assumed;
+#   * the false NEGATIVES are why `mutating` must never be read as "this step is safe" — the wire
+#     promotion is what catches these, and only after the request has already been made.
+#
+# If you change `MUTATING_KEYWORDS` or `_keyword_mutating`, these will fail. That is the point: read the
+# analysis in `safety.py` and re-run the measurement before deciding the change is an improvement.
+
+def test_the_keyword_fallback_false_fires_on_ordinary_read_labels() -> None:
+    """Documented false POSITIVES. Each is a read-only control that classifies as a write because a
+    keyword appears as a bare SUBSTRING — no word boundary."""
+    false_positives = {
+        "Show borders": "order", "Sender": "send", "Bookmarks": "book",
+        "Payment history": "pay", "Deleted items": "delete", "Subscribers": "subscribe",
+        "Confirmation number": "confirm", "Registered users": "register", "Transfers": "transfer",
+    }
+    not_firing = [n for n in false_positives
+                  if not classify_mutation("click", intent=f"open {n.lower()}", name=n, ctx={})]
+    assert not not_firing, (
+        f"these read-only labels no longer classify as mutating: {not_firing}. That is an IMPROVEMENT to "
+        f"the classifier, but it changes the population a `mutating` mark refers to — re-run the D0 "
+        f"measurement (docs/correctness-plan.md) before assuming any refusal built on that mark is still "
+        f"safe, and check no genuine write lost its gate (word-boundary matching un-gates 16 of 21).")
+
+
+def test_the_keyword_fallback_misses_real_commits_with_bland_labels() -> None:
+    """Documented false NEGATIVES. Each is a genuine, irreversible commit that the keyword fallback reads
+    as a plain read. Nothing marks these unless the control is a real form submit or the wire promotion
+    observes the POST — i.e. only AFTER it has fired."""
+    missed = ["Save", "Apply", "Continue", "Add to cart", "Approve", "Issue refund", "Merge", "Update"]
+    caught = [n for n in missed
+              if classify_mutation("click", intent=f"click {n.lower()}", name=n, ctx={})]
+    assert not caught, (
+        f"the keyword fallback now catches {caught} without form context. Better — but this is the half "
+        f"of the signal the WIRE promotion is responsible for, so verify you have not simply widened the "
+        f"false-positive set to get it (measurement in safety.py).")
+
+
 # --- pure classifier (structural ctx passed directly) -----------------------------------------
 def test_post_form_submit_is_a_write_even_with_a_bland_intent() -> None:
     ctx = {"submit": True, "form_method": "post"}

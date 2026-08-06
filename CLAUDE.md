@@ -82,6 +82,24 @@ all. A fix built on a wrong diagnosis is worse than none.
 **Verify a regression test fails against the old code.** A test that passes both before and after proves
 nothing. This has caught several no-op "fixes".
 
+## The keyword classifier is broken, stays, and must not carry a refusal
+
+`safety.MUTATING_KEYWORDS` is a bare substring match. Measured: **28% false positives** on ordinary
+read-only controls ("Show borders" → `order`, "Sender" → `send`, "Payment history" → `pay`) and it
+catches only **45%** of genuine writes without form context ("Save", "Apply", "Add to cart", "Approve"
+all read as reads). **No matching rule fixes it** — word boundaries un-gate 16 of 21 real commits
+(`Reorder`, `Resend`, `Ordering`), and the affix-aware variant that keeps every write removes only 3 of
+20 false positives, because the survivors are deverbal nouns (`payment`, `sender`, `transfers`)
+morphologically identical to the verb. It cannot be **removed** either: it is the only signal available
+BEFORE acting, which `flow.py`'s `block_mutations` needs — wire evidence is post-hoc by construction.
+
+So the operative rule, and the thing to stop anyone re-deriving: **a `mutating` mark is a GUESS, not
+evidence.** Be conservative because of one (gate it, key it, refuse to re-author it); never refuse a
+FLOW because of one. That is decision D0, rejected after a flow-level refusal was built, passed 105
+tests plus a 24-cell matrix, and would have broken a large read population. D0 is blocked
+**indefinitely**, not pending a small fix. `tests/test_write_classification.py` pins both error
+directions so a tightening fails loudly and forces re-measurement.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
