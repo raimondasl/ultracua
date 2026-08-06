@@ -187,7 +187,8 @@ def test_an_approval_from_an_older_version_refuses_and_is_never_backfilled(tmp_p
     the flow has become since (the exact failure the gate exists to catch)."""
     spec, cache, key, flow = _seeded(tmp_path)
     approve(spec, cache=cache)
-    _update_meta(cache, key, lambda m: setattr(m, "steps_hash", None))   # simulate the old on-disk state
+    _update_meta(cache, key, lambda m: setattr(m, "steps_hash", None),
+                 on_unreadable="raise")   # simulate the old on-disk state
     for _ in range(2):                                                   # twice: proves no back-fill happened
         with pytest.raises(StaleApprovalError) as ei:
             _preflight_row(spec, None, meta=_load_meta(cache, key), cached_flow=flow, require_approved=True)
@@ -235,7 +236,7 @@ def test_health_reports_a_stale_approval(tmp_path: Path) -> None:
     assert health(spec, cache=cache).approval_stale is True
     # ...and the older-version case reports the same way (it needs the same human action)
     approve(spec, cache=cache)
-    _update_meta(cache, key, lambda m: setattr(m, "steps_hash", None))
+    _update_meta(cache, key, lambda m: setattr(m, "steps_hash", None), on_unreadable="raise")
     assert health(spec, cache=cache).approval_stale is True
 
 

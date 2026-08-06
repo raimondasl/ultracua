@@ -35,7 +35,8 @@ def _edit_src(root: str, key: str, n: int) -> str:
         "from ultracua.cache import FlowCache;"
         "from ultracua.flows import _update_meta;"
         f"c=FlowCache(root={root!r});"
-        f"[_update_meta(c,{key!r},lambda m: setattr(m,'approved', not m.approved)) for _ in range({n})]"
+        f"[_update_meta(c,{key!r},lambda m: setattr(m,'approved', not m.approved),"
+        f" on_unreadable='raise') for _ in range({n})]"
     )
 
 

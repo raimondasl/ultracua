@@ -449,7 +449,8 @@ async def test_dry_run_names_a_migration_stale_approval(tmp_path: Path) -> None:
     preview used to be byte-identical to a fully-blessed flow's."""
     httpd, cache, spec, key = await _recorded_write(tmp_path, "migr")
     try:
-        _update_meta(cache, key, lambda m: setattr(m, "steps_hash", None))   # a pre-0.60 approval on disk
+        _update_meta(cache, key, lambda m: setattr(m, "steps_hash", None),
+                     on_unreadable="raise")   # a pre-0.60 approval on disk
 
         # Pin that the REAL gate refuses, so the next assertion is about a genuine divergence.
         with pytest.raises(StaleApprovalError):
@@ -495,7 +496,7 @@ async def test_dry_run_reports_an_uncomputable_digest_instead_of_tracebacking(tm
 
     try:
         c = _HandEdited(root=cache.root)
-        _update_meta(c, key, lambda m: (setattr(m, "approved", True),
+        _update_meta(c, key, on_unreadable="raise", mutate=lambda m: (setattr(m, "approved", True),
                                         setattr(m, "steps_hash", "deadbeefdeadbeef")))
 
         assert health(spec, cache=c).approval_stale is True     # the sibling predicate already says stale
