@@ -525,27 +525,99 @@ def _meta_lock(cache: FlowCache, key: str):
             f.close()
 
 
-def _update_meta(cache: FlowCache, key: str, mutate: Callable[["FlowMeta"], None]) -> None:
+class MetaUnreadableError(FlowReplayError):
+    """The trust sidecar could not be READ, so it must not be written either (R3.8).
+
+    Distinct from the `meta_unreadable` QUARANTINE, which is what a reader gets. This is what a WRITER
+    gets: a refusal to perform the read-modify-write at all, because the "read" half returned a
+    synthesised meta and saving it would overwrite the real trust state with blanks.
+
+    Raised only from `_update_meta`, only when the load's provenance is `unreadable`, and never for an
+    ABSENT sidecar (that is how a sidecar is first created)."""
+
+    code = "meta_unreadable"
+    retryable = True     # a sharing violation clears; this is the one refusal here that IS worth retrying
+
+
+def _update_meta(cache: FlowCache, key: str, mutate: Callable[["FlowMeta"], None], *,
+                 on_unreadable: str) -> None:
     """Load → mutate → atomically save a flow's meta UNDER the cross-process lock. Every writer of the
     meta sidecar (run records, learn, approve/unapprove, relearn pin-clear) goes through this, so a
     scheduled run record can't be clobbered by a concurrent operator edit of the same flow (or vice
-    versa). Reads (health views, the replay snapshot) need no lock — the atomic save never tears."""
+    versa). Reads (health views, the replay snapshot) need no lock — the atomic save never tears.
+
+    REFUSES THE WHOLE READ-MODIFY-WRITE when the load could not actually read the file (R3.8).
+    `_load_meta` handles a transient read failure correctly on its own — it returns a poisoned in-memory
+    meta and leaves the file alone, logging "leaving the file untouched (it may be perfectly healthy)".
+    But it is the LOAD half here, and this function used to save whatever it got back. So one AV/indexer
+    sharing violation on the hot path (`_record_run`, after every replay) serialised that poisoned meta
+    over the healthy sidecar — approval, contracts, shape, steps_hash and read_pin gone, with no
+    `.corrupt.*` backup, while the quarantine text told the operator to go inspect that backup.
+
+    The test is PROVENANCE, not the meta's contents, and the difference is load-bearing. A guard like
+    "skip if `meta.quarantine` is meta_unreadable" fails on the worst variant: `release()`'s mutation
+    SETS `quarantine = None`, so by save time the marker is gone and the file is left completely blank —
+    including the H9 quarantine a human was told to investigate. Provenance is known for certain at the
+    point `_load_meta` picks its branch and cannot be erased by the mutation.
+
+    `on_unreadable` is REQUIRED and has no default, so a new call site cannot inherit a policy it never
+    considered — omitting it is a TypeError. Choosing it wrongly in either direction has already been
+    measured, which is why there is no "obvious" answer to default to:
+
+    * `"raise"` — for a write a HUMAN is waiting on (`approve`, `unapprove`, `release`) or one whose
+      silent loss would leave the engine acting on stale trust (the relearn pin-clear, the post-learn
+      baselines). Not persisting one of those while reporting success is inviolable #2.
+    * `"skip"` — log and continue, for a write whose loss is survivable AND whose caller has its own,
+      better failure to report. `_quarantine` is the important one: it is called by `_do_quarantine`,
+      which then raises `FlowQuarantineError` with the value-free H9 reason. Raising here pre-empted
+      that, replacing "this flow returned a wrong value" with a retryable IO error and losing the reason
+      entirely — and aborting the whole `flow audit` fleet run on the way past."""
     with _meta_lock(cache, key):
-        meta = _load_meta(cache, key)
+        meta, provenance = _load_meta_with_provenance(cache, key)
+        if provenance == "unreadable":
+            if on_unreadable not in ("raise", "skip"):
+                raise ValueError(f"on_unreadable must be 'raise' or 'skip', got {on_unreadable!r}")
+            if on_unreadable == "raise":
+                raise MetaUnreadableError(
+                    f"the trust sidecar for {key!r} could not be read, so it must not be rewritten — "
+                    f"doing so would replace approval, contracts, shape, the recipe digest and the read "
+                    f"pin with blanks. The file has been left exactly as it is; if this was a transient "
+                    f"sharing violation (an AV scan or indexer), RETRY. If it persists, inspect "
+                    f"{_meta_path(cache, key)} by hand.")
+            _log.warning("flow %r: skipping a best-effort meta update — the sidecar could not be read, "
+                         "and rewriting it would destroy the trust state it holds", key)
+            return
         mutate(meta)
         _save_meta(cache, key, meta)
 
 
-_META_UNREADABLE = (
+# TWO reasons, because the two situations need opposite advice and sharing one text made the message
+# false on the more common path. A PARSE failure is real corruption: the bytes were read and are not a
+# meta, the original has been preserved aside, and re-learning is the recovery. A transient READ failure
+# is not corruption at all — nothing was lost, no `.corrupt.*` copy exists, and re-learning is the one
+# action that would DESTROY the H9 shape/contracts baseline that is sitting intact on disk.
+_META_CORRUPT = (
     "the trust sidecar is UNREADABLE (corrupt or torn) — approval, quarantine, contracts, the recipe "
     "digest and the 0-LLM read pin could not be recovered. Inspect the preserved `.corrupt.*` copy, then "
     "re-learn and re-approve."
 )
+_META_UNREADABLE = (
+    "the trust sidecar could not be READ (an IO error, typically an antivirus or indexer holding the "
+    "file). Nothing has been lost and nothing was rewritten — the file is intact on disk and this run is "
+    "refused only because its approval, contracts, shape and read pin could not be consulted. RETRY "
+    "first; there is no `.corrupt.*` copy to inspect, and re-learning would discard the very baselines "
+    "that are sitting there unread."
+)
 
 
-def _poisoned_meta() -> FlowMeta:
-    """The meta to hand back when the sidecar can't be read: a QUARANTINE, not a blank slate."""
-    return FlowMeta(quarantine={"code": "meta_unreadable", "reason": _META_UNREADABLE, "ts": time.time()})
+def _poisoned_meta(reason: str) -> FlowMeta:
+    """The meta to hand back when the sidecar can't be read: a QUARANTINE, not a blank slate.
+
+    `reason` is REQUIRED because the two callers need OPPOSITE advice — `_META_CORRUPT` says "inspect
+    the preserved copy and re-learn", `_META_UNREADABLE` says "retry; nothing was lost and re-learning
+    would destroy the baselines sitting there intact". Sharing one text made the message false on the
+    transient path, which is the one this release makes common."""
+    return FlowMeta(quarantine={"code": "meta_unreadable", "reason": reason, "ts": time.time()})
 
 
 def _preserve_corrupt(p: Path) -> None:
@@ -567,7 +639,7 @@ def _refuse_unreadable_meta(cache: FlowCache, key: str, p: Path, why: str) -> Fl
     """
     _log.error("flow meta %s is unreadable (%s) — refusing to run on a default trust state", p, why)
     _preserve_corrupt(p)
-    meta = _poisoned_meta()
+    meta = _poisoned_meta(_META_CORRUPT)
     try:
         _save_meta(cache, key, meta)
     except OSError as exc:  # noqa: BLE001 — read-only/full disk: the caller still gets the refusal in hand
@@ -577,7 +649,32 @@ def _refuse_unreadable_meta(cache: FlowCache, key: str, p: Path, why: str) -> Fl
 
 
 def _load_meta(cache: FlowCache, key: str) -> FlowMeta:
-    """Read a flow's trust sidecar. ABSENT and UNREADABLE are deliberately NOT the same thing.
+    """Read a flow's trust sidecar. The thin reader — see `_load_meta_with_provenance` for the how.
+
+    Callers that only READ use this. The one caller that goes on to WRITE (`_update_meta`) must use the
+    provenance form instead, because "what does this meta say" cannot answer "was it really on disk".
+    """
+    return _load_meta_with_provenance(cache, key)[0]
+
+
+def _load_meta_with_provenance(cache: FlowCache, key: str) -> "tuple[FlowMeta, str]":
+    """`(meta, provenance)` where provenance is one of:
+
+        "file"        parsed off disk — the meta faithfully represents the sidecar
+        "absent"      no sidecar exists — a virgin FlowMeta; SAFE to save (this is how one is created)
+        "unreadable"  the bytes could not be READ (transient IO). Nothing was touched; the real file
+                      is intact on disk and the meta is synthesised, so saving it would destroy it.
+        "corrupt"     the bytes were read and are not a meta. `_refuse_unreadable_meta` has ALREADY
+                      preserved the original aside and written a quarantine in its place — so the
+                      operator advice here is the opposite of the transient case, and conflating the
+                      two produced a message whose every clause was false on one of them.
+
+    Only the third refuses a write, and the distinction between the second and third is the whole point:
+    collapsing "absent" into "unreadable" would stop every new flow's sidecar from ever being created,
+    and collapsing "unreadable" into "absent" is R3.8 — one transient sharing violation blanking approval,
+    contracts, shape, the recipe digest and the read pin.
+
+    ABSENT and UNREADABLE are deliberately NOT the same thing.
 
     Absent -> a virgin `FlowMeta()` (a flow that was never learned has no trust state to lose). Unreadable
     -> a meta carrying a `meta_unreadable` QUARANTINE, so every surface refuses at pre-flight instead of
@@ -609,7 +706,7 @@ def _load_meta(cache: FlowCache, key: str) -> FlowMeta:
             except (ValueError, UnicodeDecodeError) as exc:
                 # PARSE failure — the bytes are there and they are not JSON. That is real corruption; a
                 # retry would read the same bytes. Fail over to the quarantine immediately.
-                return _refuse_unreadable_meta(cache, key, p, f"{type(exc).__name__}: {exc}")
+                return _refuse_unreadable_meta(cache, key, p, f"{type(exc).__name__}: {exc}"), "corrupt"
             except OSError as exc:
                 io_error = exc                      # could be transient: back off briefly and re-read
                 if attempt < 2:
@@ -621,11 +718,11 @@ def _load_meta(cache: FlowCache, key: str) -> FlowMeta:
             _log.error("flow meta %s could not be READ after 3 attempts (%s) — refusing this run on a "
                        "quarantine, and leaving the file untouched (it may be perfectly healthy)", p,
                        io_error)
-            return _poisoned_meta()
+            return _poisoned_meta(_META_UNREADABLE), "unreadable"
         if not isinstance(raw, dict):
             # Valid JSON, wrong document (a bare list/scalar from a truncated-then-patched file or a bad
             # hand-edit). Same treatment: it is not a meta, so it must not read as "no meta".
-            return _refuse_unreadable_meta(cache, key, p, f"not an object ({type(raw).__name__})")
+            return _refuse_unreadable_meta(cache, key, p, f"not an object ({type(raw).__name__})"), "corrupt"
         # Forward-compat: a meta written by a NEWER version may carry fields this version doesn't
         # know. Drop only the unknown keys and keep the rest — NEVER let one unexpected key make
         # `FlowMeta(**raw)` raise and reset approval + run history to defaults (a silent trust wipe).
@@ -639,8 +736,8 @@ def _load_meta(cache: FlowCache, key: str) -> FlowMeta:
                     "preserving approval + run history (metas with these keys won't be re-logged)",
                     sorted(unknown),
                 )
-        return FlowMeta(**_only_known(raw, FlowMeta))
-    return FlowMeta()
+        return FlowMeta(**_only_known(raw, FlowMeta)), "file"
+    return FlowMeta(), "absent"
 
 
 def _save_meta(cache: FlowCache, key: str, meta: FlowMeta) -> None:
@@ -651,7 +748,20 @@ def _save_meta(cache: FlowCache, key: str, meta: FlowMeta) -> None:
     a zero-length or NUL-filled sidecar on the next boot. The meta is the hot file (every replay rewrites
     it), so that window is hit often enough to matter — and a torn meta is exactly the input `_load_meta`
     now has to quarantine on. `fsync` before the rename closes it, mirroring `ledger.py`, which has always
-    done this."""
+    done this.
+
+    THE RENAME RETRIES, for the same reason the READ does — and it did not, which was the asymmetry.
+    `_load_meta` survives a transient sharing violation with three attempts and a backoff, because on
+    Windows an AV scanner or indexer holding the file for a few milliseconds is the ordinary case. This
+    `os.replace` is the operation that OPENS that window on the next reader, and it had no retry at all,
+    so the same blip the read shrugs off crashed the write with `PermissionError: [WinError 5]`. Measured
+    at roughly 1 run in 6 of `test_record_run_no_lost_updates_under_heavy_contention` under full-suite
+    load. Guard on the read, no guard on the write: this register's most-repeated shape.
+
+    A rename that never succeeds still RAISES — retrying must not become swallowing — and the temp file
+    is cleaned up on the way out, because a stray `.tmp` beside the sidecar is indistinguishable from a
+    torn write to whoever looks next.
+    """
     Path(cache.root).mkdir(parents=True, exist_ok=True)
     p = _meta_path(cache, key)
     tmp = f"{p}.{os.getpid()}.tmp"
@@ -659,7 +769,19 @@ def _save_meta(cache: FlowCache, key: str, meta: FlowMeta) -> None:
         fh.write(json.dumps(asdict(meta), indent=2))
         fh.flush()
         os.fsync(fh.fileno())
-    os.replace(tmp, p)
+    for attempt in range(3):
+        try:
+            os.replace(tmp, p)
+            return
+        except OSError:
+            if attempt == 2:
+                # Out of attempts. Drop the temp before surfacing, then let the caller see it.
+                try:
+                    os.unlink(tmp)
+                except OSError:  # noqa: BLE001 — best effort; the raise below is the load-bearing part
+                    pass
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 def _record_run(cache: FlowCache, key: str, *, ok: bool, error: Optional[str] = None) -> None:
@@ -681,7 +803,16 @@ def _record_run(cache: FlowCache, key: str, *, ok: bool, error: Optional[str] = 
             meta.last_error = error
             meta.last_error_ts = now
 
-    _update_meta(cache, key, _apply)
+    # BEST EFFORT, deliberately. This is bookkeeping — run counters and the last error for the health
+    # view — and it runs after EVERY replay, including from inside `replay()`'s own `except` handler.
+    # Raising here would mask the real failure with an IO error, and would turn a transient sharing
+    # violation into a failed run whose data was already extracted successfully. Losing a run counter is
+    # survivable; the load already logged the read failure at ERROR.
+    #
+    # Nothing that changes what the system is ALLOWED to do may use this flag — approval, quarantine,
+    # release and the read pin all keep the loud refusal, because silently not persisting one of those
+    # leaves an operator believing a trust decision took effect when it did not.
+    _update_meta(cache, key, _apply, on_unreadable="skip")
 
 
 def _default_cache() -> FlowCache:
@@ -1148,7 +1279,14 @@ async def _learn_once(
             pinned = meta.read_pin is not None
             approved = meta.approved
 
-        _update_meta(cache, key, _apply)
+        # A refusal here leaves the NEW recipe paired with the PREVIOUS `read_pin`/`shape`/`steps_hash`.
+        # On an approved flow the steps-hash gate catches that; on an UNAPPROVED READ flow nothing does,
+        # and the old pin is fed to the new recipe's final page. Filed as R4.16, NOT closed here: the
+        # obvious instrument (delete the recipe) was tried and is worse — `learn()` performs the write
+        # during discovery on a declared write flow, so 'discard and re-run learn' prescribes re-firing a
+        # commit that already landed. It needs the pin invalidated by the steps digest, which is a
+        # mechanism change and its own slice.
+        _update_meta(cache, key, _apply, on_unreadable="raise")
         # H9 layer 2: a re-authored extraction restarts the magnitude baseline (learn-bound like `shape` +
         # the seed) — a fresh window re-warms rather than comparing a new-normal value to the old baseline.
         # Same reasoning as above: an APPROVED flow keeps its baseline so a re-learn can't silently reset it.
@@ -1209,7 +1347,7 @@ def approve(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> None:
         m.contracts_hash = ch
         m.steps_hash = steps_h
 
-    _update_meta(cache, key, _apply)
+    _update_meta(cache, key, _apply, on_unreadable="raise")
 
 
 def unapprove(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> None:
@@ -1222,7 +1360,7 @@ def unapprove(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> None:
     # never learned in the first place.
     if cache.get(key) is None:
         raise FlowReplayError(f"{spec.name!r}: nothing to unapprove — learn or record the flow first")
-    _update_meta(cache, key, lambda m: setattr(m, "approved", False))
+    _update_meta(cache, key, lambda m: setattr(m, "approved", False), on_unreadable="raise")
 
 
 def release(spec: FlowSpec, *, cache: Optional[FlowCache] = None, rebaseline: bool = False) -> None:
@@ -1250,7 +1388,7 @@ def release(spec: FlowSpec, *, cache: Optional[FlowCache] = None, rebaseline: bo
         m.consecutive_failures = 0
         m.audit_due = True   # H9: the first run after a human clears a quarantine is high-risk -> audit it
 
-    _update_meta(cache, key, _apply)
+    _update_meta(cache, key, _apply, on_unreadable="raise")
     if rebaseline:
         _reset_history(cache, key)
 
@@ -1258,7 +1396,17 @@ def release(spec: FlowSpec, *, cache: Optional[FlowCache] = None, rebaseline: bo
 def _quarantine(cache: FlowCache, key: str, *, reason: str) -> None:
     """Persist an H9 value-contract quarantine (value-free reason) so every future run refuses at pre-flight
     until `release()`. Written under the meta lock via `_update_meta`, durably, before the raise."""
-    _update_meta(cache, key, lambda m: setattr(
+    # RAISES. An earlier draft made this "skip", to stop a raise (a) replacing the H9 reason with an IO
+    # error in `_do_quarantine` and (b) aborting the whole `flow audit` fleet run. Both were real, and
+    # both are now fixed AT THE CALLERS — because skipping here is worse: this function is shared, and
+    # its OTHER caller is the audit judge, whose finding is by construction NOT deterministically
+    # re-derivable (`audit_flows` only judges flows that already passed both deterministic gates) and
+    # whose evidence artifact is dropped immediately afterwards. A silent skip there loses the finding
+    # permanently while `flow audit` prints "[QUARANTINED]" for a flow that is still approved.
+    #
+    # The lesson, which is this register's own and which the skip re-committed: fix the caller that
+    # lacks the guard, not the mechanism they share.
+    _update_meta(cache, key, on_unreadable="raise", mutate=lambda m: setattr(
         m, "quarantine", {"code": "quarantined", "reason": reason, "ts": time.time()}))
 
 
@@ -1298,8 +1446,9 @@ class AdvisorySink:
 
         _ = audit.REASONS[code]   # same validation; an unknown code is a bug, not a silent no-op
         _log.info("flow %r: audit ADVISORY — %s", self._name, code)
-        _update_meta(self._cache, self._key,
-                     lambda m: setattr(m, "audit_advisories", (m.audit_advisories or 0) + 1))
+        _update_meta(self._cache, self._key,   # an advisory counter, not a permission
+                     lambda m: setattr(m, "audit_advisories", (m.audit_advisories or 0) + 1),
+                     on_unreadable="skip")
 
 
 def contracts_for(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> "tuple[dict, Optional[dict]]":
@@ -1377,7 +1526,8 @@ def _capture_audit(cache: FlowCache, key: str, spec: FlowSpec, meta: "FlowMeta",
                       signals=signals, report_mode=rmode, healed=healed, truncated=truncated,
                       redact=_secret_values(spec))   # `capture` prunes the store itself
         if meta.audit_due:  # the due flag is CONSUMED by the capture it asked for
-            _update_meta(cache, key, lambda m: setattr(m, "audit_due", False))
+            _update_meta(cache, key, lambda m: setattr(m, "audit_due", False),
+                         on_unreadable="skip")   # the whole block is already best-effort
     except Exception as exc:  # noqa: BLE001 - audit capture is best-effort, never load-bearing
         _log.warning("flow %r: audit capture skipped (%s: %s)", spec.name, type(exc).__name__, exc)
 
@@ -2342,7 +2492,8 @@ async def replay(
             # a full re-learn below re-pins from scratch.
             if spec.pin_read and meta.read_pin is not None:
                 meta.read_pin = None  # keep the in-memory snapshot consistent for the repair below
-                _update_meta(cache, key, lambda m: setattr(m, "read_pin", None))
+                _update_meta(cache, key, lambda m: setattr(m, "read_pin", None),
+                             on_unreadable="raise")   # a stale pin on a re-authored flow reads wrong
             # Cheapest repair first: re-author ONLY the broken tail from the current page, keeping the
             # working prefix (suffix-replan). This fixes locator/path drift without re-running the whole
             # flow. It can't fix data-SHAPE drift (the steps still replay) — that falls to a full relearn.
@@ -3332,7 +3483,12 @@ def _reset_learn_baselines(cache: FlowCache, key: str) -> bool:
         m.shape = None
         m.contracts = None
         m.audit_due = True
-    _update_meta(cache, key, _apply)
+    # Deliberately NO `cache.delete` here — see the note on the learn path. On THIS path the delete buys
+    # nothing even in principle: a write flow's `meta.contracts` is None by construction, a stale
+    # `meta.shape` fails LOUD as a ShapeDriftError, and this function never touches `read_pin`. So the
+    # residual it would prevent is already fail-loud, while the delete would discard a recording of a
+    # write the human just demonstrated — re-creating it means performing that write again.
+    _update_meta(cache, key, _apply, on_unreadable="raise")
     _reset_history(cache, key)
     return True
 

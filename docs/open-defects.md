@@ -1488,7 +1488,7 @@ icon-only controls records fine and caches fine. Every subsequent replay refuses
 page. The failure is discovered only in production, and the sink message accuses the page of drift
 that did not happen.
 
-### R3.8. The meta transient-retry fix does not hold on the path that actually writes: `_update_meta` re-saves the poisoned meta OVER the healthy sidecar, and unlike the code it replaced it leaves NO `.corrupt.*` backup — so one transient WinError 32 now destroys approval, contracts, shape, steps_hash and read_pin irrecoverably, while the log asserts "leaving the file untouched"
+### ✅ FIXED in 0.79.0 — R3.8. The meta transient-retry fix does not hold on the path that actually writes: `_update_meta` re-saves the poisoned meta OVER the healthy sidecar, and unlike the code it replaced it leaves NO `.corrupt.*` backup — so one transient WinError 32 now destroys approval, contracts, shape, steps_hash and read_pin irrecoverably, while the log asserts "leaving the file untouched"
 
 *medium, lens `trust`, inviolable #2, reproduced by an independent refuter*
 
@@ -1522,6 +1522,105 @@ replay that was pinned 0-LLM (inviolable #1); a subsequent wrong value returns a
 release's `_update_meta`, the mutate sets `quarantine = None` on the poisoned meta and the saved
 file is completely blank — the H9 quarantine a human was told to investigate is silently forgotten
 AND the contracts that would re-quarantine are gone, with no quarantine left to warn anyone.
+
+**FIXED in 0.79.0** (plan slice S4), both variants confirmed RED against the pre-fix source — the
+`release` one leaves the sidecar completely blank, `{"approved": false, "shape": null, ...,
+"quarantine": null}`, exactly as described above.
+
+**The fix is PROVENANCE, and the plan was right to insist it is not a field check.** The obvious patch —
+"skip the save if `meta.quarantine` is `meta_unreadable`" — fails on the worst variant, because
+`release()`'s own mutation SETS `quarantine = None`. By save time the marker a content check would test
+has been erased by the very mutation being applied. So the question the writer must ask is not *what
+does this meta say* but *where did it come from*, which is known for certain at the point `_load_meta`
+picks its branch and cannot be erased downstream.
+
+`_load_meta_with_provenance` returns `(meta, "file" | "absent" | "unreadable" | "corrupt")`; `_load_meta`
+is a thin wrapper over it. Only `"unreadable"` refuses a write — the corrupt path has already preserved
+the original aside and replaced it, so there is nothing left to protect. The fourth state exists so the
+READER can give opposite advice on the two ("retry, nothing was lost" vs "inspect the preserved copy"). `_update_meta` refuses the whole read-modify-write on `"unreadable"`, raising
+`MetaUnreadableError` (retryable — a sharing violation clears). THREE states, not two, and both
+collapses are bugs: folding `"absent"` into `"unreadable"` stops any new flow's sidecar from ever being
+created, and folding `"unreadable"` into `"absent"` is R3.8 itself.
+
+**The policy is REQUIRED per call site** — `on_unreadable` is a keyword with no default, so a new site
+cannot inherit one nobody considered (omitting it is a TypeError, which caught five existing call sites
+immediately). `"skip"` at exactly three bookkeeping sites (`_record_run`, `AdvisorySink.quarantine`,
+`_capture_audit`); `"raise"` everywhere else. The default direction is
+chosen so that a forgotten site fails visibly rather than silently: silently not persisting an approval,
+a quarantine or a release leaves the operator believing a trust decision took effect when it did not.
+
+**THE SLICE WAS NARROWED AFTER THREE ADVERSARIAL PASSES, and the reason matters more than the fix.**
+The core above closed R3.8 and passed its first audit. Everything that went wrong afterwards was in the
+REMEDIATION of an audit finding, never in the core — three rounds, and each round's fix was the next
+round's defect, twice at the same shape: *applied to a shared mechanism instead of the caller that
+lacked the guard*, or *converted one failure into a worse one*.
+
+* Making `_quarantine` skip (to stop a raise replacing the H9 reason and aborting `flow audit`) silently
+  discarded the audit JUDGE's finding — which, unlike the deterministic contract check, is not
+  re-derivable, and whose evidence artifact is dropped immediately after. `flow audit` then printed
+  `[QUARANTINED]` for a flow that stayed approved.
+* Adding `cache.delete(key)` on the torn-commit paths put a recipe-destroying call on two
+  WRITE-AUTHORING paths, whose own guidance said "re-run learn" — for a write flow, an instruction to
+  re-fire a commit that already landed.
+* Adding a per-flow guard to `audit_flows` converted a loud abort into `exit 0, nothing to report`,
+  because it incremented no counter the exit-code contract reads.
+* Adding a `"corrupt"` arm to `_update_meta`'s refusal protected nothing (that path has already been
+  preserved aside and replaced) and told the operator "retrying will NOT help" when retrying succeeds.
+
+**All four were cut.** What ships is the core plus the `_save_meta` retry, and the caller-level
+ergonomics are FILED rather than fixed under audit pressure. The transferable rule, which is now this
+register's third instance: **a guard that converts one failure into another must be audited for what the
+NEW failure does to every caller** — and when an audit says a caller lacks a guard, fix that caller, not
+the mechanism they share.
+
+**Two structural guards**, following S3's lesson that behavioural tests cannot fail for an exit added
+tomorrow: an AST scan requiring every return in `_load_meta_with_provenance` to declare a known
+provenance (and asserting all three are still produced), and an AST scan pinning the `best_effort`
+opt-outs to an allowlist. The second earned its place immediately — it flagged that
+`AdvisorySink.quarantine` (a counter) and `QuarantineSink.quarantine` (which makes every future run
+refuse) share a method name, so a bare-name allowlist would have authorised silent failure on the one
+whose entire job is to be loud. The allowlist is now qualified by class.
+
+**FILED, NOT FIXED — three residuals from the same adversarial pass, all pre-existing in shape:**
+
+* **R4.13** — `release()`'s GATING read (deciding whether there is a quarantine to clear) has no
+  provenance, only its `_update_meta` does. On a flake that recovers between the two reads, the gate sees
+  the poisoned meta, logs "releasing quarantine (was: the trust sidecar is UNREADABLE…)", and the
+  mutation then clears the REAL on-disk quarantine — a wrong-value quarantine a human was told to
+  investigate, released while the log names something else. The fix's own thesis ("a read that could not
+  read must not authorize a write") applies here and was only applied to the second read.
+* **R4.14** — `audit_flows`' candidate loop has no per-flow guard at all: `_quarantine`, `audit.judge` (an
+  LLM call) and `audit.drop` can each abort the fleet run, discarding the findings of every flow already
+  judged. `run_all` has exactly this guard. A first attempt at adding it shipped `exit 0, nothing to
+  report` — whatever lands must increment `unjudged` and print skips unconditionally.
+* **R4.15** — `cli._flow_dispatch` catches only `EmptyFlowStoreError`, so `MetaUnreadableError` reaches
+  the user as a Python traceback on six verbs (`approve`, `unapprove`, `release`, `learn`, `record`,
+  `audit`), burying its remedy text. `flow replay` and `run-batch` render it cleanly. Also: `Path.exists()`
+  can itself raise on some IO errors, a FOURTH outcome the three-state provenance model does not name and
+  `_load_meta`'s docstring explicitly denies ("It never raises").
+
+**R4.16** — a refusal in `_learn_once`'s baseline write leaves the NEW recipe paired with the PREVIOUS
+  `read_pin`/`shape`/`steps_hash`. Approved flows are caught by the steps-hash gate; an UNAPPROVED READ
+  flow is not, and the old pin is fed to the new recipe's page. The obvious instrument (delete the
+  recipe) was TRIED IN THIS SLICE AND CUT — `learn()` performs the write during discovery on a declared
+  write flow, so "discard and re-run learn" prescribes re-firing a landed commit. Needs the pin
+  invalidated by the steps digest.
+* **R4.17** — when the sidecar cannot be written, `_do_quarantine`'s H9 value-free reason is replaced by
+  a bare IO error: the operator learns about a file problem instead of "this flow returned a wrong
+  value", `_record_run` never captures the reason, and the typed `quarantined` code and
+  `retryable=False` are lost. A catch was written for this and cut, because it caught only
+  `MetaUnreadableError` while the save half raises a bare `OSError` — i.e. it did not deliver what it
+  claimed. Fix both halves together.
+* **R4.18** — `_save_meta`'s failure surfaces as a bare `PermissionError`/`OSError`, not a
+  `FlowReplayError`, so every `except FlowReplayError` on the replay, batch and MCP paths misses it. A
+  write that COMMITTED can therefore surface as `PermissionError` from `_record_run` instead of
+  `{"status": "confirmed"}`, and the MCP ledger row is never written for it. This is the read/write
+  sibling asymmetry one level up from the one this slice fixed.
+* **R4.19** — `_reset_learn_baselines` clears `shape` and `contracts` but not `read_pin`, so a
+  learn-then-`record` READ flow replays 0-LLM against the previous recipe's pin with both the shape gate
+  and the value gate now `None`. Success path, not an error path.
+
+Sequence all of these with S7a, which is the next slice touching these surfaces.
 
 ### R3.9. The new unconditional skip has no escape hatch and is invisible to the cron contract the surface documents — `run-all` exits 0 and the alert webhook stays silent for a fleet that ran nothing
 

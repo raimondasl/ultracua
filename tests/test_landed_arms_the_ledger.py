@@ -94,15 +94,23 @@ class _Site:
                 # matters: a drift that also perturbs the commit's own precondition makes the mutation
                 # gate refuse the click, nothing POSTs, and the test would measure the wrong thing (it
                 # did, on the first attempt: 0 payments fired).
+                #
+                # The reveal is SYNCHRONOUS, outside the fetch's `.then()`, and that is load-bearing.
+                # Inside the callback it raced the agent's next observation during LEARN: on a slower
+                # machine the recipe captured only the pay step, so at replay there was no trailing step
+                # to drift and the test failed with "DID NOT RAISE". That is exactly how it failed on
+                # Ubuntu CI while passing on Windows. The BANNER stays in `.then()` — it must genuinely
+                # follow the POST for the confirm to be a real transition — and finalize polls for it, so
+                # it has time. Only the button's presence needs to be deterministic.
                 reveal = ("" if site.drift else
                           "var b=document.createElement('button');b.type='button';"
                           "b.textContent='Print receipt';document.body.appendChild(b);")
                 self._send(
                     "<h1>Invoice</h1><div id='r'>pending</div>"
-                    "<button id='p' type='button' onclick=\""
+                    "<button id='p' type='button' onclick=\"" + reveal +
                     "fetch('/pay',{method:'POST',body:'x=1'}).then(function(){"
                     "document.getElementById('r').textContent='Payment sent REF-99';"
-                    + reveal + "});\">Pay invoice</button>")
+                    "});\">Pay invoice</button>")
 
             def do_POST(self) -> None:  # noqa: N802
                 self.rfile.read(int(self.headers.get("Content-Length") or 0))
@@ -547,6 +555,15 @@ async def test_a_post_commit_step_drift_still_arms_the_ledger(
         # refuses the retry for unrelated reasons and the `fired == 1` assertion below can never fail.
         spec, cache = await _learned_write_flow(flows_mod, tmp_path, monkeypatch, base, "REF-99",
                                                 trailing_step=True, retryable=True)
+        # ANTI-VACUITY. Everything below depends on the recipe having a POST-COMMIT step to drift. If the
+        # learn captured only the pay step, `site.drift` changes nothing, the replay succeeds, and the
+        # failure reads "DID NOT RAISE" — which says nothing about the property under test. That is how
+        # this test failed on Ubuntu while passing on Windows, so the premise is now pinned.
+        learned = cache.get(flows_mod.flow_key(spec.goal, spec.start_url, spec.scope))
+        assert learned is not None and len(learned.steps) == 2, (
+            f"the fixture did not learn a trailing post-commit step "
+            f"(steps={[s.intent for s in (learned.steps if learned else [])]}) — the drift below would "
+            f"then be a no-op and this test would prove nothing")
         posts_after_learn = len(site.posts)
 
         refreshed = {"n": 0}

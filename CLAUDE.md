@@ -45,6 +45,13 @@ Violating any of these is a blocking defect, not a trade-off:
 
 - **`uv` for everything.** `uv run --no-sync pytest tests/... -q`, `uv run --no-sync python -m benchmarks.X`.
   Never bare `uv sync` (it strips groups) — use `uv sync --all-groups`.
+- **CI runs the suite on ubuntu AND windows; local runs here are windows-only.** A green local suite is
+  therefore half the evidence. The browser fixtures are where this bites: anything whose page state is
+  revealed inside a `fetch(...).then(...)` races the agent's next observation, and Linux loses that race
+  where Windows wins it. It has already shipped once — an S3 fixture captured a 1-step recipe on ubuntu
+  and the test failed with a meaningless "DID NOT RAISE". **Reveal fixture state synchronously, and pin
+  the premise** (assert the recipe has the steps the test depends on) so a lost race fails LOUD instead
+  of silently testing nothing.
 - The full suite is **key-less** — real headless Chromium against local fixtures, no API key, ~18 min
   (it grew from ~15 when 0.73.0 added a per-step attribution drain to the learn path). It must be green
   before a commit.
@@ -99,6 +106,46 @@ FLOW because of one. That is decision D0, rejected after a flow-level refusal wa
 tests plus a 24-cell matrix, and would have broken a large read population. D0 is blocked
 **indefinitely**, not pending a small fix. `tests/test_write_classification.py` pins both error
 directions so a tightening fails loudly and forces re-measurement.
+
+## "Did the write commit?" has no oracle either — `landed` is evidence-bounded, not truth
+
+The second surface with the same character as the keyword classifier. At the moment the decision is
+made, nothing in the system KNOWS whether a write committed. Every available answer is an inference from
+a page condition, and the one signal that would settle it — whether a non-idempotent request actually
+left the browser — is observed in `_replay_step` but not threaded to `flows.py` (S6/AB-1, blocked on
+S17).
+
+**R3.3 cost SIX versions of one predicate, five of them wrong** (0.78.0; the failure modes are in
+`docs/open-defects.md`, each reproduced against a live fixture). Every wrong version passed the full
+suite and `drift_bench`. They failed in alternating directions, which is the tell that the question is
+under-determined rather than that the answers were careless:
+
+| answered "committed" by… | broke on |
+|---|---|
+| the exception's CLASS | the original finding |
+| the return's POSITION | a trailing "Print receipt" step drifting — paid twice |
+| `found and not confirm_pre_true` | a leftover banner + a run that never reached the write |
+| + proof the baseline ran | the Pay button renamed; baseline is taken BEFORE the click |
+| + *some* write step ok | a sibling step misclassified as a write ("Payment history") |
+
+What ships requires two independently-sourced facts: the confirm made an absent→present transition
+(measured either side), AND every step the cached recipe marks mutating ran and succeeded.
+
+**The residual that remains, and will remain:** a click that SUCCEEDS while its JS is broken, so no
+request is sent, with a banner that appears anyway, still arms. That is not fixable from page evidence.
+It is accepted because the SUCCESS path carries the identical hole — it records its ledger row off the
+same confirm — so this is parity, not a new risk.
+
+**The operative rule.** `landed` means "the evidence available says it committed", never "it committed".
+Treat it as a bound, not a fact:
+* it is sound to be conservative because of it (don't retry, tell the operator, record the row);
+* never build something that is only correct if it is TRUE — and in particular never widen what a
+  `landed=True` row is allowed to SKIP;
+* the two questions "may a resume skip this whole row" (needs every write ok) and "must a human be told
+  something fired" (needs one) are DIFFERENT — collapsing them was the sixth pass's finding.
+
+Direction of error matters more than accuracy here: a missed arm re-fires under the same
+Idempotency-Key; a false arm skips a row that was never paid, and nothing catches that.
 
 ## The pattern that predicts the next bug
 

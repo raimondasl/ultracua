@@ -112,10 +112,21 @@ each run, and its fix (quarantine) must not land before skip-visibility exists, 
   proxy"; both are proxies. **When a finding says a proxy is wrong, check whether your replacement is
   also a proxy** — read the evidence. That is now three slices running where the plan's prescribed fix
   shape was itself defective, so the standing caution above is not rhetorical.
-- **S4. R3.8 — one transient error destroys the trust sidecar.** Respecified per critique: the fix is
-  load PROVENANCE, not a field check — `_update_meta` must know whether `_load_meta` returned parsed
-  file contents or a synthesized/poisoned meta, and refuse the read-modify-write entirely on the
-  latter (covers the `release()` variant, where the mutation itself edits the quarantine field).
+- **S4. R3.8 — one transient error destroys the trust sidecar.** ✅ **DONE in 0.79.0.** The
+  respecification held: load PROVENANCE, not a field check. `_load_meta_with_provenance` returns
+  `(meta, "file"|"absent"|"unreadable")` and `_update_meta` refuses the read-modify-write on the third,
+  raising `MetaUnreadableError`. A field check provably could not work — `release()`'s own mutation
+  erases the marker it would test — and that is the second plan prescription to survive contact, against
+  three that did not.
+
+  Note the THREE states: folding `"absent"` into `"unreadable"` stops any new sidecar being created;
+  folding `"unreadable"` into `"absent"` is the finding. The policy is a REQUIRED per-site keyword, so a
+  new site cannot inherit one nobody considered.
+
+  **The slice was NARROWED after three adversarial passes.** The core was right; every later defect was
+  in the REMEDIATION of an audit finding — four of them, all cut and filed (R4.16-R4.19). When an audit
+  says a caller lacks a guard, fix that caller, not the mechanism they share; and do not fix broadly
+  under audit pressure, which is what turned one slice into three rounds of new defects.
 - **S7a. R3.9 + CLI-1 — skips are visible to cron.** Hoisted ahead of S5 deliberately: S5 creates a
   new skip class, and landing it while `run-all` exits 0 on an all-skipped fleet would widen the
   silently-dark surface. A fleet that ran nothing exits nonzero and fires the webhook.
