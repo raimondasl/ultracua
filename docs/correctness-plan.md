@@ -147,10 +147,23 @@ each run, and its fix (quarantine) must not land before skip-visibility exists, 
   slice. The other sibling, CLI-4 (`flow canary` exits 0 on an all-not-learned fleet), is the identical
   shape and is deliberately LEFT in S7b rather than pulled in ad hoc — but it should get
   `fleet_verdict`'s treatment there, not a third hand-rolled condition.
-- **S5. R3.13 — a refusal is non-terminal.** Quarantine the key on refusal via `FlowMeta.quarantine`;
-  clearing requires a human act. Two critique additions: the quarantine reason must distinguish
-  deterministic refusal classes from possibly-transient ones, and the matrix gains a "refuses once
-  transiently, invoked again" learnability cell. Touches health/MCP/run_all → its own audit.
+- **S5. R3.13 — a refusal is non-terminal.** ✅ **DONE in 0.81.0.** Clearing requires a human act
+  (`flow release`), and the "refuses once transiently, invoked again" cell landed as the
+  direction-of-error pin: the memory never re-checks by driving a browser, so a transient refusal holds
+  until a human clears it, and the test replaces the page with one that learns cleanly to prove the
+  refusal holds anyway.
+
+  **THIS PRESCRIPTION WAS WRONG TOO — the fourth of seven.** "Quarantine the key via
+  `FlowMeta.quarantine`" cannot work: quarantine is enforced in `_preflight_row`, and R3.13's loop is
+  `mode="auto"` → cache miss → LEARN, which never reaches it. The engine cannot read `FlowMeta` at all
+  (circular import), so the memory had to move to `FlowCache` and be ON BY DEFAULT — an injected policy
+  hook would have left `ultracua run` and the daemon re-firing forever, which is the
+  wrapper-not-mechanism shape. **Reproducing first is what surfaced this**: the measurement covered both
+  entry points, and the second one is the whole design constraint.
+
+  Sequencing note for whoever picks up next: the register's per-finding "fix shape" paragraphs are
+  hypotheses written before the code was read. Four of the seven attempted so far have been wrong in a
+  way that only a reproduction or an adversarial pass caught.
 - **S6. AB-1 — the causal signal as a refusal oracle only.** *(blocked on S17 — its oracle is the
   deferred-write refusal test, which is currently flaky under load.)* The register's "cheapest correct option",
   scoped conservatively: share the recorder's `__ucturn`/`attributedSeq` machinery (ONE implementation

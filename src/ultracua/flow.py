@@ -149,6 +149,25 @@ async def run_cached(
     if mode in ("replay", "repair"):
         return FlowReport(mode="miss", success=False, note="no cached flow for key")
 
+    # A REFUSAL IS TERMINAL (R3.13). Everything below this line drives a browser and re-authors the flow,
+    # which for the population this guards means the page fires the same un-keyed commit again. Measured
+    # on 0.74.0 and re-measured unchanged on 0.80.0: three `mode="auto"` invocations of one refusing flow
+    # placed three orders while reporting failure, with a clear reason, all three times.
+    #
+    # Run 1's write is not preventable — the commit fires during discovery, before anything can know it
+    # was unattributable, which is HOW we find out. Runs 2..N are, and this is where.
+    #
+    # ONE gate for both learn entry points below (`_learn_n` and `_learn`), placed above them rather than
+    # inside each: the defect this closes is a memory that some paths consult and others don't.
+    refused = cache.refusal(key)
+    if refused is not None:
+        note = (f"refusing to re-author this flow: {refused.get('reason')} "
+                f"Clear it with `flow release` once the cause is addressed (`flow record` still works "
+                f"and is the documented way to author this flow by hand).")
+        _log.warning("run: %s", note)
+        return FlowReport(mode="miss", success=False, note=note,
+                          extra={"refused": refused.get("code") or "refused"})
+
     if provider is None and grounding is None:
         return FlowReport(mode="miss", success=False, note="learn requires a provider or grounding")
     if samples and samples > 1:  # best-of-N: re-author up to N times, keep the first verified sample
@@ -660,6 +679,10 @@ async def _learn(
                 "a write fired on the wire that no step could be attributed to — refusing to cache it "
                 "(it would replay ungated, un-keyed and without a precondition, or with those on a step "
                 "that never writes). Record it with `flow record`.")
+            # REMEMBER IT (R3.13). Without this the refusal is amnesiac: the next invocation finds no
+            # recipe, re-authors, and the page fires the same commit again — measured at 3 un-keyed
+            # POSTs for 3 invocations, on both the `flow learn` and the `ultracua run` paths.
+            cache.remember_refusal(key, "write_unattributed", learn_note)
             _log.warning("learn: a write fired on the wire that no step could be attributed to — NOT "
                          "caching the flow (it would replay ungated, un-keyed and without a "
                          "precondition). Record it with `flow record` instead.")
