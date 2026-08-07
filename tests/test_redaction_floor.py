@@ -50,6 +50,7 @@ from ultracua.cache import FlowCache
 from ultracua.flows import FlowSpec, SlotSpec, learn
 from ultracua.llm.base import LLMRequest, LLMResponse, Router, Tier
 from ultracua.llm.mock import MockClient
+from ultracua.providers.scripted import ScriptedProvider
 from ultracua.snapshot import REDACTED
 
 SECRET_ENV = "ULTRACUA_TEST_SECRET"
@@ -112,7 +113,17 @@ async def test_a_short_secret_does_not_shred_the_page_the_extractor_reads(
         mc = _Recorder(actions=[{"found": True, "data": 47}], tool_name="submit")
         router = Router(fast=Tier(mc, "m"), strong=Tier(mc, "m"))
 
-        await learn(spec, provider=None, router=router, cache=cache, verify_replay=False)
+        # BOTH a provider AND a router, and that is not a detail. `learn()` computes
+        # `fixed = provider is not None and router is not None`, and when it is False it builds a REAL
+        # provider from `settings.provider` for the agent loop. Passing `provider=None` here made this
+        # test construct a live Anthropic client: green locally, where `config` loads `.env` into the
+        # environment, and a hard TypeError on CI, which is key-less by design — and worse, locally it
+        # was driving the agent with real API calls. The suite is key-less; a test that needs a key is a
+        # defect in the test.
+        #
+        # The answer is on the start page, so the agent has nothing to do but finish.
+        provider = ScriptedProvider([{"action": "done", "intent": "the count is on this page"}])
+        await learn(spec, provider=provider, router=router, cache=cache, verify_replay=False)
 
         assert mc.seen, "premise: the extractor must have been called, or this measures nothing"
         blob = "\n".join(mc.seen)

@@ -46,6 +46,20 @@ Violating any of these is a blocking defect, not a trade-off:
 
 - **`uv` for everything.** `uv run --no-sync pytest tests/... -q`, `uv run --no-sync python -m benchmarks.X`.
   Never bare `uv sync` (it strips groups) — use `uv sync --all-groups`.
+- **A LOCAL GREEN IS WEAKER EVIDENCE THAN CI, IN TWO MEASURED WAYS. Both have shipped a red PR.**
+  1. *Platform*: CI runs ubuntu AND windows; local runs here are windows-only (see the fixture-race note
+     below).
+  2. *Keys*: **importing `ultracua.config` loads `.env` into `os.environ`**, so anything that reaches for
+     a provider silently works here and raises `TypeError: Could not resolve authentication method` on
+     CI. That is not hypothetical — a test passing `provider=None` to `learn()` made `fixed` False,
+     built a live Anthropic client, and was driving the agent with REAL API CALLS locally while failing
+     both CI arms (S8/0.84.0). **Run the suite the way CI does before believing it is green:**
+
+         ANTHROPIC_API_KEY= uv run --no-sync pytest tests/ -q
+
+     `load_dotenv` does not override a variable that is already set, so an empty value is enough. When a
+     test needs an agent, pass a `ScriptedProvider` AND a mock `Router` — `learn()` only skips building a
+     real provider when BOTH are supplied.
 - **CI runs the suite on ubuntu AND windows; local runs here are windows-only.** A green local suite is
   therefore half the evidence. The browser fixtures are where this bites: anything whose page state is
   revealed inside a `fetch(...).then(...)` races the agent's next observation, and Linux loses that race
