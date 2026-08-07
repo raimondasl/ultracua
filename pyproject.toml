@@ -1,6 +1,6 @@
 [project]
 name = "ultracua"
-version = "0.82.0"
+version = "0.83.0"
 description = "A Computer Use Agent that drives a web browser at 5-10x human speed."
 readme = "README.md"
 license = "MIT"
@@ -33,6 +33,11 @@ bench = [
 dev = [
     "pytest>=9.1.0",
     "pytest-asyncio>=1.4.0",
+    # CI shards the suite across runners (see .github/workflows/ci.yml). It PARTITIONS THE REAL
+    # COLLECTION, which is the property that matters: a test file added tomorrow lands in some shard by
+    # construction. A hand-maintained file list would let a new file run in NEITHER while both shards
+    # report green — the "quiet is an allowlist" failure wearing a CI hat.
+    "pytest-split>=0.10.0",
 ]
 providers = [
     "google-genai>=2.8.0",

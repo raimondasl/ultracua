@@ -1684,6 +1684,74 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   running a command and reading a refusal each time, not an unattended `mode="auto"` loop firing
   invisibly. Revisit only with a remedy that does not depend on `record()` itself.
 
+* **R4.22 — the Windows `ERR_NO_BUFFER_SPACE` recurred (2nd occurrence), and the post-mortem RULED OUT
+  what STATUS.md predicted it would implicate.** Recorded here rather than left in a CI comment, which is
+  what cost "a day of hypothesis-guessing" the first time.
+
+  Second occurrence on PR #127 (run 31151484849), Windows only; ubuntu passed the same commit, and the
+  re-run of the identical commit passed — so it is INTERMITTENT, not deterministic. It failed in
+  `test_a_human_clear_makes_the_flow_learnable_again` with `Page.goto: net::ERR_NO_BUFFER_SPACE`, i.e. a
+  socket-layer resource error in whichever test happened to be running, exactly as the first occurrence
+  was characterised.
+
+  | post-mortem, measured at failure | value |
+  |---|---|
+  | dynamic port range | 16384 (49152–65535) |
+  | TIME_WAIT total / ephemeral | **133 / 133 — 0.8% of the range** |
+  | Chromium still running | **0** |
+  | process count / total handles | 131 / 45285 |
+  | free memory | **13372 MB of 16379** |
+
+  **Ports are not the constraint** (confirming the earlier local measurement) and **nothing leaks**.
+  Critically, `STATUS.md` said the browser-pool lever should be pulled "if the post-mortem implicates
+  handles or memory" — **it implicates neither**. 13 GB free is not memory pressure, and 45k handles
+  across 131 processes has no baseline to be judged against, which is itself the gap.
+
+  **Two limits of the instrument, both worth fixing before the next occurrence.** It runs AFTER the suite
+  exits, so every number is post-teardown: `chromium_still_running=0` proves teardown works, and nothing
+  here can see the PEAK that actually caused the failure. And there is no healthy-run baseline, so
+  "45285 handles" cannot be called high or normal. Sampling during the run, and on success as well as
+  failure, is what would turn a third occurrence into evidence instead of another inference.
+
+  **What this does NOT justify — and what was done instead.** A browser pool, on this evidence, for this
+  reason: the precondition `STATUS.md` had written down was not met, and this register's own rule is that
+  a fix built on a wrong diagnosis is worse than none. **The pool was NOT built** (0.83.0), and the
+  deferral note held under its first real test, which is the first time one of them has stopped work
+  rather than merely described it.
+
+  What shipped answers a DIFFERENT, measured problem: Windows CI at **21m53s against a 25-minute job
+  timeout** on a suite that grows every slice — a deterministic failure approaching, unlike this
+  intermittent one. CI now shards the suite across two runners per OS. That also halves per-runner
+  Chromium churn, which is the standing suspect here — **stated as a side effect, not as this finding's
+  fix.** If `ERR_NO_BUFFER_SPACE` recurs on a sharded runner, that is informative rather than surprising,
+  and R4.22 stays open either way: nothing here diagnosed it.
+
+  The pool's own ceiling was measured before it was declined, so the next person does not re-derive it:
+  **356.7 ms per session with its own browser vs 84.7 ms sharing one — 272 ms, ~2.9 min over ~650
+  sessions** — and it cannot reach the suite at all without moving every test onto a session-scoped
+  event loop, since a Playwright `Browser` is bound to the loop that created it.
+
+* **R4.23 — `test_flows_dry_run_holds_a_real_write_flow` failed once under load and I could not diagnose
+  it.** Observed while validating the shard split (0.83.0): shard 1 failed it with a Playwright error,
+  and the same shard re-run passed 433/433, having passed in isolation (3.6s), within its file (12/12)
+  and within shard 1's dry-run subset (11/11). The full suite had passed 836 minutes earlier. So it is
+  INTERMITTENT and **not** a shard-ordering dependency — which was the specific risk sharding introduces
+  and the reason it was checked.
+
+  **What makes it worth a finding rather than a shrug**: the property it guards is that a DRY RUN HOLDS A
+  REAL WRITE — i.e. that a previewed write never reaches the server. A flaky gate on that is the same
+  problem as H7/S17 (`test_record_write_deferred_write_outside_its_turn_is_refused`, flaky under
+  full-suite load only), and for the same reason: a guard that fails at random cannot be trusted to mean
+  anything when it fails for real.
+
+  **The instrument failed me and that is fixable.** The error text was truncated by `| tail` to `"pla..."`
+  so the actual Playwright error is unknown. Next occurrence: capture the whole run (tee to a file, not
+  `tail`) with `--tb=long`, before theorising. Do NOT re-run until green and move on — that is how a
+  suite normalises its own flakes, and this project's de-flake rule forbids it.
+
+  Sequence with **S17**: same family, same load-dependence, and S17 already owns "reproduce under
+  artificial load first, do not silence with reruns, do not weaken the production bound".
+
 ### ✅ FIXED in 0.80.0 (the VISIBILITY half; the escape-hatch half is argued below and stays open) — R3.9. The new unconditional skip has no escape hatch and is invisible to the cron contract the surface documents — `run-all` exits 0 and the alert webhook stays silent for a fleet that ran nothing
 
 **What shipped (S7a), and the shape it took.** The finding names two defects and they have different

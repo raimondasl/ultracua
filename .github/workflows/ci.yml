@@ -11,14 +11,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Sharding trades one silent failure for another if left unchecked: a test in NO shard leaves every
+  # shard GREEN, and nothing in the suite can fail for it — the coverage is gone and the signal that
+  # would have told you is the signal that was removed. Collection only, so it costs seconds and launches
+  # no browser. Runs on Linux alone: the partition is a property of the collection, not of the OS.
+  shard-coverage:
+    name: shards partition the suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+      - run: uv run --group bench --group providers --group mcp python scripts/check_shard_coverage.py
+
   test:
-    name: tests (${{ matrix.os }})
+    name: tests (${{ matrix.os }} ${{ matrix.group }}/2)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]   # Windows is the primary dev platform; Linux is the portability check
+        # SHARDED, because the suite was 21m53s against this job's 25-minute timeout on Windows and grows
+        # every slice — a deterministic failure approaching, unlike the intermittent WSAENOBUFS below.
+        # Measured alternative, rejected: pooling Chromium across sessions has a ceiling of 2.9 min
+        # (356.7ms -> 84.7ms per session over ~650 sessions) and cannot reach the suite without moving all
+        # 836 tests onto a session-scoped event loop, because a Playwright Browser is loop-bound.
+        # Sharding buys ~11 min per arm with no product change, and scales as the suite grows.
+        #
+        # Separate RUNNERS, deliberately, not `-n 2` on one: xdist would double concurrent Chromium on a
+        # single machine, which is the standing suspect for the WSAENOBUFS failure. This halves per-runner
+        # churn instead. (That is a hypothesis, not a claim — see R4.22.)
+        group: [1, 2]
     env:
       UV_PYTHON: "3.12"                        # match the dev interpreter (project requires >=3.12)
     steps:
@@ -39,22 +68,34 @@ jobs:
         if: runner.os == 'Windows'
         run: uv run --group bench playwright install chromium
 
-      - name: Run the test suite
+      - name: Run the test suite (shard ${{ matrix.group }} of 2)
         # `--group providers` installs the OpenAI / Gemini SDKs and `--group mcp` the MCP SDK, so the
         # provider live-path + MCP-server tests actually run here (they `importorskip` and would
         # otherwise silently skip). Still key-less (no API keys, no network beyond localhost fixtures).
-        run: uv run --group bench --group providers --group mcp pytest -q
+        #
+        # `--splits/--group` PARTITIONS THE COLLECTION, so every collected test is in exactly one shard
+        # and a file added tomorrow lands in one by construction. That property is the whole reason this
+        # is not a hand-maintained list of files per shard: such a list would let a new file run in
+        # NEITHER shard while both report green, which is a silent loss of coverage that no test can fail
+        # for. Balance comes from `.test_durations`; when it goes stale, unknown tests are estimated and
+        # the shards drift in WALL-CLOCK only — never in coverage.
+        run: uv run --group bench --group providers --group mcp pytest -q --splits 2 --group ${{ matrix.group }}
 
-      # RESOURCE POST-MORTEM. The suite has once failed on the Windows runner with
+      # RESOURCE POST-MORTEM. The suite has TWICE failed on the Windows runner with
       # `net::ERR_NO_BUFFER_SPACE` (WSAENOBUFS) on `Page.goto` — a RESOURCE error, in whichever test
       # happened to be running, not a defect in that test. Diagnosing it after the fact cost a day of
       # hypothesis-guessing, so capture the state instead of guessing again.
       #
-      # What was already measured locally and RULED OUT, so don't re-derive it: ephemeral-port
-      # exhaustion. Peak TIME_WAIT is ~276 against a 16384-port dynamic range (1.7%), and the suite
-      # binds ~235 local HTTP servers but holds at most ~8 Chromium processes at once — i.e. nothing
-      # leaks and ports are nowhere near the ceiling. The remaining suspect is the ~650 Chromium
-      # launch/teardown cycles per run (handles / non-paged pool), which this step measures directly.
+      # RULED OUT, so don't re-derive it: ephemeral-port exhaustion (peak TIME_WAIT ~276 locally, 133 at
+      # the 2nd CI failure, against a 16384-port range), leaked processes (`chromium_still_running=0`),
+      # and memory (13372 MB free of 16379 at failure). The remaining suspect is the Chromium
+      # launch/teardown churn itself — ~650 cycles per full run, now ~325 per runner with the shard split
+      # above, which is a real reduction in the suspected pressure but NOT a fix aimed at it.
+      #
+      # TWO GAPS IN THIS INSTRUMENT, worth closing before a third occurrence (R4.22): it runs AFTER the
+      # suite exits, so every number is post-teardown and none of them can see the PEAK that caused the
+      # failure; and it only runs on failure, so there is no healthy-run baseline against which
+      # "total_handles=45285" could be called high or normal.
       #
       # `continue-on-error` so a diagnostic can never itself redden a run.
       - name: Resource post-mortem (on failure only)
