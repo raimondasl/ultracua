@@ -20,8 +20,13 @@ findings ad hoc; its ordering encodes dependencies the individual entries do not
 **Round 3's response was three REDESIGNS, not three patches** (R3.1, R3.2, R3.4 in 0.73.0): its own
 finding was that patching each item is what produced round 3, so those three were changed in shape —
 one implementation instead of two, exclusive intervals instead of arbitrated overlapping ones, and a
-type that can say "unreadable" instead of one that could only say "absent". **The other eight are
-still open.**
+type that can say "unreadable" instead of one that could only say "absent".
+
+**Open as of 0.80.0 — SEVEN.** Of round 3's eleven: R3.1 and R3.4 were redesigned in 0.73.0, R3.2's
+redesign was measured to regress and REVERTED (so it is open), and R3.3, R3.5, R3.8 and R3.9 have since
+been fixed by plan slices — leaving **R3.2, R3.6, R3.7, R3.10, R3.11**. R3.12 and R3.13 were recorded
+later, during 0.74.0, and are also open. Keep this line honest: it is the first thing anyone reads, and
+a stale count here is the DOC-1 defect the plan already fixed once for the README.
 
 **What this is.** A six-lens adversarial audit of every implemented subsystem at v0.63.0, hunting for ways
 to violate the three inviolables. 20 findings survived a refutation pass and all 20 were fixed in 0.64.0–0.69.0. **That is round 1, and it
@@ -1296,7 +1301,7 @@ on the second read advertises the undeclared write to an untrusted outer agent w
 — no `[WRITE — …irreversible…]` prefix, readOnlyHint true, and `call_flow_tool` takes the READ path:
 no single-flight lock, no ledger, no human elicit.
 
-### R3.5. The consolidation left a FIFTH surface: `replay()`/`_preflight_row` still key every write rail off `spec.mutate` alone, so an UNDECLARED write takes the auth-refresh retry that a DECLARED write is explicitly forbidden from taking — measured, the commit POSTs twice
+### ✅ FIXED in 0.77.0 — R3.5. The consolidation left a FIFTH surface: `replay()`/`_preflight_row` still key every write rail off `spec.mutate` alone, so an UNDECLARED write takes the auth-refresh retry that a DECLARED write is explicitly forbidden from taking — measured, the commit POSTs twice
 
 *high, lens `surfaces`, inviolable #3, reproduced by an independent refuter*
 
