@@ -23,6 +23,10 @@ from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel
 
+from .obs import get_logger
+
+_log = get_logger("cache")
+
 from .locators import LocatorSpec
 from .types import ActionType
 
@@ -300,4 +304,81 @@ class FlowCache:
         if p.exists():
             p.unlink()
             return True
+        return False
+
+    # --- refusal memory (R3.13) ---------------------------------------------------------------
+    #
+    # WHY THIS LIVES HERE and not beside `FlowMeta.quarantine`, which is where the register's fix shape
+    # put it. The refusal it remembers is raised in the ENGINE (`flow._learn`), and the engine cannot see
+    # `FlowMeta`: `flow.py` does not import `flows.py`, and `flows.py` imports `flow.py`, so reaching back
+    # is circular. That leaves two options, and only one of them is safe.
+    #
+    # The rejected one is injecting the memory as a caller-supplied policy, the way `finalize` and
+    # `pre_write` are injected. It reads idiomatic and it is a trap: `ultracua run` (cli.py) and the
+    # daemon call `run_cached` DIRECTLY, so an opt-in memory protects the `flow` verbs and leaves those
+    # two re-authoring — and re-firing the write — on every invocation. That is "a guard in the wrapper
+    # rather than the mechanism", which `flow.py`'s own comment calls this codebase's most-repeated defect
+    # shape, in a comment written when this very refusal was moved into the engine for that reason. The
+    # memory has to be ON BY DEFAULT for a bare `run_cached`, so it belongs on the object the engine
+    # already holds.
+    #
+    # It is deliberately a NARROW, separate concept from `FlowMeta.quarantine` rather than a second
+    # writer of it: quarantine answers "may this flow RUN", enforced at `_preflight_row`; this answers
+    # "may this flow be RE-AUTHORED", enforced before `_learn`. `flows.release()` clears both, so the
+    # operator still sees one story.
+    def _refusal_path(self, key: str) -> Path:
+        return self.root / f"{key}.refused.json"
+
+    def refusal(self, key: str) -> Optional[dict]:
+        """The persisted refusal for this key, or None if there isn't one.
+
+        FAILS CLOSED, and that is the whole difference from `get()`. If the marker exists and cannot be
+        read, this returns a synthetic refusal rather than None: "I could not tell whether this flow was
+        refused" must not become "it wasn't", because the cost of that wrong answer is re-authoring a
+        flow that fires an un-keyed, ungated write. `get()` can afford to raise and let the caller
+        decide; this is consulted on the path whose only job is to stop a write, so the conservative
+        answer is the refusal itself. Same lesson as the meta loader's provenance (R3.8), pointed the
+        other way because the harm is asymmetric here.
+        """
+        p = self._refusal_path(key)
+        try:
+            if not p.exists():
+                return None
+            return json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError) as exc:
+            return {"code": "refusal_unreadable", "ts": 0.0,
+                    "reason": f"a refusal marker exists at {p} and could not be read ({exc}); refusing to "
+                              f"re-author rather than assume it said nothing. Delete it by hand if the "
+                              f"flow is known good, then re-learn."}
+
+    def remember_refusal(self, key: str, code: str, reason: str) -> None:
+        """Persist a refusal so the NEXT invocation refuses without driving a browser.
+
+        Best-effort by construction: this runs immediately after a refusal that has already happened, and
+        raising here would convert a correct refusal into an unhandled error on every caller. A failure
+        to persist costs the amnesia this exists to remove — the pre-0.81.0 behaviour — so it is logged
+        and swallowed, never allowed to mask the refusal it is recording.
+        """
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            p = self._refusal_path(key)
+            tmp = p.with_suffix(f".{os.getpid()}.tmp")
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps({"code": code, "reason": reason, "ts": time.time()}, indent=2))
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, p)
+        except OSError as exc:
+            _log.error("could not persist the refusal for %s (%s) — this run still refuses, but the next "
+                       "invocation will re-author and re-fire the write", key, exc)
+
+    def forget_refusal(self, key: str) -> bool:
+        """Clear the refusal — the human act. Returns True if there was one."""
+        p = self._refusal_path(key)
+        try:
+            if p.exists():
+                p.unlink()
+                return True
+        except OSError as exc:
+            _log.error("could not clear the refusal marker at %s (%s)", p, exc)
         return False

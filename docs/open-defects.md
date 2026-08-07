@@ -1636,7 +1636,23 @@ whose entire job is to be loud. The allowlist is now qualified by class.
   learn-then-`record` READ flow replays 0-LLM against the previous recipe's pin with both the shape gate
   and the value gate now `None`. Success path, not an error path.
 
-Sequence all of these with S7a, which is the next slice touching these surfaces.
+Sequence all of these with S7a, which is the next slice touching these surfaces. *(S7a shipped R4.14;
+the rest remain. R4.10's precondition is now satisfied — see the plan.)*
+
+**Two more, filed by S5's sibling check (0.81.0) rather than folded into it:**
+
+* **R4.20** — `FlowCache.put`'s `os.replace` has NO retry, while S4 gave `_save_meta`'s exactly that,
+  three attempts with a backoff, after measuring it fail roughly 1 run in 6 under full-suite load. Same
+  directory, same platform, same Windows AV/indexer sharing violation, same consequence class: the rename
+  is the operation that opens the window on the next reader. This is the sibling-asymmetry shape the
+  register names as its most-repeated, one file over from where it was last fixed — and the fix is to
+  share ONE durable-rename helper, not to transcribe the retry loop a second time.
+* **R4.21** — `record()`'s refusal for the same unattributable-write class stays NON-TERMINAL after S5,
+  deliberately: `flow record` is the remedy the learn refusal names, and making its own refusal terminal
+  removes the operator's last path (the D0 shape). The residual is real — repeated `flow record` on such
+  a page re-fires the write each time — but the harm profile differs from R3.13's: this is a human
+  running a command and reading a refusal each time, not an unattended `mode="auto"` loop firing
+  invisibly. Revisit only with a remedy that does not depend on `record()` itself.
 
 ### ✅ FIXED in 0.80.0 (the VISIBILITY half; the escape-hatch half is argued below and stays open) — R3.9. The new unconditional skip has no escape hatch and is invisible to the cron contract the surface documents — `run-all` exits 0 and the alert webhook stays silent for a fleet that ran nothing
 
@@ -1801,7 +1817,58 @@ practice, the finding is refuted and should be recorded as such.
 window rather than to a 2s tail that outlives it. Do not add a second slot; that is the patch R4
 tried.
 
-### R3.13. A refusal is NON-TERMINAL: nothing is remembered, so every `mode="auto"` invocation re-authors the flow and re-fires the write un-keyed
+### ✅ FIXED in 0.81.0 — R3.13. A refusal is NON-TERMINAL: nothing is remembered, so every `mode="auto"` invocation re-authors the flow and re-fires the write un-keyed
+
+**Re-measured against main @ 0.80.0 before a line of fix was written**, because this entry's own history
+is a draft that was measured on a fixture which does not refuse and reached the opposite conclusion. Six
+releases and five plan slices had changed nothing:
+
+    flows._learn_once          run1 POSTs=1  run2 POSTs=2  run3 POSTs=3   0 keyed
+    run_cached(mode="auto")    run1 POSTs=1  run2 POSTs=2  run3 POSTs=3   0 keyed
+
+    after (0.81.0), both paths:  run1 POSTs=1  run2 POSTs=0  run3 POSTs=0
+
+Run 1's write is not preventable and the fix does not claim to prevent it: the commit fires during
+discovery, before anything can know it was unattributable, which is HOW we find out. Runs 2..N are.
+
+**The fix shape this entry proposed — `FlowMeta.quarantine` — could not work, and the reason is the
+interesting part.** `quarantine` is enforced in `_preflight_row`, which serves `replay`, `run_batch`,
+`preflight_keys` and `run_all`. R3.13's loop is `mode="auto"` → cache miss → LEARN, and neither `learn()`
+nor `_learn_once` consults it. The engine cannot: `flow.py` does not import `flows.py`, and `flows.py`
+imports `flow.py`, so reaching back is circular. Quarantining alone would have left the measured loop
+exactly as it was.
+
+The alternative — inject the memory as a caller-supplied policy, the way `finalize` and `pre_write` are
+injected — reads idiomatic and is a trap: `ultracua run` and the daemon call `run_cached` DIRECTLY, so an
+opt-in memory protects the `flow` verbs and leaves those two re-firing forever. That is the
+wrapper-not-mechanism shape, in the one function whose own comment names it, written when this very
+refusal was moved into the engine for that reason. **The regression test calls `run_cached` bare, exactly
+as those two callers do, so it fails against any opt-in design** — the design constraint is pinned, not
+just the behaviour.
+
+So the memory lives on `FlowCache`, which the engine already holds, ON BY DEFAULT. It is deliberately a
+narrower concept than `quarantine` ("may this be RE-AUTHORED" vs "may this RUN"), and `flows.release()`
+clears both so the operator sees one story.
+
+**Three judgement calls, each pinned:**
+* `FlowCache.refusal` FAILS CLOSED — an unreadable marker returns a refusal, not `None`. R3.8's
+  provenance lesson pointed the other way, because here the cost of a wrong "not refused" is re-firing a
+  write;
+* the memory never re-checks by driving the browser, so a TRANSIENT refusal (a deferred commit landing
+  outside the attribution window) holds until a human clears it. Same asymmetry as `landed`: a stale
+  refusal costs one command from someone told exactly what to run; a forgotten one costs a duplicate
+  un-keyed POST that nothing catches. The test replaces the page with one that learns cleanly and
+  requires the refusal to hold anyway;
+* `health()` reports `refused`, not `not-learned`, with the reason attached — a refused flow has no run
+  history, so `last_error` would otherwise be empty. S7a's rule one surface over.
+
+**The adversarial pass found one defect in the fix, as it has in every slice:** `release()` cleared the
+refusal ABOVE an `_update_meta(..., on_unreadable="raise")` that can fail, so on an unreadable sidecar the
+operator got a raise, the refusal gone, and the quarantine still on disk — i.e. a flow that could now be
+re-authored (re-firing the write) while the thing a human was told to investigate remained. Each clear
+now happens only where nothing after it can fail, and the pin was verified RED against the bad ordering.
+
+*Original finding follows.*
 
 *medium, lens `over-refusal`, confirmed 2/2 by the audit and then MEASURED against the shipped code —
 RECORDED, NOT FIXED in 0.74.0. Not a regression: measured identical before and after.*

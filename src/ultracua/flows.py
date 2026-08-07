@@ -252,7 +252,7 @@ class FlowHealth:
     """A flow's status for the fleet view."""
 
     name: str
-    status: str  # not-learned | never-run | healthy | failing | stale | quarantined | unreadable
+    status: str  # not-learned | never-run | healthy | failing | stale | quarantined | refused | unreadable
     cached: bool
     approved: bool
     runs: int
@@ -1375,8 +1375,24 @@ def release(spec: FlowSpec, *, cache: Optional[FlowCache] = None, rebaseline: bo
     leave a bimodal baseline and habituate); the field re-warms (advisory) from subsequent clean runs."""
     cache = cache or _default_cache()
     key = flow_key(spec.goal, spec.start_url, spec.scope)
+    # R3.13: `release` is THE human act, so it clears both things that can be holding this flow — the
+    # run-time quarantine below, and the engine's refusal memory, which blocks RE-AUTHORING rather than
+    # running. They are separate mechanisms for the reason spelled out on `FlowCache.refusal` (the engine
+    # cannot see `FlowMeta`), but the operator must not need to know that: one verb clears both.
+    #
+    # ORDER MATTERS, and the first draft of this had it wrong: clearing the refusal FIRST, above a
+    # `_update_meta(..., on_unreadable="raise")` that can raise, left a partial release on the error path
+    # — the refusal gone (so a re-learn may fire the write again) while the quarantine a human was told
+    # to investigate is still on disk. Each clear now happens only where nothing after it can fail.
+    def _clear_refusal() -> None:
+        if cache.forget_refusal(key):
+            _log.info("flow %r: cleared the learn-time refusal — the next learn will re-author it",
+                      spec.name)
+
     meta = _load_meta(cache, key)
     if meta.quarantine is None:
+        # The learn-refused flow: no quarantine to clear, and this is the only thing holding it.
+        _clear_refusal()
         if rebaseline:
             _reset_history(cache, key)   # allow a pre-emptive re-baseline even when not currently quarantined
         return
@@ -1389,6 +1405,7 @@ def release(spec: FlowSpec, *, cache: Optional[FlowCache] = None, rebaseline: bo
         m.audit_due = True   # H9: the first run after a human clears a quarantine is high-risk -> audit it
 
     _update_meta(cache, key, _apply, on_unreadable="raise")
+    _clear_refusal()                     # only now — the quarantine really did clear
     if rebaseline:
         _reset_history(cache, key)
 
@@ -1735,7 +1752,14 @@ def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Op
     # `health()` backs `flow status` and the MCP `tools/list` loop, so one corrupt flow must not take down
     # the fleet view.
     approval_stale = _approval_recipe_stale(meta, cached_flow) is not None
-    if not cached:
+    refused = cache.refusal(key)
+    if not cached and refused is not None:
+        # R3.13: a flow refused at LEARN time was never cached, so the ladder below would call it
+        # "not-learned" — indistinguishable from a flow nobody has got round to yet, when in fact it was
+        # refused for firing a write nothing could account for, and it needs a human. The same
+        # never-report-a-state-nobody-chose-as-a-routine-one rule S7a applied to the fleet's skips.
+        status = "refused"
+    elif not cached:
         status = "not-learned"
     elif meta.quarantine is not None:  # H9: a wrong-value quarantine is the most severe/actionable state
         status = "quarantined"
@@ -1750,7 +1774,10 @@ def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Op
     return FlowHealth(
         name=spec.name, status=status, cached=cached, approved=meta.approved,
         runs=meta.runs, successes=meta.successes, consecutive_failures=meta.consecutive_failures,
-        last_run_ts=meta.last_run_ts, last_ok_ts=meta.last_ok_ts, last_error=meta.last_error,
+        last_run_ts=meta.last_run_ts, last_ok_ts=meta.last_ok_ts,
+        # A refused flow has no run history, so `meta.last_error` is empty and the operator would see the
+        # new status with no reason beside it — fail-loud read as fail-quiet.
+        last_error=(refused.get("reason") if status == "refused" else meta.last_error),
         approval_stale=approval_stale,
     )
 
