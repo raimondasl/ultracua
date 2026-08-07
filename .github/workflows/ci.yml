@@ -68,6 +68,24 @@ jobs:
         if: runner.os == 'Windows'
         run: uv run --group bench playwright install chromium
 
+      # R4.22 instrument. Four occurrences of `ERR_NO_BUFFER_SPACE`, four different tests, both shards,
+      # and still no diagnosis — because the post-mortem below can only see the state AFTER the suite
+      # exits, and only when it fails. This samples throughout, and the summary step runs on SUCCESS too,
+      # so there is finally a healthy baseline to compare a failing run against.
+      #
+      # It also measures NON-PAGED POOL, which no previous occurrence captured and which is the resource
+      # WSAENOBUFS is actually about. Every hypothesis so far has been about something else.
+      - name: Start the resource sampler (Windows)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $p = Start-Process pwsh -PassThru -WindowStyle Hidden -ArgumentList `
+            '-NoProfile','-File','scripts/sample_resources.ps1', `
+            '-OutFile','resource-samples.csv','-IntervalSeconds','5'
+          $p.Id | Out-File sampler.pid
+          Write-Output "sampler pid $($p.Id)"
+
       - name: Run the test suite (shard ${{ matrix.group }} of 2)
         # `--group providers` installs the OpenAI / Gemini SDKs and `--group mcp` the MCP SDK, so the
         # provider live-path + MCP-server tests actually run here (they `importorskip` and would
@@ -80,6 +98,37 @@ jobs:
         # for. Balance comes from `.test_durations`; when it goes stale, unknown tests are estimated and
         # the shards drift in WALL-CLOCK only — never in coverage.
         run: uv run --group bench --group providers --group mcp pytest -q --splits 2 --group ${{ matrix.group }}
+
+      # ALWAYS, not `if: failure()` — a baseline from a PASSING run is the entire point, and is what four
+      # failure-only post-mortems could not provide. Peaks, because the peak is what the failure is about
+      # and the post-mortem's post-teardown numbers structurally cannot show it.
+      - name: Resource sampler summary (peaks + baseline)
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          if (Test-Path sampler.pid) {
+            Stop-Process -Id (Get-Content sampler.pid) -Force -ErrorAction SilentlyContinue
+          }
+          if (-not (Test-Path resource-samples.csv)) { Write-Output "no samples"; exit 0 }
+          $r = Import-Csv resource-samples.csv
+          Write-Output "samples=$($r.Count)  outcome=${{ job.status }}  shard=${{ matrix.group }}/2"
+          foreach ($c in 'time_wait','handles','processes','chrome_procs','nonpaged_pool_mb','paged_pool_mb') {
+            $v = $r.$c | ForEach-Object { [double]$_ }
+            "{0,-18} max={1,10:F1}  mean={2,10:F1}  last={3,10:F1}" -f `
+              $c, ($v | Measure-Object -Maximum).Maximum, ($v | Measure-Object -Average).Average, $v[-1]
+          }
+          $free = $r.free_mb | ForEach-Object { [int]$_ }
+          "{0,-18} min={1,10}  (MB)" -f 'free_mb', ($free | Measure-Object -Minimum).Minimum
+
+      - name: Upload resource samples
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: resource-samples-${{ matrix.os }}-${{ matrix.group }}-${{ github.run_attempt }}
+          path: resource-samples.csv
+          if-no-files-found: ignore
 
       # RESOURCE POST-MORTEM. The suite has TWICE failed on the Windows runner with
       # `net::ERR_NO_BUFFER_SPACE` (WSAENOBUFS) on `Page.goto` — a RESOURCE error, in whichever test
