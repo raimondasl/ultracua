@@ -655,6 +655,17 @@ def _flow_audit(args: argparse.Namespace) -> None:
         if args.set_mode not in AUDIT_MODES + ("off",):
             raise SystemExit(f"--set-mode must be one of {AUDIT_MODES + ('off',)}")
         spec = load_spec(args.name)
+        # Refuse to ARM the judge on a flow it must never touch. Not sufficient on its own — an
+        # undeclared write has no declaration to test here, and a read can BECOME one on a re-learn, which
+        # is why the load-bearing gate is at the capture — but it is the first thing an operator hits,
+        # and the message that used to print here was "a corroborated finding can now QUARANTINE this
+        # flow" about a flow whose whole guarantee is that nothing here can reach it. Turning it OFF is
+        # always allowed: that direction only ever removes capability.
+        if args.set_mode != "off" and spec.mutate is not None:
+            raise SystemExit(
+                f"{spec.name!r} declares a write — the H9 judge never captures or judges a write flow, so "
+                f"arming it here would promise something that cannot happen. Its value gates are the "
+                f"confirm check and `spec.contracts`; `flow audit --set-mode off` to be explicit.")
         spec.audit = None if args.set_mode == "off" else args.set_mode
         save_spec(spec)
         print(f"audit mode for {spec.name!r} is now {spec.audit or 'off'}"

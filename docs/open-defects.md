@@ -1434,6 +1434,36 @@ contradiction of its own "never captured, never judged" invariant. Fixing it nee
 **R4.10**, sequenced in `docs/correctness-plan.md`. Note this is NOT neutralized by the fix that shipped:
 the flow-level refusal would have made it unreachable, and the retry-level guard does not.
 
+> **✅ R4.10 FIXED in 0.82.0 — and the filing understated it by half.** Reproduced first, all three parts
+> live at 0.81.0. The judge half was as filed: an undeclared write was judged, one real LLM call, an
+> advisory finding recorded against a write flow. But **the CAPTURE had no write gate in any form** —
+> `audit.capture`'s own docstring says "the CALLER gates opt-in / write-flow / deterministic-gates-passed"
+> and the caller checked opt-in and the deterministic gates and never the write, so a write flow's
+> post-commit page (up to 3000 chars, plus the extracted data) was written to `<cache>/audit/<key>/`
+> while `flow audit` printed "never captured" for that same flow. A mechanism that documents a gate as
+> its caller's responsibility, and a caller that does not implement it: this register's signature shape,
+> stated in its own source. Third: `flow audit --set-mode enforce` did not refuse a declared write flow,
+> and printed "a corroborated finding can now QUARANTINE this flow" about a flow the layer excludes.
+>
+> **The gate went INTO `_capture_audit`, not onto its call site.** It is the only function that reaches
+> `audit.capture`, so a future caller inherits the rule instead of rediscovering it — the difference
+> between fixing today's caller and closing the hole. The judge's gate became `is_write_flow` as filed,
+> and is now the second line rather than the only one: no artifact means nothing to judge, whatever a
+> later gate asks. The arming refusal is third, and deliberately NOT load-bearing — an undeclared write
+> has no declaration to test at arming time, and a read can become one on a re-learn.
+>
+> Five tests, three verified RED. The fifth is the must-remain-usable clause — a READ flow is still
+> captured on a drift signal and still judged — without which every other assertion is satisfied by
+> disabling the H9 layer, which is the 0.74.0 over-refusal shape again.
+>
+> **MIGRATION, for anyone who had `spec.audit` set on a write flow before 0.82.0.** The fix stops new
+> captures; it does not remove artifacts already on disk, and because the write gate now returns before
+> `audit.capture` (which is what runs `prune`), those files no longer age out by TTL. They are bounded —
+> `prune` ran when each was written, so the store is capped at `AUDIT_KEEP` per flow — and
+> **`flow audit --purge` clears them**, which is why nothing here deletes anything: a destructive
+> remediation inside a fully-swallowed best-effort path is the exact shape that produced S4's four cut
+> fixes.
+
 ### R3.6. The redaction covers the Observation but not `LocatorSpec` — `describe()` writes the same page-derived secret to the flow cache in plaintext, on both learn and heal
 
 *high, lens `secrets`, confidentiality (no inviolable), reproduced by an independent refuter*

@@ -1520,12 +1520,30 @@ def _secret_values(spec: FlowSpec) -> tuple:
 
 
 def _capture_audit(cache: FlowCache, key: str, spec: FlowSpec, meta: "FlowMeta", report, data: Any,
-                   *, eff: dict, truncated: bool) -> None:
+                   *, eff: dict, truncated: bool, cached_flow) -> None:
     """H9 judge: persist ONE evidence artifact for the out-of-band `flow audit` to judge later. ZERO LLM, and
     fully swallowed — a capture problem must never fail (or slow the failure of) a replay. The page text is
-    free: `report.final_text` was already captured by the engine on every replay."""
+    free: `report.final_text` was already captured by the engine on every replay.
+
+    A WRITE FLOW IS NEVER CAPTURED, and the check is HERE rather than at the call site (R4.10). This is
+    the only function that reaches `audit.capture`, whose own docstring delegates the write gate to "the
+    CALLER" — a delegation nobody had honoured, so a write flow's post-commit page went to disk while
+    `flow audit` reported "never captured" for it. Putting it at the call site would have fixed today's
+    caller and left the next one to rediscover the rule; putting it in the function whose name is the
+    capture means a new caller inherits it.
+    """
     try:
         from . import audit  # lazy: keeps the module off the import path of a flow that never audits
+
+        if is_write_flow(spec, cached_flow):
+            # Two consequences of returning HERE, both checked and both benign. `meta.audit_due` is not
+            # consumed, so it stays set on a write flow — inert, because nothing but `should_capture`
+            # below ever reads it. And `audit.prune` (which runs inside `audit.capture`) no longer runs
+            # for this key, so artifacts written by the pre-0.82.0 bug are not aged out; they are already
+            # bounded to AUDIT_KEEP by the prune that ran when they were written, and
+            # `flow audit --purge` clears them. Deleting them from here would be remediation inside a
+            # best-effort path that is fully swallowed — the S4 shape that produced four defects.
+            return
 
         doc = load_history(cache, key)
         rings, anchors = doc.get("fields") or {}, doc.get("anchors") or {}
@@ -1968,9 +1986,12 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, cached
         # it NEVER calls an LLM, never blocks, and never fails a replay. Only reached once BOTH deterministic
         # gates passed (a run that already quarantined needs no judge and its artifact would be the most
         # sensitive thing we could keep) and only on a pure replay.
+        # The WRITE gate for this lives inside `_capture_audit` (R4.10), not here: it is a safety rule
+        # about what may be persisted, and it must not depend on a caller remembering it. These two
+        # conditions are the sampling/opt-in ones and stay with the caller that knows them.
         if mode == "replay" and spec.audit:
             _capture_audit(cache, key, spec, meta, report, data, eff=eff,
-                           truncated=bool(out.get("truncated")))
+                           truncated=bool(out.get("truncated")), cached_flow=cached_flow)
     return True, data, "", "", landed, committed
 
 
@@ -2831,7 +2852,16 @@ async def audit_flows(
         try:
             spec = load_spec(name)
             key = flow_key(spec.goal, spec.start_url, spec.scope)
-            if spec.mutate is not None:
+            # `is_write_flow`, not the declaration (R4.10). An UNDECLARED write — `spec.mutate is None`
+            # with a cached step the wire promotion marked `mutating` — walked straight past the old test
+            # and was judged, and in `enforce` mode an LLM finding could quarantine it: the one thing
+            # this layer's docstring promises it can never do to a write flow.
+            #
+            # `cache.get` RAISES on an unreadable recipe rather than answering "not learned" (R3.4), and
+            # that raise is why this finding needed S7a first: before the per-flow guard above, an escape
+            # here discarded every flow already judged. Now it lands in `errors` + `unjudged` — we could
+            # not tell whether this flow writes, so we do not judge it, and we say so.
+            if is_write_flow(spec, cache.get(key)):
                 run.skipped.append((name, "write flow (never captured, never judged)"))
                 continue
             if not spec.audit:

@@ -231,12 +231,24 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   which is exactly what distinguishes it from the rejected flow-level refusal, whose remedies did not.
   **Do not re-attempt D0 without redoing the refused-population measurement first** — it went green,
   with a measured 20/24 matrix, and was still wrong.
-- **R4.10.** (found by S2's sibling check, filed not fixed) `run_audit` (flows.py:2320) skips write flows
-  on `spec.mutate is not None` alone, so an undeclared write is captured and judged in contradiction of
-  its own "never captured, never judged" invariant. Its fix needs a `CacheUnreadableError` guard around
-  the `cache.get` (R3.4 shape), so it is a slice, not a one-liner. Sequence it with S4 (the other
-  trust-sidecar-load slice); it must not land before that. Note it is NOT neutralized by what S2 shipped:
-  the rejected flow-level refusal would have made it unreachable, the retry-level guard does not.
+- **R4.10.** ✅ **DONE in 0.82.0.** (found by S2's sibling check) `run_audit` skipped write flows on
+  `spec.mutate is not None` alone, so an undeclared write was captured and judged in contradiction of its
+  own "never captured, never judged" invariant.
+
+  **The dependency this entry recorded was the real one, and it paid off**: the fix needs `cache.get`
+  inside the candidate loop, which raises `CacheUnreadableError`, and before S7a's per-flow guard
+  (R4.14) an escape there discarded every flow already judged. This is the plan's "a hole-widener never
+  lands before its hole-fix" rule working as designed — the one ordering constraint in this document
+  that has actually bound.
+
+  **Reproducing first doubled the slice, as it did for S5.** The judge half was as filed. The CAPTURE
+  half — that a write flow's post-commit page was being written to disk at all, against a guarantee
+  printed in the skip message — was not in the filing and is the more serious of the two. The gate went
+  into `_capture_audit` rather than onto its call site, so the judge's gate is now a second line rather
+  than the only one.
+
+  Two entries in a row where the register's own text understated the finding. Treat a filing's SCOPE as
+  provisional too, not just its prescribed fix.
 - **D2.** Refuse sole-candidate fuzzy (`role+name~`) binds for MUTATING steps (AB-2).
 - **D3.** Reject purely positional row-identity tokens (`data-index`, `id="row-N"`) (AB-3).
 - **D4.** Learn-path WebSocket parity with the recorder (AB-8): a sent WS frame during learn is a
