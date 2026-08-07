@@ -53,9 +53,20 @@ Violating any of these is a blocking defect, not a trade-off:
   and the test failed with a meaningless "DID NOT RAISE". **Reveal fixture state synchronously, and pin
   the premise** (assert the recipe has the steps the test depends on) so a lost race fails LOUD instead
   of silently testing nothing.
-- The full suite is **key-less** — real headless Chromium against local fixtures, no API key, ~18 min
-  (it grew from ~15 when 0.73.0 added a per-step attribution drain to the learn path). It must be green
-  before a commit.
+- The full suite is **key-less** — real headless Chromium against local fixtures, no API key, **~21 min**
+  and growing (15 → 18 → 21 over the last several releases). It must be green before a commit. Locally,
+  run it whole; **CI shards it across two runners per OS** because it had reached 21m53s against a
+  25-minute job timeout, which was a deterministic failure approaching.
+- **A shard must never be a hole.** `pytest-split` partitions the real collection, so a new test file
+  lands in a shard by construction — but the `shard-coverage` CI job asserts it (union == full, no
+  duplicates), because a test in NO shard leaves every shard green and nothing in the suite can fail for
+  it. Regenerate balance with `pytest -q --store-durations` when the suite's shape changes a lot;
+  a stale `.test_durations` costs WALL-CLOCK balance only, never coverage.
+- **The browser pool is deferred, now with a number.** 356.7 ms per session with its own Chromium vs
+  84.7 ms sharing one — a 2.9 min ceiling over ~650 sessions — and it cannot reach the suite without
+  moving all tests onto a session-scoped event loop, because a Playwright `Browser` is loop-bound. See
+  `STATUS.md`; do not reach for it as a reaction to a CI flake (R4.22 records the one that did not
+  justify it).
 - **One slice per PR**, branched off `main`, single-sourced version bump in `pyproject.toml` first
   (then `uv sync --all-groups`). The user reviews and merges; don't merge.
 - **Re-run `uv sync --all-groups` after any branch switch that changes the version.** The venv keeps the

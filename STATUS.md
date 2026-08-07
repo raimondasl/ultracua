@@ -191,6 +191,22 @@ inside it — so per-test isolation is preserved while the process is reused. It
 threaded through `flows.learn/replay/record`, which is a production API change and should be decided on
 its own merits, not slipped in as test tuning.
 
+**IT RECURRED (2nd occurrence, PR #127, 0.82.0) AND THE POST-MORTEM IMPLICATED NEITHER.** 133 TIME_WAIT
+of 16384 ports, `chromium_still_running=0`, **13372 MB free of 16379**. So the precondition written above
+was not met, and the pool was NOT built on the strength of it — the paragraph above is the rule, and it
+held. Full numbers and the two gaps in the instrument are in `docs/open-defects.md` under **R4.22**.
+
+What was done instead answers a *different*, measured problem: Windows CI had reached **21m53s against a
+25-minute job timeout** on a suite that grows every slice — a deterministic failure approaching, unlike
+the intermittent buffer error. CI now **shards the suite across two runners per OS** (~11 min per arm),
+which needs no product change at all and keeps scaling.
+
+The pool's ceiling was measured before choosing, rather than assumed: **356.7 ms per session with its own
+browser vs 84.7 ms sharing one — 272 ms saved, ~2.9 min over the suite's ~650 sessions.** It also cannot
+reach the suite without moving all 836 tests onto a session-scoped event loop, since a Playwright
+`Browser` is bound to the loop that created it. So the pool remains deferred, now with a number attached
+and for a second independent reason.
+
 ## Near-term priorities
 
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
