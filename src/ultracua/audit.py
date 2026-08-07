@@ -51,6 +51,7 @@ from .contracts import DELTA_ABS_EPS
 from .extract import tool_extract
 from .llm.types import ToolDef
 from .obs import get_logger
+from .snapshot import apply_redactions
 
 _log = get_logger("audit")
 
@@ -194,9 +195,10 @@ def _sanitize(text: str) -> str:
 def _redact(text: str, extra: tuple = ()) -> str:
     """Scrub secrets BEFORE anything is written. `extra` carries exact runtime values (resolved secret slots,
     login credentials) — the only realistic plaintext-echo path; the regexes catch common shapes."""
-    for val in extra:
-        if val and len(str(val)) >= 4:
-            text = text.replace(str(val), "[REDACTED]")
+    # The floor that used to live here as a literal `>= 4` is now `snapshot.REDACT_MIN_LEN`, shared with
+    # the two channels that had drifted from it (R3.10). Behaviour here is unchanged — this is the
+    # definition moving to one place, not a policy change on this path.
+    text = apply_redactions(text, extra)
     for pat in _SECRET_PATTERNS:
         text = re.sub(pat, "[REDACTED]", text)
     return text

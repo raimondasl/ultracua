@@ -1830,9 +1830,49 @@ tick on, `flow run-all` prints `[SKIP]`, writes `"status": "skipped"` to its `--
 fleet is dark and every automated signal says healthy. In the limit the whole fleet reclassifies and
 `flow run-all` reports `0 ok, 0 failed, N skipped` with exit code 0.
 
-### R3.10. The new redaction has no minimum-term-length floor, unlike the `audit._redact` sibling it is explicitly modeled on — a short or common-substring term shreds the extractor's input and the observation
+### ✅ FIXED in 0.84.0 (S8) — R3.10. The new redaction has no minimum-term-length floor, unlike the `audit._redact` sibling it is explicitly modeled on — a short or common-substring term shreds the extractor's input and the observation
 
 *low, lens `secrets`, confidentiality (no inviolable), reproduced by an independent refuter *(symptom real, stated cause corrected by the refuter)**
+
+**THE SEVERITY LINE ABOVE IS WRONG AND IS LEFT VISIBLE RATHER THAN EDITED.** "Confidentiality (no
+inviolable)" does not describe this finding's own Failure paragraph, which ends in the extractor returning
+a wrong number read out of a mangled span — **inviolable #2, silently WRONG**. The `found=False` half
+fails loud and is survivable; the other half is not. Third slice running where the register understated
+its own finding (see S5 and R4.10), which is now a pattern worth naming: **a filing's SCOPE and SEVERITY
+are provisional, not just its prescribed fix.**
+
+**Reproduced end-to-end before fixing**, through a real flow with a secret slot resolving to `bo`, by
+recording what the extractor actually received:
+
+    PAGE TEXT: Support In[REDACTED]x: 12 unread. Re[REDACTED]ot at 3pm. Open tickets: 47
+
+`Inbox` and `Reboot`, shredded by coincidence, in the real prompt.
+
+**The fix is one definition, not a third copy.** `snapshot.REDACT_MIN_LEN` + `redact_terms` +
+`apply_redactions`, with all three channels routed through them — including `audit._redact`, whose
+behaviour is byte-identical (it always had the floor; this is the definition moving, not a policy change
+on that path). A fourth channel added tomorrow inherits the floor instead of re-deriving it, which is the
+whole shape of the finding: `_redacted_body_text`'s docstring CITED the audit sibling by name and did not
+carry the guard it cited.
+
+**What the floor does NOT close, pinned as a test that demonstrates the surviving damage** rather than
+described in prose: a term at or above the floor is still an unconditional substring replace, so `1234`
+still mangles `Open tickets: 12345` and `smith` still mangles `Blacksmith Ltd`. Nothing string-based
+separates a secret appearing AS a secret from the same characters appearing legitimately — the
+`MUTATING_KEYWORDS` problem one surface over, with the same conclusion: the rule is a guess, so keep its
+blast radius small rather than pretending it is precise.
+
+**What the floor COSTS, also pinned, because it is a decision and not a free win.** A secret of 1-3
+characters is no longer scrubbed on the channel that reaches the MODEL. Paid because `audit._redact` has
+always made that trade for the identical terms on the disk channel, because a 1-3 character secret is not
+meaningfully one, and because the damage it does when scrubbed is severe, silent and measured. A 4-digit
+PIN is at the floor and still redacts. **If this trade is ever judged wrong, the fix is NOT to drop the
+floor** — that reinstates R3.10 — **it is to stop putting the login USERNAME in the term list**, which is
+where the short non-secrets come from.
+
+`SlotSpec`'s "ENFORCED at four points" docstring was updated in the same commit: it promised the value is
+scrubbed from every Observation, which the floor makes false for short secrets. A fix that silently
+falsifies a promise elsewhere in the codebase is a doc lie, and this register has fixed four of those.
 
 **Where.** `src/ultracua/flows.py:718-738 (`_redacted_body_text`, new in this diff) and src/ultracua/snapshot.py:278-295 (the five-field redact loop, new in this diff), versus the sibling they cite by name: src/ultracua/audit.py:194-201 (`_redact`, `if val and len(str(val)) >= 4`). Term list built by src/ultracua/flows.py:1291-1303 (`_secret_values`), which includes `LoginSpec.username_env`'s value.`
 

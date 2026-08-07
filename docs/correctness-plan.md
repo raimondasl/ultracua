@@ -258,11 +258,21 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
 
 ## Phase 4 — Secrets at rest (ordered fix-then-thread)
 
-- **S8. R3.10 first — the redaction floor.** The scrub has no minimum-term-length floor; a short term
-  shreds text (`"Open tickets: 12345"` → `"[REDACTED]2345"`). Match the sibling `audit._redact` floor.
+- **S8. R3.10 first — the redaction floor.** ✅ **DONE in 0.84.0.** The scrub had no minimum-term-length
+  floor; a short term shreds text. Matched the sibling `audit._redact` floor — and put it in ONE place
+  (`snapshot.REDACT_MIN_LEN` / `redact_terms` / `apply_redactions`) that all three channels now route
+  through, since "three copies of one rule, one of which drifted" WAS the finding.
+
   Ordered BEFORE S9 because S9 threads this primitive into a new channel — threading a known-defective
   scrub into the strings replay BINDS ON would corrupt cached anchors (the critique caught the draft
-  scheduling the spread before the repair).
+  scheduling the spread before the repair). **That ordering was right and is now the second dependency in
+  this document to have actually bound**, after R4.14 → R4.10.
+
+  Two things the bullet did not say and the work had to decide. The floor **does not close the class** —
+  `1234` still mangles `12345` — so the residual is pinned as a demonstration, not prose. And the floor
+  **costs** confidentiality on short secrets, which is a trade to be argued rather than a side effect; the
+  argument, and what to do instead if it is ever judged wrong (drop the USERNAME from the term list, never
+  the floor), are in the register.
 - **S9. R3.6 — `describe()` writes page-derived secrets to disk.** Thread redaction into the capture
   sibling; test that a capture with a short redact term leaves anchors bindable; consider cache-dir
   permissions to match audit's.
