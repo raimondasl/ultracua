@@ -1726,6 +1726,29 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   fix.** If `ERR_NO_BUFFER_SPACE` recurs on a sharded runner, that is informative rather than surprising,
   and R4.22 stays open either way: nothing here diagnosed it.
 
+  **THIRD OCCURRENCE (0.84.0, PR #129, run 31212477882) — ON A SHARDED RUNNER, WHICH WEAKENS THE ONLY
+  REMAINING HYPOTHESIS.** `tests/test_contracts.py::test_wrong_value_quarantines_and_refuses_future_runs`
+  this time — a third unrelated test, consistent with "whichever test happened to be running". Windows
+  1/2 only; ubuntu 1/2, ubuntu 2/2 and windows 2/2 all passed the same commit.
+
+  | | occ 2 (unsharded, 21m53s) | occ 3 (SHARDED, 11m02s) |
+  |---|---|---|
+  | TIME_WAIT / ephemeral | 133 | **215** |
+  | process count / handles | 131 / 45285 | 137 / 47262 |
+  | chromium still running | 0 | 0 |
+  | free memory | 13372 MB | 13410 MB |
+
+  **What this rules out further.** The standing suspect was cumulative Chromium launch/teardown churn
+  (~650 per run). Shard 1 runs 433 of 840 tests, i.e. roughly HALF the churn, in HALF the wall-clock —
+  and it failed anyway, with numbers in the same band. So the trigger does not look cumulative, which is
+  what a handle/non-paged-pool leak would predict. A burst — many sockets created in a short window —
+  fits the evidence better, and would also explain why it lands on an arbitrary test.
+
+  Ports remain ruled out at 215/16384 (1.3%), teardown remains clean, memory remains abundant. **Three
+  occurrences, three different tests, and still no diagnosis** — which is the honest state. The next step
+  is the instrument, not another hypothesis: sample during the run and on success too, so there is a
+  healthy baseline and a peak, per the two gaps below.
+
   The pool's own ceiling was measured before it was declined, so the next person does not re-derive it:
   **356.7 ms per session with its own browser vs 84.7 ms sharing one — 272 ms, ~2.9 min over ~650
   sessions** — and it cannot reach the suite at all without moving every test onto a session-scoped
