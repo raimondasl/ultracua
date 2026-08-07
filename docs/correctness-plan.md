@@ -127,9 +127,26 @@ each run, and its fix (quarantine) must not land before skip-visibility exists, 
   in the REMEDIATION of an audit finding — four of them, all cut and filed (R4.16-R4.19). When an audit
   says a caller lacks a guard, fix that caller, not the mechanism they share; and do not fix broadly
   under audit pressure, which is what turned one slice into three rounds of new defects.
-- **S7a. R3.9 + CLI-1 — skips are visible to cron.** Hoisted ahead of S5 deliberately: S5 creates a
-  new skip class, and landing it while `run-all` exits 0 on an all-skipped fleet would widen the
-  silently-dark surface. A fleet that ran nothing exits nonzero and fires the webhook.
+- **S7a. R3.9 + CLI-1 + R4.14 — skips are visible to cron.** ✅ **DONE in 0.80.0.** Hoisted ahead of S5
+  deliberately: S5 creates a new skip class, and landing it while `run-all` exits 0 on an all-skipped
+  fleet would widen the silently-dark surface. A fleet that ran nothing exits nonzero and fires the
+  webhook.
+
+  **This prescription survived contact — the third of six that has** — but it under-specified the slice
+  in two ways worth carrying forward. (a) It named one skip class; the sibling check found a second, and
+  it was the S4 shape one reader over (`run_all` decided whether to run a flow from a `_load_meta` that
+  can synthesise `approved=False` from a sidecar it could not read). **A plan bullet naming a defect by
+  its symptom will under-scope the mechanism.** (b) It said nothing about what must STAY quiet, and
+  "alert on everything" passes every test the bullet implies while destroying the alert channel it is
+  fixing — the D0 shape in a new place. Both directions are now pinned, including the `--allow-empty`
+  collision that an existing test caught within minutes of the "nothing ran" rule landing.
+
+  R4.14 was pulled in rather than left for later because it is the same invariant on the sibling verb
+  AND its precondition-holder: **R4.10's fix adds a `cache.get` to the very loop R4.14 guards**, so
+  landing R4.10 first would have widened the hole before fixing it. That makes R4.10 the natural next
+  slice. The other sibling, CLI-4 (`flow canary` exits 0 on an all-not-learned fleet), is the identical
+  shape and is deliberately LEFT in S7b rather than pulled in ad hoc — but it should get
+  `fleet_verdict`'s treatment there, not a third hand-rolled condition.
 - **S5. R3.13 — a refusal is non-terminal.** Quarantine the key on refusal via `FlowMeta.quarantine`;
   clearing requires a human act. Two critique additions: the quarantine reason must distinguish
   deterministic refusal classes from possibly-transient ones, and the matrix gains a "refuses once

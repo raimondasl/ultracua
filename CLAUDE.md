@@ -147,6 +147,25 @@ Treat it as a bound, not a fact:
 Direction of error matters more than accuracy here: a missed arm re-fires under the same
 Idempotency-Key; a false arm skips a row that was never paid, and nothing catches that.
 
+## Reporting surfaces: quiet is an ALLOWLIST, and loud needs an acknowledgement
+
+Two rules, both learned by shipping their opposite (R3.9/CLI-1, 0.80.0), and both due again the moment
+another skip/refusal class is added — S5 creates one by design:
+
+* **Enumerate the QUIET outcomes, never the loud ones.** `flow run-all` had two cron channels (exit code,
+  webhook) and each tested `status == "failed"`, so a third bucket satisfying neither was invisible in
+  both, and a flow could leave the fleet permanently with cron reporting green. One verdict function,
+  both channels, and a closed set of quiet statuses — so a status added tomorrow is loud by default.
+  This is S3's "a test cannot fail for an exit added tomorrow" one abstraction up.
+* **A loud channel with no way to ACKNOWLEDGE gets `|| true`d, and takes everything else dark with it.**
+  Before making anything alert, ask what the operator does when they cannot fix it. If the answer is
+  "nothing", the alert is a regression however correct it is — this is the D0 over-refusal shape wearing
+  a reporting hat. Prefer an acknowledgement that already exists (`flow unapprove` served here) over a
+  new flag, and keep a fleet-level guard underneath so acknowledging EVERYTHING is still loud.
+
+Corollary for both: pin the quiet direction as hard as the loud one. "Alert on everything" passes every
+test written for the finding.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

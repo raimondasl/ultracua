@@ -166,7 +166,10 @@ async def test_run_all_refuses_the_unreadable_flow_and_still_runs_the_others(
     bad_key = flow_key(specs["bad"].goal, specs["bad"].start_url, specs["bad"].scope)
 
     monkeypatch.setattr(flows_mod, "load_spec", lambda n: specs[n])
-    monkeypatch.setattr(flows_mod, "_load_meta", lambda *a, **kw: flows_mod.FlowMeta(approved=True))
+    for s in specs.values():                             # a REAL approved sidecar, not a stubbed loader:
+        flows_mod._save_meta(cache, flow_key(s.goal, s.start_url, s.scope),   # run_all reads provenance
+                             flows_mod.FlowMeta(approved=True))              # now, and provenance is a
+                                                                             # property of the file.
 
     async def _fake_replay(spec, **kw):
         ran.append(spec.name)
@@ -211,7 +214,9 @@ async def test_run_all_survives_a_read_that_fails_INSIDE_replay(
         cache.put(_flow(flow_key(spec.goal, spec.start_url, spec.scope)))
 
     monkeypatch.setattr(flows_mod, "load_spec", lambda n: specs[n])
-    monkeypatch.setattr(flows_mod, "_load_meta", lambda *a, **kw: flows_mod.FlowMeta(approved=True))
+    for s in specs.values():
+        flows_mod._save_meta(cache, flow_key(s.goal, s.start_url, s.scope),
+                             flows_mod.FlowMeta(approved=True))
 
     async def _replay(spec, **kw):
         if spec.name == "bad":                       # the read that lives INSIDE replay()

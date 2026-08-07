@@ -72,7 +72,7 @@ Hacker News (read-only) and is built to record: `uv run python examples/hn_diges
 - **Write flows** — submit / post / purchase with **action-completion verification** + idempotency.
 - **Dry run** — `flow dry-run` replays a write flow with **every write held**: see the exact body, URL and idempotency key it *would* send before you approve it. Nothing reaches the server, and anything that can't be *proven* held aborts rather than proceeding.
 - **Record by demonstration** — `ultracua flow record` captures a headed walkthrough into a cached **0-LLM** flow: reads are verify-by-replay; declared writes are **gated + approval-gated + idempotency-keyed**.
-- **Fleet supervisor** — `flow run-all` replays every saved flow, reports pass/fail, alerts, exits non-zero for cron; `flow status` for history.
+- **Fleet supervisor** — `flow run-all` replays every saved flow, reports pass/fail, alerts, exits non-zero for cron — including when a flow was refused a run by something no human chose, or when nothing ran at all; `flow status` for history.
 - **Multi-provider** — Anthropic / OpenAI / Gemini, fast/strong tiering, prompt caching.
 - **Drive from any language** — JSON-RPC daemon + a Node/JS client.
 

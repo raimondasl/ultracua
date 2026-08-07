@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from ultracua.cache import FlowCache, flow_key
+from ultracua.cache import CachedFlow, CachedStep, FlowCache, flow_key
 from ultracua.extract import extract
 from ultracua.flows import (
     FlowReplayError,
@@ -232,9 +232,19 @@ async def test_run_all_classifies_ok_failed_skipped(tmp_path: Path, monkeypatch)
         await learn(bad, provider=_ClickFirstLink(), router=_extract_router(), cache=cache)
         approve(bad, cache=cache)
         cache.delete(flow_key(bad.goal, bad.start_url, bad.scope))
-        # skipped (write): a mutate flow is skipped without include_writes
-        save_spec(FlowSpec(name="w", start_url=f"{base}/page1.html", goal="g",
-                           mutate=MutateSpec(confirm_text_contains="x")))
+        # skipped (write): a mutate flow is skipped without include_writes. It must be LEARNED AND
+        # APPROVED to test that: this flow used to be neither, so it reached the write branch only
+        # because the write gate happened to run before the approval check, and would have reported
+        # "write flow" just as happily with the mutate spec removed. The trust read runs first now (it
+        # is what makes `flow unapprove` an acknowledgement for a flow that cannot be fixed), so the
+        # fixture has to mean what the assertion says.
+        w = FlowSpec(name="w", start_url=f"{base}/page1.html", goal="g",
+                     mutate=MutateSpec(confirm_text_contains="x"))
+        save_spec(w)
+        cache.put(CachedFlow(key=flow_key(w.goal, w.start_url, w.scope), goal=w.goal,
+                             start_url=w.start_url, created_ts=1.0,
+                             steps=[CachedStep(intent="click", action="click", mutating=True)]))
+        approve(w, cache=cache)
         # skipped (unapproved): a navigate-only flow that was never approved
         un = FlowSpec(name="un", start_url=f"{base}/page1.html", goal="open the answer page three", headless=True)
         save_spec(un)

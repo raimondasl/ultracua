@@ -2672,6 +2672,61 @@ class FleetRun:
     error: Optional[str] = None
 
 
+# The statuses a fleet run may end in QUIETLY, as an ALLOWLIST. The inverse — enumerating the loud ones —
+# is precisely how R3.9/CLI-1 happened: the exit code and the webhook each tested `status == "failed"`,
+# so `skipped` fed neither channel and a flow could leave the fleet forever without cron noticing. A
+# status added to `FleetRun` tomorrow is loud until someone argues it into this set.
+_FLEET_QUIET_STATUSES = frozenset({"ok", "skipped"})
+# ...and of those, the ones that mean WORK ACTUALLY HAPPENED. A fleet with none of these ran nothing,
+# which is never a pass however deliberate each individual skip was.
+_FLEET_WORKED_STATUSES = frozenset({"ok", "failed"})
+
+
+@dataclass
+class FleetVerdict:
+    """What cron is told about one `flow run-all` — decided ONCE, for both channels.
+
+    `run_all`'s docstring points unattended callers at two signals, the exit code and `--alert-webhook`,
+    and each used to carry its own copy of the condition. Two copies of a rule is two places for a new
+    outcome to fall through, and one did: `alerts` is now non-empty exactly when `exit_code` is non-zero
+    (the empty fleet aside — there is no flow to name, and `_resolve_fleet` already refuses that case
+    unless the caller passed `allow_empty`).
+
+        0  work happened and nothing needs a human
+        1  something is loud — a flow failed, or was REFUSED a run by something no human chose
+        2  nothing ran: every flow was skipped. Deliberate skips are quiet on their own (a declared write
+           without `--include-writes` is a standing choice, and going red nightly for it is how an alert
+           channel earns its `|| true`), but a fleet where NOTHING ran is not monitoring anything, and
+           saying "healthy" is the same lie `EmptyFlowStoreError` already exits 2 for one step earlier.
+    """
+
+    exit_code: int
+    alerts: list          # list[FleetRun] — what --alert-webhook posts
+    summary: str          # one line for the human reading the console
+
+
+def fleet_verdict(results: list, *, allow_empty: bool = False) -> FleetVerdict:
+    """Judge a whole fleet run. Pure; `run_all`'s callers and the CLI share this one definition.
+
+    `allow_empty` is the operator's standing consent that a fleet resolving ZERO flows is expected here
+    (`--allow-empty`), and it is the same consent `_resolve_fleet` already honours. It buys exactly that
+    and nothing more: a store that resolved N flows and ran NONE of them is a different fact, and no
+    flag on this command was ever given for it.
+    """
+    loud = [r for r in results if r.status not in _FLEET_QUIET_STATUSES]
+    worked = [r for r in results if r.status in _FLEET_WORKED_STATUSES]
+    if loud:
+        return FleetVerdict(1, loud, f"{len(loud)} flow(s) failed or were refused a run")
+    if not results:
+        return (FleetVerdict(0, [], "no flows resolved (--allow-empty)") if allow_empty else
+                FleetVerdict(2, [], "NOTHING RAN — no flows resolved"))
+    if not worked:
+        return FleetVerdict(2, list(results),
+                            f"NOTHING RAN — {len(results)} flow(s) resolved and every one was skipped; "
+                            f"this fleet is not monitoring anything")
+    return FleetVerdict(0, [], f"{len(worked)} flow(s) ran")
+
+
 @dataclass
 class AuditFinding:
     """One judged artifact (H9). `code` is a key of `audit.REASONS`; `enforced` says whether it quarantined
@@ -2694,14 +2749,19 @@ class AuditRun:
     quarantined: int = 0
     advisories: int = 0
     calls: int = 0
-    skipped: list = field(default_factory=list)      # [(name, why)]
+    skipped: list = field(default_factory=list)      # [(name, why)] — ROUTINE, by design (--verbose only)
+    errors: list = field(default_factory=list)       # [(name, why)] — we could not look; ALWAYS printed
     budget_exhausted: bool = False
     no_llm: bool = False
 
     @property
     def exit_code(self) -> int:
         """2 = something was quarantined (alert); 3 = artifacts left UNJUDGED ("we didn't look" — a weaker,
-        distinct alarm); 0 = nothing to report. 2 wins if both apply."""
+        distinct alarm); 0 = nothing to report. 2 wins if both apply.
+
+        Note `errors` needs no clause of its own: every path that appends to it also increments
+        `unjudged`, which is the fact that matters — a flow we could not look at is not a clean audit.
+        Two conditions for one fact is how the fleet's exit code and its webhook drifted apart."""
         if self.quarantined:
             return 2
         return 3 if (self.unjudged or self.no_llm) else 0
@@ -2735,25 +2795,37 @@ async def audit_flows(
     # gather candidate artifacts across flows, riskiest first (a budget-limited run spends where it matters)
     candidates: list = []
     for name in _resolve_fleet(names, allow_empty=allow_empty, verb="flow audit"):
+        # ONE guard for the whole per-flow gather, not one on `load_spec` alone. Everything below it
+        # touches the disk as well — `audit.prune`, `audit.load_artifacts`, and a `_load_meta` that since
+        # S4 RAISES on an unreadable sidecar where it used to synthesise one — and an escape from any of
+        # them aborts the fleet, discarding every flow already gathered. `run_all` has exactly this guard
+        # at exactly this boundary; here it sat on the first of four reads, which is this register's
+        # most-repeated shape (R4.14).
         try:
             spec = load_spec(name)
-        except Exception as exc:  # noqa: BLE001 - a broken spec must not kill the audit
-            run.skipped.append((name, f"unreadable spec: {exc}"))
-            continue
-        key = flow_key(spec.goal, spec.start_url, spec.scope)
-        if spec.mutate is not None:
-            run.skipped.append((name, "write flow (never captured, never judged)"))
-            continue
-        if not spec.audit:
-            run.skipped.append((name, "audit not enabled"))
-            continue
-        audit.prune(cache, key)
-        arts = audit.load_artifacts(cache, key)
-        if not arts:
-            continue
-        if _load_meta(cache, key).quarantine is not None:
-            # already quarantined deterministically — an audit must never overwrite that reason
-            run.skipped.append((name, "already quarantined"))
+            key = flow_key(spec.goal, spec.start_url, spec.scope)
+            if spec.mutate is not None:
+                run.skipped.append((name, "write flow (never captured, never judged)"))
+                continue
+            if not spec.audit:
+                run.skipped.append((name, "audit not enabled"))
+                continue
+            audit.prune(cache, key)
+            arts = audit.load_artifacts(cache, key)
+            if not arts:
+                continue
+            if _load_meta(cache, key).quarantine is not None:
+                # already quarantined deterministically — an audit must never overwrite that reason
+                run.skipped.append((name, "already quarantined"))
+                continue
+        except Exception as exc:  # noqa: BLE001 - one broken flow must not kill the audit
+            # `errors`, not `skipped`, and `unjudged` either way. The three above are ROUTINE — a write
+            # flow is never judged by design — and the CLI hides those behind `--verbose`. This one means
+            # we could not look at a flow we were asked to look at, so it prints unconditionally and the
+            # run cannot exit 0. A first attempt at this guard shipped `exit 0, nothing to report`, which
+            # is the failure it exists to prevent wearing the fix's clothes.
+            run.errors.append((name, f"NOT AUDITED: {type(exc).__name__}: {exc}"))
+            run.unjudged += 1
             continue
         for art in arts:
             prio = 0 if (art.get("signals") or art.get("mode") != "replay") else 1
@@ -2761,7 +2833,12 @@ async def audit_flows(
     candidates.sort(key=lambda c: (c[0], c[1]))
 
     if run.no_llm or router is None:
-        run.unjudged = len(candidates)
+        # `+=`, not `=`. This was a plain assignment, which was correct while `unjudged` could only be
+        # set here — but the gather guard above now increments it too, and an assignment would erase a
+        # flow we already reported we could not look at. Today `no_llm` keeps the exit code at 3 either
+        # way, so the damage is a wrong COUNT beside a right verdict; that is still a surface lying about
+        # what it did, and it is the kind of interaction a new counter creates with old code.
+        run.unjudged += len(candidates)
         return run
 
     snap = router.totals.snapshot() if hasattr(router.totals, "snapshot") else None
@@ -2770,28 +2847,37 @@ async def audit_flows(
             run.budget_exhausted = True
             run.unjudged += 1
             continue
-        finding = await audit.judge(router, art)
-        run.calls += 1
-        run.judged += 1
-        mode = "advisory" if dry_run else (spec.audit or "advisory")
-        code = audit.decide(art, finding, mode=mode)
-        adv_code = (finding or {}).get("reason_code") if isinstance(finding, dict) else None
-        if code:
-            sink = QuarantineSink(cache, key, name)
-            sink.quarantine(code)
-            run.quarantined += 1
-            run.findings.append(AuditFinding(name, code, True, art.get("ts") or 0,
-                                             (finding or {}).get("evidence_quote") or ""))
-        elif adv_code and adv_code in audit.REASONS:
-            AdvisorySink(cache, key, name).quarantine(adv_code)
-            run.advisories += 1
-            run.findings.append(AuditFinding(name, adv_code, False, art.get("ts") or 0,
-                                             (finding or {}).get("evidence_quote") or ""))
-        elif isinstance(finding, dict) and finding.get("injection_suspected") and art.get("markers"):
-            AdvisorySink(cache, key, name).quarantine("semantic_mismatch_other")
-            run.advisories += 1
-        if not keep:
-            audit.drop(art.get("_path"))                # its whole purpose was one judge call
+        # PER CANDIDATE, for the same reason as the gather above: `audit.judge` is a network call to a
+        # provider, and the two sinks and `audit.drop` all write to disk. An escape from any of them
+        # discarded every finding the run had already made — including QUARANTINES, whose whole purpose
+        # is to be acted on, and which cannot be re-derived because the artifact each was judged from is
+        # dropped moments later.
+        try:
+            finding = await audit.judge(router, art)
+            run.calls += 1
+            run.judged += 1
+            mode = "advisory" if dry_run else (spec.audit or "advisory")
+            code = audit.decide(art, finding, mode=mode)
+            adv_code = (finding or {}).get("reason_code") if isinstance(finding, dict) else None
+            if code:
+                sink = QuarantineSink(cache, key, name)
+                sink.quarantine(code)
+                run.quarantined += 1
+                run.findings.append(AuditFinding(name, code, True, art.get("ts") or 0,
+                                                 (finding or {}).get("evidence_quote") or ""))
+            elif adv_code and adv_code in audit.REASONS:
+                AdvisorySink(cache, key, name).quarantine(adv_code)
+                run.advisories += 1
+                run.findings.append(AuditFinding(name, adv_code, False, art.get("ts") or 0,
+                                                 (finding or {}).get("evidence_quote") or ""))
+            elif isinstance(finding, dict) and finding.get("injection_suspected") and art.get("markers"):
+                AdvisorySink(cache, key, name).quarantine("semantic_mismatch_other")
+                run.advisories += 1
+            if not keep:
+                audit.drop(art.get("_path"))            # its whole purpose was one judge call
+        except Exception as exc:  # noqa: BLE001 - one artifact's failure must not kill the audit
+            run.errors.append((name, f"NOT JUDGED: {type(exc).__name__}: {exc}"))
+            run.unjudged += 1
     if snap is not None and hasattr(router.totals, "since"):
         try:
             run.calls = max(run.calls, router.totals.since(snap).calls)
@@ -2810,7 +2896,9 @@ async def run_all(
 
     Safe defaults for unattended use: **read flows only** (write flows are skipped unless
     `include_writes=True`) and **approved flows only**. Each replay records its outcome into health
-    as usual. Point cron / Task Scheduler at the CLI and alert on a non-zero exit (any flow failed).
+    as usual. Point cron / Task Scheduler at the CLI and alert on a non-zero exit — `fleet_verdict`
+    defines what that means, and it is deliberately WIDER than "any flow failed": a flow refused a run
+    by something no human chose is loud, and so is a fleet where nothing ran at all.
     Concurrency is capped (each replay uses its own browser); pass `concurrency=` or set
     `ULTRACUA_CONCURRENCY`.
     """
@@ -2857,23 +2945,76 @@ async def run_all(
         # skip a duplicate; that was measured to over-refuse a large population of ordinary reads and was
         # REVERTED (decision D0, blocked). So this remains the only thing standing between an unattended
         # cron tick and an unverifiable commit.
+        # THE TRUST READ COMES FIRST, and the order is load-bearing in a way it was not before this
+        # release. It used to sit below the write gate, which cost nothing while every branch here was
+        # quiet. Now that an undeclared write is LOUD, running the write gate first would deny this
+        # population the only acknowledgement they have: `flow unapprove` is a human act saying "I know,
+        # leave it out", and a loud channel with no way to acknowledge is a channel that gets `|| true`d
+        # — which would take the other 49 flows dark with it. A human's unapprove wins over a guess the
+        # wire promotion made. Refusing to RUN is unaffected either way: both branches skip.
+        meta, provenance = _load_meta_with_provenance(cache, key)
+        if provenance not in ("file", "absent"):
+            # THE READER SIDE of the provenance S4 gave the writer. `_update_meta` learned that "could
+            # not read it" is not "there isn't one"; this read decides whether the flow RUNS AT ALL and
+            # still asked only what the meta SAID. A synthesised `approved=False` is byte-identical to a
+            # human's `flow unapprove`, so one AV sharing violation dropped the flow from the tick under
+            # a reason naming a human act that never happened. QUIET means "a human chose this", and
+            # only a sidecar we actually read can say so.
+            return FleetRun(name=name, ok=False, status="failed",
+                            error=f"trust sidecar {provenance} — cannot tell whether this flow is "
+                                  f"approved, so it was NOT run. An unreadable one is often transient "
+                                  f"and clears on the next tick; a corrupt one has been preserved "
+                                  f"aside and needs a human.")
+        if approved_only and not meta.approved:
+            if meta.quarantine is not None:
+                # Unapproved AND quarantined is not the human act "not approved" either — the corrupt
+                # branch above PERSISTS a quarantine, so from the second tick on the sidecar reads back
+                # cleanly and this flow would go quiet forever one tick after it went loud. The reason is
+                # copied from the meta rather than re-derived: `replay()` owns the refusal policy for a
+                # quarantined flow, and this branch exists only because we never reach it.
+                #
+                # `isinstance` because `FlowMeta` is built from JSON with no type check, and a
+                # hand-edited `"quarantine": "yes"` would make `.get` raise — out through `_one`, which
+                # catches only `CacheUnreadableError`, into a `gather` with no `return_exceptions`, i.e.
+                # every OTHER flow's scheduled run cancelled. That is the exact blast radius
+                # `test_run_all_survives_a_read_that_fails_INSIDE_replay` exists to prevent, and this
+                # line is on the fleet's shared path.
+                q = meta.quarantine if isinstance(meta.quarantine, dict) else {}
+                return FleetRun(name=name, ok=False, status="failed",
+                                error=f"not approved, and QUARANTINED "
+                                      f"({q.get('code') or 'unknown'}): "
+                                      f"{q.get('reason') or meta.quarantine}")
+            return FleetRun(name=name, ok=False, status="skipped", error="not approved")
         if is_write_flow(spec, cache.get(key)):
             if spec.mutate is None:
                 # An UNDECLARED write is skipped whatever `include_writes` says, exactly as `run_batch`
                 # already refuses one: with no `spec.mutate` there is no confirm barrier, so replay cannot
                 # tell whether the write landed. `--include-writes` is consent to run writes that can be
                 # VERIFIED, not consent to fire unverifiable ones on a schedule.
-                return FleetRun(name=name, ok=False, status="skipped",
+                # LOUD, not `skipped`. The refusal is right; going quiet about it was the defect (R3.9).
+                # Every OTHER skip class is a standing operator choice — this one a flow enters with no
+                # human act at all, because the wire promotion can mark an ordinary read's fetch-POST
+                # `mutating` on a re-learn. So a monitoring flow retires itself from the fleet and cron
+                # keeps reporting green over a dashboard nobody has read since the redesign.
+                #
+                # Note what this does NOT claim: `failed` here means "refused a run", not "ran and broke"
+                # — the same call `_one`'s unreadable-recipe guard already makes thirty lines up, for the
+                # same reason (we cannot show it is safe to run, so it does not run, and cron is told).
+                # The remedies below are the ones that exist; note that for a READ misclassified by the
+                # wire promotion none of them work (declaring `mutate` demands a confirm a read cannot
+                # satisfy, and `flow record` re-derives the same verdict). For that population the
+                # acknowledgement is `flow unapprove`, checked above — visibility is the whole of the
+                # remedy until a `mutating` mark can say WHY it was set.
+                return FleetRun(name=name, ok=False, status="failed",
                                 error="UNDECLARED write — a recorded step mutates but the spec declares no "
-                                      "write, so replay cannot verify it landed. Review it "
-                                      "(`flow inspect`) and declare it (mutate.confirm_*) or re-record. "
+                                      "write, so replay cannot verify it landed. NOT RUN, and it will "
+                                      "stay out of the fleet until this is resolved. Review it "
+                                      "(`flow inspect`) and declare it (mutate.confirm_*) or re-record; "
+                                      "`flow unapprove` to acknowledge and quieten it. "
                                       "--include-writes does NOT cover this.")
             if not include_writes:
                 return FleetRun(name=name, ok=False, status="skipped",
                                 error="write flow (use --include-writes)")
-        meta = _load_meta(cache, key)
-        if approved_only and not meta.approved:
-            return FleetRun(name=name, ok=False, status="skipped", error="not approved")
         async with sem:  # only actual replays consume a browser slot; the skips above are free
             t0 = time.perf_counter()
             try:
