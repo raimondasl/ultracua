@@ -378,7 +378,10 @@ async def _author_steps(
         # recorder path builds its specs in JS and so was never affected, which is why 565 tests missed it.
         if action.action in ("click", "type", "select") and action.ref:
             with tr.measure("describe"):
-                spec = await describe(session.page, action.ref)
+                # `session.redact` carries the run's resolved secrets. Threaded at EVERY describe()
+                # call site, not just this one — the recorder's sibling was how R3.6 reached disk
+                # from three places while one of them looked fixed.
+                spec = await describe(session.page, action.ref, session.redact)
             if action.action == "click":  # structural write-signal (does it submit a form? method?)
                 ctx = await mutation_context(
                     session.page.locator(f'[data-ultracua-ref="{action.ref}"]').first
@@ -406,7 +409,7 @@ async def _author_steps(
             # locator — we fall back to the whole-page gate instead.
             ref = await focused_ref(session.page)
             if ref:
-                spec = await describe(session.page, ref)  # stored as the press step's locator
+                spec = await describe(session.page, ref, session.redact)  # the press step's locator
                 if spec is not None:
                     precond_scope = await scope_fingerprint(
                         session.page.locator(f'[data-ultracua-ref="{ref}"]').first
@@ -1305,7 +1308,7 @@ async def _maybe_heal(
     # next replay drifts again — while the report still says the step healed. (A benchmark counting
     # `heal_persisted` would count that as a durable recovery it is not.)
     if action.action in ("click", "type", "select") and action.ref:
-        spec = await describe(session.page, action.ref)
+        spec = await describe(session.page, action.ref, session.redact)
     # GUARD 1 (pre-act, classifier) — mirrors `_author_steps`'s `block_mutations`. Probe the ref BEFORE
     # acting: a submit navigates and detaches it, so afterwards there is nothing left to classify.
     hctx: dict = {}

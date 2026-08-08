@@ -50,7 +50,7 @@ from typing import Awaitable, Callable, Optional
 from .browser import BrowserSession
 from .cache import CachedFlow, CachedStep, FlowCache, flow_key
 from .llm.types import LLMRequest, Message, TextBlock, ToolDef
-from .locators import _SPECOF_JS, LocatorSpec
+from .locators import _SPECOF_JS, LocatorSpec, redact_spec_fields
 from .safety import classify_mutation, is_write_request, origin_of
 from .snapshot import _ACCNAME_JS, _MUTATION_CTX_JS, _ROLEOF_JS, SCOPE_JS, hash_scope
 
@@ -385,9 +385,12 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
 Demo = Callable[[object], Awaitable[None]]
 
 
-def _step_from_event(ev: dict, *, write_flow: bool = False) -> CachedStep:
+def _step_from_event(ev: dict, *, write_flow: bool = False, redact: tuple = ()) -> CachedStep:
     raw = ev.get("spec")
-    spec = LocatorSpec(**raw) if raw else None  # scroll has no target element
+    # THE RECORDER'S OWN PATH TO DISK (R3.6). It runs the SAME shared `specOf` in-page as `describe()`
+    # and builds the spec itself, so scrubbing only `describe()` would leave `flow record` writing the
+    # secret to the same cache file. One shared helper, so the two cannot drift.
+    spec = LocatorSpec(**redact_spec_fields(raw, redact)) if raw else None  # scroll: no target element
     action = ev["action"]
     name = (spec.name or spec.tag) if spec else action
     intent = f"{action} {name}".strip()  # placeholder — real intents are an open question
@@ -492,6 +495,7 @@ async def record_demo(
     storage_state: Optional[str] = None, extra_headers: Optional[dict] = None,
     mutate: bool = False, caption: "Optional[Caption]" = None,
     window_size: Optional[tuple[int, int]] = None,
+    redact: tuple = (),
 ) -> "tuple[CachedFlow, bool, bool, int]":
     """Capture a demonstration of `goal` at `url` into a cached, replayable `CachedFlow`.
 
@@ -685,7 +689,7 @@ async def record_demo(
     # deferred write's cause — a load-armed write coincides indistinguishably with an unrelated click).
     wire_writes = [ev for ev in events if ev.get("action") == "__wirewrite"]
     events = [ev for ev in events if ev.get("action") != "__wirewrite"]
-    steps = [_step_from_event(ev, write_flow=mutate) for ev in events]  # 1:1 with `events` by index
+    steps = [_step_from_event(ev, write_flow=mutate, redact=redact) for ev in events]  # 1:1 by index
     # `unattributed_writes` counts genuine wire writes that could NOT be tied to a gated commit, so
     # `flows.record` refuses the flow rather than cache a real write ungated. Two sources, both fail-LOUD:
     #   (1) a marker the JS tied to NO single commit (seq=null — a deferred/nested/background write); and

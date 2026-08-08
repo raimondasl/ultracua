@@ -3775,6 +3775,7 @@ async def record(
         mutate=declared_write,  # gate the demonstrated write step(s) at capture time
         caption=caption,        # best-effort intent labels (off the replay path); None -> placeholder intents
         prepare=_probe_confirm,
+        redact=_secret_values(spec),   # R3.6: the recorder writes locators to the cache too
     )
     detected_write = wire_write or any(s.mutating for s in flow.steps)
 

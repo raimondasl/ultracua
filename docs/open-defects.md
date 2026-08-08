@@ -1464,7 +1464,45 @@ the flow-level refusal would have made it unreachable, and the retry-level guard
 > remediation inside a fully-swallowed best-effort path is the exact shape that produced S4's four cut
 > fixes.
 
-### R3.6. The redaction covers the Observation but not `LocatorSpec` — `describe()` writes the same page-derived secret to the flow cache in plaintext, on both learn and heal
+### ✅ FIXED in 0.86.0 (S9) — R3.6. The redaction covers the Observation but not `LocatorSpec` — `describe()` writes the same page-derived secret to the flow cache in plaintext, on both learn and heal
+
+**Reproduced first, and the reproduction's own failure is the best statement of the finding.** The first
+fixture drove a scripted click on the button's real accessible name and nothing happened: `_learn_once`
+passes `redact=_secret_values(spec)`, so `snapshot.capture` had ALREADY rewritten that name to
+`Copy [REDACTED]` before any provider saw it. The agent literally cannot name the element by its secret.
+**That is what makes the disk channel so easy to miss — every observable signal says the redaction
+worked.** With the provider matching what the agent actually sees, the leak was exact:
+
+    the resolved secret was written to the flow cache in plaintext, where it persists.
+    Offending fields: ['name', 'text', 'anchor']
+
+**A THIRD PATH TO DISK existed and `describe()` was only one of them.** `recorder._step_from_event`
+builds `LocatorSpec(**raw)` itself from the same shared in-page `specOf`, so scrubbing `describe()`
+alone would have left `flow record` writing the same plaintext to the same file. One shared
+`redact_spec_fields` now serves both, threaded from `flows.record` — the sibling-gap shape, caught by
+checking for it rather than by a test.
+
+**Every string field, not the leaking three.** A scrub is a no-op unless the term is present, so
+structural selectors are untouched in the ordinary case; partial coverage is exactly how R9 shipped
+scrubbing 2 of 5 Observation fields and had to be reopened.
+
+**What the adversarial pass found in the fix, which no test above would have caught.** `anchor_id` is
+compared by EQUALITY against the row identity recomputed from the LIVE page (`got == spec.anchor_id`).
+The page still holds the real secret, so a stored `href:/reveal?api_key=[REDACTED]` can NEVER match —
+the row guard would refuse the bind on every replay, permanently, for a reason no message explains. A
+redacted identity is a FABRICATED one, and this module's own rule already covers it: return null, because
+a fabricated identity "makes the guard claim protection it does not provide". `anchor`/`anchor_source` go
+with it.
+
+The alternative that would keep the guard working — scrub both sides at compare time — was REJECTED:
+it makes two DIFFERENT secrets compare equal, trading a loud refusal for a possible silent wrong-row
+bind. Worse on this register's ranking, and the reasoning is recorded so it is not re-attempted.
+
+**The cost, stated rather than hidden.** A control whose only identity IS the secret becomes unbindable
+once scrubbed, and a row whose identity carries one loses the row guard. Both fail LOUD; neither is
+silent. `drift_bench` invariants ALL HOLD with the binding-tier distribution unchanged, and the
+must-remain-bindable direction is pinned (the recipe still resolves at 0-LLM where any other tier
+survives).
 
 *high, lens `secrets`, confidentiality (no inviolable), reproduced by an independent refuter*
 

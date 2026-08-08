@@ -273,9 +273,23 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   **costs** confidentiality on short secrets, which is a trade to be argued rather than a side effect; the
   argument, and what to do instead if it is ever judged wrong (drop the USERNAME from the term list, never
   the floor), are in the register.
-- **S9. R3.6 — `describe()` writes page-derived secrets to disk.** Thread redaction into the capture
-  sibling; test that a capture with a short redact term leaves anchors bindable; consider cache-dir
-  permissions to match audit's.
+- **S9. R3.6 — `describe()` writes page-derived secrets to disk.** ✅ **DONE in 0.86.0.** Threaded the
+  S8 scrub (floor included) into `describe()` AND into `recorder._step_from_event`, which builds its own
+  `LocatorSpec` from the same in-page `specOf` — one shared `redact_spec_fields`, because fixing only
+  `describe()` would have left `flow record` leaking to the same file.
+
+  **The S8-before-S9 ordering was right and is the third dependency in this document to actually bind**
+  (after R4.14 → R4.10 and S8 → S9 itself): the scrub S9 threads is the one S8 repaired, floor and all.
+
+  Two things the bullet did not anticipate, both found by auditing the fix rather than by a test. A
+  redacted `anchor_id` can never match the live page it is compared against by equality, so it is
+  DROPPED rather than stored — a fabricated identity is the failure this module already documents. And
+  the "scrub both sides at compare time" alternative is rejected in writing, because it makes two
+  different secrets compare equal and trades a loud refusal for a silent wrong-row bind.
+
+  Cache-dir permissions (the bullet's third clause) are NOT done and are not folded in: `FlowCache.put`
+  still writes at the default umask while `audit.capture` chmods 0o700. Left as its own item rather than
+  widened into this slice.
 
 ## Phase 5 — Fail-loud means the exit code too
 
