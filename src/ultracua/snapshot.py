@@ -246,6 +246,48 @@ async def mutation_context(locator) -> dict:
 
 REDACTED = "[REDACTED]"
 
+# THE FLOOR, in ONE place (R3.10). A secret shorter than this is not scrubbed, because scrubbing it does
+# far more damage than leaking it: the terms include a LOGIN USERNAME and any secret slot's value, and a
+# short one is a substring of ordinary copy. Measured on a real flow before this existed — with the
+# secret `bo`, the text handed to the extractor read
+#
+#     PAGE TEXT: Support In[REDACTED]x: 12 unread. Re[REDACTED]ot at 3pm. Open tickets: 47
+#
+# `Inbox` and `Reboot`, shredded by coincidence. To an extractor, `[REDACTED]` is indistinguishable from
+# a value that is not on the page, so it either fails loud (survivable) or reads a number out of a mangled
+# span and returns it as a clean success — inviolable #2, which is what makes this more than a
+# confidentiality nit.
+#
+# THE VALUE IS 4 BECAUSE `audit._redact` HAS ALWAYS USED 4 for the same terms on the disk channel. This is
+# not a new policy; it is the same policy finally applied to the two channels that drifted from it. The
+# cost is stated rather than discovered: a secret of 1-3 characters now reaches the MODEL where it
+# previously did not. A 4-digit PIN still redacts.
+REDACT_MIN_LEN = 4
+
+
+def redact_terms(terms) -> tuple:
+    """The terms that may actually be applied — empties and anything under the floor dropped.
+
+    Separate from `apply_redactions` so a caller can ask "what will be scrubbed" without scrubbing, and
+    so the floor cannot be re-derived per channel. Three channels drifted from one rule once already."""
+    return tuple(str(t) for t in terms if t and len(str(t)) >= REDACT_MIN_LEN)
+
+
+def apply_redactions(text: str, terms) -> str:
+    """Scrub every above-floor term out of `text`.
+
+    RESIDUAL, pinned in `tests/test_redaction_floor.py` rather than hidden: this is still an
+    unconditional substring replace, so a term at or above the floor still excises a legitimate
+    occurrence — `1234` mangles "Open tickets: 12345", `smith` mangles "Blacksmith Ltd". No string rule
+    separates a secret appearing AS a secret from the same characters appearing legitimately; that is the
+    keyword classifier's problem one surface over, and the same conclusion holds — the rule is a guess, so
+    keep its blast radius small rather than pretending it is precise."""
+    if not text:
+        return text
+    for term in redact_terms(terms):
+        text = text.replace(term, REDACTED)
+    return text
+
 
 async def capture(page, max_elements: int, redact: tuple = ()) -> Observation:
     """Capture a scoped snapshot of the given Playwright page.
@@ -282,7 +324,9 @@ async def capture(page, max_elements: int, redact: tuple = ()) -> Observation:
         # carries the plaintext on the standard "Copy sk-live-…" button (a name is computed from text
         # content for links and buttons), and a token in a query string — a magic link, `?api_key=`,
         # `?otp=`, a secret slot filled into a GET form — rides `url`, which is rendered in EVERY prompt.
-        terms = [t for t in redact if t]
+        # `redact_terms` applies the floor ONCE for all five fields; it used to be `[t for t in redact if
+        # t]`, i.e. every non-empty term however short (R3.10).
+        terms = redact_terms(redact)
         for e in elements:
             for term in terms:
                 if e.value:

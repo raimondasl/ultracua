@@ -46,7 +46,7 @@ from .pin import find_pin, read_pin
 from .providers import build_router, get_provider
 from .recorder import caption_intents, record_demo
 from .safety import idempotency_key
-from .snapshot import REDACTED
+from .snapshot import REDACTED, apply_redactions
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
@@ -144,9 +144,14 @@ class SlotSpec:
     That last promise is ENFORCED at four points, not merely asserted: the value is refused as a `params`
     key and omitted from the MCP input schema; the recorder blanks a credential field at capture so no
     plaintext reaches the cache; `flow inspect` masks the step; and `snapshot.capture(redact=...)` scrubs
-    the resolved value out of every Observation before it can reach a provider. The residual, stated rather
-    than hidden: the VISION tier sends a raw screenshot, where a secret typed into a plain text input is
-    legible. Don't pair a secret slot with vision grounding."""
+    the resolved value out of every Observation before it can reach a provider.
+
+    TWO residuals, stated rather than hidden. The VISION tier sends a raw screenshot, where a secret typed
+    into a plain text input is legible — don't pair a secret slot with vision grounding. And the scrub has
+    a MINIMUM LENGTH (`snapshot.REDACT_MIN_LEN`, 4): a secret shorter than that is deliberately not
+    scrubbed, because scrubbing it shreds ordinary page copy into the extractor and does more harm than
+    the leak — see R3.10. A 4-character PIN is at the floor and still redacts; if you have a 1-3 character
+    secret, this promise does not cover it."""
 
     type: str = "string"
     enum: Optional[list] = None
@@ -864,10 +869,10 @@ def _redacted_body_text(session, redact: tuple) -> "Any":
             text = await session.page.inner_text("body")
         except Exception:  # noqa: BLE001
             return ""
-        for term in redact:
-            if term:
-                text = text.replace(term, REDACTED)
-        return text
+        # ONE definition of the scrub, floor included (R3.10). This loop used to be a bare
+        # `if term: text.replace(...)` — no floor — while the docstring above cited the audit sibling that
+        # has had one all along. Citing a guard is not carrying it.
+        return apply_redactions(text, redact)
     return _read()
 
 
