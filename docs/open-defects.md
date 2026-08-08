@@ -1768,6 +1768,26 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   It reports numbers and no verdict, deliberately. A diagnostic that renders its own opinion is how four
   occurrences each got explained away.
 
+  **FIRST BASELINE (0.84.0, run 31222830257, both windows shards PASSING) — and it invalidates the four
+  post-mortems above rather than confirming them:**
+
+  | | pass 1/2 | pass 2/2 | at "failure" (occ 2 / 3 / 4) |
+  |---|---|---|---|
+  | TIME_WAIT max | **386** | 377 | 133 / 215 / 206 |
+  | handles max | **54262** | 52861 | 45285 / 47262 / 47097 |
+  | non-paged pool max | 189.9 MB | 195.9 MB | never measured |
+  | chrome procs max | 5 | 8 | 0 (post-teardown) |
+
+  **A healthy run peaks HIGHER than anything the failing runs reported.** That is not a paradox, it is
+  the gap: the post-mortem samples after the suite exits, so its numbers describe teardown, not the
+  event. Every "ports / handles / memory are ruled out" statement in the entries above was therefore
+  drawn from the wrong moment. **Treat them as void, not as evidence** — ports genuinely do look fine
+  (386 of 16384 = 2.4% at peak, now measured properly), but that conclusion now rests on the baseline,
+  not on the post-mortems that claimed it first.
+
+  Non-paged pool sits at ~190 MB and barely moves across a whole run. If a failing run shows the same,
+  the pool hypothesis is dead and the answer is somewhere none of the five hypotheses have looked.
+
   *(The sampler's own first draft formatted with `N1`, which inserts a thousands separator and split
   `6,434.5` across two CSV columns — caught by running it once before trusting it. An instrument that
   lies is worse than none, and this one was built to settle an argument.)*
@@ -1797,6 +1817,68 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
 
   Sequence with **S17**: same family, same load-dependence, and S17 already owns "reproduce under
   artificial load first, do not silence with reruns, do not weaken the production bound".
+
+* **R4.24 — a LOCALHOST round-trip stalled past the 5 s action budget on the Windows runner. This is NOT
+  R4.22, and the sampler is what proves it.** (0.84.0, PR #129 run 31230301214, windows 1/2.)
+
+      FAILED tests/test_contracts.py::test_write_flow_is_not_contract_checked
+        playwright TimeoutError: Locator.wait_for: Timeout 5000ms exceeded.
+        Call log: - waiting for get_by_text("Order placed") to be visible
+
+  The fixture is a REAL form POST (`<form method='post' action='/order'>`) to a local
+  `ThreadingHTTPServer` that returns the confirm page. Not a `fetch().then()` reveal race — there is no
+  JS in the path — so the reveal-synchronously rule (CLAUDE.md) does not apply and would not have helped.
+  A localhost POST + navigation should complete in milliseconds; it exceeded five seconds.
+
+  **Why it is filed separately from R4.22, which is the whole point of having built the instrument.**
+  Same platform, same suite, adjacent tests — the tempting move is to call it one flake. The sampler
+  says otherwise: at this failure the resource profile is indistinguishable from a PASSING run.
+
+  | | this failure | baseline 1/2 (pass) | baseline 2/2 (pass) |
+  |---|---|---|---|
+  | TIME_WAIT max | 393 | 386 | 377 |
+  | handles max | 53561 | 54262 | 52861 |
+  | non-paged pool max | **193.2 MB** | 189.9 | 195.9 |
+  | processes / chrome max | 158 / 8 | 157 / 5 | 154 / 8 |
+
+  So this one is not pool, handle or port pressure. Lumping it into R4.22 would have buried the one
+  measurement that distinguishes them, which is exactly how the previous four occurrences each got
+  explained away.
+
+  **What the baselines also did to R4.22's own history — read this before citing those numbers.** Every
+  post-mortem figure (TIME_WAIT 133/215/206, handles 45-47k) was captured AFTER the suite exited, and a
+  healthy run PEAKS HIGHER during the run (TIME_WAIT 386, handles 54k). **The four "we ruled out ports /
+  handles / memory" conclusions were drawn from the wrong moment and never had standing to rule anything
+  in or out.** They are not evidence against those hypotheses; they are evidence of nothing. R4.22 stays
+  open with its measurements downgraded accordingly.
+
+  **THE OBVIOUS MITIGATION WAS BUILT, THEN NOT SHIPPED — and what stopped it is worth more than it was.**
+  Setting `ULTRACUA_ACTION_TIMEOUT_MS=15000` in CI looked free: the knob already existed, the shipped
+  default stays 5000, no assertion weakens. It was implemented, and the full suite then failed
+  `test_drift_bench.py::test_the_baseline_is_current`.
+
+  That is not a flake, it is the bench's provenance guard doing its job. `baselines/drift_v2.json` PINS
+  `action_timeout_ms` so a rate measured under one configuration is never compared against another, and
+  the bench deliberately inherits the ambient setting — its own note records that forcing a value was a
+  past mistake which made "part of what the resilience number measured the speed of the machine measuring
+  it". **An ambient CI override reintroduces exactly that bias**, and the guard refused it.
+
+  The workaround (pin the timeout in the test harness) needs `object.__setattr__` on a FROZEN dataclass —
+  defeating a deliberate immutability decision to work around a mitigation for a SINGLE observation. On
+  one occurrence that trade is not worth it, and this register's own rule is that a fix on thin evidence
+  is worse than none. **So R4.24 ships unmitigated**, with the sampler (0.84.0) in place to characterise
+  the next occurrence.
+
+  What DID ship from the attempt: `tests/test_production_timeouts.py`, an AST guard that the shipped
+  timeout defaults have not been raised — verified RED against exactly the mistake a future reader will
+  be tempted by (raise the default instead of the env var) — plus a guard that the env knob itself
+  survives, since it is load-bearing precisely when unused.
+
+  **The open question, for whoever picks this up.** Two failure shapes on the same platform — fail-fast
+  (`WSAENOBUFS`) and fail-slow (a 5 s stall) — are both consistent with Windows socket-establishment
+  pressure on localhost, which nothing has yet measured. The sampler covers pools, handles, TIME_WAIT and
+  processes; it does NOT cover connection-establishment latency or the fixture servers' accept backlog.
+  That is the next instrument, if a sixth occurrence justifies one.
 
 ### ✅ FIXED in 0.80.0 (the VISIBILITY half; the escape-hatch half is argued below and stays open) — R3.9. The new unconditional skip has no escape hatch and is invisible to the cron contract the surface documents — `run-all` exits 0 and the alert webhook stays silent for a fleet that ran nothing
 
