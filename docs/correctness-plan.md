@@ -293,10 +293,21 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
 
 ## Phase 5 — Fail-loud means the exit code too
 
-- **S7b. Remaining CLI truth (CLI-2..5).** Root command always exits 0 (CLI-2); `flow learn` exits 0 on
-  a refused learn and DROPS the refusal note (CLI-3); `flow canary` exits 0 all-not-learned (CLI-4);
-  `flow status` advisory swallow (CLI-5). One rule: work that did not succeed exits nonzero with the
-  reason printed.
+- **S7b. Remaining CLI truth (CLI-2..5).** ✅ **DONE in 0.87.0.** One rule, as the bullet said: work
+  that did not succeed exits nonzero with the reason printed.
+
+  **The prescription held, and CLI-4 is why the S7a cross-reference was worth writing down.** S7a
+  recorded CLI-4 as a KNOWN-IDENTICAL shape to CLI-1 rather than leaving it to be rediscovered, so this
+  slice extracted `sweep_verdict` — one rule (loud outside a quiet ALLOWLIST; exit 2 when nothing was
+  actually checked; else quiet) parameterised by each surface's vocabulary — instead of hand-rolling a
+  third condition. `fleet_verdict` is now a thin wrapper over it and S7a's 12 tests pass unchanged.
+
+  That framing also produced the right nuance rather than a binary: `not-learned` is QUIET on its own (a
+  saved-but-not-yet-learned flow is an ordinary intermediate state, and going red for it nightly is how
+  an alert earns its `|| true`), while an all-`not-learned` fleet is loud via the second clause.
+
+  **CLI-3's real defect was the MESSAGE, not the exit code** — "the agent took no clean steps" is false
+  for the refusal population, and `res.note` already held the true reason and its remedy.
 - **S10. API contract truth.** `_load_meta`'s "never raises" broken by `RecursionError` (R3.11);
   MCP tool-list shrinkage visible only in logs (MCP-1) — surface count/reason in the listing.
 

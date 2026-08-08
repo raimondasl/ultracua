@@ -1856,6 +1856,35 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   Sequence with **S17**: same family, same load-dependence, and S17 already owns "reproduce under
   artificial load first, do not silence with reruns, do not weaken the production bound".
 
+* **R4.25 — THE WRITE-REFUSAL GUARDS ARE LOAD-SENSITIVE AS A CLASS. Three now, and that is the finding.**
+  Observed on the S7b run (0.87.0):
+
+      FAILED tests/test_record.py::test_record_write_load_armed_write_with_single_commit_is_refused
+      (assert res.cached is False and "single" in res.note)
+
+  It passes in isolation in 1.9 s. The failure is at the ASSERTION, not a timeout, so under full-suite
+  load the refusal took a DIFFERENT PATH — the load-armed POST landed at a different moment and
+  attribution came out otherwise. Not caused by the slice that surfaced it: S7b's diff is CLI exit codes
+  plus the `sweep_verdict` extraction, and `record()` reaches neither.
+
+  **The cluster is what matters, not the third instance.** Every load-dependent test found so far guards
+  a WRITE REFUSAL:
+
+  | | guards |
+  |---|---|
+  | H7 / **S17** `test_record_write_deferred_write_outside_its_turn_is_refused` | a deferred write outside its turn is refused |
+  | **R4.23** `test_flows_dry_run_holds_a_real_write_flow` | a dry run HOLDS a real write |
+  | **R4.25** `test_record_write_load_armed_write_with_single_commit_is_refused` | a load-armed write is not attributed to a benign click |
+
+  Three independent tests, one shape: they all pin a refusal whose input is WHEN a request arrives
+  relative to a step. That is not three flaky tests, it is one property being verified unreliably — and
+  it is the property inviolable #3 rests on. A guard that fails at random cannot be trusted to mean
+  anything when it fails for real, and, worse, cannot be trusted to be MEANINGFUL when it passes.
+
+  **This widens S17.** Its scope was one test; it should be "the timing-dependent write-refusal guards",
+  reproduced under artificial load together, because a fix for one is likely a fix for all three — and
+  because S6 is blocked on S17 for exactly the reason that its oracle must be deterministic.
+
 * **R4.24 — a LOCALHOST round-trip stalled past the 5 s action budget on the Windows runner. This is NOT
   R4.22, and the sampler is what proves it.** (0.84.0, PR #129 run 31230301214, windows 1/2.)
 
