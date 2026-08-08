@@ -2758,6 +2758,35 @@ class FleetVerdict:
     summary: str          # one line for the human reading the console
 
 
+def sweep_verdict(results: list, *, quiet: frozenset, worked: frozenset, allow_empty: bool = False,
+                  noun: str = "flow") -> FleetVerdict:
+    """THE RULE, once, for any fleet-shaped sweep — `run-all` and `canary` both, now (CLI-4).
+
+    Three clauses, and the vocabulary is the only thing that varies between surfaces:
+      1. anything OUTSIDE `quiet` is loud — an allowlist, so a status added tomorrow is loud by default.
+         Keying off the loud ones is exactly how `skipped` came to feed neither channel in `run-all` and
+         `not-learned` neither in `canary`;
+      2. if nothing in `worked` happened, the sweep checked nothing and cannot report health — the wiped
+         cache / wrong-cwd case, which is `EmptyFlowStoreError`'s reasoning one step later;
+      3. otherwise quiet.
+
+    Parameterised rather than duplicated because CLI-4 IS CLI-1 on another verb: S7a recorded it as a
+    known-identical shape precisely so it would get this treatment instead of a third hand-rolled
+    condition."""
+    loud = [r for r in results if r.status not in quiet]
+    did = [r for r in results if r.status in worked]
+    if loud:
+        return FleetVerdict(1, loud, f"{len(loud)} {noun}(s) need attention")
+    if not results:
+        return (FleetVerdict(0, [], f"no {noun}s resolved (--allow-empty)") if allow_empty else
+                FleetVerdict(2, [], f"NOTHING CHECKED — no {noun}s resolved"))
+    if not did:
+        return FleetVerdict(2, list(results),
+                            f"NOTHING CHECKED — {len(results)} {noun}(s) resolved and not one of them "
+                            f"was actually checked; this sweep is not monitoring anything")
+    return FleetVerdict(0, [], f"{len(did)} {noun}(s) checked")
+
+
 def fleet_verdict(results: list, *, allow_empty: bool = False) -> FleetVerdict:
     """Judge a whole fleet run. Pure; `run_all`'s callers and the CLI share this one definition.
 
@@ -2766,18 +2795,8 @@ def fleet_verdict(results: list, *, allow_empty: bool = False) -> FleetVerdict:
     and nothing more: a store that resolved N flows and ran NONE of them is a different fact, and no
     flag on this command was ever given for it.
     """
-    loud = [r for r in results if r.status not in _FLEET_QUIET_STATUSES]
-    worked = [r for r in results if r.status in _FLEET_WORKED_STATUSES]
-    if loud:
-        return FleetVerdict(1, loud, f"{len(loud)} flow(s) failed or were refused a run")
-    if not results:
-        return (FleetVerdict(0, [], "no flows resolved (--allow-empty)") if allow_empty else
-                FleetVerdict(2, [], "NOTHING RAN — no flows resolved"))
-    if not worked:
-        return FleetVerdict(2, list(results),
-                            f"NOTHING RAN — {len(results)} flow(s) resolved and every one was skipped; "
-                            f"this fleet is not monitoring anything")
-    return FleetVerdict(0, [], f"{len(worked)} flow(s) ran")
+    return sweep_verdict(results, quiet=_FLEET_QUIET_STATUSES, worked=_FLEET_WORKED_STATUSES,
+                         allow_empty=allow_empty)
 
 
 @dataclass
