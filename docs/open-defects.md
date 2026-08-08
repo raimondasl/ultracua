@@ -1738,16 +1738,39 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   | chromium still running | 0 | 0 |
   | free memory | 13372 MB | 13410 MB |
 
-  **What this rules out further.** The standing suspect was cumulative Chromium launch/teardown churn
+  **What this ruled out further.** The standing suspect was cumulative Chromium launch/teardown churn
   (~650 per run). Shard 1 runs 433 of 840 tests, i.e. roughly HALF the churn, in HALF the wall-clock —
   and it failed anyway, with numbers in the same band. So the trigger does not look cumulative, which is
   what a handle/non-paged-pool leak would predict. A burst — many sockets created in a short window —
-  fits the evidence better, and would also explain why it lands on an arbitrary test.
+  fit the evidence better, and would also explain why it lands on an arbitrary test.
 
-  Ports remain ruled out at 215/16384 (1.3%), teardown remains clean, memory remains abundant. **Three
-  occurrences, three different tests, and still no diagnosis** — which is the honest state. The next step
-  is the instrument, not another hypothesis: sample during the run and on success too, so there is a
-  healthy baseline and a peak, per the two gaps below.
+  Ports remained ruled out at 215/16384 (1.3%), teardown remained clean, memory remained abundant.
+
+  **OCCURRENCE 4, immediately after 3, on the OTHER shard** (windows 2/2, run 31213427292,
+  `test_write_safety_invariants.py::test_a_learned_write_is_never_cached_ungated_or_replayed_unkeyed`):
+  TIME_WAIT 206, handles 47097, chromium 0, free 13352 MB. Four occurrences, four different tests, both
+  shards, two consecutive PR runs — the frequency is up, not down.
+
+  **What occurrences 3 and 4 together establish.** Sharding halved the cumulative churn per runner
+  (~650 launches → ~335 and ~312) and left the RATE essentially unchanged (~30/min in all three
+  measured configurations, since the wall-clock halved too). The failure persisted in both halves. A
+  cumulative handle/non-paged-pool leak predicts that halving the total helps; it did not. **So the
+  trigger tracks rate or burst, not cumulative total** — the first mechanism-level discrimination in
+  four occurrences, and it is what the sampler below is built to confirm or kill.
+
+  **THE INSTRUMENT SLICE (0.85.0, `ci/resource-sampler`).** Rather than a fifth hypothesis, the two
+  filed gaps got closed: `scripts/sample_resources.ps1` samples every ~5 s THROUGHOUT the run, and the
+  summary step runs on `always()` so a PASSING run produces the baseline that four failure-only
+  post-mortems could never provide. It records **non-paged pool**, which is the resource WSAENOBUFS is
+  actually about and which no occurrence has ever measured — every hypothesis so far has been about
+  something else. The CSV uploads as an artifact so two runs can be diffed directly.
+
+  It reports numbers and no verdict, deliberately. A diagnostic that renders its own opinion is how four
+  occurrences each got explained away.
+
+  *(The sampler's own first draft formatted with `N1`, which inserts a thousands separator and split
+  `6,434.5` across two CSV columns — caught by running it once before trusting it. An instrument that
+  lies is worse than none, and this one was built to settle an argument.)*
 
   The pool's own ceiling was measured before it was declined, so the next person does not re-derive it:
   **356.7 ms per session with its own browser vs 84.7 ms sharing one — 272 ms, ~2.9 min over ~650
@@ -2073,4 +2096,3 @@ invocation refuse WITHOUT driving a browser. That is a real behaviour change —
 `health()`, the MCP tool list, `run_all`'s skip logic and the CLI — so it wants its own slice and its
 own audit. Check the siblings while there: `record()` refuses the same class with the same
 non-terminal property.
-
