@@ -1856,7 +1856,53 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   Sequence with **S17**: same family, same load-dependence, and S17 already owns "reproduce under
   artificial load first, do not silence with reruns, do not weaken the production bound".
 
-* **R4.25 — THE WRITE-REFUSAL GUARDS ARE LOAD-SENSITIVE AS A CLASS. Three now, and that is the finding.**
+* **R4.26 — CRITICAL. Under load the recorder credits a DEFERRED write to the NEXT click, caching the
+  real commit UNGATED and UN-KEYED.** Measured, not read: this is R3.2's harm class on the `record` path.
+
+      steps=[('click Commit', False), ('click Next', True)]      # 1 run in ~40 under CPU saturation
+
+  `click Commit` arms the write and is cached `mutating=False`. `click Next` writes nothing and carries
+  the gate. On replay Commit fires the commit with **no mutation gate, no precondition and no
+  Idempotency-Key**, while the barrier sits on a step that never writes. Inviolable #3.
+
+  **Rates**, all under `os.cpu_count()` busy-spin workers: 1/8 and 1/20 at the pytest level, 1/40 in a
+  direct harness. Zero in 12 unloaded runs and 5/5 in isolation historically — which is precisely why it
+  has looked like a flaky test for three releases.
+
+  **What is measured vs inferred, kept apart on purpose.** MEASURED: the cached gate lands on the benign
+  click while the committing step is ungated. INFERRED (consistent with the evidence, not proven): the
+  120 ms timer fires inside the NEXT click's synchronous turn, so `__ucturn === 1` and `attributedSeq()`
+  returns `__uclast` = Next. The in-page logic is turn-based and therefore machine-speed independent IN
+  PRINCIPLE — which is what made this look impossible — but the turn BOUNDARY is closed by a
+  `setTimeout(..., 0)`, and a starved reset plus a delayed timer is a scheduling question, not a logic
+  one. **Do not fix from that inference alone; instrument the turn counter first.**
+
+  **THIS IS WHY S17 MUST NOT BE "DE-FLAKED".** `test_record_write_deferred_write_outside_its_turn_is_refused`
+  is not flaky — it is faithfully reporting an intermittent PRODUCT defect. Every tempting remedy the S17
+  bullet already forbids (rerun to green, widen `write_attrib_ms`, loosen the assertion to "refused OR
+  cached") would have SUPPRESSED a live write-safety hole, and the last of those would have done it
+  silently. S6 is blocked on S17 because its oracle must be deterministic; the oracle is honest and the
+  MECHANISM is not.
+
+* **R4.25 — CORRECTED. It is not a class of three; it is one real defect, one over-specified test, and
+  one non-reproducer.** The original entry unified three load-dependent failures on surface similarity.
+  Reproduced under saturation, they are not the same thing:
+
+  | test | 8 iters under load | what it actually is |
+  |---|---|---|
+  | `..._deferred_write_outside_its_turn_is_refused` | 1/8 | **R4.26** — a real product defect |
+  | `..._load_armed_write_with_single_commit_is_refused` | 3/8 | a TEST defect (see below) |
+  | `test_flows_dry_run_holds_a_real_write_flow` (R4.23) | **0/8** | did not reproduce; different mechanism |
+
+  The load-armed failure is **not a safety hole**: `res.cached is False` held every time — the flow WAS
+  refused, via a different and equally correct path (under load the load-armed POST lands before the
+  demo, so A8's confirm-baseline probe sees `LOAD-SAVED` already on the entry page and refuses there).
+  The test pins one refusal by asserting `"single" in res.note`, so it fails when a second legitimate
+  refusal wins the race. Fix the ASSERTION — refused, not cached, not re-fired — not the guard.
+
+  **The lesson is about the filing, not the code.** Three observations were unified into one finding on
+  the strength of their shape, and reproduction dissolved two thirds of it. This register's own rule —
+  reproduce before fixing — applies to CLASSIFYING a defect as much as to repairing one.
   Observed on the S7b run (0.87.0):
 
       FAILED tests/test_record.py::test_record_write_load_armed_write_with_single_commit_is_refused
