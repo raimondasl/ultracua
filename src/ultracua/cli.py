@@ -68,6 +68,16 @@ async def _amain(args: argparse.Namespace) -> None:
             f"{len(steps)} step(s), avg {report.avg_step_ms:.0f} ms/step, "
             f"total {report.total_ms:.0f} ms"
         )
+    # CLI-2. `run_cached` RETURNS `success=False` rather than raising on every failure path (miss,
+    # escalate, verify-failed, the unattributed-write refusal), and this printed the flag without ever
+    # converting it into an exit code — so a scripted caller checking `$?` saw success on total failure.
+    #
+    # The note is printed for the reason flow.py states about populating it: "a bare success=False with
+    # no reason ... is the fail-loud inviolable read as fail-quiet". The daemon already surfaces it; this
+    # surface dropped the explanation the engine had already computed.
+    if report.note:
+        print(f"reason: {report.note}")
+    raise SystemExit(0 if report.success else 1)
 
 
 # --- `ultracua flow` subcommand: define + run recurring flows -------------------------------
@@ -182,7 +192,14 @@ async def _flow_learn(args: argparse.Namespace) -> None:
               if res.pinned else
               "could NOT pin a 0-LLM read (answer isn't a unique scalar) — replay uses the LLM extractor.")
     if not res.cached:
-        print("WARNING: no replayable flow was cached (the agent took no clean steps).")
+        # CLI-3, and the MESSAGE is the worse half. The generic line below claims "the agent took no
+        # clean steps", which for the refusal population is false and misdirecting: the steps were fine
+        # and the flow was refused on write safety. `res.note` already carries the precise reason AND its
+        # remedy, and was discarded. Exit nonzero too, so a provisioning script can tell a refused flow
+        # from a learned one.
+        print(f"WARNING: nothing was cached — {res.note}" if res.note else
+              "WARNING: no replayable flow was cached (the agent took no clean steps).")
+        raise SystemExit(1)
     elif not res.approved:
         print(f"verify the above, then approve it: ultracua flow approve --name {spec.name}")
     else:
@@ -528,8 +545,9 @@ def _ago(ts: float) -> str:
     return f"{int(d)}s ago"
 
 
-def _audit_advisories(name: str) -> int:
-    """Unreviewed H9 audit advisories for a flow (CLI-only; never part of FlowHealth's status vocabulary)."""
+def _audit_advisories(name: str) -> Optional[int]:
+    """Unreviewed H9 audit advisories for a flow, or None when the meta could not be READ (CLI-only;
+    never part of FlowHealth's status vocabulary)."""
     try:
         from .cache import FlowCache, flow_key
         from .flows import _load_meta, load_spec
@@ -538,7 +556,10 @@ def _audit_advisories(name: str) -> int:
         meta = _load_meta(FlowCache(), flow_key(spec.goal, spec.start_url, spec.scope))
         return int(getattr(meta, "audit_advisories", 0) or 0)
     except Exception:  # noqa: BLE001 - a status line must never break `flow status`
-        return 0
+        # CLI-5: None, not 0. The habituation counter this exists to surface would otherwise read CLEAN
+        # exactly when the trust state is unreadable — "we could not tell" reported as "there are none",
+        # which is the distinction S4 drew for the sidecar loader, one surface over.
+        return None
 
 
 def _flow_status(args: argparse.Namespace) -> None:
@@ -567,7 +588,12 @@ def _flow_status(args: argparse.Namespace) -> None:
         # H9 judge: surface unreviewed advisories so habituation is MEASURED, not a silent pile-up. This
         # ESCALATES without quarantining — FlowHealth's status vocabulary is deliberately unchanged.
         adv = _audit_advisories(name)
-        if adv:
+        if adv is None:
+            # CLI-5. `if adv:` treated "cannot tell" and "none" identically, so the one state that most
+            # warrants a look printed nothing at all.
+            print(f"    audit: UNKNOWN — the trust sidecar could not be read, so the unreviewed-advisory "
+                  f"count is not available for {name!r}")
+        elif adv:
             print(f"    audit: {adv} unreviewed advisor{'y' if adv == 1 else 'ies'} — "
                   f"`flow audit --list --name {name}`")
 
@@ -950,7 +976,7 @@ def _flow_record(args: argparse.Namespace) -> None:
 
 
 def _flow_canary(args: argparse.Namespace) -> None:
-    from .flows import canary, canary_all, load_spec
+    from .flows import canary, canary_all, load_spec, sweep_verdict
 
     if args.name:
         results = [asyncio.run(canary(load_spec(args.name)))]
@@ -965,7 +991,21 @@ def _flow_canary(args: argparse.Namespace) -> None:
     stale = [r for r in results if r.status in ("stale", "error")]
     fresh = sum(1 for r in results if r.status == "fresh")
     print(f"\n== {fresh} fresh, {len(stale)} stale/error (of {len(results)}) ==")
-    raise SystemExit(1 if stale else 0)  # cron alerts on a non-zero exit
+    # CLI-4 IS CLI-1 ON ANOTHER VERB, which S7a recorded as a known-identical shape rather than leaving
+    # it to be rediscovered: the old test was `status in ("stale","error")`, so `not-learned` counted
+    # toward neither bucket and a wiped cache or wrong-cwd job printed "0 fresh, 0 stale", exited 0, and
+    # reported healthy while checking nothing — the exact inversion of what a canary is for.
+    #
+    # QUIET is the allowlist. `not-learned` stays quiet on its own (a saved-but-not-yet-learned flow is
+    # an ordinary intermediate state, and going red for it nightly is how an alert earns its `|| true`),
+    # but a sweep where NOTHING was actually checked is loud by the shared rule's second clause. One
+    # definition with `run-all`, so a status added tomorrow is loud on both.
+    verdict = sweep_verdict(results, quiet=frozenset({"fresh", "not-learned"}),
+                            worked=frozenset({"fresh", "stale", "error"}),
+                            allow_empty=getattr(args, "allow_empty", False), noun="flow")
+    if verdict.exit_code:
+        print(verdict.summary)
+    raise SystemExit(verdict.exit_code)  # cron alerts on a non-zero exit
 
 
 def _add_login_args(parser, *, url_required: bool) -> None:

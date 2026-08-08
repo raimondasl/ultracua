@@ -476,7 +476,7 @@ GUIDE.md:577-581 and README.md:75, both quoted as evidence below, were corrected
 **Disposition / fix shape.** Decide whether skipped-that-was-not-human-chosen (undeclared write, not-approved after a re-learn) should be a distinct exit code / webhook event; the EmptyFlowStoreError precedent (cli.py:1179-1183, exit 2/3 for zero flows) shows the shape already used for 'ran nothing'.
 
 
-### `CLI-2` (high)
+### `CLI-2` (high) — ✅ FIXED in 0.87.0 (S7b): exits `0 if success else 1`, and prints `report.note` (the reason the engine had already computed and this surface discarded)
 
 **What.** Root `ultracua --url --goal` command ALWAYS exits 0: `_amain` prints `success={report.success}` but never raises or sets an exit code, and `run_cached` returns FlowReport(success=False) rather than raising on every failure path (miss, escalate, verify-failed, unattributed-write refusal). Additionally `report.note` — which flow.py deliberately populates because 'a bare success=False with no reason ... is the fail-loud inviolable read as fail-quiet' (flow.py:761-763) — is never printed by _amain. A scripted caller checking $? sees success on total failure, and a human sees success=False with no reason.
 
@@ -490,7 +490,7 @@ GUIDE.md:577-581 and README.md:75, both quoted as evidence below, were corrected
 **Disposition / fix shape.** Exit nonzero on success=False and print report.note; this is the same surface the flow.py comment already identifies as needing the reason.
 
 
-### `CLI-3` (medium)
+### `CLI-3` (medium) — ✅ FIXED in 0.87.0 (S7b): a refused learn exits 1 AND prints `res.note`; the old generic line ("the agent took no clean steps") was actively wrong for that population — the steps were fine, the flow was refused on write safety
 
 **What.** `flow learn` exits 0 when learning FAILED, and drops LearnResult.note. On res.cached=False it prints only the generic 'WARNING: no replayable flow was cached (the agent took no clean steps).' and returns — exit 0, and the specific refusal reason in res.note is never shown. This includes the R3.2-adjacent unattributable-write refusal, whose carefully written note (flows.py:1057-1063: 'a write fired on the wire during discovery but no step could be attributed to it...') is invisible from the CLI; the operator instead reads a false diagnosis ('took no clean steps').
 
@@ -504,7 +504,7 @@ GUIDE.md:577-581 and README.md:75, both quoted as evidence below, were corrected
 **Disposition / fix shape.** Mirror _flow_record: print res.note and exit nonzero when not res.cached (or not res.found). Sibling-guard pattern from CLAUDE.md applies literally.
 
 
-### `CLI-4` (medium)
+### `CLI-4` (medium) — ✅ FIXED in 0.87.0 (S7b) via the SHARED `sweep_verdict`, not a third hand-rolled condition: CLI-4 is CLI-1 on another verb, which S7a recorded as known-identical for exactly this reason
 
 **What.** `flow canary` exits 0 for a fleet that is entirely 'not-learned': exit condition is `status in ('stale','error')` only, so not-learned counts toward neither, and a wiped/relocated cache (the exact wrong-cwd class the EmptyFlowStoreError fix targeted for zero SPECS) reports '0 fresh, 0 stale/error (of N)' with exit 0 — cron reports the early-warning probe green while probing nothing.
 
@@ -602,7 +602,7 @@ GUIDE.md:577-581 and README.md:75, both quoted as evidence below, were corrected
 **Disposition / fix shape.** Only relevant if the plan touches write attribution: the daemon is the second of the 'three callers' the unattributed-write refusal was moved into flow._learn to cover (flows.py:1041-1042).
 
 
-### `CLI-5` (low)
+### `CLI-5` (low) — ✅ FIXED in 0.87.0 (S7b), the advisory-counter half: `_audit_advisories` returns None (not 0) when the meta cannot be read, and `flow status` prints UNKNOWN — "we could not tell" is not "there are none"
 
 **What.** Minor status-view soft spots, each individually small: (a) _audit_advisories swallows ALL exceptions to 0 (cli.py:540-541), so `flow status` shows no unreviewed-advisory line when the meta is unreadable — the habituation counter the feature exists to surface reads as zero exactly when state is broken; (b) _warn_if_approval_stale swallows import errors silently (cli.py:120-121, deliberate 'courtesy warning' rationale); (c) serve-mcp refuses an EMPTY store (exit 2) but a store whose flows all fail health/approval checks serves zero tools and stays up — explicitly allowed as 'a legitimate mid-setup state' (cli.py:492-497), with the count printed to stderr as the only signal.
 
