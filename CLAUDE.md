@@ -7,8 +7,9 @@ failing LOUD on drift.**
 
 **[docs/open-defects.md](docs/open-defects.md) — the standing defect register.** FOUR rounds. Rounds 1–2
 (30 findings) are fixed; **round 3 found 11 more in the 387 lines those fixes added, 1 critical, and
-refuted NONE of them** (five of the eleven still open at 0.80.0; R3.12–R3.13 were recorded later, so
-**seven** register findings are open in total); round 4 was a pre-merge audit that PARKED a change rather than
+refuted NONE of them** (**4 open** at 0.86.0 — R3.2, R3.7, R3.11, R3.12; the count is asserted by
+`tests/test_register_count.py`, which caught this very line going stale inside the slice that wrote it —
+R3.6 closed after the number was typed); round 4 was a pre-merge audit that PARKED a change rather than
 ship it. Two are regressions the fixes introduced. Defect density in fix code measured ~3x
 the code it replaced, so **a patch on a patch is the thing to be most suspicious of here** — three round-3
 findings are the same shape as the finding they were fixing, one level down. When you close something,

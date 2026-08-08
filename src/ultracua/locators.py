@@ -16,7 +16,7 @@ from typing import Optional
 from playwright.async_api import Locator, Page
 from pydantic import BaseModel
 
-from .snapshot import _ACCNAME_JS, _ROLEOF_JS
+from .snapshot import apply_redactions, redact_terms, _ACCNAME_JS, _ROLEOF_JS
 
 # `anchorOf` truncates every captured anchor to this many chars. A row anchor at exactly this length is
 # a PREFIX of the real row text, so it cannot be compared exactly — and a prefix comparison is the
@@ -243,12 +243,77 @@ DESCRIBE_JS = r"""
 """
 
 
-async def describe(page: Page, ref: str) -> Optional[LocatorSpec]:
-    """Capture a resilient LocatorSpec for the element currently tagged with `ref`."""
+async def describe(page: Page, ref: str, redact: tuple = ()) -> Optional[LocatorSpec]:
+    """Capture a resilient LocatorSpec for the element currently tagged with `ref`.
+
+    `redact`: the run's resolved SECRET VALUES (`flows._secret_values`), scrubbed out of every captured
+    string before the spec exists — and therefore before `cache.put` writes it to
+    `<flow_home>/flows/<key>.json`, where it would persist (R3.6).
+
+    THE SIBLING THAT WAS MISSED. `snapshot.capture(redact=...)` was introduced as "the one place" every
+    snapshot -> LLM path runs through, and it is: the heal prompt genuinely says `[REDACTED]`. But this
+    function reads the LIVE page through its own JS, so the same run captured the same characters
+    verbatim into `name` (the accessible name — "Copy sk-live-…" on the standard copy button), `text`,
+    `anchor` (60 chars of the enclosing row's collapsed innerText) and `anchor_id` (`'href:'` + the row's
+    first href, query string included). Measured: three of those four leaked on one fixture. Every
+    OBSERVABLE signal said the redaction worked; the durable channel was the one nobody looked at.
+
+    EVERY string field, not the obvious ones. `elem_id`/`testid`/`css` are structural selectors and a
+    scrub is a no-op on them unless they actually contain the secret — in which case leaking it is worse
+    than losing the tier. Partial coverage is how R9 shipped scrubbing 2 of 5 Observation fields and had
+    to be reopened for the other three.
+
+    WHAT THIS COSTS, and it is real: replay BINDS on these strings. A control whose only identity IS the
+    secret becomes unbindable once scrubbed, and the flow then fails LOUD at resolve rather than binding
+    something else — the right direction on this project's ranking, but a genuine capability loss for
+    that shape of page. Where any other tier survives (`elem_id`, `testid`, `css`, a clean anchor), the
+    bind is unaffected; `tests/test_locator_spec_secrets.py` pins that it still resolves at 0-LLM.
+    """
     raw = await page.evaluate(DESCRIBE_JS, ref)
     if not raw:
         return None
-    return LocatorSpec(**raw)
+    return LocatorSpec(**redact_spec_fields(raw, redact))
+
+
+def redact_spec_fields(raw: dict, redact: tuple) -> dict:
+    """Scrub the run's secrets out of a raw `specOf` result, before it becomes a `LocatorSpec`.
+
+    ONE definition, because there are TWO paths from a live page to a cached locator and only one of them
+    is `describe()`: the RECORDER runs the same shared `specOf` in-page and builds `LocatorSpec(**raw)`
+    itself (`recorder._step_from_event`). Fixing `describe()` alone would have left `flow record` writing
+    the same plaintext to the same file — the sibling-gap shape this register keeps finding, and the
+    reason this is a function rather than four lines inlined above.
+
+    Every string field, deliberately: see `describe`. A no-op when the term is absent, so structural
+    selectors are untouched in the ordinary case.
+    """
+    if not redact:
+        return raw
+    terms = redact_terms(redact)              # ONE floor, shared with every other scrub (R3.10)
+    if not terms:
+        return raw
+    out = {k: (apply_redactions(v, terms) if isinstance(v, str) else v) for k, v in raw.items()}
+
+    # A REDACTED IDENTITY IS A FABRICATED ONE, so drop it rather than store it.
+    #
+    # `anchor_id` is compared by EQUALITY against the row identity recomputed from the live page
+    # (`got == spec.anchor_id` in `resolve`). The live page still contains the real secret, so a stored
+    # `href:/reveal?api_key=[REDACTED]` can never match and the guard refuses the bind on EVERY replay —
+    # a flow broken permanently, loudly, for a reason no message would explain. `anchor` is the same
+    # story one tier softer: a disambiguation hint that cannot match the page is worse than no hint.
+    #
+    # None is not a degradation invented here — it is this module's own documented answer for "no
+    # candidate discriminates", and its reasoning applies verbatim: a fabricated identity "makes the
+    # guard claim protection it does not provide". Losing the row guard for such a row is a real cost,
+    # and it is the conservative direction: the alternative that keeps it working is to scrub BOTH sides
+    # at compare time, which would make two DIFFERENT secrets compare equal and could bind the wrong
+    # row — trading a loud refusal for a silent wrong-row write.
+    for field in ("anchor", "anchor_id"):
+        if isinstance(raw.get(field), str) and out.get(field) != raw.get(field):
+            out[field] = None
+    if out.get("anchor") is None:
+        out["anchor_source"] = None           # keep the pair coherent; `_resolve` reads them together
+    return out
 
 
 # Returns the focused element's ref ONLY if it uniquely + correctly resolves back to it. The snapshot
