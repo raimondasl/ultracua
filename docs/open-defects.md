@@ -122,6 +122,57 @@ The recurring shape is **a guard living in a wrapper, or on one authoring path, 
 mechanism**. Every safe entry point is safe; the raw one underneath is not. A targeted pass to push those
 guards down would have prevented most of this list, and is the highest-leverage follow-up available.
 
+## Two strikes, then change the SENSOR CLASS — a standing gate on how a finding may be re-attempted
+
+*A gate, not a lesson, and it governs this whole file rather than round 1. It exists because the stopping
+rule that would otherwise apply — "keep going until the suite passes" — is measured not to work here.*
+
+**The rule.** When two fix shapes for ONE finding have been built and measured wrong, the third attempt
+must change what the decision is made FROM — inference → a human's verdict, or inference → a loud refusal
+— rather than refine the inference. Moving *within* a class (a better constant, a better window, a better
+in-page probe) is not a third attempt; it is the second one again.
+
+**What counts.** A strike is a fix shape that was BUILT and measured wrong — reverted, parked, or
+redesigned mid-slice. A hypothesis discarded at design time is free. The count is per FINDING, not per
+release, and it does not reset when the person changes.
+
+**Where the classes are.** Each row is a different thing to ask, not a better way of asking the same one:
+
+| sensor class | what it is here | what it can never answer |
+|---|---|---|
+| the clock | `write_window_ms` grace tails, `setTimeout(…, 0)` turn boundaries | anything about a DEFERRED cause — R3.2, R4.26 |
+| intent text | `MUTATING_KEYWORDS` | read vs write: 28% FP / 45% recall, unfixable by any matching rule |
+| the page | confirm transitions, scope fingerprints, `_pre_confirm` | whether a request left, or what the server did with it — R3.3 |
+| the wire | `is_write_request`, `expect_request` | what a request MEANS — a GraphQL read IS a POST |
+| the platform | `window.event` dispatch-presence | the cause of a write issued from a bare task, by construction |
+| a human | `approve`, `record`, `dry_run`, a write annotation | anything at REPLAY time — it answers only at authoring, and it costs friction |
+| a loud refusal | every fail-loud boundary in the engine | nothing — it declines the question and pays the cost in availability |
+
+**The evidence this is built on.** R3.2's first three attempts were three inferences answering one
+under-determined question: a clock (0.73.0, reverted), a refusal keyed off that same clock's failure
+(0.74.0, over-refused), and an in-page causal map (0.76.0, parked). Two of the three were fully GREEN —
+754 tests with a clean `drift_bench`, then 785 with a byte-identical one. The third was not green, but the
+only thing that caught it was an opaque `assert learn.success` in an unrelated login file, 17 minutes into
+the suite. The fourth stopped claiming attribution at all, and shipped. Note what the suite did across
+that span: **754 → 785 → 867 tests**, growing with every slice and never acquiring the ability to catch
+this class. Those counts are evidence of SIZE, not of coverage, and quoting one as reassurance is the
+habit this gate exists to interrupt. R3.3 ran the same course inside a
+single predicate: six versions, five wrong, every one of them green, failing in ALTERNATING directions
+(double-pay, then never-pay) — which is the tell that the question was under-determined rather than that
+the answers were careless.
+
+**The corollary that makes this operational.** Before building a third attempt, write down what would
+falsify it and measure THAT first — on the real classifier and the real population, never on the fixture
+the finding was filed with. Both of S6's dead versions died to that measurement in a day instead of to an
+audit a release later, and D0 was rejected the same way after it had already gone green across 105 tests
+and a 24-cell matrix scoring 20/24.
+
+**Why it is written down rather than remembered.** The plan's prescribed fix shape has been wrong in four
+of the seven slices that attempted one (S2 in three separate ways, S3, S5, S6) and survived contact in
+three (S4, S7a, S7b). The failure mode is never a bad idea; it is a good-looking idea arriving in a session
+that has not read the ones before it. See **D5** below for the worked application, and `D0` in
+`docs/correctness-plan.md` for the other decision this gate has already produced.
+
 ## Status at a glance
 
 Round 1 only — round 2's open findings are listed at the bottom of this file.
@@ -1202,6 +1253,83 @@ the promotion is then simply dead for every step index >= 1), while `ultracua ru
 advertises `readOnlyHint=True` and `run_batch` treats it as a read batch. Moving the SAME button to
 step 0 promotes correctly — which is precisely why the existing suite (tests/test_write_signal.py)
 does not see this: every one of its write fixtures puts the commit at step 0.
+
+### D5 — positive attribution of a deferred write is BLOCKED INDEFINITELY. Refuse-or-over-gate plus human adjudication IS the design, not a stopgap
+
+*A decision, not a finding, recorded immediately below the entry it governs because this is what anyone
+starting attempt 5 is reading. Same standing as **D0** in `docs/correctness-plan.md`: built, measured,
+rejected, and BLOCKED rather than deferred. It is the first application of the two-strikes gate near the
+top of this file.*
+
+**What is blocked.** Any mechanism that answers *"which authored step CAUSED this wire write"* for a write
+that did not leave inside its own commit's dispatch. **Not blocked, and untouched by this:** the
+wire-vs-classifier consistency check (0.74.0), the provability evidence and gate-every-candidate posture
+(S6/AB-1, 0.89.0), and the recorder's per-write attribution — which is sound BY CONSTRUCTION, because a
+human's own dispatch stamps it, and is precisely why `record()` has never needed one of these attempts.
+
+**Four passes at the problem, and what each one measured.** Three were attempts to ATTRIBUTE and all
+three were defeated — which is the count `CLAUDE.md` carries. The fourth is in this table because it is
+what a fifth would be measured against, not because it attributed anything: it deliberately does not.
+
+| # | design | outcome |
+|---|---|---|
+| 1 | 0.73.0 — exclusive intervals via a 250 ms drain (`1e47f0f`) | green at 754 tests + clean `drift_bench`; **silently credited the WRONG step** at defer 450 ms and 800 ms. REVERTED |
+| 2 | 0.74.0 — refuse whenever nothing could be attributed (`987ca58`) | over-refused: the ordinary fill-then-submit shape is unattributable by construction, so it failed every `tests/test_press_gate.py` login flow. Shipped instead as the CONSISTENCY check, which claims strictly less |
+| 3 | 0.76.0 — shared in-page causal signal, flat seq→step map (`adc8266`) | green at 785 tests + byte-identical `drift_bench`; **PARKED** — the round-4 audit found the defects WERE the design (R4.3, R4.4, R4.5) |
+| 4 | 0.89.0 — S6/AB-1: provability as evidence about a PLACEMENT | ships, and deliberately **does not attribute**. Where the page cannot prove the cause, every candidate row is gated |
+
+**Why a fifth attempt of the same kind cannot work — three measured impossibilities, not a judgement:**
+
+1. **No temporal design survives.** No constant is simultaneously long enough to catch a deferred write
+   and short enough to exclude the next step: shortening the tail reproduces the bug, lengthening it
+   restores the credit-nobody collapse. The ladder is the proof that it is a RACE and not a tuning
+   problem — on one page, defer 60 ms → correct, 300 ms → loud, 450 ms → **wrong, silent**, 600 ms →
+   loud, 800 ms → **wrong, silent**. R4.26 re-proved it one module over: a timer is a bet on the
+   scheduler, not a boundary.
+2. **The in-page causal signal is partial BY CONSTRUCTION, not by omission.** `attributedSeq` certifies a
+   synchronous or microtask cause (`__ucturn === 1 && inDispatch()`) and returns `null` for every write
+   that leaves in a bare task. That `null` is the CORRECT answer from that vantage; there is no version of
+   the same sensor that returns a step instead, so "improve it" is not a design.
+3. **Refusing on unprovability is not available either.** Measured against the real capture script, 4 of 6
+   ordinary READ patterns issued over POST are exactly as unprovable as a deferred commit — an awaited
+   round-trip, a debounced search, deferred pagination, an rAF-batched query — because `is_write_request`
+   is method-based and a GraphQL read IS a POST. Refusing them is D0's regression one surface over. The
+   same method-blindness files 12 of 12 ordinary read controls as write flows (R4.27).
+
+**What the block costs, priced rather than waved through.** R3.2 stays open as a MANAGED residual, not a
+closed one. A write deferred forward onto a classifier-mutating neighbour is now gated, but the recipe is
+OVER-gated rather than correctly gated: it becomes multi-write, loses the auth-refresh retry, and every
+gated step loses self-heal and suffix-replan. That is paid in RECOVERY features, never in silence — the
+same trade this register has argued every time this has come up.
+
+**What would unblock it: a genuinely NEW evidence source, measured BEFORE it is built.** All three
+conditions, not any one:
+
+* **A sensor class none of the four attempts used** (see the two-strikes gate). The candidate anyone will
+  reach for is CDP `Network.requestWillBeSent.initiator` with async stack traces: out-of-band, so a page
+  cannot shadow it the way it can shadow `window.event`, and able to see across the timer/await boundary
+  the in-page signal cannot. Its hostile priors, stated here so nobody rediscovers them: an initiator
+  stack names a script FRAME, not a recorded step, so a seq→step map re-enters and R4.3/R4.4 with it;
+  framework schedulers (batching, event emitters) root the stack in a generic queue drain rather than in
+  the click; and it says nothing whatever about read-POST vs write-POST, which is where most of the
+  current cost actually falls.
+* **It must WIDEN the provable set inside the shipped fail-closed shape** — union, never remove (R4.2's
+  lesson) — keeping gate-every-candidate as the fallback. A design that REPLACES the current posture is
+  the parked branch again.
+* **It must be measured first against the artifacts that already exist**: the defer ladder
+  (60/300/450/600/800 ms), the `_DEFERRED_ONTO_BAIT` fixture, the R4.26 deterministic harness, and the six
+  read-over-POST patterns — plus new fixtures for its own blind spots (a framework-batched commit, a
+  service-worker fetch). A spike that cannot beat those is not an attempt; it is a fifth wrong fix that
+  has not been built yet.
+
+**Order of attack, if this is ever revisited.** The HUMAN lever comes first: persist WHY a step carries
+its `mutating` mark (keyword guess / form method / wire promotion / human verdict) and let a human confirm
+or correct it at authoring time. It has certainty where a new inference has a measured-hostile prior, it
+is the only sensor that can answer the semantic question at all, and the plan already names it as D0's
+lever (ii) — which also says building it twice is how a fifth wrong fix arrives. A sensor spike after that
+is optional; before it, it is attempt 5.
+
+**Overturning this decision requires overturning this text**, which is the whole point of writing it down.
 
 ### ✅ FIXED in 0.78.0 — R3.3. The `landed` rail arms the ledger for `WriteReadbackError` but not for its sibling `ShapeDriftError` — the case where the code knows the write committed AND the readback succeeded is still unarmed, so the CLI's resume re-fires it
 

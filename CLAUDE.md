@@ -20,7 +20,11 @@ became one, and a return type that could only say "absent" learned to say "unrea
 (R3.2, write attribution) has now defeated three attempts** — 0.73.0's drain (reverted), 0.74.0's first
 refusal draft (over-refused), and a 0.76.0 causal-attribution branch that was green and still wrong
 (**parked**, see `docs/parked/README.md`). Read that history before touching attribution: it rules out
-every purely temporal design, and it shows that green is not evidence here.
+every purely temporal design, and it shows that green is not evidence here. **A fifth attempt is now
+BLOCKED by decision `D5`** in the register — refuse-or-over-gate plus human adjudication IS the design,
+and unblocking it needs a new SENSOR CLASS measured against the existing artifacts first, not a better
+inference. The general gate D5 applies (**two strikes, then change the sensor class**) is at the top of
+the same file.
 
 **WORK FROM THE PLAN.** `docs/correctness-plan.md` sequences every open finding, test hole and unpinned
 residual into slices, worst user harm first, with the dependencies between them made explicit (the net
