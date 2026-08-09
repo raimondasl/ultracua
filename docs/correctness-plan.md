@@ -328,7 +328,19 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   either direction fails a test. AB-10 (possibly-dead belt-and-braces branch): coverage probe; delete
   if dead.
 - **S16. Scheduled mutation sweep.** The nine known mutants become a script + a weekly CI schedule.
-- **S17. De-flake `test_record_write_deferred_write_outside_its_turn_is_refused` (H7).** Found while
+- **S17. ⚠️ RESCOPED BY MEASUREMENT (0.87.0): the test is NOT flaky — it is reporting a real defect.**
+  Reproduced under artificial load (busy-spin workers on every core): the deferred-write refusal fails
+  1 run in ~20, and the cached result puts the gate on the BENIGN click while the committing step is
+  ungated and un-keyed — **R4.26**, inviolable #3, R3.2's harm class on the `record` path.
+
+  So "de-flake" is the wrong verb and every remedy this bullet already forbids would have SUPPRESSED a
+  live write-safety hole. The work is to fix the recorder's attribution under scheduling pressure; the
+  test then stops failing as a consequence, which is the only acceptable way for it to stop failing.
+
+  **S6's blocker is unchanged but its reason is inverted.** S6 needs a deterministic oracle; the oracle
+  is honest and the MECHANISM under it is not. Fix R4.26 first, then S6.
+
+  Original bullet follows. Found while
   landing S1: it fails intermittently in the full suite and never in isolation (5/5 isolated, 3/3 whole
   file both with and without the S1 diff, 1 failure inside the 781-test run). It guards the DEFERRED
   -write refusal — the exact property **S6** uses as its oracle — so **S6 must not be built on it until
