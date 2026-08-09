@@ -206,6 +206,37 @@ async def _vision_decide(session: BrowserSession, goal: str, grounding: Any, tr:
     return await grounding.decide(goal, png, vp)
 
 
+async def _wire_writes_are_provable(page) -> bool:
+    """Did the PAGE itself prove what caused every wire write it issued? (S6/AB-1.)
+
+    Reads the markers the recorder's capture script already emits — ONE implementation of the causal
+    signal, shared rather than transcribed (R3.1's lesson). Each non-idempotent request pushes a
+    `__wirewrite` marker stamped with the seq of the commit that unambiguously caused it, or null when
+    the page cannot prove it: a write deferred into a bare task (timer, awaited round-trip, rAF) or one
+    sharing its turn with a nested synthetic commit.
+
+    Used ONLY as evidence about whether a gate PLACEMENT can be trusted — never to place one. No
+    seq->step map is built here, which is what removes the parked branch's cross-origin-seq and
+    drain-rebind hazards by construction.
+
+    FAILS CLOSED in every direction that matters. No markers at all — the script never ran, a
+    cross-origin hop dropped the queue, the page is gone — reads as NOT provable, so the caller gates
+    more rather than less. An exception does the same.
+    """
+    if page is None:
+        return False
+    try:
+        marks = await page.evaluate(
+            "(() => { try { return JSON.parse(sessionStorage.getItem('__ucbuf') || '[]')"
+            "  .filter(e => e && e.action === '__wirewrite'); } catch (e) { return null; } })()")
+    except Exception:  # noqa: BLE001
+        return False
+    if not marks:
+        return False
+    real = [m for m in marks if is_write_request(m.get("method") or "", m.get("url") or "")]
+    return bool(real) and all(m.get("seq") is not None for m in real)
+
+
 def _write_owner(act_open: bool, cur_i: int, live_tails: "set[int]") -> int:
     """Which step owns a wire write observed right now? -1 = credit nobody.
 
@@ -556,6 +587,58 @@ async def _author_steps(
             _log.warning("learn: a wire write fired while step(s) %s were in flight, but the recipe gates "
                          "step(s) %s — the classifier and the wire disagree about where the write is, so "
                          "the gate cannot be trusted", sorted(acting_at_write), sorted(gated))
+        elif not await _wire_writes_are_provable(page):
+            # AB-1. THE SETS AGREEING IS NOT EVIDENCE, AND TRUSTING IT WAS THE HOLE.
+            #
+            # `acting_at_write` says which step was IN FLIGHT when the wire saw a write — never which
+            # step CAUSED it. Those come apart precisely when a write is deferred FORWARD, out of its own
+            # step and onto a neighbour the keyword classifier happens to mark: the two signals then agree
+            # on that neighbour, the check is satisfied, and the recipe caches the Idempotency-Key, the
+            # precondition and the drift gate on a step that never writes while the real commit replays
+            # with none of them. Measured on the mirror of `_LATER_COMMIT`'s ordering — the one nothing
+            # covered, because the tested ordering (bait first) makes the sets DISAGREE and refuse.
+            #
+            # Nothing here can say which step committed; that is R3.2 and it stays open. So stop pretending
+            # placement is known and gate EVERY candidate row instead. Over-gating is the direction this
+            # codebase has already argued for and priced: a spare Idempotency-Key on a step that does not
+            # write costs nothing, a missing one costs a double-submit.
+            #
+            # WHY THE `provable` GUARD ABOVE, AND NOT THIS ALONE. The agreeing arm is ALSO where the
+            # ordinary write flow lives — a benign step, then a correctly-classified commit that writes
+            # synchronously. From timing the two are INDISTINGUISHABLE: both show `acting_at_write` and
+            # `gated` agreeing on the same later step. Gating everything unconditionally therefore made
+            # every ordinary `filter -> place order` recipe multi-write, which the suite caught. What
+            # separates them is not a better reading of the clock but whether the PAGE can prove the
+            # write's cause: the ordinary commit leaves inside its own click's dispatch (provable), a
+            # write deferred forward leaves in a bare task (not). That is the shared recorder signal,
+            # used here as evidence about placement rather than as an attribution.
+            #
+            # Why not REFUSE when it is unprovable, which is what the disagreeing arm does? Because that
+            # refusal cannot be keyed on unprovability without taking ordinary reads with it. Measured
+            # against the same capture script: 4 of 6 ordinary READ patterns issued over POST — an awaited
+            # round-trip, a debounced search, deferred pagination, an rAF-batched query — are exactly as
+            # unprovable as a real deferred commit, because `is_write_request` is method-based and a
+            # GraphQL read IS a POST. Refusing those is D0's regression one surface over. Gating them is
+            # not: it costs recovery features, not the flow.
+            #
+            # PRICED, because this is not free. Such a recipe becomes multi-write, so it loses the
+            # auth-refresh retry (a whole-flow precheck cannot tell whether an earlier write landed) and
+            # every gated step loses self-heal and suffix-replan. That is the cost of not knowing, paid
+            # in recovery rather than in silence.
+            newly = []
+            for i, p in sorted(pos_of.items()):
+                if steps[p].mutating:
+                    continue
+                steps[p] = steps[p].model_copy(update={
+                    "mutating": True,
+                    "precond_scope": steps[p].precond_scope or scope_of.get(i, ""),
+                })
+                newly.append(p)
+            if newly:
+                _log.warning("learn: a wire write fired while step(s) %s were in flight and nothing could "
+                             "attribute it; the recipe gated step(s) %s, which this cannot confirm — "
+                             "gating step(s) %s as well rather than trust the placement",
+                             sorted(acting_at_write), sorted(gated), newly)
     return (steps, success, llm, traces, wrote["hit"] or any(s.mutating for s in steps),
             unattributed["hit"])
 
@@ -617,6 +700,25 @@ async def _learn(
         # Magento auto-login header on the initial admin request).
         if extra_headers:
             await session.set_extra_http_headers(extra_headers)
+        # S6/AB-1: the recorder's causal signal, on the AUTHORING path (this function; 0-LLM replay
+        # never reaches it). Installed BEFORE the first navigation — an init script applies to future
+        # documents only — so a write that leaves in a bare task is distinguishable from one that leaves
+        # inside its own click's dispatch. Read only by `_wire_writes_are_provable`, and only to decide
+        # whether a gate PLACEMENT can be trusted, never to place one.
+        #
+        # `__ucAttribOnly` goes in a SEPARATE init script added FIRST — init scripts run in the order
+        # they were added, and the capture script reads the flag at its top. Without it the full recorder
+        # capture runs here, which was measured at a failed `ambiguous_disambiguated` bench invariant for
+        # one bit of information. The import is local because `recorder` imports from this module's
+        # siblings and a module-level import would close the cycle.
+        try:
+            from .recorder import _CAPTURE_JS
+
+            if session.page is not None:
+                await session.page.add_init_script("window.__ucAttribOnly = 1;")
+                await session.page.add_init_script(_CAPTURE_JS)
+        except Exception:  # noqa: BLE001
+            pass          # no markers -> `_wire_writes_are_provable` reads False -> the caller gates MORE
         nav = StepTrace(index=-1)
         with nav.measure("navigate"):
             await session.goto(url)

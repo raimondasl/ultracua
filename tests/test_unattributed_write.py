@@ -109,6 +109,35 @@ for (const id of ['f','p']) document.getElementById(id).addEventListener('click'
   function(){ document.querySelector('h1').textContent = 'clicked ' + id; });
 </script>"""
 
+# AB-1. The write is deferred FORWARD — out of its own step and onto a classifier-mutating neighbour.
+#
+# This is the MIRROR of `_LATER_COMMIT` above, and the ordering nothing covered. There the bait is FIRST
+# and the real commit second, so `acting_at_write` (the bait was not in flight) and `gated` (the bait)
+# DISAGREE and the flow is correctly refused. Here the commit is first and defers into the bait, so the
+# two AGREE — by accident, on the step that never writes — the consistency check is satisfied, and the
+# flow caches with the gate, the precondition and the Idempotency-Key on the wrong row.
+#
+# Deterministic by construction, not by timing. Measured with a plain `setTimeout(..., D)` the outcome is
+# a three-way race decided by a stopwatch: at D=60ms the gate lands on the wrong step 6 runs in 8, at
+# D=150ms the flow is refused 6 in 8. Instead the write is armed by the commit and released by the BAIT's
+# own click, via a `window` capture listener (which runs before any target handler) and a 0 ms timer
+# (which fires in the next bare task) — so the write lands while the bait is the step in flight, every
+# time, with no artificial load and nothing to tune.
+_DEFERRED_ONTO_BAIT = """<h1>Panel</h1>
+<button id='c' type='button'>Continue</button>
+<button id='a' type='button'>Confirm address</button>
+<script>
+document.getElementById('c').addEventListener('click', function(){ window.__armed = 1; });
+window.addEventListener('click', function(ev){
+  if (window.__armed && ev.target && ev.target.id === 'a') {
+    window.__armed = 0;
+    setTimeout(function(){ fetch('/api/commit', {method:'POST', body:'x=1'}); }, 0);
+  }
+}, true);
+for (const id of ['c','a']) document.getElementById(id).addEventListener('click',
+  function(){ document.querySelector('h1').textContent = 'clicked ' + id; });
+</script>"""
+
 # The other control: no write anywhere. An ordinary read flow must be entirely unaffected.
 _READ_ONLY = """<h1>Panel</h1>
 <button id='s' type='button'>Search</button>
@@ -146,6 +175,48 @@ async def test_a_keyword_mutating_sibling_no_longer_disarms_the_refusal(tmp_path
         assert cache.get(flow_key(spec.goal, spec.start_url, spec.scope)) is None
 
 
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_a_write_deferred_onto_a_mutating_neighbour_never_leaves_its_commit_ungated(
+        tmp_path: Path) -> None:
+    """AB-1. The sibling ordering of the test above, and the one the consistency check cannot judge.
+
+    `acting_at_write` answers "which step was in flight when the wire saw a write" — NOT "which step
+    caused it". When a write is deferred forward onto a classifier-mutating neighbour those two come
+    apart, the check's agreement is an accident, and trusting it puts the Idempotency-Key, the
+    precondition and the drift gate on a step that never writes while the real commit replays with
+    none of them.
+
+    The property, not the mechanism: a write that nothing could attribute must never leave the step
+    that actually committed UNGATED. Refusing satisfies that; so does gating every candidate. What is
+    not allowed is caching a confident-looking gate on the wrong row.
+    """
+    site = _Site(_DEFERRED_ONTO_BAIT)
+    httpd, base = site.serve()
+    cache = FlowCache(root=tmp_path / "c")
+    try:
+        spec = FlowSpec(name="p", goal="work the panel", start_url=f"{base}/", headless=True)
+        res = await _learn_once(
+            spec, provider=_prov(("Continue", "continue"), ("Confirm address", "confirm the address")),
+            router=None, cache=cache, verify_replay=False)
+        assert site.posts == ["/api/commit"], "the fixture did not POST; this would prove nothing"
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        if flow is None:
+            assert res.cached is False and res.note, "a refusal must be loud and carry its reason"
+            return
+        gated = [i for i, s in enumerate(flow.steps) if s.mutating]
+        assert 0 in gated, (
+            f"the commit is step 0 and it cached UNGATED while the gate sits on {gated} — a step that "
+            f"never writes. It will replay with no drift gate, no precondition and no Idempotency-Key, "
+            f"and it stays heal- and replan-eligible. "
+            f"steps={[(s.intent, s.mutating) for s in flow.steps]}")
+        for i in gated:
+            assert flow.steps[i].precond_scope, (
+                f"step {i} is marked mutating but carries no precondition, so its mutation gate has "
+                f"nothing to refuse under drift")
     finally:
         httpd.shutdown()
         httpd.server_close()
