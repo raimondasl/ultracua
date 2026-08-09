@@ -164,11 +164,17 @@ each run, and its fix (quarantine) must not land before skip-visibility exists, 
   Sequencing note for whoever picks up next: the register's per-finding "fix shape" paragraphs are
   hypotheses written before the code was read. Four of the seven attempted so far have been wrong in a
   way that only a reproduction or an adversarial pass caught.
-- **S6. AB-1 — the causal signal as a refusal oracle only.** *(blocked on S17 — its oracle is the
-  deferred-write refusal test, which is currently flaky under load.)* The register's "cheapest correct option",
+- **S6. AB-1 — the causal signal as a refusal oracle only.** *(UNBLOCKED in 0.88.0 — its oracle is the deferred-write
+  refusal test, which was not flaky: it was reporting R4.26. The mechanism under it is now fixed and
+  the test is deterministic under load.)* The register's "cheapest correct option",
   scoped conservatively: share the recorder's `__ucturn`/`attributedSeq` machinery (ONE implementation
   — R3.1's lesson) and use it ONLY to detect "a wire write occurred whose cause the page cannot prove"
-  → refuse loudly. No attribution, no augmentation, no seq→step map — which removes the parked
+  → refuse loudly. **What it inherits is now worth more than when this was written:** after R4.26 the
+  turn boundary is taken from the platform (`window.event`) instead of a `setTimeout(..., 0)`, so the
+  primitive S6 shares is no longer a bet on the scheduler. Note the same criticism applies to the
+  mechanism S6 would REPLACE — `flow.py`'s `write_window_ms` grace tails are a clock-based boundary of
+  exactly the kind R4.26 showed to be unsound, which strengthens the case for sharing rather than
+  tuning. Do not read that as licence to skip S6's own RED tests. No attribution, no augmentation, no seq→step map — which removes the parked
   branch's cross-origin-seq and drain-rebind hazards by construction. The remaining round-4 hazard
   that DOES apply (page-synthetic clicks masking a deferred write) is in scope and must have a RED
   test. First tests: the preserved defer-ladder fixture (60/300/450/600/800 ms) and the refuter
@@ -212,13 +218,13 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   evidence — so a refusal can key off evidence. Three constraints on it. It must stay OUT of
   `_HASHED_STEP_FIELDS` (that list is an allowlist, so a new field is approval-safe only if excluded;
   include it and every approved flow raises `StaleApprovalError`). It belongs INSIDE S6/AB-1, which needs
-  the same primitive and is blocked on S17 — building it twice is how a fifth wrong fix arrives. And it
+  the same primitive (no longer blocked — S17 landed in 0.88.0) — building it twice is how a fifth wrong fix arrives. And it
   is not retroactive: `mutating` is persisted and never recomputed, so D0 stays blocked for every
   already-cached flow until it is re-learned.
 
   **Net: D0 is blocked indefinitely, not pending a small fix.** The retry-and-relearn guard from S2 is
   the answer for as long as the write signal is a guess — treat it as the design, not a stopgap. (ii) overlaps **S6/AB-1** (the
-  causal signal as a refusal oracle) and inherits its blocker on **S17**.
+  causal signal as a refusal oracle), whose S17 blocker cleared in 0.88.0.
 
   **What the deferral actually costs that population, stated precisely — an earlier draft of this bullet
   said "one auth-refresh retry and nothing else", which the same commit falsified.** They lose (a) the
@@ -328,17 +334,25 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   either direction fails a test. AB-10 (possibly-dead belt-and-braces branch): coverage probe; delete
   if dead.
 - **S16. Scheduled mutation sweep.** The nine known mutants become a script + a weekly CI schedule.
-- **S17. ⚠️ RESCOPED BY MEASUREMENT (0.87.0): the test is NOT flaky — it is reporting a real defect.**
-  Reproduced under artificial load (busy-spin workers on every core): the deferred-write refusal fails
-  1 run in ~20, and the cached result puts the gate on the BENIGN click while the committing step is
-  ungated and un-keyed — **R4.26**, inviolable #3, R3.2's harm class on the `record` path.
+- **S17. ✅ DONE in 0.88.0 — the test was not flaky; the recorder was wrong, and it is now fixed.**
+  Rescoped by measurement at 0.87.0: under artificial load the deferred-write refusal failed ~1 run in
+  20 and the cached result put the gate on the BENIGN click while the committing step cached ungated
+  and un-keyed — **R4.26**, inviolable #3, R3.2's harm class on the `record` path.
 
-  So "de-flake" is the wrong verb and every remedy this bullet already forbids would have SUPPRESSED a
-  live write-safety hole. The work is to fix the recorder's attribution under scheduling pressure; the
-  test then stops failing as a consequence, which is the only acceptable way for it to stop failing.
+  So "de-flake" was the wrong verb, and every remedy this bullet forbade would have SUPPRESSED a live
+  write-safety hole. The attribution was fixed instead and the test stopped failing as a consequence,
+  which was the only acceptable way for it to stop failing: **0 failures in 25 loaded runs** of the
+  four load-dependent write-refusal tests, against 1-in-8 before.
 
-  **S6's blocker is unchanged but its reason is inverted.** S6 needs a deterministic oracle; the oracle
-  is honest and the MECHANISM under it is not. Fix R4.26 first, then S6.
+  Two things worth carrying forward. **Instrumenting the mechanism suppressed it** — 0 in 150 loaded
+  runs with an in-page probe — so the trace was never going to arrive by waiting for it; a
+  deterministic harness had to be built, and it then REFUTED the inferred cause (see R4.26 for the
+  measured one). And **the recorder's attribution had no property-level coverage at all**:
+  `tests/test_write_safety_invariants.py` covered only the `learn` path, whose attribution is a
+  different mechanism. That structural gap is the reason a misattribution survived three releases, and
+  closing it is what the fix's test does.
+
+  **S6 is UNBLOCKED.** Its oracle was honest all along; the mechanism under it was not, and now is.
 
   Original bullet follows. Found while
   landing S1: it fails intermittently in the full suite and never in isolation (5/5 isolated, 3/3 whole

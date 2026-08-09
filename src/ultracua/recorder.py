@@ -185,7 +185,49 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
   //     invasive to do without altering page behaviour; fail-loud is the safe choice.)
   //   - __ucturn > 1    -> a NESTED synthetic commit shares the turn (wrapper -> hidden control); we can't tell
   //     which commit issued the write.
-  const attributedSeq = () => (__ucturn === 1 ? __uclast : null);
+  //   - NOT INSIDE AN EVENT DISPATCH -> the write left in a bare task, so whatever `__ucturn` says, this is
+  //     not the commit's turn. See `inDispatch` below (R4.26).
+  //
+  // R4.26. `__ucturn` ALONE IS NOT ENOUGH, because the turn BOUNDARY is closed by a `setTimeout(..., 0)` and
+  // a timer is not a boundary — it is a bet on the scheduler, and the bet loses. A deferred write whose timer
+  // is already overdue runs BEFORE the reset armed by a later commit, inside that commit's still-open turn,
+  // and gets credited to it: the benign click cached `mutating=True` while the real commit cached UNGATED and
+  // UN-KEYED. Measured, and the ordering depends on how the later commit ARRIVES:
+  //
+  //     later commit arrives as a TIMER task  -> the reset runs first, write correctly unattributed
+  //     later commit arrives as an INPUT task -> the overdue write runs first and is misattributed, 3/3
+  //
+  // The agent's clicks are input tasks. In the field this needed a starved renderer to hold the write past
+  // the next click, which is why it read as a flaky test for three releases (~1 run in 40 under load).
+  //
+  // So the boundary is taken from the page instead of from the clock. `window.event` is the spec's "an event
+  // dispatch is in progress" signal: set for the duration of a dispatch and RESTORED when it ends. It is
+  // therefore still set through the dispatch's microtask continuations — which are genuinely part of the
+  // commit's turn — and gone in a timer or network continuation, which are not. Measured across every write
+  // shape the recorder supports (the cross-product in tests/test_write_safety_invariants.py):
+  //
+  //     KEPT (set):   sync in-handler | Promise.then | queueMicrotask | native submit button |
+  //                   form.submit() | requestSubmit() | Enter-submit
+  //     REFUSED (unset):  setTimeout | `await fetch(...)` continuation
+  //
+  // Note what this does NOT use. Comparing the IDENTITY of the current event against the commit's event
+  // refuses every ordinary form write (a native submit button dispatches a `submit` event, so the current
+  // event is no longer the click), and `eventPhase` reads 0 there for the same reason. Only the presence of
+  // a dispatch separates the two groups; the nested-commit case is still caught by `__ucturn > 1`.
+  //
+  // Read through the NATIVE getter, captured here before any page script runs, so a page cannot manufacture
+  // a dispatch by shadowing `window.event`. If the descriptor is ever missing the fallback is the plain
+  // property read: this is one half of a conjunction, so degrading it only returns to the previous
+  // behaviour, never to something weaker.
+  let __ucevget = null;
+  try {
+    const d = Object.getOwnPropertyDescriptor(window, 'event');
+    if (d && typeof d.get === 'function') __ucevget = d.get;
+  } catch (e) {}
+  const inDispatch = () => {
+    try { return !!(__ucevget ? __ucevget.call(window) : window.event); } catch (e) { return false; }
+  };
+  const attributedSeq = () => (__ucturn === 1 && inDispatch() ? __uclast : null);
   // `src` (fetch/xhr/beacon) tags which entry point fired the marker. The Python side reconciles the
   // fetch+xhr markers against the fetch/xhr requests Playwright saw on the wire: a write from a web worker /
   // cross-realm context (which this init-script can't reach) surfaces as a fetch/xhr request with NO marker,
