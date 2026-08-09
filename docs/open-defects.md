@@ -826,11 +826,117 @@ never accumulate a global map. **Not attempted.**
 execution context is the ordinary case). Markers left in the buffer are read by a LATER drain and bound
 to whichever step drained them. Same structural fix as R4.3. **Not attempted.**
 
-## R4.5 — A page-initiated synthetic click launders a deferred write into a confident attribution — OPEN (parked)
+## R4.5 — A page-initiated synthetic click launders a deferred write into a confident attribution — OPEN, and NO LONGER PARKED: REPRODUCED 10/10 AGAINST SHIPPED 0.89.0
 
-*medium.* The learn listener registers a commit for any click, including one the PAGE dispatches. A
-deferred write whose handler synthesises a click can therefore acquire a fresh, confidently-attributed
-turn. **In scope for slice S6** — it applies to the refusal-oracle design too, and needs a RED test.
+*Filed medium against the parked branch. **Re-filed HIGH at 0.90.0**, inviolable #3 (and #2 on the
+`record()` path, where replay double-submits while reporting success): it applies to the
+mechanism that SHIPPED in S6/AB-1, not to a branch nobody is on, and it is deterministic — no load, no
+timing, 10 runs in 10. RED test: `test_a_page_synthesised_click_must_not_launder_a_deferred_write`
+(`tests/test_unattributed_write.py`), strict-xfail until the fix lands.*
+
+**As filed.** The learn listener registers a commit for any click, including one the PAGE dispatches, so
+a deferred write whose handler synthesises a click can acquire a fresh, confidently-attributed turn.
+That was written about the parked branch's ATTRIBUTION. It survives into the shipped design for a
+different reason, which is why nothing caught it: S6 does not attribute — it asks whether the page can
+PROVE a cause, and over-gates when it cannot. A manufactured cause answers that question with a yes.
+
+**Mechanism, against `main`.** `attributedSeq()` is `__ucturn === 1 && inDispatch() ? __uclast : null`.
+R4.26 hardened `inDispatch` against a page SHADOWING `window.event`, by reading the native getter
+captured before page scripts run. Nothing anywhere checks `isTrusted`, so a page does not need to shadow
+a dispatch — it can PERFORM one. A deferred task that dispatches a click on any element matching
+`ACTIONABLE` and issues its write inside that dispatch gets `__ucturn` 0→1 from the capture listener and
+a genuine `window.event`, so the marker is stamped with the SYNTHETIC commit's own seq.
+`_wire_writes_are_provable` then returns True, `_author_steps` takes the "agree and provable" arm, the
+placement is TRUSTED, and AB-1's over-gating never runs.
+
+**Failure, measured.** Fixtures are `_DEFERRED_TWO_TASKS` (control) and `_DEFERRED_VIA_SYNTHETIC_CLICK`,
+identical but for whether the write leaves inside a dispatch. Three arms, 10 reps each, every run POSTing
+exactly once:
+
+| arm | write leaves via | gated | over-gate log | outcome |
+|---|---|---|---|---|
+| shipped `_DEFERRED_ONTO_BAIT`, verbatim | bare task | `[0, 1]` | fired | safe, 10/10 |
+| control: one MORE bare task | bare task | `[0, 1]` | fired | safe, 10/10 — the extra task is not the variable |
+| **synthetic click** | inside its dispatch | **`[1]`** | **silent** | **commit UNGATED, 10/10** |
+
+Read directly rather than inferred: the `__wirewrite` marker carries `seq=null` in the control and
+`seq=3` in the treatment — and 3 is the synthetic click's own seq, a commit no step performed. So step 0,
+the real commit, caches `mutating=False`: no drift gate, empty `precond_scope`, and heal- and
+suffix-replan-eligible. Positive control: force `_wire_writes_are_provable` False and the same fixture
+gates `[0, 1]`, so the RED test is wired to this decision point and will XPASS the moment it is closed.
+
+**A first draft of this entry also claimed "no Idempotency-Key on the wire", and that is WITHDRAWN as
+unmeasured.** The deferred POST leaves during step 1's window, and step 1 IS gated in the treatment, so
+the key on the wire is not obviously absent. The claim was an inference about replay dressed as an
+observation — the exact move R3.3 cost six predicate versions to unlearn — and the harm is fully carried
+by the surviving, measured facts. Do not restore it without a captured request header.
+
+**TWO SHAPES, not one.** `el.click()` launders identically to `dispatchEvent(new MouseEvent(...))` —
+measured 3/3 at 0.90.0, and it is the shape the parked round-4 probe itself used. The RED test is
+parametrized over both, so a fix that only sees one cannot XPASS its way to having the marker deleted.
+
+### R4.5 IS WORSE ON THE `record()` PATH, AND THE FIRST FILING OF THIS SLICE MISSED IT
+
+`attributedSeq` has TWO consumers, and this entry originally described only one. The learn path reads it
+through `_wire_writes_are_provable`, where the worst outcome is a trusted placement. `record()` reads it
+for per-write ATTRIBUTION and is **not** in attribution-only mode, so `store()` captures the page's
+synthetic click as a REAL STEP with a real locator, and the laundered seq attributes the write to it.
+
+Measured at 0.90.0 on `_R45_RECORD_PAGE` (a declared write flow, so the undeclared-write refusal cannot
+mask the result — the first probe used an undeclared one, refused for that unrelated reason, and would
+have "refuted" this had it been trusted):
+
+    record cached=True     steps: [0] click Continue   [1] click Confirm address   [2] click Refresh
+                           2 human clicks -> a 3-step recipe; step 2 is the page's own click
+    replay: returns OK     POSTs during replay: 2      <- double submit, reported as success
+
+So on this path R4.5 is not an over-gate at all. It (a) turns a refusal into a cached flow, (b) writes a
+step **no human performed** into the recipe that `approve()` then blesses — defeating the approval digest
+in the one way it exists to prevent — and (c) fires the commit TWICE on replay, under two different
+Idempotency-Keys, so a backend cannot dedupe them. **Inviolable #3 broken outright, and #2 with it.**
+
+The target's visibility is what decides which harm you see: with a `display:none` control replay fails
+loud (`DriftError`, and its note states the write did commit); with a visible one replay succeeds and
+double-submits. A reader who probes only the hidden variant will conclude this path is safe. It is not.
+
+**This miss is the entry's own lesson turned on itself.** The paragraph below already named the
+sibling-guard shape as what produced R4.5 — and the first draft of this re-filing then documented one
+consumer of a two-consumer signal. The check is cheap and was skipped: enumerate every reader of the
+signal before writing the scope line.
+
+**One fixture note worth keeping, because it will look like a fudge otherwise.** The write must land TWO
+bare tasks after the bait click, not one. `window` capture runs before `document` capture, so the page's
+release timer is armed — and fires — before the capture script's own `setTimeout(reset, 0)`; at one task
+out `__ucturn` is still 1 and a synthetic commit reads 2, refused for a reason unrelated to this finding.
+One task further the reset has run and `__ucturn` is 0, the ordinary deferred-write state. Equal-delay
+timers fire in arming order, so this is deterministic by construction — the same property the R4.26
+harness leans on, and why neither test needs artificial load.
+
+**ON `isTrusted`, WHICH IS THE OBVIOUS LEVER — and a first draft of this paragraph argued against it on
+three exhibits that do not hold.** The withdrawn version said the recorder's measured KEPT set
+(`form.submit()`, `requestSubmit()`, the wrapping-`<label>` forwarded click) put those shapes at risk from
+a trust filter. It does not: `form.submit()` fires no event at all, and for all three the COMMIT that
+`attributedSeq` reads is the enclosing REAL click, which is trusted. A filter on the commit listener
+cannot touch them. The direction of error was stated backwards too — dropping a commit makes
+`attributedSeq` return null, which makes `record` REFUSE and learn OVER-GATE, i.e. over-refusal, not the
+under-gate the draft warned of. Three independent lenses flagged that paragraph; it is corrected here
+rather than quietly deleted, because a register that steers the next slice off a lever on false evidence
+is worse than one that says nothing.
+
+**What stands.** The instruction survives even though its examples did not: *measure what any candidate
+filter refuses, on the real KEPT set, before writing it up* (D5's corollary). What is genuinely unpriced
+is the untrusted-forwarded-click class — a wrapper element forwarding to a hidden control, and the
+Playwright-dispatched `change` behind a `select` commit — and the cross-product in
+`tests/test_write_safety_invariants.py` does **not** currently contain a single cell whose commit is
+untrusted, so it cannot price the trade as it stands. New cells are needed first. And whatever the fix,
+it must not refuse on unprovability, which the AB-1 entry above measured as taking 4 of 6 ordinary
+read-over-POST patterns with it.
+
+**Process note, recorded because the miss is more instructive than the bug.** The plan named this hazard
+in scope for S6 and required a RED test; S6 shipped without one, and the register kept filing R4.5 as
+"parked", which reads as belonging to a branch nobody is on. A hazard carried forward by DESCRIPTION into
+a slice's scope, with no test to hold it, is a hazard that quietly leaves scope. That is the sibling-guard
+shape one level up: the guard was specified, and never applied to the mechanism that shipped.
 
 ## R4.6 — The invariant matrix asserts only that SOME step is gated, never that the gate is on the step that WROTE — OPEN
 
@@ -853,8 +959,10 @@ slice relies on the matrix as a gate.
 The conservative half of R3.2 continues as plan slice **S6**: the causal signal used ONLY as a refusal
 oracle — "a wire write occurred whose cause the page cannot prove" → refuse loudly — with no
 attribution and no seq→step map, which removes R4.3 and R4.4 **by construction** rather than by
-patching them. R4.5 remains in scope. Any future attempt to ATTRIBUTE (rather than merely refuse) must
-start from R4.3/R4.4 and from `docs/parked/README.md`, not from the diff.
+patching them. ~~R4.5 remains in scope.~~ **R4.5 was in S6's scope and S6 shipped without covering it**
+— it is now reproduced 10/10 against shipped `main` and carries a RED test; see its entry above. Any
+future attempt to ATTRIBUTE (rather than merely refuse) must start from R4.3/R4.4 and from
+`docs/parked/README.md`, not from the diff.
 
 ### ✅ AB-1 FIXED in 0.89.0 — and the "refusal oracle" framing above was measured WRONG twice
 
@@ -2323,6 +2431,31 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   one occurrence that trade is not worth it, and this register's own rule is that a fix on thin evidence
   is worse than none. **So R4.24 ships unmitigated**, with the sampler (0.84.0) in place to characterise
   the next occurrence.
+
+  **OCCURRENCE 2 (0.90.0, local windows, incidental to the R4.5 slice and recorded because a single
+  observation was the stated reason not to act).** Same shape, DIFFERENT test — so the "one flaky test"
+  reading is now unavailable:
+
+      FAILED tests/test_multiwrite.py::test_multiwrite_barrier_rejects_a_nonunique_confirm
+        playwright TimeoutError: Locator.wait_for: Timeout 5000ms exceeded.
+        Call log: - waiting for get_by_text("Saved") to be visible
+
+  Full suite, 1 failed / 867 passed / 1 xfailed in 23:47. The same file re-run in isolation: 8 passed in
+  31.9 s. The failing wait is a `record()` DEMO step — a localhost round-trip again, and again nothing in
+  the JS-reveal-race class. Two occurrences, two different tests, two different confirm strings, one
+  signature: a localhost round-trip exceeding a 5 s action budget.
+
+  **What this occurrence does NOT establish, stated because the temptation is to over-read it.** The host
+  load was not measured, so the wall-clock (23:47 against a nominal ~21 min) is not evidence — this
+  register's own rule about timing numbers under unknown load applies to its own filings first. The
+  sampler that exists to characterise the next occurrence runs in CI, not locally, so occurrence 2 came
+  with no resource profile at all. It moves the count from one to two and removes the single-observation
+  argument; it does not diagnose anything, and it is not grounds for raising a timeout.
+
+  One negative result worth keeping, since it is the hypothesis a reader reaches for first: the clean
+  re-run of the same tree was SLOWER — 868 passed in **26:56** against the failing run's 23:47 — and did
+  not fail. So wall-clock does not track the failure, and "the host was busy" is not supported by the one
+  cheap observation available. Whatever the mechanism is, it is not simply "slower run, more likely".
 
   What DID ship from the attempt: `tests/test_production_timeouts.py`, an AST guard that the shipped
   timeout defaults have not been raised — verified RED against exactly the mistake a future reader will

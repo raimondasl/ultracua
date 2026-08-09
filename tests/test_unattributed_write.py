@@ -42,9 +42,10 @@ from pathlib import Path
 
 import pytest
 
+import ultracua.flow as _flowmod
 from ultracua.cache import FlowCache, flow_key
 from ultracua.flow import run_cached
-from ultracua.flows import FlowSpec, _learn_once
+from ultracua.flows import FlowSpec, MutateSpec, _learn_once, approve, record, replay
 from ultracua.providers.scripted import ScriptedProvider
 
 
@@ -138,6 +139,91 @@ for (const id of ['c','a']) document.getElementById(id).addEventListener('click'
   function(){ document.querySelector('h1').textContent = 'clicked ' + id; });
 </script>"""
 
+# R4.5. The two below are `_DEFERRED_ONTO_BAIT` with the write pushed ONE MORE bare task out, and they
+# differ in exactly one thing: whether the write leaves inside a click the PAGE dispatched.
+#
+# WHY ONE MORE TASK, and why that is not a fudge. The capture script closes a turn by arming
+# `setTimeout(reset, 0)` from its own `document` capture listener. `window` capture runs BEFORE
+# `document` capture, so the page's release timer is armed FIRST and therefore fires FIRST — at that
+# point `__ucturn` is still 1 from the bait's click, and a synthetic commit there would read 2 and be
+# refused for a reason that has nothing to do with R4.5. Hopping one further task puts the reset behind
+# us and `__ucturn` back to 0: the ordinary deferred-write state, and the one an attacker-shaped page
+# would find. Equal-delay timers fire in ARMING order, so this is deterministic by construction — the
+# same property the R4.26 harness leans on, and the reason neither test below needs artificial load.
+_DEFERRED_TWO_TASKS = """<h1>Panel</h1>
+<button id='c' type='button'>Continue</button>
+<button id='a' type='button'>Confirm address</button>
+<button id='h' type='button' style='display:none'>Refresh</button>
+<script>
+document.getElementById('c').addEventListener('click', function(){ window.__armed = 1; });
+window.addEventListener('click', function(ev){
+  if (window.__armed && ev.target && ev.target.id === 'a') {
+    window.__armed = 0;
+    setTimeout(function(){ setTimeout(function(){
+      fetch('/api/commit', {method:'POST', body:'x=1'});
+    }, 0); }, 0);
+  }
+}, true);
+for (const id of ['c','a']) document.getElementById(id).addEventListener('click',
+  function(){ document.querySelector('h1').textContent = 'clicked ' + id; });
+</script>"""
+
+# ...and the same page where the deferred task SYNTHESISES a commit and writes inside its dispatch.
+_DEFERRED_VIA_SYNTHETIC_CLICK = """<h1>Panel</h1>
+<button id='c' type='button'>Continue</button>
+<button id='a' type='button'>Confirm address</button>
+<button id='h' type='button' style='display:none'>Refresh</button>
+<script>
+document.getElementById('h').addEventListener('click', function(){
+  fetch('/api/commit', {method:'POST', body:'x=1'});
+});
+document.getElementById('c').addEventListener('click', function(){ window.__armed = 1; });
+window.addEventListener('click', function(ev){
+  if (window.__armed && ev.target && ev.target.id === 'a') {
+    window.__armed = 0;
+    setTimeout(function(){ setTimeout(function(){
+      document.getElementById('h').dispatchEvent(new MouseEvent('click', {bubbles: true}));
+    }, 0); }, 0);
+  }
+}, true);
+for (const id of ['c','a']) document.getElementById(id).addEventListener('click',
+  function(){ document.querySelector('h1').textContent = 'clicked ' + id; });
+</script>"""
+
+# The SECOND member of the laundering class, and the reason the test below is parametrized. `el.click()`
+# is not an exotic variant — it is what the parked round-4 probe used — and it launders identically
+# (measured 3/3 at 0.90.0). Pinning only `dispatchEvent` would let a shape-specific fix XPASS, and the
+# strict marker would then be deleted as "fixed" with half the class still open.
+_DEFERRED_VIA_EL_CLICK = _DEFERRED_VIA_SYNTHETIC_CLICK.replace(
+    "document.getElementById('h').dispatchEvent(new MouseEvent('click', {bubbles: true}));",
+    "document.getElementById('h').click();")
+
+# R4.5 on the RECORD path, where the harm is a different and worse one. Same laundering, but the target
+# is VISIBLE and the write reveals a confirm, so the flow is recordable as a declared write. The
+# synthetic click is captured as a REAL STEP (`record` is not in attribution-only mode), so the recipe a
+# human approves contains an action nobody performed — and replaying it fires the commit twice: once
+# because the page still defers its own write, once because replay actuates the phantom step.
+_R45_RECORD_PAGE = """<h1>Panel</h1>
+<button id='c' type='button'>Continue</button>
+<button id='a' type='button'>Confirm address</button>
+<button id='h' type='button'>Refresh</button>
+<script>
+document.getElementById('h').addEventListener('click', function(){
+  fetch('/api/commit', {method:'POST', body:'x=1'}).then(function(){
+    document.querySelector('h1').textContent = 'Saved';
+  });
+});
+document.getElementById('c').addEventListener('click', function(){ window.__armed = 1; });
+window.addEventListener('click', function(ev){
+  if (window.__armed && ev.target && ev.target.id === 'a') {
+    window.__armed = 0;
+    setTimeout(function(){ setTimeout(function(){
+      document.getElementById('h').dispatchEvent(new MouseEvent('click', {bubbles: true}));
+    }, 0); }, 0);
+  }
+}, true);
+</script>"""
+
 # The other control: no write anywhere. An ordinary read flow must be entirely unaffected.
 _READ_ONLY = """<h1>Panel</h1>
 <button id='s' type='button'>Search</button>
@@ -217,6 +303,208 @@ async def test_a_write_deferred_onto_a_mutating_neighbour_never_leaves_its_commi
             assert flow.steps[i].precond_scope, (
                 f"step {i} is marked mutating but carries no precondition, so its mutation gate has "
                 f"nothing to refuse under drift")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_the_control_a_write_deferred_two_tasks_is_still_over_gated(tmp_path: Path) -> None:
+    """R4.5's CONTROL, and it is what makes the xfail below mean anything.
+
+    Identical to the R4.5 page except that the deferred task issues the write directly instead of
+    dispatching a click first. If this ever goes red, the extra task — not the synthetic click — is
+    what moved the verdict, and the finding below is misdiagnosed rather than fixed.
+    """
+    site = _Site(_DEFERRED_TWO_TASKS)
+    httpd, base = site.serve()
+    cache = FlowCache(root=tmp_path / "c")
+    try:
+        spec = FlowSpec(name="p", goal="work the panel", start_url=f"{base}/", headless=True)
+        res = await _learn_once(
+            spec, provider=_prov(("Continue", "continue"), ("Confirm address", "confirm the address")),
+            router=None, cache=cache, verify_replay=False)
+        assert site.posts == ["/api/commit"], "the fixture did not POST; this would prove nothing"
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        if flow is None:
+            assert res.cached is False and res.note, "a refusal must be loud and carry its reason"
+            return
+        gated = [i for i, s in enumerate(flow.steps) if s.mutating]
+        assert 0 in gated, (
+            f"deferring the write one extra bare task defeated the over-gating on its own, with no "
+            f"synthetic click involved. gated={gated} "
+            f"steps={[(s.intent, s.mutating) for s in flow.steps]}")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+@pytest.mark.parametrize("shape,page", [
+    pytest.param("dispatchEvent", _DEFERRED_VIA_SYNTHETIC_CLICK, id="dispatchEvent"),
+    pytest.param("el.click()", _DEFERRED_VIA_EL_CLICK, id="el_click"),
+])
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
+    "R4.5 — OPEN against shipped 0.89.0. A page-synthesised click manufactures a provable cause, so "
+    "`_wire_writes_are_provable` returns True, S6/AB-1 trusts the placement, and the real commit "
+    "caches UNGATED. Reproduced 10/10. Remove this marker with the fix, never without it."))
+async def test_a_page_synthesised_click_must_not_launder_a_deferred_write(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str, page: str) -> None:
+    """R4.5, against the SHIPPED mechanism rather than the parked branch it was filed on.
+
+    S6/AB-1 does not attribute; it asks whether the page can PROVE the cause of every wire write, and
+    over-gates when it cannot. R4.26 hardened that signal against a page SHADOWING `window.event` by
+    reading the native getter captured before page scripts run. Nothing stops a page from PERFORMING a
+    dispatch instead: there is no `isTrusted` check on the commit listener, so a deferred write that
+    first dispatches a click on any actionable element, then writes inside that dispatch, is stamped
+    with the synthetic commit's own seq and reads as provable.
+
+    Measured at 0.90.0 — the marker carries `seq=null` in the control above and a non-null seq here,
+    and the recipe gates only the bait, so the real commit (step 0) caches with no drift gate and no
+    `precond_scope`, and stays heal- and suffix-replan-eligible. Parametrized over BOTH members of the
+    laundering class: `dispatchEvent(new MouseEvent(...))` and `el.click()`. Pinning one would let a
+    shape-specific fix XPASS and get this marker deleted with the other half still open.
+
+    The property is the same one AB-1 pins, and it is deliberately disjunctive: a write nothing could
+    honestly attribute must never leave the step that actually committed UNGATED. Refusing satisfies
+    it; so does gating every candidate. Caching a confident-looking gate on the wrong row does not.
+
+    STRICT + `raises=AssertionError` on purpose: every premise below raises RuntimeError, so a premise
+    that rots ERRORS loudly instead of being swallowed as "expected failure" — the trap an xfail
+    otherwise sets for the next person. When the fix lands this XPASSes and the suite goes red until
+    the marker is deleted.
+
+    THE THIRD PREMISE IS THE ONE THAT IS EASY TO MISS, and it was found by auditing this test rather
+    than the code it tests. The AB-1 arm is reached only when `_write_owner` sees TWO live candidates —
+    step 0's `write_window_ms` grace tail still open under step 1's act window. Let one inter-step gap
+    exceed that tail (measured headroom on this host: ~1.8 s, and this repo documents 5 s stalls twice
+    under R4.24) and the write acquires a unique owner, the whole AB-1 block is SKIPPED, and the
+    assertion below still fails with a byte-identical message. The xfail would then read "expected
+    failure, R4.5 still open" while never evaluating the decision point at all. So the adjudication is
+    spied on, and its absence is an ERROR rather than a quiet expected failure.
+    """
+    seen: list[bool] = []
+    _real_provable = _flowmod._wire_writes_are_provable
+
+    async def _spy(pg):
+        out = await _real_provable(pg)
+        seen.append(bool(out))
+        return out
+
+    monkeypatch.setattr(_flowmod, "_wire_writes_are_provable", _spy)
+
+    site = _Site(page)
+    httpd, base = site.serve()
+    cache = FlowCache(root=tmp_path / "c")
+    try:
+        spec = FlowSpec(name="p", goal="work the panel", start_url=f"{base}/", headless=True)
+        res = await _learn_once(
+            spec, provider=_prov(("Continue", "continue"), ("Confirm address", "confirm the address")),
+            router=None, cache=cache, verify_replay=False)
+        if site.posts != ["/api/commit"]:
+            raise RuntimeError(
+                f"PREMISE LOST ({shape}): the fixture did not POST exactly once (posts={site.posts}), "
+                f"so this test is not exercising R4.5 at all and its xfail means nothing")
+        if not seen:
+            raise RuntimeError(
+                f"PREMISE LOST ({shape}): the AB-1 adjudication was never reached, so "
+                f"`_wire_writes_are_provable` was never consulted. The write was uniquely attributed "
+                f"instead — most likely an inter-step gap exceeded `write_window_ms` — and this test "
+                f"would otherwise XFAIL for a reason that has nothing to do with R4.5")
+        if not any(seen):
+            raise RuntimeError(
+                f"PREMISE LOST ({shape}): the marker was NOT laundered (provable={seen}), so the "
+                f"synthetic click did not manufacture a cause and there is no R4.5 here to observe")
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        if flow is None:
+            assert res.cached is False and res.note, "a refusal must be loud and carry its reason"
+            return
+        if len(flow.steps) < 2:
+            raise RuntimeError(
+                f"PREMISE LOST ({shape}): the recipe has {len(flow.steps)} step(s); this test needs "
+                f"the commit at step 0 and the bait at step 1")
+        gated = [i for i, s in enumerate(flow.steps) if s.mutating]
+        assert 0 in gated, (
+            f"R4.5 ({shape}): the commit is step 0 and it cached UNGATED while the gate sits on "
+            f"{gated} — a step that never writes. The page manufactured a provable cause by "
+            f"dispatching its own click, so the placement was trusted and the over-gating never ran. "
+            f"steps={[(s.intent, s.mutating) for s in flow.steps]}")
+        for i in gated:
+            assert flow.steps[i].precond_scope, (
+                f"step {i} is marked mutating but carries no precondition")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
+    "R4.5 on the RECORD path — OPEN against shipped 0.89.0, and WORSE than the learn-path harm: the "
+    "synthetic click is captured as a real STEP, so an approved recipe contains an action no human "
+    "performed and replay DOUBLE-SUBMITS while reporting success. Measured at 0.90.0."))
+async def test_a_page_synthesised_click_must_not_become_a_recorded_step(tmp_path: Path) -> None:
+    """R4.5's sibling consumer, and the one the first filing of this slice missed entirely.
+
+    `attributedSeq` has TWO consumers. The learn path reads it through `_wire_writes_are_provable` and
+    the worst it does is trust a placement. `record()` reads it for per-write ATTRIBUTION, and it is
+    not in attribution-only mode — so `store()` captures the page's synthetic click as a step, with a
+    real locator, and the laundered seq attributes the write to it. The result is not an over-gate:
+
+      * a demo of TWO human clicks caches a THREE-step recipe, and the extra step is one nobody
+        performed — approval then blesses an action a human never reviewed, which is what the whole
+        approval-digest mechanism exists to prevent;
+      * replay actuates that phantom step WHILE the page still defers its own write, so the commit
+        fires TWICE, under two different Idempotency-Keys, and `replay()` returns normally.
+
+    That is inviolable #3 broken outright and #2 with it, where the learn path only loses recovery
+    features. Measured at 0.90.0: `record cached=True`, 3 steps for 2 human actions, replay OK, 2 POSTs.
+
+    Disjunctive again: refusing the demo satisfies this test, and so does recording only the human's
+    steps. What is not allowed is a phantom step, or a second POST.
+    """
+    site = _Site(_R45_RECORD_PAGE)
+    httpd, base = site.serve()
+    cache = FlowCache(root=tmp_path / "c")
+    try:
+        spec = FlowSpec(name="rp", goal="work the panel", start_url=f"{base}/",
+                        mutate=MutateSpec(confirm_text_contains="Saved"))
+
+        async def _demo(pg) -> None:
+            await pg.get_by_role("button", name="Continue").click()
+            await pg.get_by_role("button", name="Confirm address").click()
+            await pg.wait_for_timeout(900)
+
+        res = await record(spec, demo=_demo, headless=True, cache=cache)
+        if len(site.posts) != 1:
+            raise RuntimeError(
+                f"PREMISE LOST: the demo did not produce exactly one POST (posts={site.posts}), so the "
+                f"laundering path was not exercised")
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        if flow is None or not res.cached:
+            assert res.note, "a refusal must carry its reason"
+            return                                    # refusing is a correct outcome for this property
+
+        def _target(step) -> str:
+            try:
+                return (step.locator.name or step.locator.text or "") or ""
+            except Exception:                          # noqa: BLE001 - a spec shape we don't care about
+                return ""
+
+        phantom = [(i, _target(s)) for i, s in enumerate(flow.steps)
+                   if _target(s) not in ("Continue", "Confirm address")]
+        assert not phantom, (
+            f"R4.5 (record): the demo performed 2 clicks and the recipe cached {len(flow.steps)} steps; "
+            f"{phantom} was never performed by a human. The page dispatched it, `store()` captured it "
+            f"as a real step, and approval will bless it. "
+            f"steps={[(_target(s), s.mutating) for s in flow.steps]}")
+
+        before = len(site.posts)
+        approve(spec, cache=cache)
+        try:
+            await replay(spec, cache=cache)
+        except Exception:                              # noqa: BLE001 - a loud failure is acceptable here
+            pass                                       # the POST COUNT is the property, not the verdict
+        fired = len(site.posts) - before
+        assert fired <= 1, (
+            f"R4.5 (record): replay fired {fired} POSTs for one operator request — the page deferred "
+            f"its own write AND replay actuated the phantom step. Inviolable #3.")
     finally:
         httpd.shutdown()
         httpd.server_close()
