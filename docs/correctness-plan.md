@@ -401,6 +401,11 @@ so refusals read as designed behaviour. STATUS/README counts squared with realit
   drift_bench (deliberate re-baselines argued in writing).
 - Audit the fix: anything touching flow.py / flows.py / locators.py / recorder.py write paths gets a
   pre-merge adversarial audit.
+- **Two strikes, then change the SENSOR CLASS.** After two fix shapes for one finding have been built
+  and measured wrong, the third must change what the decision is made FROM — inference → a human's
+  verdict, or inference → a loud refusal — not refine the inference. Green cannot tell attempt N from
+  attempt N+1 here, so "until the suite passes" is not a stopping rule. Full gate, the class table, and
+  its worked application (**D5**, attribution blocked) are in `docs/open-defects.md`.
 - Matrix over bespoke: write-safety fixes add a dimension, and the cell prints what it exercised.
 - Guards go in the mechanism, never the wrapper; predicates become inexpressible raw (enforcement
   tests), not merely consolidated.
