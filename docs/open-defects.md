@@ -1856,8 +1856,90 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   Sequence with **S17**: same family, same load-dependence, and S17 already owns "reproduce under
   artificial load first, do not silence with reruns, do not weaken the production bound".
 
-* **R4.26 — CRITICAL. Under load the recorder credits a DEFERRED write to the NEXT click, caching the
-  real commit UNGATED and UN-KEYED.** Measured, not read: this is R3.2's harm class on the `record` path.
+* **✅ FIXED in 0.88.0 — R4.26 — CRITICAL. Under load the recorder credits a DEFERRED write to the NEXT
+  click, caching the real commit UNGATED and UN-KEYED.** Measured, not read: this is R3.2's harm class
+  on the `record` path.
+
+  **THE MECHANISM, NOW MEASURED — and the inference below was right about the what, wrong about the
+  when.** The filing said "do not fix from that inference alone; instrument the turn counter first".
+  Doing so paid twice. First, instrumenting the turn counter SUPPRESSED the defect: 0 reproductions in
+  150 loaded runs with an in-page probe, against 1-in-40 without one. A Heisenbug, so the trace was
+  never going to arrive by waiting. Second, the deterministic harness built instead REFUTED the obvious
+  story. The turn boundary is closed by a `setTimeout(..., 0)`, and the guess was that an overdue timer
+  simply sorts earlier and preempts it. It does not — not on its own:
+
+  | how the LATER commit arrives | which runs first | outcome |
+  |---|---|---|
+  | a TIMER task (a synthetic `.click()`) | the freshly-armed reset | unattributed, correct, 3/3 |
+  | an INPUT task (a real dispatched click) | the OVERDUE write timer | **misattributed, 3/3** |
+
+  Blink prioritises input, so the later commit's `store` runs, arms its reset, and returns — and the
+  overdue write timer then runs INSIDE that commit's still-open turn, before the reset it was armed
+  after. The agent's clicks are input tasks. That is the whole defect, and it is why load is required
+  in the field (the renderer must be starved past the write's due time) while nothing about the logic
+  is machine-speed dependent — the contradiction that made this look impossible for three releases.
+
+  **The fix: take the turn boundary from the page instead of from the clock.** A timer is not a
+  boundary, it is a bet on the scheduler. `window.event` is the spec's "an event dispatch is in
+  progress" signal — set for the duration of a dispatch and restored when it ends — so it is still set
+  through the dispatch's microtask continuations, which ARE the commit's turn, and gone in a timer or
+  network continuation, which are not. `attributedSeq()` now requires it in addition to
+  `__ucturn === 1`, read through the native getter captured before any page script runs.
+
+  Chosen by measurement across every write shape the recorder supports, because the tighter rules fail:
+
+  | rule | sync | microtask | submit button | `form.submit()` | requestSubmit | Enter | setTimeout | await |
+  |---|---|---|---|---|---|---|---|---|
+  | same Event identity | ✓ | ✓ | **✗** | ✓ | **✗** | **✗** | ✓ | ✓ |
+  | commit's `eventPhase` | ✓ | ✓ | **✗** | ✓ | ✓ | **✗** | ✓ | ✓ |
+  | **inside a dispatch** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+  Identity and `eventPhase` both refuse the ordinary form write — a native submit button dispatches a
+  `submit` event, so the current event is no longer the click and the click's phase has returned to 0.
+  Either would have shipped the D0 over-refusal shape wearing an attribution hat. Only the PRESENCE of
+  a dispatch separates the two groups; the nested-synthetic-commit case stays caught by `__ucturn > 1`.
+
+  **RESIDUAL, stated rather than implied.** A write issued from a NON-commit event dispatch — a `load`,
+  `message` or `visibilitychange` handler — that runs inside another commit's still-open turn is still
+  attributable to that commit. It needs the same starved-reset window R4.26 needed, so this is a
+  narrowing (any task → an event-dispatch task), not a closure. It was NOT closed by requiring the
+  current event to be the commit's own, because that is the identity rule in the table above and it
+  costs every form write; and a denylist of lifecycle event types is the "enumerate the loud outcomes"
+  error this file already records. Pinned by the `timer`/`microtask` cells' premise assertions, which
+  fail loudly if a cell stops producing the shape it is named for.
+
+  **The test is a DIMENSION, not a bespoke case** — `tests/test_write_safety_invariants.py` now runs the
+  property over the `record` entry point too, crossed on WHEN the write leaves the browser (sync /
+  microtask / timer / timer-armed-by-an-earlier-commit). That file previously covered only
+  `run_cached(mode="learn")`, whose attribution is a different mechanism entirely, so the recorder's
+  had no property-level coverage at all — which is the structural reason this survived. Both directions
+  are load-bearing: sync and microtask MUST stay learnable, or the fix is satisfied by refusing
+  everything.
+
+  The R4.26 cell is deterministic — 8/8 RED against pre-fix source, reproducing the field signature
+  `steps=[('click Commit', False), ('click Next', True)]` exactly. It gets there WITHOUT racing: the
+  field ordering is 1-in-40 under load and only 2-in-10 even when the page starves its own renderer
+  (Playwright's CDP traffic interleaves at the block boundary), so the cell instead reproduces the same
+  decision-point state via two documented orderings — a `window` capture listener runs before the
+  recorder's `document` one, and equal-delay timers fire in arming order.
+
+  **Each half of the fix was mutation-checked, because "the cells are green" is not evidence of which
+  line made them green:**
+
+  | mutation | cells RED |
+  |---|---|
+  | drop `&& inDispatch()` (revert the fix) | `timer_armed_by_an_earlier_commit`, `timer_with_window_event_shadowed` |
+  | keep the fix, read `window.event` NAIVELY | `timer_with_window_event_shadowed` only |
+
+  So the dispatch check is what closes R4.26, the native-getter capture is independently load-bearing
+  rather than defensive decoration, and the two liveness cells are not passing merely because
+  everything is refused. **Verified hostile**: `window.event` is a *configurable* accessor, a page can
+  redefine it to return a truthy fake, and only the getter captured at init still reads the truth.
+
+  **The change is monotone in the safe direction** — `attributedSeq` can now only return `null` where
+  it previously returned a seq — so it cannot introduce a new silent-wrong. The entire risk of this fix
+  is capability loss, which is what the liveness cells and the 88 existing recorder/write tests
+  measure. That asymmetry is why this one is not the fourth green-but-wrong change in this area.
 
       steps=[('click Commit', False), ('click Next', True)]      # 1 run in ~40 under CPU saturation
 
@@ -1899,6 +1981,14 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   demo, so A8's confirm-baseline probe sees `LOAD-SAVED` already on the entry page and refuses there).
   The test pins one refusal by asserting `"single" in res.note`, so it fails when a second legitimate
   refusal wins the race. Fix the ASSERTION — refused, not cached, not re-fired — not the guard.
+
+  **✅ The assertion was fixed in 0.88.0**, alongside R4.26 because it is the same cluster and the same
+  lesson: an intermittent red is how a real defect stays invisible. It now asserts the property —
+  refused, nothing cached, the write never re-fired, and a non-empty reason — instead of which of two
+  correct refusals won. It still fails if the load-armed write is attributed to the benign click, which
+  is the thing it exists to catch. Note the 3-in-8 rate was NOT reproduced afterwards (0 in 25 loaded
+  runs), but under a lighter harness — four tests per pytest process rather than the full file — so
+  that is not evidence the race is gone, only that it was not provoked.
 
   **The lesson is about the filing, not the code.** Three observations were unified into one finding on
   the strength of their shape, and reproduction dissolved two thirds of it. This register's own rule —

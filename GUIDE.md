@@ -147,7 +147,14 @@ uv run ultracua flow approve --name place-order    # verify your demo, then appr
 A write demonstrated **without** a declared confirm check is **refused** with guidance to re-record. The
 recorder trusts HTTP method semantics, so a write *behind a GET* link or via `sendBeacon` isn't
 auto-detected — **declare those as writes** (`--confirm-*`) and they're captured gated + approval-gated all
-the same; don't rely on auto-detection for them. The Python API is `record(spec, demo=…)` (set
+the same; don't rely on auto-detection for them.
+
+A **deferred** write is also refused: if the request leaves the browser after its click's turn has ended —
+from a `setTimeout`, an awaited round-trip, or a load handler — nothing on the page can prove which control
+caused it, so the recorder gates nothing and says so rather than risk gating the wrong step. A write issued
+synchronously from the click, or from a microtask continuation of it, records normally; so does an ordinary
+form submit. In practice this means a **debounced** commit button is not recordable — re-demonstrate with a
+control that commits directly, or declare the write and let the confirm barrier carry it. The Python API is `record(spec, demo=…)` (set
 `spec.mutate` for a write), returning a `RecordResult` (`is_write` flags a write flow).
 
 ### Serve flows to any AI assistant (MCP)

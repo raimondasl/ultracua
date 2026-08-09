@@ -763,7 +763,18 @@ async def test_record_write_load_armed_write_with_single_commit_is_refused(tmp_p
 
         res = await record(spec, demo=_demo, headless=True, cache=cache)
         # The load-armed write must NOT be attributed to the sole benign click (that would cache it ungated).
-        assert res.cached is False and "single" in res.note
+        #
+        # R4.25 — assert the PROPERTY, not which refusal won the race. This asserted `"single" in
+        # res.note`, pinning the attribution refusal specifically, and failed ~3 runs in 8 under load
+        # for a reason that is not a defect: when the load-armed POST lands before the demo starts,
+        # A8's confirm-baseline probe sees `LOAD-SAVED` already on the entry page and refuses THERE
+        # instead — a second, equally correct refusal reached by a different path. `res.cached is
+        # False` held in every one of those runs. Over-specifying the reason turned a correct guard
+        # into an intermittent red, and an intermittent red is how R4.26 stayed invisible for three
+        # releases. What must hold is that the flow is refused, nothing is cached, and the write is
+        # never re-fired.
+        assert res.cached is False, f"the load-armed write was CACHED: {res.note!r}"
+        assert res.note, "refused silently — a refusal must carry its reason"
         assert cache.get(flow_key(spec.goal, spec.start_url, spec.scope)) is None
         assert counter["saves"] == 1                                  # demo only; not cached -> never re-fired
     finally:

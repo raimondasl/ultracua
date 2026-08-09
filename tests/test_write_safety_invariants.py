@@ -88,8 +88,10 @@ class _Site:
 
 
 # --- the commit control, three ways a real page commits ---------------------------------------
-# All three are SYNCHRONOUS on purpose: a deferred write is R3.2's open residual, and mixing it in
-# would make these cells race rather than test the property.
+# All three are SYNCHRONOUS on purpose: this matrix varies WHERE the commit is and WHAT it looks
+# like, not WHEN its write leaves. That second axis is a dimension of its own and it lives in the
+# `record`-path matrix at the bottom of this file — where, contrary to what this comment used to
+# claim, it does NOT have to race (R4.26).
 _COMMITS = {
     # A formless JS POST. `classify_mutation` has no form context — the A9 shape.
     "fetch": "<button id='c' type='button' onclick=\"fetch('/commit',{method:'POST',body:'x=1'})\">"
@@ -300,6 +302,185 @@ async def test_a_learned_write_is_never_cached_ungated_or_replayed_unkeyed(case,
         assert not unkeyed, (
             f"{_ids(case)}: {len(unkeyed)} of {len(site.posts)} replayed POST(s) carried NO "
             f"Idempotency-Key — a resume or retry double-submits. gated steps={gated}")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# =============================================================================================
+# THE SAME INVIOLABLE ON THE OTHER ENTRY POINT, crossed with WHEN THE WRITE LEAVES THE BROWSER.
+#
+# Everything above enters through `run_cached(mode="learn")`, whose attribution is `flow.py`'s
+# post-hoc reconciliation of requests against steps. `record()` uses a DIFFERENT mechanism — in-page
+# markers that name the commit each write came from — and nothing asserted this property over it.
+# That gap is how R4.26 survived three releases: the recorder credited a deferred write to the NEXT
+# click, cached the real commit UNGATED, and the only thing that ever noticed was one bespoke test
+# that failed ~1 run in 20 and was read as flaky.
+#
+# The new dimension is WHEN the write leaves relative to its commit. The comment on `_COMMITS` used
+# to say a deferred write would make cells "race rather than test the property" — which was true of
+# the field ordering and is why nobody added it. The cells below do not race for it: they reproduce
+# the same DECISION-POINT STATE from two documented orderings instead (see the R4.26 cell).
+#
+# BOTH DIRECTIONS ARE LOAD-BEARING, as everywhere in this file:
+#   * `sync` and `microtask` MUST STAY LEARNABLE. A turn boundary closed too early — a microtask
+#     reset, say — satisfies every safety cell here by refusing writes it could have attributed,
+#     which is the D0 over-refusal shape wearing an attribution hat.
+#   * every `timer*` cell MUST BE REFUSED, including against a page actively faking the signal the
+#     fix reads. In-page evidence cannot prove what caused a deferred write, so the only honest
+#     answer is to gate nothing and fail loud.
+# =============================================================================================
+
+# Each cell records the SHAPE it actually produced — whether the write left the browser inside an
+# event dispatch or in a bare task — and that is asserted as a PREMISE below, so a cell which
+# silently stops exercising its shape fails loudly instead of passing. Without it the deferred cells
+# would go quietly vacuous the day anything perturbs their scheduling, which is the failure mode that
+# let R4.26 live for three releases. `__nev` is the page's own copy of the NATIVE `window.event`
+# getter, taken before anything below can shadow it, so the premise stays truthful in the hostile
+# cell — where the naive read (`__postPlainEvent`) is the fake and the two deliberately disagree.
+_NATIVE_EVENT_JS = ("var __nev = (function(){"
+                    " var d = Object.getOwnPropertyDescriptor(window, 'event');"
+                    " return (d && d.get) ? d.get : function(){ return window.event; }; })();")
+_POST_JS = ("window.__postAt = performance.now();"
+            "window.__postInDispatch = !!__nev.call(window);"
+            "window.__postPlainEvent = !!window.event;"
+            "fetch('/save',{method:'POST'}).then(function(r){return r.text();})"
+            ".then(function(t){ document.getElementById('out').textContent = t; });")
+
+# Commit arms the write; a `window` capture-phase listener re-issues it in a bare task during the NEXT
+# click's still-open turn. Shared by R4.26's cell and the shadowing cell below.
+_ARM_ON_NEXT_JS = ("window.addEventListener('click', function(ev){"
+                   " if (window.__armed && ev.target && ev.target.id === 'next') {"
+                   "  window.__armed = false;"
+                   "  setTimeout(function(){" + _POST_JS + "}, 0); } }, true);")
+
+_TIMING = {
+    # The write leaves in the commit's own synchronous turn.
+    "sync": (_POST_JS, ""),
+    # A microtask continuation of the commit's turn — still unambiguously caused by this click.
+    "microtask": ("Promise.resolve().then(function(){" + _POST_JS + "});", ""),
+    # Deferred by a timer: the cause cannot be proven in-page (a load-armed write coincides
+    # indistinguishably with an unrelated click), so it must be refused even though a human can see
+    # which button caused it.
+    "timer": ("setTimeout(function(){" + _POST_JS + "}, 120);", ""),
+    # R4.26, deterministically. Commit ARMS the write; it leaves the browser in a timer task that runs
+    # during the NEXT click's still-open turn, so the recorder credits the benign click and caches the
+    # real commit UNGATED.
+    #
+    # Why this shape and not the field one: in the field the write is a plain `setTimeout(..., 120)`
+    # held past the next click by a starved renderer, and that ordering is a race — measured 1 run in
+    # ~40 under busy-spun cores, and 2 in 10 when the page starves its own main thread, because
+    # Playwright's CDP traffic interleaves at the block boundary. The ordering is decided by the task
+    # TYPE of the later commit, which is not something a test can pin:
+    #
+    #     later commit arrives as a TIMER task  -> the turn-reset timer runs first, no misattribution
+    #     later commit arrives as an INPUT task -> the overdue write timer runs first, 3/3
+    #
+    # So the cell reproduces the same DECISION-POINT STATE — a write leaving in a bare task while a
+    # later commit's turn is still open — without racing for it. Two documented orderings do the work:
+    # a `window` capture-phase listener runs BEFORE the recorder's `document` one, and equal-delay
+    # timers fire in arming order. The write's timer is therefore armed before the turn-reset of the
+    # very commit it is about to be credited to, and beats it every time.
+    "timer_armed_by_an_earlier_commit": ("window.__armed = true;", _ARM_ON_NEXT_JS),
+    # The same thing against a HOSTILE page. `window.event` is a configurable accessor, so a page can
+    # redefine it to return a truthy fake and make every deferred write look like it left inside a
+    # dispatch — which would hand R4.26 straight back. Measured: the redefinition succeeds, a plain
+    # `window.event` read returns the fake, and the native getter captured at init still returns the
+    # truth. This cell is what makes that hardening a tested claim rather than a comment.
+    "timer_with_window_event_shadowed": (
+        "window.__armed = true;",
+        "Object.defineProperty(window, 'event', {configurable: true,"
+        " get: function(){ return {type: 'FAKE'}; }});" + _ARM_ON_NEXT_JS),
+}
+_MUST_REFUSE = {"timer", "timer_armed_by_an_earlier_commit", "timer_with_window_event_shadowed"}
+
+
+def _timing_page(commit_body: str, extra: str) -> str:
+    return ("<h1>Editor</h1>"
+            "<button type=button id='commit'>Commit</button>"
+            "<button type=button id='next'>Next</button>"
+            "<div id='out'></div>"
+            "<script>" + _NATIVE_EVENT_JS +
+            "document.getElementById('next').addEventListener('click',function(){"
+            "window.__nextAt = performance.now();});"
+            + extra +
+            "document.getElementById('commit').addEventListener('click',function(){" + commit_body + "});"
+            "</script>")
+
+
+@pytest.mark.parametrize("timing", list(_TIMING))
+async def test_a_recorded_write_is_gated_on_the_step_that_wrote_or_refused(timing, tmp_path: Path) -> None:
+    """INVIOLABLE #3 over the `record` entry point. A cell fails when the recorder caches a write
+    with the gate on a step that did not write (R4.26's harm), caches one with no gate at all, or —
+    the other direction — refuses a write whose cause it can actually prove."""
+    from ultracua.flows import FlowSpec, MutateSpec, record
+
+    commit_body, extra = _TIMING[timing]
+    site = _Site(_timing_page(commit_body, extra))
+    httpd, base = site.serve()
+    cache = FlowCache(root=tmp_path / "c")
+    goal = f"commit then move on ({timing})"
+    seen: dict = {}
+    try:
+        spec = FlowSpec(name=f"rec-{timing}", start_url=f"{base}/", goal=goal,
+                        mutate=MutateSpec(confirm_text_contains="committed"))
+
+        async def _demo(page) -> None:
+            await page.get_by_role("button", name="Commit").click()
+            await page.get_by_role("button", name="Next").click()
+            await page.get_by_text("committed").wait_for()
+            seen.update(await page.evaluate(
+                "({post: window.__postAt || 0, next: window.__nextAt || 0,"
+                "  inDispatch: !!window.__postInDispatch,"
+                "  plainEvent: !!window.__postPlainEvent})"))
+
+        res = await record(spec, demo=_demo, headless=True, cache=cache)
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+
+        assert len(site.posts) == 1, (
+            f"{timing}: the demo must commit exactly once; saw {len(site.posts)} POST(s)")
+        # PIN THE PREMISE — each cell must actually produce the write SHAPE it is named for, or it is
+        # asserting the product's behaviour on an input it never generated.
+        assert seen.get("inDispatch") is (timing not in _MUST_REFUSE), (
+            f"{timing}: this cell is supposed to issue its write "
+            f"{'INSIDE' if timing not in _MUST_REFUSE else 'OUTSIDE'} an event dispatch and did the "
+            f"opposite, so it exercised the wrong shape entirely (inDispatch={seen.get('inDispatch')})")
+        if timing.startswith("timer_"):
+            # ...and for R4.26's cells specifically: the deferred write must land AFTER the benign
+            # click, or no commit's turn was open to mis-credit it to and the cell proved nothing.
+            assert seen.get("post", 0) > seen.get("next", 0) > 0, (
+                f"{timing}: premise lost — the deferred write did not land after the benign click "
+                f"(post={seen.get('post')}, next={seen.get('next')}), so this cell exercised nothing")
+        # The hostile cell must actually be hostile: a NAIVE `window.event` read has to come back
+        # truthy at the moment of the write — from the fake — or the shadowing never took and the cell
+        # is just a duplicate of the one above it. Everywhere else the naive read agrees with the
+        # native one, which is what makes the shadowed cell the only thing separating the two.
+        shadowed = timing == "timer_with_window_event_shadowed"
+        assert seen.get("plainEvent") is (shadowed or timing not in _MUST_REFUSE), (
+            f"{timing}: the page's naive `window.event` read was {seen.get('plainEvent')} at the moment "
+            f"of the write, which is not the setup this cell is named for "
+            f"(native reading of the same moment: {seen.get('inDispatch')})")
+
+        if timing in _MUST_REFUSE:
+            assert res.cached is False and flow is None, (
+                f"{timing}: a write whose cause cannot be proven in-page was CACHED. steps="
+                f"{[(s.intent, s.mutating) for s in flow.steps] if flow else None}")
+            assert res.note, f"{timing}: refused silently — a refusal must carry its reason"
+            return
+
+        # ...and the liveness half: a write the recorder CAN attribute must stay learnable.
+        assert res.cached is True and flow is not None, (
+            f"{timing}: this write is caused by its own click, provably and in-page, and must stay "
+            f"recordable — refusing it makes the ordinary write flow unauthorable. note={res.note!r}")
+        gated = [i for i, s in enumerate(flow.steps) if s.mutating]
+        assert 0 in gated, (
+            f"{timing}: the gate is on step(s) {gated}, but step 0 ('Commit') is the one that WROTE. "
+            f"The commit replays with no drift gate, no precondition and no Idempotency-Key while the "
+            f"barrier sits on a step that never writes. "
+            f"steps={[(s.intent, s.mutating) for s in flow.steps]}")
+        assert flow.steps[0].precond_scope, (
+            f"{timing}: step 0 is marked mutating but carries no precondition, so the mutation gate "
+            f"has nothing to refuse under drift")
     finally:
         httpd.shutdown()
         httpd.server_close()

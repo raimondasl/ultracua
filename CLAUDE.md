@@ -116,6 +116,18 @@ all. A fix built on a wrong diagnosis is worse than none.
 **Verify a regression test fails against the old code.** A test that passes both before and after proves
 nothing. This has caught several no-op "fixes".
 
+**The instrument can suppress the defect — and a rare bug is a harness problem, not a patience problem.**
+R4.26 reproduced 1 run in 40 under load and **zero in 150** once an in-page probe was added to watch it.
+Waiting longer with a heavier instrument was never going to produce the trace. The deterministic harness
+built instead REFUTED the inferred cause on its first run — the guess was that an overdue timer preempts
+the turn-reset, and it does so only when the later commit arrives as an INPUT task, never as a timer task.
+Build the mechanism on demand; do not fish for it. The same move turned a 1-in-40 field race into an 8/8
+RED test that needs no artificial load at all.
+
+**A timer is not a boundary.** `setTimeout(..., 0)` as a "the turn ended" marker is a bet on the
+scheduler, and R4.26 is what losing it costs. When something needs to know that control left a scope, take
+the fact from the platform (`window.event` for "a dispatch is in progress") rather than from the clock.
+
 ## The keyword classifier is broken, stays, and must not carry a refusal
 
 `safety.MUTATING_KEYWORDS` is a bare substring match. Measured: **28% false positives** on ordinary

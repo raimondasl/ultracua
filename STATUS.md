@@ -203,7 +203,7 @@ which needs no product change at all and keeps scaling.
 
 The pool's ceiling was measured before choosing, rather than assumed: **356.7 ms per session with its own
 browser vs 84.7 ms sharing one — 272 ms saved, ~2.9 min over the suite's ~650 sessions.** It also cannot
-reach the suite without moving all 836 tests onto a session-scoped event loop, since a Playwright
+reach the suite without moving every test in it onto a session-scoped event loop, since a Playwright
 `Browser` is bound to the loop that created it. So the pool remains deferred, now with a number attached
 and for a second independent reason.
 
