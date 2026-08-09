@@ -137,9 +137,22 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
       return /(?:current|new)-password|one-time-code/i.test(el.getAttribute('autocomplete') || '');
     } catch (e) { return false; }
   };
+  // ATTRIBUTION-ONLY MODE (set by the LEARN path, never by `record`). The learn path needs exactly one
+  // thing from this script — whether a wire write left inside its commit's dispatch — and none of the
+  // step capture. Running the whole thing there is what a first attempt did, and it was measured: +54%
+  // drift_bench wall, +2.4 min on the suite, and a `ambiguous_disambiguated` invariant failure, because
+  // `store` computes `specOf` and JSON round-trips a GROWING array through sessionStorage on every
+  // click, change, keydown and scroll. So the same script serves both callers with the recording half
+  // switched off — ONE implementation with a mode, rather than a second transcription of the write
+  // entry-point patches, which is the duplication R3.1 was filed for.
+  const ATTRIB_ONLY = (() => { try { return !!window.__ucAttribOnly; } catch (e) { return false; } })();
   const store = (action, el, value, ctx, scope, domain, secret) => {
     if (el && el.nodeType !== 1) return;
     try {
+      // In attribution-only mode a non-commit action carries no information: it cannot open a turn, so
+      // it cannot change what a write is attributed to. Returning before `nextSeq` also keeps scroll and
+      // type events from touching sessionStorage at all.
+      if (ATTRIB_ONLY && !COMMIT[action]) return;
       const seq = nextSeq();
       if (COMMIT[action]) {
         __uclast = seq;
@@ -149,6 +162,7 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
         // timer/await-network continuation runs in a fresh turn with __ucturn back to 0 (its write is deferred).
         setTimeout(() => { __ucturn = 0; }, 0);
       }
+      if (ATTRIB_ONLY) return;   // turn bookkeeping done; no step row, no specOf, no queue growth
       const arr = JSON.parse(sessionStorage.getItem(KEY) || '[]');
       arr.push({ action, spec: el ? specOf(el) : null, value, ctx, scope, seq, domain: domain || null,
                  secret: !!secret });

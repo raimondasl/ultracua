@@ -124,6 +124,17 @@ the turn-reset, and it does so only when the later commit arrives as an INPUT ta
 Build the mechanism on demand; do not fish for it. The same move turned a 1-in-40 field race into an 8/8
 RED test that needs no artificial load at all.
 
+**A green suite is not a green change — run `drift_bench` too, and know the host's load.** S6/AB-1's
+third draft passed **867 tests** and failed the bench's `ambiguous_disambiguated` invariant. Nothing in
+the suite is shaped to notice a resolver regression or a cost; the bench is. So any change to what runs
+IN the page — an init script, a listener, a patched entry point — gets a bench run before the PR.
+
+**And the other half of that lesson, learned the same hour: a loaded host cannot adjudicate either.**
+That bench run happened while this machine was at ~100% memory and swapping, where a heal that misses
+its budget records `drifted` — which is what the failing invariant reads. A controlled A/B minutes later
+showed the change costing nothing. Timing numbers and timing-sensitive invariants taken under unknown
+load are not evidence; say so in the register rather than quoting them, and let CI decide.
+
 **A timer is not a boundary.** `setTimeout(..., 0)` as a "the turn ended" marker is a bet on the
 scheduler, and R4.26 is what losing it costs. When something needs to know that control left a scope, take
 the fact from the platform (`window.event` for "a dispatch is in progress") rather than from the clock.

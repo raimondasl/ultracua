@@ -164,9 +164,23 @@ each run, and its fix (quarantine) must not land before skip-visibility exists, 
   Sequencing note for whoever picks up next: the register's per-finding "fix shape" paragraphs are
   hypotheses written before the code was read. Four of the seven attempted so far have been wrong in a
   way that only a reproduction or an adversarial pass caught.
-- **S6. AB-1 — the causal signal as a refusal oracle only.** *(UNBLOCKED in 0.88.0 — its oracle is the deferred-write
-  refusal test, which was not flaky: it was reporting R4.26. The mechanism under it is now fixed and
-  the test is deterministic under load.)* The register's "cheapest correct option",
+- **S6. ✅ DONE in 0.89.0 — but NOT as a refusal oracle; that framing was measured wrong.** AB-1 is
+  closed by sharing the recorder's marker script with the learn path and using it as evidence about
+  whether a gate PLACEMENT can be trusted — no attribution, no seq→step map, so R4.3/R4.4 stay removed
+  by construction as this bullet intended.
+
+  **Two versions died to measurement before the third shipped, and both deaths are the point.**
+  (a) The refusal this bullet specified would refuse **4 of 6 ordinary READ patterns** issued over POST,
+  including an awaited round-trip — D0's regression one surface over, because `is_write_request` is
+  method-based and a GraphQL read is a POST. (b) Over-gating unconditionally broke the ordinary
+  `filter → place order` flow in one suite run, because the arm AB-1 lives in is also where the ordinary
+  write flow lives and the two are indistinguishable from timing. Full numbers in the register under
+  AB-1; a separate defect found while pricing it is filed as **R4.27**.
+
+  **The transferable part:** this bullet's prescribed fix shape was wrong in the same way S2's and
+  S3's were, which is now four for four. Treat every remaining slice's fix shape here as a hypothesis.
+
+  Original bullet follows. The register's "cheapest correct option",
   scoped conservatively: share the recorder's `__ucturn`/`attributedSeq` machinery (ONE implementation
   — R3.1's lesson) and use it ONLY to detect "a wire write occurred whose cause the page cannot prove"
   → refuse loudly. **What it inherits is now worth more than when this was written:** after R4.26 the

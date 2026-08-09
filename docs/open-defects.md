@@ -805,6 +805,104 @@ attribution and no seq→step map, which removes R4.3 and R4.4 **by construction
 patching them. R4.5 remains in scope. Any future attempt to ATTRIBUTE (rather than merely refuse) must
 start from R4.3/R4.4 and from `docs/parked/README.md`, not from the diff.
 
+### ✅ AB-1 FIXED in 0.89.0 — and the "refusal oracle" framing above was measured WRONG twice
+
+**The finding, reproduced and sharper than filed.** AB-1 is the MIRROR of the ordering
+`test_a_keyword_mutating_sibling_no_longer_disarms_the_refusal` already covered. There the bait is
+first and the commit second, so `acting_at_write` and `gated` disagree and the flow is refused. Turn it
+around — the commit first, deferring FORWARD onto a classifier-mutating neighbour — and the two agree,
+on the step that never writes. The check is satisfied and the recipe caches the Idempotency-Key, the
+precondition and the drift gate on the wrong row. **The guarded ordering had a test; its sibling did
+not.** That is this register's own most-repeated pattern, one more time.
+
+**And the verdict is not even stable.** With a plain `setTimeout(..., D)` the same page gives three
+different answers, decided by a stopwatch:
+
+| defer | gate on the WRONG step | correct | refused |
+|---|---|---|---|
+| 60 ms | **6/8** | 2/8 | 0/8 |
+| 150 ms | **2/8** | 0/8 | 6/8 |
+
+`_write_owner` decides ownership from `write_window_ms` grace tails — a clock-based boundary, exactly
+what R4.26 had just proved unsound one module over. The 2/8 "correct" runs are not correct reasoning;
+they are the stopwatch getting lucky.
+
+**TWO measurements redirected the slice, and both killed a version of it before it shipped.**
+
+*The plan's refusal oracle cannot ship.* "Refuse any write whose cause the page cannot prove", measured
+against the real capture script on ordinary READS issued over POST:
+
+| read pattern | cause | naive S6 |
+|---|---|---|
+| sync query in click handler | PROVABLE | ok |
+| **await token, then query** | unprovable | **refuses** |
+| **debounced search** | unprovable | **refuses** |
+| **deferred pagination** | unprovable | **refuses** |
+| microtask continuation | PROVABLE | ok |
+| **rAF-batched query** | unprovable | **refuses** |
+
+4 of 6, including the commonest SPA data-fetching shape. `is_write_request` is method-based and a
+GraphQL read IS a POST, so a read's cause is exactly as unprovable as a deferred commit's. That is D0's
+regression one surface over — and measuring it BEFORE writing the refusal is the only reason it is a
+paragraph here rather than a revert.
+
+*Over-gating unconditionally cannot ship either.* The suite caught it in one run:
+`test_the_ordinary_fill_then_submit_flow_still_learns` went red, because the agreeing arm is ALSO where
+the ordinary write flow lives (a benign step, then a correctly-classified commit). From timing, that
+and AB-1 are **indistinguishable** — which is what the code's own comment had said all along: it needs
+the causal signal, not a better reading of the clock.
+
+**What ships.** The two are separated by whether the PAGE can prove the write's cause — the ordinary
+commit leaves inside its own click's dispatch, a forward-deferred one leaves in a bare task. So the
+recorder's marker script is installed on the learn path too (ONE implementation, shared not
+transcribed) and read by `_wire_writes_are_provable`, which is used ONLY as evidence about whether a
+gate PLACEMENT can be trusted. No attribution, no seq→step map — R4.3/R4.4 stay removed by
+construction. When the placement cannot be confirmed, every candidate row is gated instead of trusting
+the agreement. It fails CLOSED: no markers, a cross-origin hop, an exception — all read as "not
+provable", so the caller gates MORE.
+
+**PRICED, not waved through.** Such a recipe becomes multi-write, so it loses the auth-refresh retry and
+every gated step loses self-heal and suffix-replan. Recovery features, not the flow. Refusing would
+have cost the flow — and, per the table above, a large read population with it.
+
+Both halves are mutation-checked, because green does not say which line made it green: disable the new
+branch → only the AB-1 test fails; make it unconditional → only the ordinary-write-flow test fails.
+
+**A THIRD version was rejected before merge — and the evidence for WHY is weaker than it first looked;
+read the confound before citing these numbers.** Sharing the recorder's script by injecting ALL of it on
+the learn path passed **867 tests green** and came back
+`invariants: FAILED -> ['ambiguous_disambiguated']` (heal-eligible 26→27), bench wall 105.3s → 162.5s,
+suite 20:57 → 23:20.
+
+**But the host was under heavy CPU load and near-100% memory for that whole window**, which the operator
+flagged afterwards. Under swapping a heal can miss its budget and record `drifted` instead of `healed` —
+which is exactly what that invariant reads — so **neither the wall times nor the invariant failure can be
+cleanly attributed to the change.** A controlled A/B on the same host minutes later put the injection at
+13.6s against 15.0/15.7s WITHOUT it, i.e. no measurable cost at all. Treat every timing figure in this
+entry as unusable and the invariant failure as UNATTRIBUTED. **CI is the adjudicator here**, per this
+repo's own standing rule that a local green is the weaker evidence.
+
+The mode is kept anyway, on first principles rather than on those numbers: `store()` computes `specOf`
+and JSON round-trips a GROWING sessionStorage array on every click, change, keydown and scroll, and the
+learn path needs exactly ONE bit from this script. Doing all of that for one bit is wrong whether or not
+a loaded laptop can measure it. So `window.__ucAttribOnly` is a MODE on the one script, not a second copy
+of the write entry-point patches: in that mode `store` does the turn bookkeeping and returns before
+`nextSeq` for any non-commit action, so scroll/type never touch sessionStorage and no step rows
+accumulate. One implementation with a documented mode, rather than the transcription R3.1 was filed for.
+With it: `invariants: ALL HOLD`, recovery-eligible 44, ladder 27/44, writes `double=0 wrong_target=0`.
+
+**The transferable lesson survives the confound, and it is about instruments, not milliseconds:** a
+change that alters what runs IN THE PAGE cannot be adjudicated by the suite, which is shaped to notice
+neither a resolver regression nor a cost. Run `drift_bench` — and on a host whose load you know.
+
+**A SEPARATE DEFECT MEASURED IN PASSING, not yet fixed — the wire promotion marks ordinary reads as
+writes.** Learning twelve ordinary read controls that query over POST, all twelve cached as write
+flows. Seven were the keyword classifier; the other five — `Filter results`, `Export CSV`, `Next page`,
+`Refresh data`, `View details`, none of which trips a keyword — were the WIRE PROMOTION, from its own
+log: `step 0 'go to the next page' wrote on the wire — caching it as a WRITE`. D0's text calls this a
+"stated read-POST residual"; it is now 5/5 measured. It is the mirror of the keyword classifier's false
+positives and it deserves its own filing.
+
 
 # Round 3 — the 2026-08-03 re-audit of everything written since v0.70.0
 
@@ -1965,6 +2063,32 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   cached") would have SUPPRESSED a live write-safety hole, and the last of those would have done it
   silently. S6 is blocked on S17 because its oracle must be deterministic; the oracle is honest and the
   MECHANISM is not.
+
+* **R4.27 — OPEN. The wire promotion marks ordinary GraphQL-style READS as writes, and it is the
+  mirror of the keyword classifier's false positives.** Measured while pricing AB-1's fix (0.89.0), not
+  read: twelve ordinary read controls that query over `POST /graphql` were learned, and **all twelve
+  cached as write flows**. Seven are the keyword classifier doing what `MUTATING_KEYWORDS` always does.
+  The other five — `Filter results`, `Export CSV`, `Next page`, `Refresh data`, `View details`, not one
+  of which contains a keyword — were promoted by the WIRE, from its own log line:
+
+      learn: step 0 'go to the next page' wrote on the wire — caching it as a WRITE (the classifier said otherwise)
+
+  `is_write_request` is method-based (`POST/PUT/PATCH/DELETE`, minus telemetry hosts) and a GraphQL read
+  is a POST, so the promotion cannot tell a query from a commit. The cost is not theoretical: such a
+  flow becomes `is_write_flow`, so it is approval-gated, refused from MCP and `run_batch` until a human
+  declares it, and denied heal/replan and the auth-refresh retry.
+
+  **This is already acknowledged, in the wrong register.** The promotion's own comment states the
+  residual and calls it "the fail-loud direction and the right trade"; D0's entry calls it "the wire
+  promotion's stated read-POST residual (every GraphQL-backed SPA read)". Neither carries a number, and
+  5/5 on non-keyword controls is a different claim from "a residual". Filed so the disposition is made
+  deliberately rather than inherited.
+
+  **Do not reach for a URL heuristic.** Excluding `/graphql` is a denylist — the "enumerate the loud
+  outcomes" error this file already records — and a GraphQL MUTATION travels the same URL, so it would
+  un-gate real writes to spare reads. This is the same no-oracle shape as `MUTATING_KEYWORDS` and
+  `landed`: at the moment of the decision nothing in the system knows. Any fix must come from evidence
+  the page can produce, and the direction of error must stay conservative.
 
 * **R4.25 — CORRECTED. It is not a class of three; it is one real defect, one over-specified test, and
   one non-reproducer.** The original entry unified three load-dependent failures on surface similarity.
