@@ -34,8 +34,12 @@ from .config import settings
 from .locators import describe, focused_ref, resolve
 from .providers.base import Provider
 from .safety import (
+    MARK_OVERGATE,
+    MARK_WIRE,
     PacingGovernor,
     classify_mutation,
+    classify_mutation_with_source,
+    merge_marks,
     idempotency_key,
     is_write_request,
     looks_like_interstitial,
@@ -417,7 +421,8 @@ async def _author_steps(
                 ctx = await mutation_context(
                     session.page.locator(f'[data-ultracua-ref="{action.ref}"]').first
                 )
-        mutating = classify_mutation(action.action, action.intent, spec.name if spec else "", ctx)
+        mutating, mark_src = classify_mutation_with_source(
+            action.action, action.intent, spec.name if spec else "", ctx)
         if block_mutations and mutating:
             # A replay-triggered re-author must NOT perform a new write — abort before acting.
             tr.meta["blocked"] = "mutation-under-replan"
@@ -498,6 +503,7 @@ async def _author_steps(
                     precond_fingerprint=obs.fingerprint,
                     precond_scope=precond_scope,
                     mutating=mutating,
+                    mutating_sources=merge_marks(None, mark_src) or None,
                 )
             )
             pos_of[i] = len(steps) - 1
@@ -545,12 +551,21 @@ async def _author_steps(
                          "step can carry its gate; refusing the flow", i)
             continue
         if steps[p].mutating:
+            # Already gated by an earlier signal, so do NOT re-write the gate or the precondition —
+            # but the wire is EVIDENCE and must be recorded anyway. Suppressing it here made the mark
+            # track the control's NAME rather than the strongest signal: a real commit called "Place
+            # order" recorded `keyword` (a 28%-FP guess) while a bland-named GraphQL read recorded
+            # `wire`, inverting the one distinction this field exists to carry.
+            steps[p] = steps[p].model_copy(update={
+                "mutating_sources": merge_marks(steps[p].mutating_sources, MARK_WIRE)})
             continue
         steps[p] = steps[p].model_copy(update={
             "mutating": True,
             # Prefer the pre-act scope captured above; empty degrades to the whole-page
             # `precond_fingerprint` gate, which is the documented fallback and is always populated.
             "precond_scope": steps[p].precond_scope or scope_of.get(i, ""),
+            # EVIDENCE: a non-idempotent request was observed leaving during this step.
+            "mutating_sources": merge_marks(steps[p].mutating_sources, MARK_WIRE),
         })
         _log.info("learn: step %d %r wrote on the wire — caching it as a WRITE (the classifier said "
                   "otherwise)", p, steps[p].intent)
@@ -632,6 +647,10 @@ async def _author_steps(
                 steps[p] = steps[p].model_copy(update={
                     "mutating": True,
                     "precond_scope": steps[p].precond_scope or scope_of.get(i, ""),
+                    # NOT evidence about THIS step — a blanket precaution because the page
+                    # could not prove which step caused the write (AB-1). Recorded as such so
+                    # it is never mistaken for a signal that said anything about this row.
+                    "mutating_sources": merge_marks(steps[p].mutating_sources, MARK_OVERGATE),
                 })
                 newly.append(p)
             if newly:

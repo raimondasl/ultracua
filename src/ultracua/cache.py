@@ -105,6 +105,18 @@ class CachedStep(BaseModel):
     # masks it. Additive + defaulted, so older flows deserialize unchanged (NO schema bump needed) — the
     # same precedent as `slot` and `slot_domain` above.
     secret: bool = False
+    # WHICH SIGNAL set `mutating` — `safety.MARK_*`, sorted, deduped. `None` means "never recorded"
+    # (a flow authored before this field existed); `[]` would mean "marked, source lost", which is a
+    # bug. Those are DIFFERENT answers and are kept apart deliberately: collapsing a three-state
+    # question into two is this register's absent-vs-unreadable trap, filed three times (R3.1, R3.4,
+    # R3.3's second version).
+    #
+    # A LIST because the signals are not exclusive: a keyword guess and a later wire promotion can both
+    # land on one step, and "a guess that the wire then confirmed" is a materially different claim from
+    # either alone. It is purely descriptive — NOTHING reads it as a gate in this slice, by design.
+    # Additive + defaulted, so older flows deserialize unchanged (NO schema bump needed) — the same
+    # precedent as `slot`, `slot_domain` and `secret` above.
+    mutating_sources: Optional[list[str]] = None
 
 
 class CachedFlow(BaseModel):
@@ -165,7 +177,21 @@ _HASHED_STEP_FIELDS = ("intent", "action", "text", "coords", "tool", "args",
                        # would read as a demonstrated empty value rather than a redaction. It defaults to
                        # False, and `_canon` omits defaults, so every existing digest is byte-identical.
                        "secret")
-_UNHASHED_STEP_FIELDS: tuple = ()
+# `mutating_sources` is UNHASHED, and the reasoning is the inclusion rule run in reverse. The rule asks
+# whether flipping the field WEAKENS a guard while still passing; this field arms no guard at all — it is
+# descriptive, and the safety-critical transition it describes (`mutating` itself flipping) is already
+# hashed, so a demotion can never hide behind it. Hashing it would instead re-gate a fleet the first time
+# an unchanged recipe is re-authored, buying churn for no guard.
+#
+# NOTE FOR WHOEVER MAKES IT TRUST-BEARING (the human-verdict verb): promoting it into the hashed list
+# later costs a STEPS_HASH_VERSION bump, which re-approval-gates every fleet on purpose. That is the
+# price of this choice, stated so it is a choice.
+#
+# `docs/correctness-plan.md`'s D0 text says a new field "must stay OUT of `_HASHED_STEP_FIELDS` ...
+# include it and every approved flow raises StaleApprovalError". That reason is WRONG — `_canon` omits
+# any field still at its declared default, which is exactly how `secret` was added with zero
+# re-approvals. The conclusion happens to hold here; the stated mechanism does not.
+_UNHASHED_STEP_FIELDS: tuple = ("mutating_sources",)
 _NESTED_STEP_FIELDS = ("locator", "confirm")
 
 _HASHED_LOCATOR_FIELDS = ("role", "name", "tag", "elem_id", "testid", "placeholder",

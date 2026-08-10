@@ -51,7 +51,8 @@ from .browser import BrowserSession
 from .cache import CachedFlow, CachedStep, FlowCache, flow_key
 from .llm.types import LLMRequest, Message, TextBlock, ToolDef
 from .locators import _SPECOF_JS, LocatorSpec, redact_spec_fields
-from .safety import classify_mutation, is_write_request, origin_of
+from .safety import (MARK_CAPTION, MARK_DECLARED, MARK_WIRE, classify_mutation,
+                     classify_mutation_with_source, is_write_request, merge_marks, origin_of)
 from .snapshot import _ACCNAME_JS, _MUTATION_CTX_JS, _ROLEOF_JS, SCOPE_JS, hash_scope
 
 # Runs in the page (injected before any page script, re-installed on every navigation). On each actuation it
@@ -451,7 +452,9 @@ def _step_from_event(ev: dict, *, write_flow: bool = False, redact: tuple = ()) 
     name = (spec.name or spec.tag) if spec else action
     intent = f"{action} {name}".strip()  # placeholder — real intents are an open question
     ctx = ev.get("ctx") or {}
-    mutating = classify_mutation(action, intent, spec.name if spec else "", ctx)
+    mutating, mark_src = classify_mutation_with_source(
+        action, intent, spec.name if spec else "", ctx)
+    marks = merge_marks(None, mark_src)
     # In a DECLARED write flow, gate a COMMIT the method-classifier treats as a read — a GET-form submit (a
     # write behind a GET). Require BOTH `submit` AND `form_method`, i.e. a real FORM submit: a bare formless
     # <button> reports submit=true with no form_method, and force-gating it would (a) over-gate a BENIGN
@@ -460,8 +463,10 @@ def _step_from_event(ev: dict, *, write_flow: bool = False, redact: tuple = ()) 
     # formless submit-typed button here. A POST-form submit is already caught by `classify_mutation`.
     if write_flow and action == "click" and ctx.get("submit") and ctx.get("form_method"):
         mutating = True
+        marks = merge_marks(marks, MARK_DECLARED)
     if write_flow and action in ("press", "select") and ctx.get("form_method"):
         mutating = True
+        marks = merge_marks(marks, MARK_DECLARED)
     # Capture the precise mutation-gate precondition (the target's enclosing form/section interactables),
     # exactly as the learn path does — so a recorded write replays GATED. INVARIANT: a mutating step must
     # NEVER be cached without a precondition (an empty precond_scope AND empty precond_fingerprint makes the
@@ -475,6 +480,7 @@ def _step_from_event(ev: dict, *, write_flow: bool = False, redact: tuple = ()) 
     text = ev.get("value") if action in ("type", "select", "press", "scroll") else None
     return CachedStep(intent=intent, action=action, locator=spec, text=text,
                       mutating=mutating, precond_scope=precond_scope, slot_domain=ev.get("domain"),
+                      mutating_sources=(marks or None) if mutating else None,
                       # The value is ALREADY empty for a secret field (blanked in the page, before it could
                       # reach the exfil buffer). This flag records WHY it is empty.
                       secret=bool(ev.get("secret")))
@@ -769,9 +775,17 @@ async def record_demo(
             if i is None or not events[i].get("scope"):
                 unattributed_writes += 1  # a real write tied to no gated commit -> record fails loud
                 continue
+            # EVIDENCE: this exact commit's own `__wirewrite` marker. Recorded UNCONDITIONALLY — the
+            # guard protects the GATE (don't re-gate a form-classified commit), and letting it suppress
+            # the PROVENANCE too made a keyword guess masquerade as the whole story: a commit named
+            # "Place order" that demonstrably POSTed recorded only `keyword`.
+            srcs = merge_marks(steps[i].mutating_sources, MARK_WIRE)
             if not (steps[i].mutating and steps[i].precond_scope):  # don't re-gate a form-classified commit
                 steps[i] = steps[i].model_copy(
-                    update={"mutating": True, "precond_scope": hash_scope(events[i]["scope"])})
+                    update={"mutating": True, "precond_scope": hash_scope(events[i]["scope"]),
+                            "mutating_sources": srcs})
+            else:
+                steps[i] = steps[i].model_copy(update={"mutating_sources": srcs})
     if mutate:
         marker_urls: dict = {}  # (method, url) -> fetch/xhr markers; keyed identically to xhr_urls
         form_urls: dict = {}    # (method, url) -> `form` markers;   keyed identically to doc_urls
@@ -819,7 +833,12 @@ async def record_demo(
                     s = steps[i]
                     if classify_mutation(s.action, cap, (s.locator.name if s.locator else ""),
                                          events[i].get("ctx") or {}):
-                        upd.update(mutating=True, precond_scope=hash_scope(events[i]["scope"]))
+                        # A keyword hit on an LLM-WRITTEN caption — weaker than MARK_KEYWORD,
+                        # which at least reads a string the page or the agent produced. Its own
+                        # source so it is never mistaken for evidence.
+                        upd.update(mutating=True, precond_scope=hash_scope(events[i]["scope"]),
+                                   mutating_sources=merge_marks(
+                                       s.mutating_sources, MARK_CAPTION))
                 steps[i] = steps[i].model_copy(update=upd)
     steps = _coalesce_scrolls(steps)
     flow = CachedFlow(key=flow_key(goal, url, scope), goal=goal, start_url=url,
