@@ -218,6 +218,11 @@ async def test_a_learned_write_is_never_cached_ungated_or_replayed_unkeyed(case,
             f"{_ids(case)}: a POST reached the server during learn and the flow cached with NO mutating "
             f"step — it will replay with no gate, no precondition and no Idempotency-Key. "
             f"steps={[(s.intent, s.mutating) for s in flow.steps]}")
+        for i in gated:
+            assert flow.steps[i].mutating_sources, (
+                f"{_ids(case)}: step {i} is gated but records NO source, so nothing downstream can tell "
+                f"a keyword GUESS from wire EVIDENCE. Every cell of this matrix crosses a different "
+                f"signal, which makes it the right place to notice a mark site that forgot provenance.")
         commit_index = 0 if commit_first else 1
         assert commit_index in gated, (
             f"{_ids(case)}: the gate is on step(s) {gated} but the step that WROTE is {commit_index} "
@@ -473,6 +478,10 @@ async def test_a_recorded_write_is_gated_on_the_step_that_wrote_or_refused(timin
             f"{timing}: this write is caused by its own click, provably and in-page, and must stay "
             f"recordable — refusing it makes the ordinary write flow unauthorable. note={res.note!r}")
         gated = [i for i, s in enumerate(flow.steps) if s.mutating]
+        for i in gated:
+            assert flow.steps[i].mutating_sources, (
+                f"{timing}: recorded step {i} is gated but records NO source — the learn arm above "
+                f"records provenance and its sibling front-end must too.")
         assert 0 in gated, (
             f"{timing}: the gate is on step(s) {gated}, but step 0 ('Commit') is the one that WROTE. "
             f"The commit replays with no drift gate, no precondition and no Idempotency-Key while the "

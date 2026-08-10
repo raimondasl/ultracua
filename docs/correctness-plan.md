@@ -238,9 +238,18 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   commit) is not separable by any string rule. **Do not spend a slice on the keyword matcher.**
 
   So the only real lever is (ii): persist WHY a step was marked — keyword guess vs form method vs wire
-  evidence — so a refusal can key off evidence. Three constraints on it. It must stay OUT of
-  `_HASHED_STEP_FIELDS` (that list is an allowlist, so a new field is approval-safe only if excluded;
-  include it and every approved flow raises `StaleApprovalError`). It belongs INSIDE S6/AB-1, which needs
+  evidence — so a refusal can key off evidence. ✅ **The PERSISTENCE half shipped in 0.92.0** as
+  `CachedStep.mutating_sources`; what remains blocked is ACTING on it, which is still D0.
+
+  Two of the three constraints below were WRONG as written, and are corrected here rather than left to
+  mislead the next reader. (a) "It must stay OUT of `_HASHED_STEP_FIELDS` … include it and every approved
+  flow raises `StaleApprovalError`" — the CONCLUSION holds but the MECHANISM does not: `_canon` omits any
+  field still at its declared default, which is exactly how `secret` was added to the hashed list with
+  zero re-approvals. The field is `_UNHASHED` by the inclusion rule instead (it arms no guard, and the
+  transition it describes — `mutating` itself flipping — is already hashed). (b) "It belongs INSIDE
+  S6/AB-1, which needs the same primitive — building it twice is how a fifth wrong fix arrives" — S6
+  shipped without it, and the primitive landed standalone; the warning against building it twice stands.
+  The third constraint held exactly as written: It belongs INSIDE S6/AB-1, which needs
   the same primitive (no longer blocked — S17 landed in 0.88.0) — building it twice is how a fifth wrong fix arrives. And it
   is not retroactive: `mutating` is persisted and never recomputed, so D0 stays blocked for every
   already-cached flow until it is re-learned.

@@ -67,9 +67,16 @@ from urllib.parse import urlsplit
 # expensive way: a flow-level refusal keyed off this signal was built, passed 105 targeted tests and a
 # 24-cell invariant matrix, and would have broken a large population of ordinary read flows whose only
 # offered remedies both fail. See `docs/open-defects.md` (R3.5) and `docs/correctness-plan.md` (D0,
-# blocked indefinitely). The cache stores the mark but NOT which of keyword/form-method/wire set it, so
-# nothing downstream can tell a guess from evidence — that provenance is the one real improvement
-# available, and it belongs with S6/AB-1, which needs the same primitive.
+# blocked indefinitely). The cache USED to store the mark but not which signal set it, so nothing
+# downstream could tell a guess from evidence. Since 0.92.0 it stores both: `CachedStep.mutating_sources`
+# records every `MARK_*` below that independently supports the mark — D0's lever (ii), landed standalone
+# rather than inside S6/AB-1 as the plan expected.
+#
+# THE FIELD IS DESCRIPTIVE, AND NOTHING READS IT AS A GATE YET. That is deliberate: recording provenance
+# is inert, while ACTING on it is a decision this register has rejected once already. The contract, so a
+# consumer cannot misread it: the list is *every signal that independently supports this mark*, not "the
+# one that decided it" — a step a keyword guessed at and the wire then confirmed carries BOTH, and the
+# first draft of that field got it backwards, filing a wire-proven commit as a bare guess.
 #
 # Before touching this list, re-run the measurement. `tests/test_write_classification.py` pins the known
 # false positives and false negatives so a well-meaning tightening fails loudly instead of silently
@@ -136,15 +143,42 @@ def classify_mutation(action: str, intent: str = "", name: str = "",
     keyword heuristic. `ctx` is a `{submit: bool, form_method: str}` probe of the target (see
     `snapshot.mutation_context`). `type` / `scroll` / `navigate` are never mutating on their own.
     """
+    return classify_mutation_with_source(action, intent, name, ctx)[0]
+
+
+# The signals that can set a `mutating` mark. They are NOT interchangeable, which is the whole reason
+# this exists: `FORM_METHOD` and `WIRE` are EVIDENCE, `KEYWORD` is a guess with a measured 28% false
+# positive rate, and `OVERGATE` is a precaution about a step nothing said anything about at all.
+# Collapsing them to one bit is what makes D0 unbuildable and R4.27 invisible.
+MARK_KEYWORD = "keyword"          # `MUTATING_KEYWORDS` substring hit — a GUESS
+MARK_FORM_METHOD = "form_method"  # the target's own form declares a non-idempotent method — EVIDENCE
+MARK_WIRE = "wire"                # a non-idempotent request was observed leaving — EVIDENCE, post-hoc
+MARK_DECLARED = "declared"        # the human declared `spec.mutate` and the target submits a form
+MARK_OVERGATE = "overgate"        # a blanket precaution (AB-1): nothing attributed this step at all
+MARK_CAPTION = "caption"          # a keyword hit on an LLM-written caption — a guess about a guess
+
+
+def classify_mutation_with_source(action: str, intent: str = "", name: str = "",
+                                  ctx: Optional[dict] = None) -> tuple[bool, str]:
+    """`classify_mutation`, plus WHICH signal decided it. ONE implementation, two surfaces — a second
+    transcription of this ladder is precisely the defect R3.1 was filed for.
+
+    The source is meaningful only when the verdict is True; a False verdict returns `""` because there
+    is no mark to explain. Callers that need provenance use this; `classify_mutation` stays a bare bool
+    so the four existing call sites and the public `is_mutating` shim are untouched.
+    """
     ctx = ctx or {}
     if action == "click":
         method = (ctx.get("form_method") or "").lower()
         if ctx.get("submit") and method:        # a real form submit -> the method is decisive
-            return method in NONIDEMPOTENT_METHODS
-        return _keyword_mutating(intent, name)  # JS button / non-submit -> keyword fallback
+            hit = method in NONIDEMPOTENT_METHODS
+            return hit, (MARK_FORM_METHOD if hit else "")
+        hit = _keyword_mutating(intent, name)   # JS button / non-submit -> keyword fallback
+        return hit, (MARK_KEYWORD if hit else "")
     if action == "press":  # Enter can submit a form; without the focused element's form, use keywords
-        return _keyword_mutating(intent, name)
-    return False  # type/scroll/navigate are not mutating by themselves
+        hit = _keyword_mutating(intent, name)
+        return hit, (MARK_KEYWORD if hit else "")
+    return False, ""  # type/scroll/navigate are not mutating by themselves
 
 
 def is_mutating(action: str, intent: str = "", name: str = "") -> bool:
@@ -257,3 +291,15 @@ class PacingGovernor:
             yield
         finally:
             sem.release()
+
+
+def merge_marks(existing: Optional[list[str]], *added: str) -> list[str]:
+    """Union of `MARK_*` sources — sorted, deduped, and NEVER dropping one already recorded.
+
+    Union, not replace: R4.2 is what happens when a newer signal overwrites what an older one earned.
+    A step a keyword guessed at and the wire later confirmed carries BOTH, because "guessed, then
+    confirmed" is a materially different claim from either alone.
+    """
+    out = set(existing or ())
+    out.update(a for a in added if a)
+    return sorted(out)
