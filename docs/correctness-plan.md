@@ -180,6 +180,15 @@ each run, and its fix (quarantine) must not land before skip-visibility exists, 
   **The transferable part:** this bullet's prescribed fix shape was wrong in the same way S2's and
   S3's were, which is now four for four. Treat every remaining slice's fix shape here as a hypothesis.
 
+  **AND THE SLICE MISSED A HAZARD ITS OWN BULLET NAMED.** The text below requires a RED test for
+  page-synthetic clicks masking a deferred write; S6 shipped without one, and the hazard is real against
+  the mechanism that shipped — reproduced 10/10 at 0.90.0 and now carrying a strict-xfail RED test
+  (**R4.5**). The prescribed fix shape being a hypothesis is the lesson already recorded here; this adds
+  a second one, about SCOPE rather than shape: **a hazard carried into a slice by description, with no
+  test to hold it, quietly leaves that slice.** A named-but-untested hazard should be treated as out of
+  scope unless the slice's test list names it too — the same reason the plan's dependencies are written
+  as orderings rather than as intentions.
+
   Original bullet follows. The register's "cheapest correct option",
   scoped conservatively: share the recorder's `__ucturn`/`attributedSeq` machinery (ONE implementation
   — R3.1's lesson) and use it ONLY to detect "a wire write occurred whose cause the page cannot prove"
