@@ -826,7 +826,7 @@ never accumulate a global map. **Not attempted.**
 execution context is the ordinary case). Markers left in the buffer are read by a LATER drain and bound
 to whichever step drained them. Same structural fix as R4.3. **Not attempted.**
 
-## R4.5 — A page-initiated synthetic click launders a deferred write into a confident attribution — OPEN, and NO LONGER PARKED: REPRODUCED 10/10 AGAINST SHIPPED 0.89.0
+## R4.5 — A page-initiated synthetic click launders a deferred write into a confident attribution — STILL OPEN at 0.90.0. TWO fix attempts built and measured wrong; **D5's two-strikes gate now applies**
 
 *Filed medium against the parked branch. **Re-filed HIGH at 0.90.0**, inviolable #3 (and #2 on the
 `record()` path, where replay double-submits while reporting success): it applies to the
@@ -912,6 +912,78 @@ One task further the reset has run and `__ucturn` is 0, the ordinary deferred-wr
 timers fire in arming order, so this is deterministic by construction — the same property the R4.26
 harness leans on, and why neither test needs artificial load.
 
+### Two attempts, both measured wrong. `isTrusted` IS NOT A USER-PRESENCE SIGNAL, and that kills the whole family
+
+**Neither attempt shipped.** Both were built, both went green on gates that matter, and both were killed
+by measurement — the first by the mandatory pre-merge audit, the second by the audit of the REWORK, which
+is S4's rule (*"the second pass found a CRITICAL the first pass had walked past, because the fix had
+changed under it"*) paying for itself again.
+
+**ATTEMPT 1 — require the COMMIT's own `isTrusted`.** Passed the full suite (871), `drift_bench` (15) and
+every write/recorder file, with a refused population measured as three `select_option` demos. That
+measurement was taken against a sample that shared its blind spot: the suite holds no WAI-ARIA APG
+widget, no design-system dropdown, no ref-forward from a non-actionable wrapper. Reproduced by hand on an
+APG-compliant `role=button` — the pattern REQUIRES the widget to implement Enter itself, canonically via
+`el.click()`:
+
+    human presses ENTER    posts=1  cached=False   <- record REFUSES
+    human CLICKS (control) posts=1  cached=True    gated=[0]
+
+Same widget, same human, same write: **recordable by mouse, refused by keyboard.** The regression falls
+on accessible widgets and the people who use them, and no remedy exists — the human already acted
+directly. D0's shape, so it was not shipped.
+
+**ATTEMPT 2 — require that a trusted USER ACTIVATION began the commit's turn** (`__uctrusted = own trust
+OR a trusted click/change/keydown/submit opened this turn`). It admitted all three shapes attempt 1
+refused, still refused both filed attacks, and was green. **It is forgeable.** Measured on a page with
+ZERO user interaction, everything fired from a bare task, on markup the page creates at runtime:
+
+    submit@made   TRUSTED     <- form.requestSubmit(), on a form built by the page
+    change@cb     TRUSTED     <- checkbox.click()
+    click@b       False
+
+So a page opens its own activation window whenever it likes, and R4.5 returns verbatim — `record
+cached=True`, a 3-step recipe for 2 human actions, replay firing 2 POSTs while returning normally.
+**`isTrusted` does not mean "a user did this"; it means "the user agent fired this event", and a page can
+make the user agent fire events.** That single sentence is the transferable result: it kills attempt 1,
+attempt 2, and every variant of them. Narrowing the activation set does not help — dropping `submit`
+leaves `checkbox.click()`, and the next reader would spend a slice discovering that.
+
+**Ruled out with measurement, so it is not re-proposed:** `navigator.userActivation.isActive` is not a
+usable discriminator here — it reads TRUE on a blank page with no interaction ever, and inside a bare task.
+
+**TWO STRIKES — D5 NOW BINDS.** Both attempts are inferences over the same in-page bit. Per the gate at
+the top of this file, a third attempt **must change the SENSOR CLASS** — inference → a human's verdict, or
+inference → a loud refusal — and a third variant of "read a better bit in the page" is the second attempt
+again, not a third. R4.5 therefore stays OPEN, guarded by the strict-xfail RED tests landed in 0.90.0
+(`tests/test_unattributed_write.py`, both dispatch shapes plus the record path), and the next attempt is
+gated on D5 rather than on someone having a better idea.
+
+**Two instrument results worth keeping, both from work that was then thrown away.**
+
+*`drift_bench` earns its mandate, in both directions.* A first implementation of attempt 2 registered 11
+window capture listeners for the activation classes: bench wall **138 s → 265 s**, the 180 s budget blown,
+and an absolute invariant broke with it. Nothing in the 871-test suite notices a cost like that. The
+cheap form — setting the flag from the capture listeners the script already installs, at the TOP of each
+so a trusted click on a non-actionable wrapper still counts — needed **zero new listeners** and was both
+faster and more precise.
+
+*A loaded host cannot adjudicate, and the A/B is how you know.* The full suite then returned `869 passed,
+2 failed`, both `drift_bench`, on a 36:44 run against a ~22 min baseline. The obvious reading — the change
+still costs something — is exactly backwards. Measured at that moment: **144–284 MB free of 16309 MB
+(1–2%)**, top consumers Firefox / VS Code / Defender, zero leftover chromium or node. Back-to-back on that
+same host:
+
+| arm | recorder | result |
+|---|---|---|
+| A | **main's** — the fix ABSENT | **2 failed**, 184.3 s |
+| B | the branch — the fix present | **15 passed**, 151.9 s |
+
+`main` fails the same two tests under the same load. Without that A/B the honest-looking conclusion would
+have been "my change broke the bench", and a slice would have been spent tuning a cost that does not
+exist. Second occurrence of the mechanism R4.24 tracks.
+
+
 **ON `isTrusted`, WHICH IS THE OBVIOUS LEVER — and a first draft of this paragraph argued against it on
 three exhibits that do not hold.** The withdrawn version said the recorder's measured KEPT set
 (`form.submit()`, `requestSubmit()`, the wrapping-`<label>` forwarded click) put those shapes at risk from
@@ -923,8 +995,11 @@ under-gate the draft warned of. Three independent lenses flagged that paragraph;
 rather than quietly deleted, because a register that steers the next slice off a lever on false evidence
 is worse than one that says nothing.
 
+**Overtaken by the two attempts above, which measured it — and NOTE THERE IS NO FIX; an earlier draft of this line said "superseded by the fix above" while R4.5 was open, which is the kind of stale claim this file exists to prevent.** The instruction survived and was followed. The examples did not, and neither did this paragraph's guess about WHICH shapes a trust filter endangers: the untrusted-forwarded-click class is already refused on the commit count, and the real casualties were an APG keyboard activation and a design-system dropdown. Original text follows.
+
 **What stands.** The instruction survives even though its examples did not: *measure what any candidate
-filter refuses, on the real KEPT set, before writing it up* (D5's corollary). What is genuinely unpriced
+filter refuses, on the real KEPT set, before writing it up* (D5's corollary). It killed both attempts —
+attempt 1 on the population it refused, attempt 2 on the forgeability of the bit it reads. What is genuinely unpriced
 is the untrusted-forwarded-click class — a wrapper element forwarding to a hidden control, and the
 Playwright-dispatched `change` behind a `select` commit — and the cross-product in
 `tests/test_write_safety_invariants.py` does **not** currently contain a single cell whose commit is
