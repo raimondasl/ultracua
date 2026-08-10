@@ -11,6 +11,8 @@ by applying this file's own sibling rule while redesigning R3.2; it is recorded 
 CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch was **PARKED, not
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
+The round-4 series has since grown to R4.27 as later slices filed against it: **18 open**, 5 fixed,
+4 parked, indexed and token-checked in the R4 STATUS INDEX at the top of that section.
 
 **THE PLAN.** `docs/correctness-plan.md` sequences every open item here — plus the test-machinery
 holes, CLI/API truthfulness defects and unpinned residuals found by the survey in
@@ -768,6 +770,52 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
+## R4 STATUS INDEX — the machine-checked one. **18 open**, 5 fixed, 4 parked
+
+*Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
+was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
+four different shapes (`## R4.N —` headings, `- **R4.N** *(sev)*` bullets, `**R4.N (filed, not fixed).**`
+paragraphs, `* **R4.N —**` bullets) and several ids also appear as bare cross-references, so a format
+parser would silently miscount — worse than none, by this file's own rule. The test instead does a TOKEN
+scan: every `R4.N` appearing ANYWHERE in this file must have a row here, and the counts above must match
+the rows. File a new round-4 finding in any style you like; the suite will demand you index it.*
+
+**Three states, because two would lie.** `open` = live against `main`. `fixed` = closed in shipped code.
+`parked` = the defect exists only in the unmerged `feat/shared-causal-attribution` branch, whose
+`src/ultracua/attribution.py` is not on `main` at all — so it is neither live nor fixed, and it returns
+if and only if that branch is ever resumed.
+
+| id | status | what |
+|---|---|---|
+| R4.1 | parked | telemetry beacons counted as causal writes (fixed ON the branch) |
+| R4.2 | parked | the causal set REPLACED the temporal set (fixed ON the branch) |
+| R4.3 | parked | cross-origin seq collision rebinds a gate — not attempted |
+| R4.4 | parked | a swallowed drain rebinds commits to the next step — not attempted |
+| R4.5 | open | a page-synthesised commit launders a deferred write; **HIGH**, inviolable #3; two fix attempts failed, D5 gate applies |
+| R4.6 | fixed | the matrix asserted only that SOME step is gated — closed by S1 |
+| R4.7 | open | `recordWire` bypasses `pushRec`, so wire markers have no in-memory fallback |
+| R4.8 | open | nothing pinned the AUGMENT-NEVER-REFUSE rule (pinned only on the parked branch) |
+| R4.9 | open | `test_run_cached_refuses_it_too…` no longer exercises its stated property |
+| R4.10 | fixed | the H9 judge captured and judged write flows — closed in 0.82.0 |
+| R4.11 | open | post-auth-refresh `write_unreadable` falls to the generic tail, recorded ok=False |
+| R4.12 | open | `_learn` takes no `pre_write`, so learn-time write verification is a bare presence check |
+| R4.13 | open | `release()`'s gating read has no provenance |
+| R4.14 | fixed | `audit_flows`' candidate loop had no per-flow guard — closed in 0.80.0 (S7a) |
+| R4.15 | open | `cli._flow_dispatch` lets `MetaUnreadableError` traceback on six verbs |
+| R4.16 | open | a refusal pairs the NEW recipe with the PREVIOUS read_pin/shape/steps_hash |
+| R4.17 | open | a quarantine's value-free reason is replaced by a bare IO error |
+| R4.18 | open | `_save_meta`'s failure surfaces as a bare OSError every handler misses |
+| R4.19 | open | `_reset_learn_baselines` clears shape/contracts but not `read_pin` |
+| R4.20 | open | `FlowCache.put`'s `os.replace` has no retry, while `_save_meta`'s got one |
+| R4.21 | open | `record()`'s refusal stays non-terminal — deliberate, but each retry re-fires the write |
+| R4.22 | open | Windows `ERR_NO_BUFFER_SPACE`, 4 occurrences, undiagnosed |
+| R4.23 | open | `test_flows_dry_run_holds_a_real_write_flow` failed once under load, undiagnosed |
+| R4.24 | open | a localhost round-trip stalled past the 5 s budget; ships unmitigated, 2 occurrences |
+| R4.25 | fixed | the load-dependent "cluster of three" was one defect + one bad test — assertion fixed in 0.88.0 |
+| R4.26 | fixed | the recorder credited a DEFERRED write to the next click — closed in 0.88.0 |
+| R4.27 | open | the wire promotion marks ordinary GraphQL-style READS as writes (12/12 measured) |
+
+
 **Scope.** The uncommitted `feat/shared-causal-attribution` work (would-be 0.76.0): extracting the
 recorder's `__ucturn` signal into `src/ultracua/attribution.py` and using it on the learn path to
 ATTRIBUTE writes. Five lenses, 20 candidates, independent refuters per finding defaulting to REFUTE.
@@ -1013,7 +1061,7 @@ in scope for S6 and required a RED test; S6 shipped without one, and the registe
 a slice's scope, with no test to hold it, is a hazard that quietly leaves scope. That is the sibling-guard
 shape one level up: the guard was specified, and never applied to the mechanism that shipped.
 
-## R4.6 — The invariant matrix asserts only that SOME step is gated, never that the gate is on the step that WROTE — OPEN
+## ✅ FIXED by plan slice S1 — R4.6. The invariant matrix asserts only that SOME step is gated, never that the gate is on the step that WROTE
 
 *medium, and the reason the matrix did not catch R4.1/R4.2.* `tests/test_write_safety_invariants.py`
 checks `gated = [i for i,s in enumerate(flow.steps) if s.mutating]; assert gated` — satisfied by a gate

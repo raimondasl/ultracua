@@ -60,3 +60,120 @@ def test_claude_md_names_them_so_a_wrong_count_is_obvious() -> None:
     notes = NOTES.read_text(encoding="utf-8")
     missing = [f for f in open_findings() if f not in notes]
     assert not missing, f"CLAUDE.md does not name these open findings: {missing}"
+
+
+# ---------------------------------------------------------------------------------------------------
+# Round 4 has no heading grammar to parse, so it gets an INDEX and a token scan instead.
+#
+# R3 works because every finding is one `### … R3.N.` heading. R4 is not like that: its 27 findings are
+# declared as `## R4.N —` headings, `- **R4.N** *(sev)*` bullets, `**R4.N (filed, not fixed).**`
+# paragraphs and `* **R4.N —**` bullets, and several ids also appear as bare cross-references inside
+# unrelated prose. A parser over that would miscount SILENTLY, which this register rates worse than no
+# parser at all — so the truth is derived from an explicit index table, and the only thing scanned out of
+# the prose is the ID TOKEN, which no formatting choice can hide.
+#
+# Found while building it: R4.6's heading still said "— OPEN" while its own body said "Closed by plan
+# slice S1". That is the R3 staleness one series over, which is the argument for the guard.
+_R4_ROW = re.compile(r"^\| *(R4\.\d+) *\| *(open|fixed|parked) *\|", re.MULTILINE)
+_R4_TOKEN = re.compile(r"R4\.(\d+)")
+_R4_CLAIM = re.compile(r"\*\*(\d+) open\*\*, (\d+) fixed, (\d+) parked")
+
+
+def r4_index() -> dict[str, str]:
+    """`{'R4.5': 'open', …}` — the index table's own rows."""
+    return {m.group(1): m.group(2) for m in _R4_ROW.finditer(REGISTER.read_text(encoding="utf-8"))}
+
+
+def test_the_r4_index_is_not_vacuous() -> None:
+    """Anti-vacuity FIRST, as above: a regex matching nothing makes every assertion below pass."""
+    idx = r4_index()
+    assert len(idx) >= 25, f"only {len(idx)} R4 rows parsed; the index or the parser is broken"
+    assert set(idx.values()) == {"open", "fixed", "parked"}, (
+        f"expected all three states to be used; got {sorted(set(idx.values()))}")
+
+
+def test_every_r4_id_in_the_register_is_indexed() -> None:
+    """The load-bearing one, and the reason this is a token scan. A new round-4 finding filed in ANY
+    prose shape still mentions its own id, so it lands here and the suite demands a row for it."""
+    text = REGISTER.read_text(encoding="utf-8")
+    mentioned = {f"R4.{m.group(1)}" for m in _R4_TOKEN.finditer(text)}
+    missing = sorted(mentioned - set(r4_index()), key=lambda s: int(s.split(".")[1]))
+    assert not missing, (
+        f"these round-4 ids are written about but have no row in the R4 STATUS INDEX: {missing}. "
+        f"Add a row (open / fixed / parked) — an unindexed finding is one nobody can count.")
+
+
+def test_the_r4_counts_the_register_claims_match_its_index() -> None:
+    """The R3 defect, one series over: prose states a count, the rows are the truth."""
+    text = REGISTER.read_text(encoding="utf-8")
+    claims = _R4_CLAIM.findall(text)
+    assert claims, "the register no longer states an R4 tally as `**N open**, N fixed, N parked`"
+    idx = r4_index()
+    actual = (sum(v == "open" for v in idx.values()),
+              sum(v == "fixed" for v in idx.values()),
+              sum(v == "parked" for v in idx.values()))
+    for i, claim in enumerate(claims):
+        assert tuple(int(x) for x in claim) == actual, (
+            f"R4 tally #{i + 1} says {claim}; the index rows show {actual}. RE-COUNT rather than "
+            f"editing the number to match a guess — the rows are the truth.")
+
+
+# ---------------------------------------------------------------------------------------------------
+# An xfail is an ACKNOWLEDGEMENT, and an acknowledgement nobody re-reads becomes wallpaper.
+#
+# 0.90.0 introduced the suite's first `xfail`s, for R4.5. They are the right shape — strict, so the fix
+# turns them into an XPASS and the suite goes red until the marker is deleted — but nothing noticed if
+# they sat for ten releases, and nothing stopped the next one being added for a defect that was never
+# filed. Both directions are pinned here, in the same derive-truth-from-the-artifact shape as above:
+#
+#   * every strict-xfail must NAME a finding this register shows as OPEN. Close the finding and forget
+#     the marker, and this goes red — which is the case the marker's own `strict` cannot cover, because
+#     a test can keep failing for an unrelated reason.
+#   * every xfail must BE strict. A non-strict one passes whether it fails or not, which is the
+#     unfalsifiable-test shape this suite has shipped before.
+import ast
+
+TESTS_DIR = Path("tests")
+
+
+def _xfail_markers() -> list[tuple[str, str, dict]]:
+    """`[(file, test_name, {'reason': …, 'strict': …}), …]` for every xfail decorator in the suite."""
+    out: list[tuple[str, str, dict]] = []
+    for path in sorted(TESTS_DIR.glob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for dec in node.decorator_list:
+                call = dec if isinstance(dec, ast.Call) else None
+                target = call.func if call else dec
+                if not (isinstance(target, ast.Attribute) and target.attr == "xfail"):
+                    continue
+                kw = {}
+                for k in (call.keywords if call else []):
+                    if isinstance(k.value, ast.Constant):
+                        kw[k.arg] = k.value.value
+                out.append((path.name, node.name, kw))
+    return out
+
+
+def test_every_xfail_is_strict_so_it_cannot_pass_both_ways() -> None:
+    loose = [(f, n) for f, n, kw in _xfail_markers() if kw.get("strict") is not True]
+    assert not loose, (
+        f"these xfails are not strict, so they pass whether the test fails OR succeeds and can never "
+        f"force their own removal: {loose}")
+
+
+def test_every_xfail_names_a_finding_the_register_still_shows_as_OPEN() -> None:
+    """The anti-wallpaper rule. An xfail exists because a defect is open; when the defect closes, the
+    marker must go, and this is what notices."""
+    still_open = set(open_findings()) | {i for i, s in r4_index().items() if s == "open"}
+    assert still_open, "no open findings at all — verify that before believing this test"
+    orphans = []
+    for fname, test, kw in _xfail_markers():
+        reason = kw.get("reason") or ""
+        if not any(f in reason for f in still_open):
+            orphans.append((fname, test, reason[:70]))
+    assert not orphans, (
+        f"these xfails name no OPEN register finding — either the finding was closed and the marker "
+        f"should be deleted, or the defect was never filed and should be: {orphans}")

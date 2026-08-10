@@ -384,6 +384,37 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   it is deterministic**. Reproduce under artificial load first; do not silence with reruns, and do not
   weaken the production bound (the register's earlier de-flake work set that rule).
 
+- **S18. R4.5 — a page-synthesised commit launders a deferred write. OPEN, HIGH, inviolable #3, and
+  ⛔ BLOCKED BY `D5` until a new SENSOR CLASS is measured.** It owned no slice until now, which is how it
+  spent a round filed as "parked" while being live against shipped code — the same drift the R4 STATUS
+  INDEX was added to stop.
+
+  **State.** Reproduced 10/10 against 0.89.0 on the learn path and, worse, on `record()`, where it caches
+  a step no human performed and replay double-submits while reporting success. Guarded by strict-xfail
+  RED tests in 0.90.0 (both dispatch shapes + the record path), which the anti-wallpaper guard in
+  `tests/test_register_count.py` now ties to this finding's OPEN status.
+
+  **Two attempts are spent, so D5's two-strikes gate applies to the next one.** Attempt 1 (require the
+  commit's own `isTrusted`) over-refused an APG `role=button` activated by ENTER — recordable by mouse,
+  refused by keyboard — which is D0's shape landing on accessible widgets with no remedy. Attempt 2
+  (require a trusted activation to have begun the turn) is forgeable: `form.requestSubmit()` and
+  `checkbox.click()` both yield TRUSTED events from a bare task, on markup the page creates at runtime.
+  **`isTrusted` is not a user-presence signal — it means the user agent fired the event, and a page can
+  make the user agent fire events.** That one sentence rules out the whole family, so a third variant of
+  "read a better bit in the page" is attempt 2 again, not a third attempt.
+
+  **What the next attempt must do**, per D5: change the sensor class — inference → a human's verdict, or
+  inference → a loud refusal — and measure it against the existing artifacts BEFORE building it (the
+  shape set in the register's fix section, both attack shapes, and the APG / framework-forward /
+  design-system-dropdown population that killed attempt 1). Ruled out already, so nobody re-spends them:
+  `navigator.userActivation` (reads true on a blank page with no interaction ever) and driver-side
+  tagging (works for a scripted `demo=`, but `flow record`'s real surface is a headed human whose input
+  is trusted and indistinguishable from `Input.dispatchMouseEvent`).
+
+  **Sequencing.** The human-verdict sensor is the write-provenance + annotation work — the same primitive
+  D0's lever (ii) and R4.27's disposition need — so S18 should follow it rather than duplicate it.
+  Building that primitive twice is, in this plan's own words, how a fifth wrong fix arrives.
+
 ## Phase 7 — Documentation truth
 
 Capability-bounds section for users: what `learn()` AND `record()` refuse and why (deferred commits,
