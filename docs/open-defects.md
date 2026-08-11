@@ -1061,6 +1061,45 @@ in scope for S6 and required a RED test; S6 shipped without one, and the registe
 a slice's scope, with no test to hold it, is a hazard that quietly leaves scope. That is the sibling-guard
 shape one level up: the guard was specified, and never applied to the mechanism that shipped.
 
+### The human-verdict prerequisite LANDED and R4.5 did not move. Measured at 0.93.0, and one of the two claims made for it was wrong
+
+The plan sequenced S18 behind the write-provenance + annotation work, because D5 requires the third
+attempt to change the SENSOR CLASS and "inference → a human's verdict" is that change. Both halves
+shipped (0.92.0, 0.93.0). **A prerequisite landing is not a dependency being satisfied**, so both paths
+were run rather than argued:
+
+| path | what the human can do to the laundered recipe | |
+|---|---|---|
+| `learn` | step 0 caches `mutating=False, sources=None, scope='', fp=set`; `flow mark --write` → **ALLOWED**, step 0 becomes `mutating=True, sources=['human']` | the artifact IS repairable |
+| `record` | 2 human clicks → a 3-step recipe; the phantom step 2 caches `mutating=True, sources=['wire']`; `--read` **REFUSED** (`wire`), `--write` allowed and pointless | the artifact is NOT repairable |
+
+**The learn-path row corrects a claim this session made and should not have.** It was asserted that
+promotion would be refused as a gateless write. It is not: `flows.mark_step`'s gate needs *either* a
+`precond_scope` *or* a `precond_fingerprint`, and `_learn` always populates the whole-page fingerprint —
+only `recorder._step_from_event` leaves both empty, which is what that refusal was written for. Reading
+the guard's *intent* instead of running it produced a wrong answer in the safe-sounding direction, which
+is the harder one to catch.
+
+**The record-path row is the one that matters, and its bound is structural.** The harm there is a step
+**no human performed** sitting in the recipe. `flow mark` has a two-word vocabulary — writes / does not
+write — and neither word changes step MEMBERSHIP. There is no annotation that deletes the phantom, so
+the primitive is not merely refusing here; it cannot express the repair. Widening it to delete steps is
+not a small change either: step membership is what `approve()`'s digest is over, so a delete verb is an
+approval-bypass surface, and this file's own rule is that a verb which can rewrite what was approved
+needs its own argument, not an extra flag.
+
+**And on the learn path, the repair is unreachable in practice** — not because the verb refuses, but
+because nothing tells the operator to run it. The laundering arm is measured SILENT (no over-gate log,
+`gated=[1]`, the flow reports success), so a human-verdict sensor that only fires when a human already
+knows is not a sensor; it is a remedy for a diagnosis nobody has. **That is the transferable result:**
+when D5 says change the sensor class to a human's verdict, the human needs a TRIGGER, and specifying the
+verdict verb without specifying what surfaces the question builds half a sensor. S18's next attempt must
+name the trigger first.
+
+**Net: S18 is exactly where it was, and its stated prerequisite is now spent.** Recorded here rather
+than in the plan alone so nobody re-derives it from the sequencing line, which was corrected in the same
+change.
+
 ## ✅ FIXED by plan slice S1 — R4.6. The invariant matrix asserts only that SOME step is gated, never that the gate is on the step that WROTE
 
 *medium, and the reason the matrix did not catch R4.1/R4.2.* `tests/test_write_safety_invariants.py`
@@ -2448,6 +2487,39 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   un-gate real writes to spare reads. This is the same no-oracle shape as `MUTATING_KEYWORDS` and
   `landed`: at the moment of the decision nothing in the system knows. Any fix must come from evidence
   the page can produce, and the direction of error must stay conservative.
+
+  **RE-MEASURED at 0.93.0, and the human-verdict verb does NOT dispose of it — 12 of 12 refused.** The
+  plan sequenced R4.27's disposition behind the annotation work (`flow mark`, 0.93.0) on the argument
+  that a human can separate this population from real commits where no automated rule can. Landing that
+  primitive is not the same as satisfying the dependency, so the twelve controls were re-run against
+  shipped code rather than reasoned about:
+
+  | | of 12 |
+  |---|---|
+  | cached as WRITE flows (R4.27 still live) | 12 |
+  | step carries `wire` | 12 |
+  | `flow mark --read` **REFUSED** | 12 |
+  | demotion allowed | **0** |
+
+  The 7/5 split is as filed: seven record `['keyword','wire']`, five (`Filter results`, `Export CSV`,
+  `Next page`, `Refresh data`, `View details`) record `['wire']` alone. The wire promotion stamps
+  `MARK_WIRE` on BOTH of its branches — the already-marked one too, deliberately, so the field tracks the
+  strongest signal rather than the control's name — so a keyword false positive that also queries over
+  POST ends up **less** demotable than one that does not. `wire ∉ _DEMOTABLE_MARKS`, so `flows.mark_step`
+  refuses every one of the twelve, naming the evidence.
+
+  That refusal is CORRECT, and it is why this closes nothing: the verb declines to overrule a POST that
+  was watched leaving the browser, and a GraphQL query is a POST that was watched leaving the browser.
+  The verb cannot separate this population for the same reason the wire cannot. **R4.27 needs a sensor
+  class that can, and the human-verdict one is now spent on it** — which is a D5-shaped result arrived at
+  by measurement instead of by two more attempts. Pinned end-to-end by
+  `tests/test_annotation_disposition.py`, in both directions: it fails loudly if a GraphQL read stops
+  being filed as a write, so closing R4.27 cannot leave this entry stale.
+
+  **A correction that fell out of the same run.** `test_a_human_may_demote_a_mark_that_was_only_ever_a
+  _keyword_guess` described its fixture as "R4.27's population". It is not — R4.27's population all
+  carries `wire`. The test is sound and pins a real permitted case; only its claim about which
+  population it represents was wrong, and it is fixed.
 
 * **R4.25 — CORRECTED. It is not a class of three; it is one real defect, one over-specified test, and
   one non-reproducer.** The original entry unified three load-dependent failures on surface similarity.

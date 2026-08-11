@@ -63,7 +63,15 @@ def _seed(tmp_path: Path, *steps: CachedStep):
 
 
 def test_a_human_may_demote_a_mark_that_was_only_ever_a_keyword_guess(tmp_path: Path) -> None:
-    """R4.27's population: a read control whose NAME tripped the classifier. Nothing observed it write."""
+    """A read control whose NAME tripped the classifier, with nothing else having marked it.
+
+    This docstring used to say "R4.27's population", and that was MEASURED WRONG at 0.93.0: all twelve
+    of R4.27's GraphQL-style reads query over POST, so all twelve also carry `wire` and every one of
+    them is refused (`tests/test_annotation_disposition.py` pins that end-to-end). The permitted case
+    here is real — a keyword false positive on a control that never touched the network, which is most
+    of the classifier's 28% — but it is not that population, and claiming it was made the verb look like
+    R4.27's disposition when it is not.
+    """
     spec, cache, key = _seed(tmp_path, _step("payment history", mutating=True, sources=["keyword"]))
     mark_step(spec, 0, writes=False, cache=cache)
     step = cache.get(key).steps[0]

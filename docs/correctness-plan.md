@@ -420,9 +420,26 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   tagging (works for a scripted `demo=`, but `flow record`'s real surface is a headed human whose input
   is trusted and indistinguishable from `Input.dispatchMouseEvent`).
 
-  **Sequencing.** The human-verdict sensor is the write-provenance + annotation work — the same primitive
-  D0's lever (ii) and R4.27's disposition need — so S18 should follow it rather than duplicate it.
-  Building that primitive twice is, in this plan's own words, how a fifth wrong fix arrives.
+  **Sequencing — WRITTEN, THEN MEASURED, AND IT DID NOT HOLD.** The original line read: *"the
+  human-verdict sensor is the write-provenance + annotation work — the same primitive D0's lever (ii)
+  and R4.27's disposition need — so S18 should follow it rather than duplicate it."* Both halves shipped
+  (0.92.0 provenance, 0.93.0 `flow mark`). Running the three populations against 0.93.0 instead of
+  reasoning from the vocabulary:
+
+  * **R4.27 — not disposed of. 12 of 12 demotions REFUSED**, because all twelve carry `wire` and the verb
+    declines to overrule a POST that was watched leaving the browser. Correct refusal, closed nothing.
+  * **R4.5 / `record` — not repairable.** The harm is a phantom step; `flow mark` cannot change step
+    membership, so the repair is not expressible, not merely refused.
+  * **R4.5 / `learn` — repairable, and unreachable.** Promotion is allowed (an earlier claim that it
+    would be refused as a gateless write was wrong — `_learn` always sets `precond_fingerprint`), but
+    the laundering arm is silent, so nothing tells the operator to run it.
+
+  **So the prerequisite is spent and S18 has not moved.** The lesson is a gate on the next attempt, not
+  just bookkeeping: *a human-verdict sensor is a verdict verb PLUS a trigger that puts the question in
+  front of a human.* Specifying only the verb builds half a sensor, which is how a landed prerequisite
+  can leave the finding exactly where it was. S18's next attempt names the trigger first. Numbers and
+  the per-path table are in R4.5's and R4.27's entries in `docs/open-defects.md`; the R4.27 half is
+  pinned end-to-end by `tests/test_annotation_disposition.py`, in both directions.
 
 ## Phase 7 — Documentation truth
 
