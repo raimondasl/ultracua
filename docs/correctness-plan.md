@@ -346,8 +346,40 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
 
   **CLI-3's real defect was the MESSAGE, not the exit code** — "the agent took no clean steps" is false
   for the refusal population, and `res.note` already held the true reason and its remedy.
-- **S10. API contract truth.** `_load_meta`'s "never raises" broken by `RecursionError` (R3.11);
-  MCP tool-list shrinkage visible only in logs (MCP-1) — surface count/reason in the listing.
+- **S10. API contract truth.** ✅ **DONE in 0.95.0**, scoped as ONE invariant rather than five patches —
+  *nothing crossing a boundary loses its type or its reason, and every durable rename goes through one
+  helper*. Closed R3.11 (`_load_meta`'s "never raises" was false — `RecursionError` and `Path.exists()`
+  both escaped), plus the R4.15/17/18/20 cluster the register told this slice to sequence here.
+
+  **The bullet under-scoped it, and measurement is what said so.** R4.20 was filed as one asymmetry
+  (`FlowCache.put` vs `_save_meta`); there were **seven** durable renames and one retry. Reproducing
+  before fixing is the only reason the fix went into a shared `fsio` helper instead of a second
+  transcription of the retry loop.
+
+  **AND THE PRE-MERGE AUDIT FOUND A CRITICAL IN THE FIX** — 26 findings, 24 refuted, 2 survived. Typing
+  `_save_meta`'s failure (R4.18) let it propagate out of the four positions where `_record_run` runs
+  immediately before a deliberate raise, so a sidecar blip replaced `WriteUnverifiedError`
+  (retryable=False) with `MetaUnwritableError` ("RETRY", retryable=True) and no ledger row — an MCP agent
+  honouring that re-fires the commit. Inviolable #3. The guard already existed on `_record_run`'s READ
+  half (`on_unreadable="skip"`) and had never been applied to the save half: this plan's own
+  most-repeated shape, inside the slice closing four instances of it.
+
+  Two further defects were caught earlier and cheaper — one by the sibling check (typing the error
+  un-caught it in `_refuse_unreadable_meta`, turning a CORRUPT verdict into an `unreadable` one with the
+  opposite remedy), one by an existing enforcement test going red on the `_read_meta` split. A third
+  existing test turned out to be pinning the R4.15 DEFECT: it asserted that a typed error tracebacks out
+  of the CLI.
+
+  **MCP-1 was deliberately NOT taken here** and moves to S10b. It is a protocol-surface design question
+  — `tools/list` has nowhere to carry a drop count, so the answer is a new surface — and this plan does
+  not add capability. Bundling it into a slice that already grew a critical is how the audit surface
+  gets too large to aim.
+
+- **S10b. MCP-1 — tool-list shrinkage is invisible to the client.** Four skip paths (unreadable spec,
+  unreadable recipe, stale approval, name collision) each drop a tool with a stderr log and no
+  protocol-level signal, so an agent cannot tell "flow retired" from "flow broken". Decide the SURFACE
+  first (a diagnostic tool, an `instructions` line, or a structured field), then build; the register's
+  reporting rule applies — whatever is added must have an acknowledgement path, or it earns its `|| true`.
 
 ## Phase 6 — Remaining register items + systemic holes
 

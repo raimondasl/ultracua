@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .contracts import DELTA_ABS_EPS
+from .fsio import durable_write_text
 from .extract import tool_extract
 from .llm.types import ToolDef
 from .obs import get_logger
@@ -251,9 +252,7 @@ def capture(cache, key: str, *, goal: str, extract: Optional[str], data: Any, pa
         if os.name == "posix":
             os.chmod(d, 0o700)
         p = d / f"{int(art['ts'] * 1000)}-{art['run_id']}.json"
-        tmp = p.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(art), encoding="utf-8")
-        os.replace(tmp, p)
+        durable_write_text(p, json.dumps(art))
         prune(cache, key)   # bound enforced AT THE WRITE SITE, so no caller can forget it and let the
         return p            # store grow unbounded (a fleet whose operator never audits is still capped)
     except OSError as exc:

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import time
 from pathlib import Path
@@ -23,6 +22,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel
 
+from .fsio import durable_write_text
 from .obs import get_logger
 
 _log = get_logger("cache")
@@ -315,17 +315,12 @@ class FlowCache:
 
     def put(self, flow: CachedFlow) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
-        # Atomic (temp + os.replace) so a concurrent reader never sees a half-written flow, and DURABLE
-        # (fsync before the rename) so a host crash / power loss can't leave a zero-length or NUL-filled
-        # entry behind — `get()` reads that as a miss, i.e. a silently forgotten recipe. Same reasoning and
-        # the same shape as `_save_meta` and the ledger.
-        p = self._path(flow.key)
-        tmp = p.with_suffix(f".{os.getpid()}.tmp")
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(flow.model_dump_json(indent=2))
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, p)
+        # Atomic + DURABLE via the one shared helper: a concurrent reader never sees a half-written flow,
+        # a host crash can't leave a zero-length entry (which `get()` reads as a miss — a silently
+        # forgotten recipe), and the rename RETRIES through the transient sharing violation that this
+        # call site used to die on. It had the identical bug `_save_meta` was fixed for and never got the
+        # fix; that asymmetry is why the retry now lives in `fsio` rather than beside one writer.
+        durable_write_text(self._path(flow.key), flow.model_dump_json(indent=2))
 
     def delete(self, key: str) -> bool:
         p = self._path(key)
@@ -389,13 +384,9 @@ class FlowCache:
         """
         try:
             self.root.mkdir(parents=True, exist_ok=True)
-            p = self._refusal_path(key)
-            tmp = p.with_suffix(f".{os.getpid()}.tmp")
-            with open(tmp, "w", encoding="utf-8") as fh:
-                fh.write(json.dumps({"code": code, "reason": reason, "ts": time.time()}, indent=2))
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(tmp, p)
+            durable_write_text(
+                self._refusal_path(key),
+                json.dumps({"code": code, "reason": reason, "ts": time.time()}, indent=2))
         except OSError as exc:
             _log.error("could not persist the refusal for %s (%s) — this run still refuses, but the next "
                        "invocation will re-author and re-fire the write", key, exc)

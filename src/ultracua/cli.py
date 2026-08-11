@@ -1283,7 +1283,7 @@ def _flow_main(argv) -> None:
                           "retry of the same args is deduped, and calls run under the OPERATOR's identity.")
 
     args = p.parse_args(argv)
-    from .flows import EmptyFlowStoreError
+    from .flows import EmptyFlowStoreError, FlowReplayError
     from .obs import configure_logging
     configure_logging("INFO" if getattr(args, "verbose", False) else settings.log_level)
     try:
@@ -1293,6 +1293,20 @@ def _flow_main(argv) -> None:
         # 2 for the rest — never 0, which is what made a wrong-cwd cron job look healthy forever.
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(3 if args.cmd == "audit" else 2)
+    except FlowReplayError as exc:
+        # R4.15. This used to catch exactly `EmptyFlowStoreError`, so every OTHER typed error reached the
+        # user as a Python traceback on six verbs (`approve`, `unapprove`, `release`, `learn`, `record`,
+        # `audit`) — and the thing a traceback buries is the remedy, which for `MetaUnreadableError` is
+        # the difference between "retry, that was an AV scan" and a user deleting a healthy sidecar.
+        #
+        # CATCH THE FAMILY, NOT A MEMBER. Naming the reported class would fix the reported verb and leave
+        # the next typed error a traceback — the same enumerate-the-loud-outcomes error the fleet verdict
+        # was rebuilt to avoid. Every `FlowReplayError` carries a message written FOR an operator, so
+        # rendering the base class is not a widening of blast radius, it is the contract those messages
+        # were already written under. The verbs that render these themselves (`replay`, `run-batch`,
+        # `dry-run`) still do — this handler only ever sees what they did not.
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(2)
 
 
 def _flow_dispatch(args: argparse.Namespace) -> None:

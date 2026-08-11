@@ -22,9 +22,10 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from pathlib import Path
+
+from .fsio import durable_rename, durable_write_text
 
 _log = logging.getLogger("ultracua.history")
 
@@ -41,7 +42,9 @@ def _num(x):
 def _preserve_corrupt(p: Path) -> None:
     """Move an unreadable history sidecar aside so the next clean run's re-anchor doesn't erase it."""
     try:
-        os.replace(p, p.with_name(f"{p.name}.corrupt.{int(time.time())}"))
+        # `cleanup_src=False`: here the SOURCE is the evidence being preserved, so a rename that never
+        # lands must leave it alone rather than delete it.
+        durable_rename(p, p.with_name(f"{p.name}.corrupt.{int(time.time())}"))
     except OSError as exc:  # noqa: BLE001 — best effort
         _log.warning("could not preserve the corrupt magnitude history %s: %s", p, exc)
 
@@ -99,15 +102,10 @@ def set_anchor(doc: dict, path: str, value) -> None:
 
 
 def save_history(cache, key: str, doc: dict) -> None:
-    """Atomically + DURABLY persist the history doc (fsync then os.replace, mirroring `_save_meta`).
+    """Atomically + DURABLY persist the history doc, through the one shared durable write.
 
     The fsync is not decoration: without it a host crash can leave a zero-length/NUL-filled file, and the
     thing lost is the ANCHOR — whose loss silently re-baselines at the drifted value (see `load_history`)."""
     p = history_path(cache, key)
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".json.tmp")
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(json.dumps(doc))
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, p)
+    durable_write_text(p, json.dumps(doc))
