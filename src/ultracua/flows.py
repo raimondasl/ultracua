@@ -45,7 +45,7 @@ from .obs import get_logger
 from .pin import find_pin, read_pin
 from .providers import build_router, get_provider
 from .recorder import caption_intents, record_demo
-from .safety import idempotency_key
+from .safety import MARK_CAPTION, MARK_HUMAN, MARK_KEYWORD, MARK_UNKNOWN, merge_marks, idempotency_key
 from .snapshot import REDACTED, apply_redactions
 
 if TYPE_CHECKING:
@@ -1366,6 +1366,141 @@ def unapprove(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> None:
     if cache.get(key) is None:
         raise FlowReplayError(f"{spec.name!r}: nothing to unapprove — learn or record the flow first")
     _update_meta(cache, key, lambda m: setattr(m, "approved", False), on_unreadable="raise")
+
+
+# The signals a human is permitted to overrule. Everything else is EVIDENCE (something observed the
+# write), a PRECAUTION (AB-1 gated a row nothing could attribute — R4.5), or the human's OWN earlier
+# declaration — and none of those is the classifier guessing from a control's name.
+_DEMOTABLE_MARKS = frozenset({MARK_KEYWORD, MARK_CAPTION, MARK_HUMAN})
+# `MARK_HUMAN` is in the set so the verb is REVERSIBLE and IDEMPOTENT. Without it a promotion was a
+# one-way door — the human's own verdict became the "evidence" a later correction was refused for, with
+# a message telling them a human verdict may not overrule a human verdict. It launders nothing: a step
+# carrying real evidence keeps that source too (`merge_marks` is a union), so `['human','wire']` is
+# still refused. Only a mark whose ENTIRE basis is guesswork plus a human's own say-so is demotable.
+
+
+def mark_step(spec: FlowSpec, index: int, *, writes: bool,
+              cache: Optional[FlowCache] = None) -> bool:
+    """Record a HUMAN's verdict on whether one cached step writes. D0's lever (ii), acting half.
+
+    The classifier is wrong in both directions and no matching rule fixes it — 28% false positives on
+    ordinary read controls, and the wire promotion files 12/12 GraphQL-style read POSTs as writes
+    (R4.27). Those flows lose self-heal, suffix-replan, the auth-refresh retry, MCP exposure and
+    `run_all` inclusion. D0 is blocked indefinitely because no automated rule separates that population
+    from real commits; a human can, and D5 says the next attempt must change the SENSOR CLASS rather
+    than refine the inference. This is that change: not a better guess, a different kind of answer.
+
+    THE ASYMMETRY IS THE DESIGN, and it is what keeps this from being the first step backwards:
+
+      * `writes=True` is always allowed. It is strictly more conservative — at worst it spends an unused
+        Idempotency-Key on a step that never writes, which this register has priced repeatedly.
+      * `writes=False` is allowed ONLY when every recorded source is a GUESS (`keyword`, `caption`). A
+        human may overrule the classifier's guesswork. A human may NOT overrule a POST that was watched
+        leaving the browser (`wire`), a form that declares its own method (`form_method`), AB-1's
+        precaution on a row nothing could attribute (`overgate`), or their own earlier `spec.mutate`
+        declaration (`declared`).
+      * NO provenance at all refuses too. `mutating_sources is None` means a flow authored before 0.92.0
+        — "never recorded", NOT "no evidence". Reading the third state as the safe one is this
+        register's absent-vs-unreadable trap (R3.1, R3.4, and `landed`'s second wrong version). The
+        remedy is a re-learn, which genuinely works: provenance then exists and the verdict is informed.
+
+    Every annotation moves the steps digest, because `mutating` is in `_HASHED_STEP_FIELDS` — so an
+    approved flow refuses with `stale_approval` until a human re-reads the recipe. That is not a side
+    effect to be worked around; a demotion is exactly the change nobody should slip past an approval
+    granted for the recipe as it stood.
+
+    Raises `ValueError` with the reason on every refusal — including naming the evidence being
+    overruled, since a refusal whose reason is invisible is one an operator learns to route around.
+    """
+    cache = cache or _default_cache()
+    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    flow = cache.get(key)
+    if flow is None:
+        raise ValueError(
+            f"flow {spec.name!r} is not learned, so there is no recipe to annotate — run `flow learn` "
+            f"or `flow record` first")
+    if not 0 <= index < len(flow.steps):
+        raise ValueError(
+            f"flow {spec.name!r} has {len(flow.steps)} step(s); there is no step {index}. "
+            f"`flow inspect --name {spec.name}` lists them with their indices")
+    step = flow.steps[index]
+
+    if not writes:
+        srcs = step.mutating_sources
+        if step.mutating and not srcs:
+            raise ValueError(
+                f"step {index} ({step.intent!r}) records no provenance ({srcs!r}), so it cannot be "
+                f"shown to be a guess. `None` means it was authored before marks carried their source; "
+                f"`[]` means a mark site failed to record one, which is a bug. Neither is 'no evidence'. "
+                f"Re-learn or re-record the flow and the provenance appears, then annotate it")
+        hard = sorted(set(srcs or ()) - _DEMOTABLE_MARKS)
+        if hard:
+            raise ValueError(
+                f"step {index} ({step.intent!r}) is marked by {', '.join(hard)} — that is evidence or a "
+                f"deliberate precaution, not the classifier guessing from a control's name, and a human "
+                f"verdict does not overrule it. Only {sorted(_DEMOTABLE_MARKS)} may be demoted. If this "
+                f"step really does not write, the flow needs re-authoring, not annotating")
+        if step.confirm is not None:
+            raise ValueError(
+                f"step {index} ({step.intent!r}) carries a per-write commit barrier, and barriers are "
+                f"bound to the Nth MUTATING step — demoting this one would silently re-bind every later "
+                f"confirm to the wrong write. Remove the barrier from `spec.mutate.step_confirms` first "
+                f"if this step really does not commit")
+        if spec.mutate is not None and step.mutating:
+            others = [i for i, s in enumerate(flow.steps) if s.mutating and i != index]
+            if not others:
+                raise ValueError(
+                    f"flow {spec.name!r} DECLARES a write (`spec.mutate`) and step {index} is its only "
+                    f"marked step; demoting it would leave a declared write planning zero "
+                    f"Idempotency-Keys, which replay refuses with UnkeyedWriteError. Drop the "
+                    f"declaration first if the flow really is a read")
+
+    if writes and not step.precond_scope and not step.precond_fingerprint:
+        # `recorder._step_from_event` never sets `precond_fingerprint`, and only scopes a step it
+        # already considers mutating — so promoting an unscoped RECORDED step would cache a mutating
+        # step with NO precondition, where `_replay_step`'s gate takes neither branch and the write
+        # fires blind under drift. recorder.py says so in capitals, and refuses to author it; this verb
+        # must not create through the back door what the recorder refuses to create through the front.
+        raise ValueError(
+            f"step {index} ({step.intent!r}) has no recorded precondition (neither a form/section scope "
+            f"nor a page fingerprint), so marking it as writing would cache a write whose mutation gate "
+            f"is a no-op — it would replay under any drift. Re-record the flow with `mutate` declared, "
+            f"which scopes every commit, then annotate")
+
+    # PRESERVE the unknown. A step already marked with no provenance was marked by SOMETHING; stamping
+    # only `human` over that void claims the human is the sole basis, which is false — and it made the
+    # next demotion legal, defeating the no-provenance guard through two individually-legal calls. The
+    # matrix dimension in `tests/test_write_safety_invariants.py` found this; the bespoke tests did not.
+    prior = MARK_UNKNOWN if (step.mutating and not step.mutating_sources) else ""
+    marks = merge_marks(step.mutating_sources, MARK_HUMAN, prior)
+    flow.steps[index] = step.model_copy(update={
+        "mutating": writes,
+        "mutating_sources": marks,
+        # PRESERVED in both directions, and the first draft of this cleared it on a demotion.
+        #
+        # That was wrong twice over. A demote-then-promote round trip — the most likely sequence for a
+        # human correcting and re-correcting — left `mutating=True` with an EMPTY scope, and the
+        # justification written here ("it degrades to the whole-page `precond_fingerprint`, which is
+        # always populated") was a verbatim transcription of `flow.py`'s comment: true where it was
+        # written, false where it was pasted. `precond_fingerprint` is assigned at exactly one site,
+        # the LLM-learn path, so for every RECORDED flow it is empty and the scope IS the whole gate.
+        # Measured in a browser: the mutation gate went from refusing a drifted write to a no-op, and
+        # the order was placed against a form that had changed since a human approved it.
+        #
+        # Keeping the scope on a non-mutating step costs nothing — nothing reads it — and it is what
+        # makes the verb reversible instead of quietly lossy.
+        "precond_scope": step.precond_scope,
+    })
+    changed = (step.mutating != writes) or (step.mutating_sources or []) != marks
+    if not changed:
+        _log.info("flow %r: step %d %r was already marked %s by a human — nothing changed",
+                  spec.name, index, step.intent, "WRITING" if writes else "read")
+        return False
+    cache.put(flow)
+    _log.info("flow %r: step %d %r marked %s by a human (sources now %s) — approval is now stale until "
+              "a human re-reads the recipe", spec.name, index, step.intent,
+              "WRITING" if writes else "read", marks)
+    return True
 
 
 def release(spec: FlowSpec, *, cache: Optional[FlowCache] = None, rebaseline: bool = False) -> None:

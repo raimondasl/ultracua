@@ -493,3 +493,86 @@ async def test_a_recorded_write_is_gated_on_the_step_that_wrote_or_refused(timin
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+# ===================================================================================================
+# DIMENSION: the HUMAN ANNOTATION verb (0.93.0) — the first thing in this arc that can UN-gate a write.
+#
+# Its first draft shipped a critical that every bespoke test in its own file passed straight through: a
+# demote->promote round trip left `mutating=True` with NO precondition, so the mutation gate took
+# neither branch and the write fired blind under drift. The bespoke tests all asserted about `mutating`
+# and `mutating_sources` and none asserted about the GATE — which is exactly why the project rule is
+# matrix over bespoke, and why the dimension belongs here rather than beside the feature.
+#
+# The property is the invariant `recorder.py` states in capitals and refuses to author against: a step
+# that is marked mutating must have SOMETHING for the gate to check. No annotation, in any order, from
+# any starting state, may produce a step that violates it.
+# ===================================================================================================
+
+_ANNOTATION_STATES = [
+    # (label,                       mutating, sources,               scope,   fingerprint)
+    ("keyword-only, scoped",        True,  ["keyword"],              "scope", ""),
+    ("keyword+wire, scoped",        True,  ["keyword", "wire"],      "scope", ""),
+    ("form_method, scoped",         True,  ["form_method"],          "scope", ""),
+    ("overgate, scoped",            True,  ["overgate"],             "scope", ""),
+    ("caption-only, scoped",        True,  ["caption"],              "scope", ""),
+    ("no provenance, scoped",       True,  None,                     "scope", ""),
+    ("empty provenance, scoped",    True,  [],                       "scope", ""),
+    ("read step, learn-shaped",     False, None,                     "",      "fp"),
+    ("read step, recorder-shaped",  False, None,                     "",      ""),
+    ("already-human, scoped",       True,  ["human", "keyword"],     "scope", ""),
+]
+
+_ANNOTATION_SEQUENCES = [
+    ("demote",              [False]),
+    ("promote",             [True]),
+    ("demote->promote",     [False, True]),
+    ("promote->demote",     [True, False]),
+    ("demote x2",           [False, False]),
+    ("demote->promote->demote", [False, True, False]),
+]
+
+
+@pytest.mark.parametrize("state", _ANNOTATION_STATES, ids=lambda s: s[0])
+@pytest.mark.parametrize("seq", _ANNOTATION_SEQUENCES, ids=lambda s: s[0])
+def test_no_annotation_sequence_can_produce_a_write_with_no_mutation_gate(state, seq, tmp_path) -> None:
+    """INVARIANT #2/#3 over the annotation verb: a step left MUTATING must have a precondition.
+
+    60 cells. Each applies a sequence of human verdicts to a starting state and asserts the result is
+    either refused or GATED — never `mutating=True` with an empty scope AND an empty fingerprint, which
+    is a mutation gate that silently does nothing.
+    """
+    import time as _time
+
+    from ultracua.cache import CachedFlow, CachedStep, FlowCache, flow_key
+    from ultracua.flows import FlowSpec, mark_step
+    from ultracua.locators import LocatorSpec
+
+    label, mutating, sources, scope, fp = state
+    _seqlabel, verdicts = seq
+
+    spec = FlowSpec(name="m", goal="g", start_url="http://x/")
+    cache = FlowCache(root=tmp_path / "c")
+    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    cache.put(CachedFlow(
+        key=key, goal="g", start_url="http://x/", created_ts=_time.time(),
+        steps=[CachedStep(intent="act", action="click",
+                          locator=LocatorSpec(role="button", name="act", tag="button"),
+                          mutating=mutating, precond_scope=scope, precond_fingerprint=fp,
+                          mutating_sources=sources)]))
+
+    refusals = 0
+    for writes in verdicts:
+        try:
+            mark_step(spec, 0, writes=writes, cache=cache)
+        except ValueError:
+            refusals += 1                       # a refusal is always an acceptable outcome
+        step = cache.get(key).steps[0]
+        assert not step.mutating or step.precond_scope or step.precond_fingerprint, (
+            f"[{label} | {_seqlabel}] the step is marked MUTATING with neither a scope nor a "
+            f"fingerprint — its mutation gate takes neither branch, so it replays under any drift. "
+            f"sources={step.mutating_sources!r}")
+
+    # Anti-vacuity: a cell where EVERY verdict refused proves nothing about the invariant, so make the
+    # census visible rather than letting a wholly-refusing matrix read as a passing one.
+    print(f"[annotation] {label:<28} {_seqlabel:<26} refused {refusals}/{len(verdicts)}")

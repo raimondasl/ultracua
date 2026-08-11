@@ -329,8 +329,41 @@ def _step_line(i: int, s, spec) -> str:
             shown = s.text if len(s.text) <= 60 else s.text[:57] + "..."
             parts.append(f"  text={shown!r}")
     if s.mutating:
-        parts.append("  **MUTATING**")
+        # Show WHICH signal marked it. Without this the operator sees one bit for four very different
+        # claims and cannot tell the 28%-false-positive keyword guess from a POST that was watched
+        # leaving the browser — which is exactly the judgement `flow mark` asks them to make.
+        src = ",".join(s.mutating_sources) if s.mutating_sources else "source not recorded"
+        parts.append(f"  **MUTATING** ({src})")
+    elif s.mutating_sources:
+        # A step a human demoted keeps its history, so the override stays visible on the recipe they
+        # re-approve rather than looking like a step nothing ever marked.
+        parts.append(f"  [not writing — was marked by {','.join(s.mutating_sources)}]")
     return "".join(parts)
+
+
+def _flow_mark(args: argparse.Namespace) -> None:
+    """`flow mark` — the human's verdict on one step's write status (D0 lever ii, acting half).
+
+    Exits NONZERO on a refusal, with the reason printed: this is a write-path decision, and a refusal
+    that exits 0 is the CLI-truth defect S7a/S7b spent two slices removing.
+    """
+    from .flows import load_spec, mark_step
+
+    spec = load_spec(args.name)
+    try:
+        changed = mark_step(spec, args.step, writes=bool(args.write))
+    except ValueError as exc:
+        print(f"refused: {exc}")
+        raise SystemExit(2)
+    verdict = "WRITING" if args.write else "not writing"
+    if not changed:
+        print(f"step {args.step} of {args.name!r} was already marked {verdict} — nothing changed, "
+              f"and its approval is untouched.")
+        return
+    print(f"step {args.step} of {args.name!r} is now marked {verdict} (recorded as a human verdict).")
+    print("The recipe changed, so its approval is now STALE. Re-read it and re-approve:")
+    print(f"  ultracua flow inspect --name {args.name}")
+    print(f"  ultracua flow approve --name {args.name}")
 
 
 def _flow_approve_all(args: argparse.Namespace) -> None:
@@ -1135,6 +1168,17 @@ def _flow_main(argv) -> None:
                      help="also clear the magnitude baseline so the field re-warms at the new normal "
                           "(use ONLY for a genuine, permanent level shift).")
 
+    pmk = sub.add_parser("mark", help="Record a HUMAN verdict on whether one step WRITES (see `flow inspect`).")
+    pmk.add_argument("--name", required=True)
+    pmk.add_argument("--step", required=True, type=int, metavar="N",
+                     help="step index, as shown by `flow inspect`.")
+    grp = pmk.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--read", action="store_true",
+                     help="this step does NOT write. Allowed only where the mark was a GUESS "
+                          "(keyword/caption); refused where something observed the write.")
+    grp.add_argument("--write", action="store_true",
+                     help="this step DOES write. Always allowed — it is the conservative direction.")
+
     pct = sub.add_parser("contracts", help="View / edit a flow's H9 VALUE contracts (fail-loud value guards).")
     pct.add_argument("--name", required=True)
     pct.add_argument("--set", action="append", metavar="PATH:ATTR=VALUE",
@@ -1274,6 +1318,8 @@ def _flow_dispatch(args: argparse.Namespace) -> None:
         _flow_status(args)
     elif args.cmd == "release":
         _flow_release(args)
+    elif args.cmd == "mark":
+        _flow_mark(args)
     elif args.cmd == "contracts":
         _flow_contracts(args)
     elif args.cmd == "audit":
