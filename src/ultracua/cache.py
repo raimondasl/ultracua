@@ -113,7 +113,9 @@ class CachedStep(BaseModel):
     #
     # A LIST because the signals are not exclusive: a keyword guess and a later wire promotion can both
     # land on one step, and "a guess that the wire then confirmed" is a materially different claim from
-    # either alone. It is purely descriptive — NOTHING reads it as a gate in this slice, by design.
+    # either alone. It was purely descriptive when introduced; since 0.93.0 `flows.mark_step` READS it —
+    # a mark is demotable by a human only if every source is a guess — so it is now TRUST-BEARING, and
+    # a future signal added to `safety.MARK_*` must decide explicitly whether it is demotable.
     # Additive + defaulted, so older flows deserialize unchanged (NO schema bump needed) — the same
     # precedent as `slot`, `slot_domain` and `secret` above.
     mutating_sources: Optional[list[str]] = None

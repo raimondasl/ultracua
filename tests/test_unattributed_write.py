@@ -308,13 +308,24 @@ async def test_a_write_deferred_onto_a_mutating_neighbour_never_leaves_its_commi
         httpd.server_close()
 
 
-async def test_the_control_a_write_deferred_two_tasks_is_still_over_gated(tmp_path: Path) -> None:
+async def test_the_control_a_write_deferred_two_tasks_is_still_over_gated(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """R4.5's CONTROL, and it is what makes the xfail below mean anything.
 
     Identical to the R4.5 page except that the deferred task issues the write directly instead of
     dispatching a click first. If this ever goes red, the extra task — not the synthetic click — is
     what moved the verdict, and the finding below is misdiagnosed rather than fixed.
     """
+    seen: list[bool] = []
+    _real_provable = _flowmod._wire_writes_are_provable
+
+    async def _spy(pg):
+        out = await _real_provable(pg)
+        seen.append(bool(out))
+        return out
+
+    monkeypatch.setattr(_flowmod, "_wire_writes_are_provable", _spy)
+
     site = _Site(_DEFERRED_TWO_TASKS)
     httpd, base = site.serve()
     cache = FlowCache(root=tmp_path / "c")
@@ -324,6 +335,19 @@ async def test_the_control_a_write_deferred_two_tasks_is_still_over_gated(tmp_pa
             spec, provider=_prov(("Continue", "continue"), ("Confirm address", "confirm the address")),
             router=None, cache=cache, verify_replay=False)
         assert site.posts == ["/api/commit"], "the fixture did not POST; this would prove nothing"
+        # THE PREMISE PIN ITS SIBLING HAD AND THIS DID NOT — added after ubuntu CI failed here while
+        # windows passed, which is this register's own sibling-guard shape created inside the slice that
+        # documented it. The AB-1 arm is reached only when `_write_owner` finds TWO live candidates; if
+        # the write is uniquely attributed instead (different timer/act-window interleaving, and Linux
+        # schedules it differently from Windows) the whole block is skipped and `gated` is [1] — at
+        # which point this test's failure message asserts a conclusion it cannot support, namely that
+        # the extra bare task defeated the over-gating. That is a premise loss, and it must ERROR as one
+        # rather than accuse the mechanism.
+        if not seen:
+            raise RuntimeError(
+                "PREMISE LOST: the AB-1 adjudication was never reached, so `_wire_writes_are_provable` "
+                "was never consulted — the write was uniquely attributed instead. This control says "
+                "nothing about over-gating on such a run")
         flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
         if flow is None:
             assert res.cached is False and res.note, "a refusal must be loud and carry its reason"

@@ -72,9 +72,12 @@ from urllib.parse import urlsplit
 # records every `MARK_*` below that independently supports the mark — D0's lever (ii), landed standalone
 # rather than inside S6/AB-1 as the plan expected.
 #
-# THE FIELD IS DESCRIPTIVE, AND NOTHING READS IT AS A GATE YET. That is deliberate: recording provenance
-# is inert, while ACTING on it is a decision this register has rejected once already. The contract, so a
-# consumer cannot misread it: the list is *every signal that independently supports this mark*, not "the
+# SINCE 0.93.0 THE FIELD IS TRUST-BEARING: `flows.mark_step` lets a human demote a mark only when every
+# recorded source is a GUESS (keyword / caption / their own prior verdict). Evidence — `form_method`,
+# `wire` — a precaution (`overgate`), a declaration (`declared`) or an unrecoverable basis (`unknown`)
+# all refuse. A new signal added below MUST decide explicitly whether it belongs in
+# `flows._DEMOTABLE_MARKS`; the set is an ALLOWLIST, so a new mark is non-demotable by default, which is
+# the safe direction. The contract, so a consumer cannot misread it: the list is *every signal that independently supports this mark*, not "the
 # one that decided it" — a step a keyword guessed at and the wire then confirmed carries BOTH, and the
 # first draft of that field got it backwards, filing a wire-proven commit as a bare guess.
 #
@@ -156,6 +159,8 @@ MARK_WIRE = "wire"                # a non-idempotent request was observed leavin
 MARK_DECLARED = "declared"        # the human declared `spec.mutate` and the target submits a form
 MARK_OVERGATE = "overgate"        # a blanket precaution (AB-1): nothing attributed this step at all
 MARK_CAPTION = "caption"          # a keyword hit on an LLM-written caption — a guess about a guess
+MARK_HUMAN = "human"              # a human's explicit verdict (`flows.mark_step`) — the only NON-inferred source
+MARK_UNKNOWN = "unknown"          # marked before provenance existed: SOMETHING marked it, basis unrecoverable
 
 
 def classify_mutation_with_source(action: str, intent: str = "", name: str = "",
