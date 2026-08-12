@@ -179,7 +179,7 @@ def test_cli_status_and_list_stay_exit_zero_and_print_the_resolved_home(monkeypa
         assert str(flow_home()) in capsys.readouterr().out
 
 
-def test_the_unapprove_verb_the_docs_prescribe_actually_exists(monkeypatch, tmp_path) -> None:
+def test_the_unapprove_verb_the_docs_prescribe_actually_exists(monkeypatch, tmp_path, capsys) -> None:
     """REGRESSION: an approved flow keeps its blessed shape/contracts across a re-learn, and the documented
     recovery is `unapprove -> learn -> approve`. That prescription named a CLI verb that did not exist, so a
     legitimate page restructure wedged the flow with no CLI escape."""
@@ -206,10 +206,21 @@ def test_the_unapprove_verb_the_docs_prescribe_actually_exists(monkeypatch, tmp_
     cli._flow_main(["unapprove", "--name", "wedge"])                  # and it runs
     assert not flows._load_meta(cache, key).approved
 
-    # it also mirrors `approve`'s guard rather than minting a sidecar for a never-learned flow
+    # It also mirrors `approve`'s guard rather than minting a sidecar for a never-learned flow.
+    #
+    # HOW THAT IS OBSERVED CHANGED IN 0.95.0, AND THE OLD SHAPE WAS PINNING THE DEFECT. This used to
+    # assert the `FlowReplayError` propagated out of `_flow_main` — i.e. that the operator got a Python
+    # traceback — and `unapprove` is one of the six verbs R4.15 names for exactly that. The guard is the
+    # property; the traceback was never part of it, and a traceback is what BURIES the remedy the error
+    # was written to carry. So: still refused, still by its own reason, now rendered and exited on.
     save_spec(FlowSpec(name="never", start_url="http://127.0.0.1:9/x", goal="g2"))
-    with pytest.raises(flows.FlowReplayError, match="nothing to unapprove"):
+    with pytest.raises(SystemExit) as ex:
         cli._flow_main(["unapprove", "--name", "never"])
+    assert ex.value.code == 2, "a refusal must not exit 0 — that is how a cron job reports green"
+    err = capsys.readouterr().err
+    assert "nothing to unapprove" in err, (
+        f"the guard's reason must reach the operator, not just its exit code; got {err!r}")
+    assert "Traceback" not in err
 
 
 @pytest.mark.parametrize("extra", [["--purge"], ["--list"], ["--show"]])

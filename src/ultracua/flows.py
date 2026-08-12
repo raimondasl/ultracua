@@ -39,6 +39,7 @@ from .contracts import (
 from .history import history_path, load_history, save_history, set_anchor
 from .extract import extract
 from .flow import run_cached
+from .fsio import durable_rename, durable_write_text
 from .ledger import LedgerError, RunLedger
 from .locators import resolve
 from .obs import get_logger
@@ -544,6 +545,43 @@ class MetaUnreadableError(FlowReplayError):
     retryable = True     # a sharing violation clears; this is the one refusal here that IS worth retrying
 
 
+class MetaUnwritableError(FlowReplayError):
+    """The trust sidecar could not be WRITTEN, after the durable rename exhausted its retries (R4.18).
+
+    The read half of this pair has been typed since R3.8; the write half raised a bare
+    `PermissionError`/`OSError`, so every `except FlowReplayError` on the replay, batch and MCP paths
+    walked straight past it. That is the read/write sibling asymmetry one level up from the one those
+    handlers were written for, and its worst case is on the SUCCESS path: a write that COMMITTED reaches
+    `_record_run`, which fails here, and the operator gets a file-permission traceback instead of
+    `{"status": "confirmed"}` — with no ledger row written for a write that really happened.
+
+    NOTHING IS LOST WHEN THIS RAISES, and the message says so, because an operator's instinct on a
+    sidecar error is to delete the file: the rename never landed, so the PREVIOUS sidecar is intact and
+    the temp file has been cleaned up. What did not happen is this run's update.
+    """
+
+    code = "meta_unwritable"
+
+    # NOT RETRYABLE, AND THE FIRST DRAFT OF THIS CLASS HAD IT THE OTHER WAY. `retryable = True` was
+    # copied from the READ twin, where it is correct because `MetaUnreadableError` is only ever raised
+    # PRE-WRITE — nothing has actuated, so re-running is free. This class is raised from post-actuation
+    # positions too, and the flag was copied without regard to position: the register's "a guard that
+    # exists on a sibling and was never applied to the mechanism" shape, inside the fix for that shape.
+    #
+    # The measured harm: a declared write whose commit actuated but could not be verified returned
+    # `code=meta_unwritable, retryable=True, "…RETRY"` to an MCP agent, with no ledger row, displacing
+    # the `WriteUnverifiedError` (retryable=False) that the code one line down was about to raise. The
+    # agent re-invokes, `ledger.is_committed` is False, and the commit fires twice. Inviolable #3.
+    #
+    # That pre-emption is fixed in `_record_run`, so this flag is now belt-and-braces — kept
+    # because the family's convention is unambiguous: of eleven classes, the only two that are retryable
+    # are raised strictly before anything can act. Direction of error decides it. A missed auto-retry
+    # costs an operator one manual re-run; a wrongly-advertised one can double-submit, and this file's
+    # own rule is never to build something that is only correct if `landed` happens to be true.
+    # The message still tells a HUMAN to retry — this flag is the instruction to an autonomous agent.
+    retryable = False
+
+
 def _update_meta(cache: FlowCache, key: str, mutate: Callable[["FlowMeta"], None], *,
                  on_unreadable: str) -> None:
     """Load → mutate → atomically save a flow's meta UNDER the cross-process lock. Every writer of the
@@ -629,7 +667,9 @@ def _preserve_corrupt(p: Path) -> None:
     """Move an unreadable sidecar aside before anything can overwrite it. The meta is the HOT file (every
     replay rewrites it via `_record_run`), so without this the next run destroys the only evidence."""
     try:
-        os.replace(p, p.with_name(f"{p.name}.corrupt.{int(time.time())}"))
+        # `cleanup_src=False` (the default): the SOURCE is the evidence here, so a rename that never
+        # lands must leave it where it is rather than delete it.
+        durable_rename(p, p.with_name(f"{p.name}.corrupt.{int(time.time())}"))
     except OSError as exc:  # noqa: BLE001 — best effort; the refusal below is the load-bearing part
         _log.warning("could not preserve the corrupt flow meta %s: %s", p, exc)
 
@@ -647,7 +687,15 @@ def _refuse_unreadable_meta(cache: FlowCache, key: str, p: Path, why: str) -> Fl
     meta = _poisoned_meta(_META_CORRUPT)
     try:
         _save_meta(cache, key, meta)
-    except OSError as exc:  # noqa: BLE001 — read-only/full disk: the caller still gets the refusal in hand
+    except (MetaUnwritableError, OSError) as exc:
+        # BOTH, and the typed one FIRST, because this handler is the one R4.18's own fix could have
+        # broken: it used to catch the bare `OSError` that `_save_meta` raised, and typing that error
+        # silently UN-CAUGHT it — the exception would escape `_refuse_unreadable_meta`, be swallowed by
+        # the new totality wrapper, and report a genuinely CORRUPT sidecar as `unreadable`. The two carry
+        # opposite advice ("inspect the preserved copy and re-learn" vs "RETRY, nothing was lost"), so
+        # the fix would have swapped a true message for a false one, one call away from itself.
+        # `OSError` stays alongside it for the reason R3.11 exists: enumerating the exception you have in
+        # mind is the bug, not the fix.
         _log.error("could not persist the meta-unreadable quarantine for %s (%s) — this run refuses, but "
                    "the NEXT one would see an absent sidecar and start from a clean trust state", p, exc)
     return meta
@@ -663,6 +711,34 @@ def _load_meta(cache: FlowCache, key: str) -> FlowMeta:
 
 
 def _load_meta_with_provenance(cache: FlowCache, key: str) -> "tuple[FlowMeta, str]":
+    """`(meta, provenance)` — TOTAL by construction. `_read_meta` below does the classification.
+
+    R3.11. The docstring below has always undertaken that this never raises, and `health()` and the MCP
+    `tools/list` loop are built on it — they walk the whole fleet, and one bad sidecar must not take the
+    listing down with it. It was not true. `_read_meta`'s arms enumerate the exception types someone
+    thought of (`ValueError`, `UnicodeDecodeError`, `OSError`) and reality supplies others: a
+    20000-deep sidecar raises `RecursionError` out of `json.loads`, and `Path.exists()` itself raises on
+    a permission error or a dead network share — a FOURTH outcome the three-state provenance model does
+    not name. Both were reproduced escaping this function.
+
+    The fix is this wrapper rather than another arm, because another arm is the same bet one level down:
+    it enumerates again, and the next unanticipated exception escapes again.
+
+    The catch-all lands on UNREADABLE — never absent, never corrupt — and both halves are deliberate.
+    Not ABSENT, because a sidecar we could not classify is one whose trust state we cannot claim to know,
+    and reporting "no meta" is R3.8 with a different first step. Not CORRUPT, because that branch renames
+    the file aside, and destroying a sidecar on an exception nobody anticipated is the wrong direction to
+    be wrong in. The operator gets a loud refusal, an intact file, and the exception in the log.
+    """
+    try:
+        return _read_meta(cache, key)
+    except Exception as exc:  # noqa: BLE001 — totality IS the contract; see above
+        _log.error("flow meta for %r could not be classified (%s: %s) — refusing this run on a "
+                   "quarantine and leaving the file untouched", key, type(exc).__name__, exc)
+        return _poisoned_meta(_META_UNREADABLE), "unreadable"
+
+
+def _read_meta(cache: FlowCache, key: str) -> "tuple[FlowMeta, str]":
     """`(meta, provenance)` where provenance is one of:
 
         "file"        parsed off disk — the meta faithfully represents the sidecar
@@ -763,30 +839,29 @@ def _save_meta(cache: FlowCache, key: str, meta: FlowMeta) -> None:
     at roughly 1 run in 6 of `test_record_run_no_lost_updates_under_heavy_contention` under full-suite
     load. Guard on the read, no guard on the write: this register's most-repeated shape.
 
-    A rename that never succeeds still RAISES — retrying must not become swallowing — and the temp file
-    is cleaned up on the way out, because a stray `.tmp` beside the sidecar is indistinguishable from a
-    torn write to whoever looks next.
+    THAT RETRY NOW LIVES IN `fsio`, because it was fixed here and nowhere else — six sibling renames in
+    this package carried the identical bug (R4.20). Transcribing the loop a seventh time is the shape the
+    register warns about; the shared helper is the fix.
+
+    AND THE FAILURE IS TYPED (R4.18). A rename that never lands still RAISES — retrying must not become
+    swallowing — but it used to raise a bare `PermissionError`/`OSError`, which every
+    `except FlowReplayError` on the replay, batch and MCP paths misses. See `MetaUnwritableError`.
     """
-    Path(cache.root).mkdir(parents=True, exist_ok=True)
     p = _meta_path(cache, key)
-    tmp = f"{p}.{os.getpid()}.tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(json.dumps(asdict(meta), indent=2))
-        fh.flush()
-        os.fsync(fh.fileno())
-    for attempt in range(3):
-        try:
-            os.replace(tmp, p)
-            return
-        except OSError:
-            if attempt == 2:
-                # Out of attempts. Drop the temp before surfacing, then let the caller see it.
-                try:
-                    os.unlink(tmp)
-                except OSError:  # noqa: BLE001 — best effort; the raise below is the load-bearing part
-                    pass
-                raise
-            time.sleep(0.05 * (attempt + 1))
+    try:
+        # The mkdir is INSIDE the try on purpose: a read-only or missing cache root fails here, and to
+        # the caller that is the same fact as a lost rename. Leaving it outside would let one shape of
+        # "the sidecar was not written" out as a bare OSError while the other is typed — the asymmetry
+        # this whole change exists to remove, reintroduced two lines above the fix.
+        Path(cache.root).mkdir(parents=True, exist_ok=True)
+        durable_write_text(p, json.dumps(asdict(meta), indent=2))
+    except OSError as exc:
+        raise MetaUnwritableError(
+            f"the trust sidecar {p} could not be WRITTEN ({type(exc).__name__}: {exc}). Nothing was "
+            f"corrupted — the previous sidecar is intact and the temp file has been removed — but this "
+            f"run's approval, quarantine, run history and contract state were NOT persisted. If this was "
+            f"a transient sharing violation (an AV scan or indexer), RETRY; if it persists, check the "
+            f"permissions on {Path(cache.root)}") from exc
 
 
 def _record_run(cache: FlowCache, key: str, *, ok: bool, error: Optional[str] = None) -> None:
@@ -817,7 +892,35 @@ def _record_run(cache: FlowCache, key: str, *, ok: bool, error: Optional[str] = 
     # Nothing that changes what the system is ALLOWED to do may use this flag — approval, quarantine,
     # release and the read pin all keep the loud refusal, because silently not persisting one of those
     # leaves an operator believing a trust decision took effect when it did not.
-    _update_meta(cache, key, _apply, on_unreadable="skip")
+    #
+    # THE WRITE HALF NEVER GOT THE SAME TREATMENT, and that omission is what the pre-merge audit of this
+    # very slice caught. `on_unreadable="skip"` above makes the READ half best-effort exactly as the
+    # paragraph argues; the SAVE half raised, and once R4.18 made that raise TYPED it began propagating
+    # out of the four positions in `replay()` where `_record_run` runs immediately before a deliberate
+    # raise. A transient sharing violation — measured at ~1 run in 6 under load — then swapped the
+    # operator's verdict:
+    #
+    #     WriteUnverifiedError  "the commit actuated and cannot be verified"  retryable=False
+    #       became
+    #     MetaUnwritableError   "nothing was corrupted … RETRY"               retryable=True
+    #
+    # with no ledger row (the arming point only stamps `landed` when an attempt observed the confirm
+    # transition), so an MCP agent honouring `retryable` re-invokes and the commit fires TWICE.
+    # Inviolable #3, created by the fix for R4.18, in the sibling half of the guard that paragraph
+    # describes. The fix belongs HERE rather than at the five call sites: bookkeeping is best-effort by
+    # its own stated design, so making that true of both halves needs no caller to remember anything.
+    #
+    # R4.18 IS NOT WEAKENED BY THIS. Its harm was an UNTYPED error escaping every `except FlowReplayError`
+    # — and every trust-changing surface (`approve`, `unapprove`, `release`, `_quarantine`,
+    # `_reset_learn_baselines`) still calls `_update_meta`/`_save_meta` directly and still gets the loud
+    # typed refusal. What changes is only this one best-effort caller, which the comment above already
+    # said should not be able to mask a real failure with an IO error.
+    try:
+        _update_meta(cache, key, _apply, on_unreadable="skip")
+    except MetaUnwritableError as exc:
+        _log.error("flow %r: the run could not be recorded (%s). The health view and the failure streak "
+                   "will be one run stale — deliberately survivable, and never allowed to displace "
+                   "whatever the caller is about to report.", key, exc)
 
 
 def _default_cache() -> FlowCache:
@@ -1115,7 +1218,7 @@ async def refresh_auth(spec: FlowSpec, *, headless: Optional[bool] = None) -> No
         Path(spec.storage_state).parent.mkdir(parents=True, exist_ok=True)
         tmp = f"{spec.storage_state}.tmp"
         await session.save_storage_state(tmp)
-        os.replace(tmp, spec.storage_state)
+        durable_rename(tmp, spec.storage_state, cleanup_src=True)
         _log.info("flow %r: auth refreshed OK", spec.name)
     finally:
         await session.close()
@@ -1563,8 +1666,22 @@ def _quarantine(cache: FlowCache, key: str, *, reason: str) -> None:
     #
     # The lesson, which is this register's own and which the skip re-committed: fix the caller that
     # lacks the guard, not the mechanism they share.
-    _update_meta(cache, key, on_unreadable="raise", mutate=lambda m: setattr(
-        m, "quarantine", {"code": "quarantined", "reason": reason, "ts": time.time()}))
+    try:
+        _update_meta(cache, key, on_unreadable="raise", mutate=lambda m: setattr(
+            m, "quarantine", {"code": "quarantined", "reason": reason, "ts": time.time()}))
+    except MetaUnwritableError as exc:
+        # R4.17. The IO failure used to REPLACE the H9 reason, so an operator whose flow returned a
+        # WRONG VALUE was told about a file permission instead. Both facts have to travel, and the order
+        # is the fix: the wrong value is what they act on; the failed persistence is what makes it urgent.
+        #
+        # Deliberately re-raised as the SAME class rather than promoted to `FlowQuarantineError`. This
+        # function has two callers, and to the audit judge a `FlowQuarantineError` would assert that the
+        # flow IS quarantined — which is exactly what just failed to happen. The type keeps saying "the
+        # sidecar did not get written"; the message carries the finding.
+        raise MetaUnwritableError(
+            f"a value-contract violation was detected AND the quarantine could not be persisted, so the "
+            f"NEXT run will NOT refuse — treat this flow as untrusted until the sidecar is writable. "
+            f"The finding: {reason}. The persistence failure: {exc}") from exc
 
 
 @dataclass(frozen=True)

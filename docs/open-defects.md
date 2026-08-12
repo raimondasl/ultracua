@@ -11,7 +11,7 @@ by applying this file's own sibling rule while redesigning R3.2; it is recorded 
 CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch was **PARKED, not
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
-The round-4 series has since grown to R4.30 as later slices filed against it: **20 open**, 6 fixed,
+The round-4 series has since grown to R4.30 as later slices filed against it: **16 open**, 10 fixed,
 4 parked, indexed and token-checked in the R4 STATUS INDEX at the top of that section.
 
 **THE PLAN.** `docs/correctness-plan.md` sequences every open item here — plus the test-machinery
@@ -770,7 +770,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **20 open**, 6 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **16 open**, 10 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -801,12 +801,12 @@ if and only if that branch is ever resumed.
 | R4.12 | open | `_learn` takes no `pre_write`, so learn-time write verification is a bare presence check |
 | R4.13 | open | `release()`'s gating read has no provenance |
 | R4.14 | fixed | `audit_flows`' candidate loop had no per-flow guard — closed in 0.80.0 (S7a) |
-| R4.15 | open | `cli._flow_dispatch` lets `MetaUnreadableError` traceback on six verbs |
+| R4.15 | fixed | `cli._flow_dispatch` lets `MetaUnreadableError` traceback on six verbs — closed in 0.95.0 (S10) |
 | R4.16 | open | a refusal pairs the NEW recipe with the PREVIOUS read_pin/shape/steps_hash |
-| R4.17 | open | a quarantine's value-free reason is replaced by a bare IO error |
-| R4.18 | open | `_save_meta`'s failure surfaces as a bare OSError every handler misses |
+| R4.17 | fixed | a quarantine's value-free reason is replaced by a bare IO error — closed in 0.95.0 (S10) |
+| R4.18 | fixed | `_save_meta`'s failure surfaces as a bare OSError every handler misses — closed in 0.95.0 (S10) |
 | R4.19 | open | `_reset_learn_baselines` clears shape/contracts but not `read_pin` |
-| R4.20 | open | `FlowCache.put`'s `os.replace` has no retry, while `_save_meta`'s got one |
+| R4.20 | fixed | seven durable renames, one retry — closed in 0.95.0 (S10) by one shared `fsio` helper |
 | R4.21 | open | `record()`'s refusal stays non-terminal — deliberate, but each retry re-fires the write |
 | R4.22 | open | Windows `ERR_NO_BUFFER_SPACE`, 4 occurrences, undiagnosed |
 | R4.23 | open | `test_flows_dry_run_holds_a_real_write_flow` failed once under load, undiagnosed |
@@ -2176,7 +2176,7 @@ whose entire job is to be loud. The allowlist is now qualified by class.
   clothes of the failure it prevents. `errors` prints unconditionally as `[NOT AUDITED]`, and every path
   that appends to it also increments `unjudged`, so `exit_code` needs no new clause of its own. Two
   conditions for one fact is how this fleet's exit code and its webhook drifted apart to begin with.
-* **R4.15** — `cli._flow_dispatch` catches only `EmptyFlowStoreError`, so `MetaUnreadableError` reaches
+* **R4.15 — ✅ FIXED in 0.95.0 (S10).** `cli._flow_dispatch` catches only `EmptyFlowStoreError`, so `MetaUnreadableError` reaches
   the user as a Python traceback on six verbs (`approve`, `unapprove`, `release`, `learn`, `record`,
   `audit`), burying its remedy text. `flow replay` and `run-batch` render it cleanly. Also: `Path.exists()`
   can itself raise on some IO errors, a FOURTH outcome the three-state provenance model does not name and
@@ -2188,13 +2188,13 @@ whose entire job is to be loud. The allowlist is now qualified by class.
   recipe) was TRIED IN THIS SLICE AND CUT — `learn()` performs the write during discovery on a declared
   write flow, so "discard and re-run learn" prescribes re-firing a landed commit. Needs the pin
   invalidated by the steps digest.
-* **R4.17** — when the sidecar cannot be written, `_do_quarantine`'s H9 value-free reason is replaced by
+* **R4.17 — ✅ FIXED in 0.95.0 (S10).** when the sidecar cannot be written, `_do_quarantine`'s H9 value-free reason is replaced by
   a bare IO error: the operator learns about a file problem instead of "this flow returned a wrong
   value", `_record_run` never captures the reason, and the typed `quarantined` code and
   `retryable=False` are lost. A catch was written for this and cut, because it caught only
   `MetaUnreadableError` while the save half raises a bare `OSError` — i.e. it did not deliver what it
   claimed. Fix both halves together.
-* **R4.18** — `_save_meta`'s failure surfaces as a bare `PermissionError`/`OSError`, not a
+* **R4.18 — ✅ FIXED in 0.95.0 (S10).** `_save_meta`'s failure surfaces as a bare `PermissionError`/`OSError`, not a
   `FlowReplayError`, so every `except FlowReplayError` on the replay, batch and MCP paths misses it. A
   write that COMMITTED can therefore surface as `PermissionError` from `_record_run` instead of
   `{"status": "confirmed"}`, and the MCP ledger row is never written for it. This is the read/write
@@ -2208,7 +2208,7 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
 
 **Two more, filed by S5's sibling check (0.81.0) rather than folded into it:**
 
-* **R4.20** — `FlowCache.put`'s `os.replace` has NO retry, while S4 gave `_save_meta`'s exactly that,
+* **R4.20 — ✅ FIXED in 0.95.0 (S10).** `FlowCache.put`'s `os.replace` has NO retry, while S4 gave `_save_meta`'s exactly that,
   three attempts with a backoff, after measuring it fail roughly 1 run in 6 under full-suite load. Same
   directory, same platform, same Windows AV/indexer sharing violation, same consequence class: the rename
   is the operation that opens the window on the next reader. This is the sibling-asymmetry shape the
@@ -2237,6 +2237,86 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   DURING the run and on success as well as failure — plus an A/B of suite-wide peak with the drain on
   and off. Until then this is a fifth data point with a new correlate attached, recorded so the sixth
   has something to compare against instead of starting from scratch again.
+
+### S10 (0.95.0) closed R4.15, R4.17, R4.18, R4.20 and R3.11 as ONE invariant — and its pre-merge audit found a CRITICAL inside the fix
+
+**The invariant:** *nothing crossing a boundary loses its type or its reason, and every durable rename
+goes through one helper.* Five findings that read as five patches share one mechanism, and this file's
+standing instruction is to change the shape rather than add a fifth per-branch guard.
+
+**R4.20 was worse than filed — seven renames, one guarded.** The entry named `FlowCache.put`. Measured at
+0.94.0: `flows._save_meta` (retried, S4), and with NO retry `cache.put`, `cache.remember_refusal`,
+`audit`'s artifact, `history.save_history`, the refreshed `storage_state`, and both `_preserve_corrupt`
+functions. New `src/ultracua/fsio.py` holds `durable_rename` + `durable_write_text`; all seven route
+through it, and an AST scan makes a bare `os.replace` outside that module fail — with a positive control,
+because this register already recorded one enforcement test that was regex-shaped theatre.
+
+**R4.18 and R4.17 shared one root:** `_save_meta`'s bare `OSError`. It is now `MetaUnwritableError`, and
+`_quarantine` catches it to re-raise with the H9 finding FIRST and the persistence failure second —
+deliberately not promoted to `FlowQuarantineError`, which would assert to the audit judge that the flow
+IS quarantined, the very thing that just failed to happen.
+
+**R3.11 got a total wrapper, not another arm.** `_load_meta_with_provenance` now wraps `_read_meta` in a
+catch-all. Another `except` clause would have been the same bet one level down: it enumerates again, and
+the next unanticipated exception escapes again. The catch-all lands on `unreadable`, never `absent`
+(that is R3.8) and never `corrupt` (that branch destroys the file).
+
+**R4.15 catches the FAMILY.** Naming `MetaUnreadableError` would have fixed six verbs and left the next
+typed error a traceback — the enumerate-the-loud-outcomes error one surface over.
+
+#### THREE DEFECTS WERE FOUND IN THIS SLICE'S OWN FIX CODE, AND ONLY ONE OF THEM BY A TEST
+
+*Density in fix code, again, exactly as this file predicts. The order they were found in is the useful part.*
+
+1. **By the sibling check, before any test ran.** Typing `_save_meta`'s failure silently UN-CAUGHT it in
+   `_refuse_unreadable_meta`, whose guard was `except OSError`. A genuinely CORRUPT sidecar would have
+   been reported `unreadable` — telling the operator to RETRY a transient blip that never happened rather
+   than to inspect the preserved copy. Both messages loud, exactly one true, and the fix swapped them.
+
+2. **By an existing enforcement test.** The loader's provenance AST scan went red on the `_read_meta`
+   split, as designed. It now follows both halves and allows exactly one delegating return, re-verified
+   RED against the mutation the original caught. A second existing test had been pinning the DEFECT:
+   `test_the_unapprove_verb...` asserted that a `FlowReplayError` propagates out of `_flow_main` — i.e.
+   that the operator gets a traceback — and `unapprove` is one of the six verbs R4.15 names.
+
+3. **CRITICAL, by the pre-merge adversarial audit — 26 findings filed, 24 refuted, 2 survived.**
+   `_record_run` runs immediately before four deliberate raises in `replay()`. Once its failure became
+   typed it propagated out of those positions, so a transient sharing violation — the ~1-run-in-6 blip
+   this very slice cites — swapped the operator's verdict:
+
+   | | class | retryable | ledger row |
+   |---|---|---|---|
+   | intended | `WriteUnverifiedError` "the commit actuated and cannot be verified" | False | — |
+   | actual | `MetaUnwritableError` "nothing was corrupted … RETRY" | **True** | **none** |
+
+   An MCP agent honouring `retryable` re-invokes, `ledger.is_committed` is False, the elicit fires and
+   **the commit actuates a second time**. Inviolable #3, created by the fix for R4.18, and confirmed
+   against a `main` worktree: pre-diff the same failure was a bare `PermissionError` that no
+   `except FlowReplayError` caught, so it could never reach the retryable channel at all.
+
+   **The guard already existed on the sibling half.** `_record_run` passes `on_unreadable="skip"` and its
+   own comment argues at length that bookkeeping must not mask a real failure with an IO error. The SAVE
+   half never got it. So the fix went into `_record_run` rather than into five call sites — a per-caller
+   rule is what a sixth raise site forgets — and `MetaUnwritableError.retryable` became False, which the
+   family's own convention already implied: of eleven typed classes the only ones that are retryable are
+   raised strictly before anything can act, and the flag had been copied from the read twin without
+   regard to position.
+
+   **Both halves are pinned**, because "make the sidecar failure quiet" satisfies the safety property
+   completely and undoes R4.18: bookkeeping stays quiet, every trust-changing write (`approve`,
+   `unapprove`, `release`, `_quarantine`) stays loud, and a third test asserts `replay` still RECORDS on
+   all eight paths — "never raises" is also satisfied by never being called.
+
+   The audit's second survivor: `durable_write_text` leaked the temp when the WRITE half failed (ENOSPC,
+   EIO, a quota hit) while the new message asserted it had been removed. The leak was pre-existing; the
+   sentence denying it was new — a fail-loud message with a false clause, which is the `_META_CORRUPT` /
+   `_META_UNREADABLE` defect verbatim. Fixed in `fsio`, not in the message, because seven writers share it.
+
+**The transferable part.** The adversarial audit is now six-for-six in this codebase, and this is the
+second time it caught a write-safety critical that a full green suite, a clean `drift_bench` and the
+author's own sibling check had all passed over. The refuters are also load-bearing rather than ceremony:
+24 of 26 findings were refuted, several of them plausible-sounding and traced to pre-existing behaviour
+the diff does not touch — an unrefuted finding list would have sent this slice chasing four phantoms.
 
 * **R4.22 — the Windows `ERR_NO_BUFFER_SPACE` recurred (2nd occurrence), and the post-mortem RULED OUT
   what STATUS.md predicted it would implicate.** Recorded here rather than left in a CI comment, which is
@@ -3015,7 +3095,7 @@ plainly on the page. The `found=False` branch fails loud; the other returns a wr
 mangled span. I could not prove the wrong-answer half key-lessly (it is LLM-mediated), so I claim
 only the input corruption, which is deterministic.
 
-### R3.11. Narrowing `except Exception` to `(ValueError, UnicodeDecodeError, OSError)` broke `_load_meta`'s explicit "It never raises" contract — a deeply nested meta raises RecursionError straight out of `health()`, tracebacking `flow status` and the MCP `tools/list` loop on one bad flow
+### ✅ FIXED in 0.95.0 (S10) — R3.11. Narrowing `except Exception` to `(ValueError, UnicodeDecodeError, OSError)` broke `_load_meta`'s explicit "It never raises" contract — a deeply nested meta raises RecursionError straight out of `health()`, tracebacking `flow status` and the MCP `tools/list` loop on one bad flow
 
 *low, lens `trust`, confidentiality (no inviolable), reproduced by an independent refuter*
 

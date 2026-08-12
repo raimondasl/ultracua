@@ -260,7 +260,15 @@ def test_a_permanent_save_failure_raises_and_leaves_no_temp_file(
 ) -> None:
     """The other half: retrying must not become swallowing. A rename that never succeeds has to surface —
     and must not leave a `.tmp` behind, because the sidecar directory is scanned and a stray temp is
-    indistinguishable from a torn write to anyone looking at it later."""
+    indistinguishable from a torn write to anyone looking at it later.
+
+    THE EXPECTED TYPE CHANGED IN 0.95.0, deliberately, and this is the whole of R4.18. It used to be a
+    bare `OSError`, which is precisely the bug: every `except FlowReplayError` on the replay, batch and
+    MCP paths walked past it, so a write that COMMITTED could surface as `PermissionError` out of
+    `_record_run` with no ledger row. `MetaUnwritableError` is a `FlowReplayError`, so this assertion is
+    STRICTLY STRONGER than the one it replaces — it still fails if the error is swallowed, and it now
+    also fails if the error is untyped again.
+    """
     from ultracua import flows as flows_mod
 
     cache = FlowCache(root=tmp_path / "c")
@@ -270,8 +278,13 @@ def test_a_permanent_save_failure_raises_and_leaves_no_temp_file(
         raise PermissionError(5, "Access is denied")
 
     monkeypatch.setattr(flows_mod.os, "replace", _always)
-    with pytest.raises(OSError):
+    with pytest.raises(flows_mod.MetaUnwritableError) as ei:
         flows_mod._save_meta(cache, key, flows_mod.FlowMeta(approved=True))
+    assert isinstance(ei.value, flows_mod.FlowReplayError), (
+        "the point of typing it is that the handlers guarding on the family catch it")
+    assert isinstance(ei.value.__cause__, OSError), (
+        "and the underlying IO error must stay attached — an operator debugging a permissions problem "
+        "needs the errno, not a paraphrase of it")
     monkeypatch.undo()
 
     assert list((tmp_path / "c").glob("*.tmp")) == [], (
@@ -284,42 +297,60 @@ def test_every_return_in_the_loader_carries_a_provenance() -> None:
     """STRUCTURAL. The behavioural tests above cover the read failures that exist today; this covers the
     one added tomorrow.
 
-    `_load_meta_with_provenance` has four exits. Each must return `(meta, provenance)` with provenance a
-    literal from the known set — a bare `return FlowMeta()` would default to *nothing*, unpack-error at
-    best and silently arm the write path at worst. This is the same shape as
-    `test_landed_arms_the_ledger.py`'s `_fail` guard, and for the same reason: R3.8 was not about the
-    branches that existed when the retry logic was written."""
+    The loader's exits must each return `(meta, provenance)` with provenance a literal from the known
+    set — a bare `return FlowMeta()` would default to *nothing*, unpack-error at best and silently arm
+    the write path at worst. This is the same shape as `test_landed_arms_the_ledger.py`'s `_fail` guard,
+    and for the same reason: R3.8 was not about the branches that existed when the retry logic was
+    written.
+
+    THE LOADER IS TWO FUNCTIONS SINCE 0.95.0 and this scan follows it, because a structural guard that
+    keeps pointing at the old name is worse than none — R3.11 split `_load_meta_with_provenance` into a
+    TOTAL wrapper (which cannot raise, by construction) over `_read_meta` (which classifies). So both are
+    scanned, and the wrapper is allowed exactly one extra shape: a bare `return _read_meta(...)`
+    delegation, which is safe precisely because the callee is held to the same rule in the same test.
+    """
     import ast
     import pathlib
 
     path = pathlib.Path(__file__).parents[1] / "src" / "ultracua" / "flows.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    fn = next((n for n in ast.walk(tree)
-               if isinstance(n, ast.FunctionDef) and n.name == "_load_meta_with_provenance"), None)
-    assert fn is not None, (
-        "could not find `_load_meta_with_provenance` — this test asserts a NEGATIVE, so a rename would "
-        "make it pass while checking nothing")
-
-    nested = {id(r) for inner in ast.walk(fn)
-              if isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef)) and inner is not fn
-              for r in ast.walk(inner) if isinstance(r, ast.Return)}
     known = {"file", "absent", "unreadable", "corrupt"}
-    offenders, seen = [], set()
-    for node in ast.walk(fn):
-        if not isinstance(node, ast.Return) or id(node) in nested:
-            continue
-        v = node.value
-        if not (isinstance(v, ast.Tuple) and len(v.elts) == 2
-                and isinstance(v.elts[1], ast.Constant) and v.elts[1].value in known):
-            offenders.append(f"line {node.lineno}: not `(meta, <'file'|'absent'|'unreadable'|'corrupt'>)`")
-        else:
-            seen.add(v.elts[1].value)
+    offenders, seen, delegations = [], set(), 0
+
+    fns = {n.name: n for n in ast.walk(tree)
+           if isinstance(n, ast.FunctionDef) and n.name in ("_load_meta_with_provenance", "_read_meta")}
+    assert set(fns) == {"_load_meta_with_provenance", "_read_meta"}, (
+        f"could not find both halves of the loader (found {sorted(fns)}) — this test asserts a NEGATIVE, "
+        f"so a rename would make it pass while checking nothing")
+
+    for name, fn in fns.items():
+        nested = {id(r) for inner in ast.walk(fn)
+                  if isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef)) and inner is not fn
+                  for r in ast.walk(inner) if isinstance(r, ast.Return)}
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Return) or id(node) in nested:
+                continue
+            v = node.value
+            if (isinstance(v, ast.Tuple) and len(v.elts) == 2
+                    and isinstance(v.elts[1], ast.Constant) and v.elts[1].value in known):
+                seen.add(v.elts[1].value)
+            elif (name == "_load_meta_with_provenance" and isinstance(v, ast.Call)
+                  and isinstance(v.func, ast.Name) and v.func.id == "_read_meta"):
+                delegations += 1     # the wrapper handing off to the half this same test also scans
+            else:
+                offenders.append(
+                    f"{name} line {node.lineno}: not `(meta, <'file'|'absent'|'unreadable'|'corrupt'>)`")
 
     assert not offenders, (
-        "a return in `_load_meta_with_provenance` does not declare where its meta came from. "
+        "a return in the meta loader does not declare where its meta came from. "
         "`_update_meta` refuses the read-modify-write on 'unreadable' alone, so an undeclared exit "
         "either crashes on unpack or — worse — is treated as a faithful read and its blanks are saved "
         "over the real trust state:\n  " + "\n  ".join(offenders))
+    assert delegations == 1, (
+        f"the wrapper must delegate to `_read_meta` exactly once ({delegations} found). Zero means the "
+        f"totality wrapper stopped calling the classifier and this scan is now guarding a dead path; "
+        f"more than one means there is a second entry into classification that the wrapper's `except` "
+        f"may not cover.")
     assert seen == known, (
         f"the loader no longer produces every provenance ({sorted(known - seen)} missing). If a state "
         f"was genuinely removed, update this test AND `_update_meta`'s refusal — collapsing 'absent' "
