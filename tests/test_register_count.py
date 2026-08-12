@@ -177,3 +177,51 @@ def test_every_xfail_names_a_finding_the_register_still_shows_as_OPEN() -> None:
     assert not orphans, (
         f"these xfails name no OPEN register finding — either the finding was closed and the marker "
         f"should be deleted, or the defect was never filed and should be: {orphans}")
+
+
+# ---------------------------------------------------------------------------------------------------
+# A finding id CITED IN CODE must exist in the register.
+#
+# Added after the S14 audit caught the slice shipping five references to "R4.31" — in `flow.py`'s
+# comments and in a test docstring — while `docs/open-defects.md` topped out at R4.30 and its header
+# asserted that ceiling. Nothing went red: every guard above derives truth from the register's own text
+# and never looks at `src/` or `tests/`, so a finding filed in CODE and nowhere else is invisible.
+#
+# That is the second dangling documentation reference in one working session (the first shipped a literal
+# `TESTCOUNT` placeholder into `STATUS.md` on main), which is what turns "fix the instance" into "close
+# the class". CLAUDE.md's first line points a reader at this register; a comment citing an id it does not
+# contain sends them looking for a record that was never written.
+
+_ID_IN_CODE = re.compile(r"\bR([34])\.(\d+)\b")
+
+
+def _cited_ids() -> "dict[str, list[str]]":
+    """Every `R3.N` / `R4.N` mentioned anywhere in the shipped package or the suite -> where."""
+    out: dict[str, list[str]] = {}
+    for base in (Path("src"), Path("tests")):
+        for py in sorted(base.rglob("*.py")):
+            for n, line in enumerate(py.read_text(encoding="utf-8").splitlines(), 1):
+                for m in _ID_IN_CODE.finditer(line):
+                    out.setdefault(f"R{m.group(1)}.{m.group(2)}", []).append(
+                        f"{py}:{n}")
+    return out
+
+
+def test_every_finding_id_cited_in_code_exists_in_the_register() -> None:
+    """The anti-vacuity clause first: this scan must actually find ids, or it asserts nothing. The suite
+    cites dozens (every write-safety file names the finding it pins), so a zero here means the regex or
+    the walk broke, not that the codebase went quiet."""
+    cited = _cited_ids()
+    assert len(cited) >= 15, (
+        f"only {len(cited)} finding id(s) found across src/ and tests/ — the scan is broken, so the "
+        f"assertion below would pass vacuously. Found: {sorted(cited)}")
+
+    text = REGISTER.read_text(encoding="utf-8")
+    known = set(_ID_IN_CODE.findall(text))
+    known = {f"R{a}.{b}" for a, b in known}
+    dangling = {i: where for i, where in cited.items() if i not in known}
+    assert not dangling, (
+        "these finding ids are cited in code but appear NOWHERE in docs/open-defects.md:\n  " +
+        "\n  ".join(f"{i} — cited at {', '.join(w[:4])}" for i, w in sorted(dangling.items())) +
+        "\n\nFile the finding in the register in the SAME change that names it. Every id is a promise "
+        "that a reader can look it up; this project's first instruction is to read that file.")

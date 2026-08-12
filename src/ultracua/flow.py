@@ -88,12 +88,19 @@ class FlowReport:
         return sum(t.total_ms for t in steps) / len(steps) if steps else 0.0
 
 
+# The modes `run_cached` accepts. Declared ONCE, next to the dispatch that reads it, because the
+# signature comment and the body had already drifted apart: the comment said "auto" | "learn" | "replay"
+# while the body also accepted "repair" (replay WITH the heal provider). A caller reading the signature
+# could not know "repair" existed, and a caller mistyping any of them got a silent re-author (R4.31).
+_MODES = frozenset({"auto", "learn", "replay", "repair"})
+
+
 async def run_cached(
     url: str,
     goal: str,
     provider: Optional[Provider] = None,
     cache: Optional[FlowCache] = None,
-    mode: str = "auto",  # "auto" | "learn" | "replay"
+    mode: str = "auto",  # one of `_MODES` above — validated, never guessed at (R4.31)
     max_steps: Optional[int] = None,
     headless: Optional[bool] = None,
     scope: str = "default",
@@ -125,6 +132,28 @@ async def run_cached(
     dry_run: Optional[object] = None,
 ) -> FlowReport:
     cache = cache or FlowCache()
+    # R4.31 — AN UNRECOGNISED MODE IS A CALLER ERROR AND MUST SAY SO, NOT BE GUESSED AT.
+    #
+    # The dispatch below asks `mode in ("auto", "replay", "repair")` and then `mode in ("replay",
+    # "repair")`. An unrecognised string matches NEITHER, so it fell past both and landed on the LEARN
+    # path — which re-authors the flow with an LLM and, for a cached write flow, PERFORMS THE COMMIT
+    # AGAIN. Measured with a provider present, which is the daemon's normal state:
+    #
+    #     mode="bogus"   -> report.mode='learn', llm_calls=2, the cached flow's write FIRED AGAIN
+    #     mode="REPLAY"  -> identical; a CASE TYPO re-authored the flow and re-placed the order
+    #
+    # All three inviolables in one line of control flow: an LLM call the caller did not ask for (#1),
+    # something other than what was requested with no reason given (#2), and a repeated write (#3).
+    # `daemon/server.py` passes `params.get("mode", "auto")` straight from JSON-RPC without validating
+    # it, so the bad value can come off the wire.
+    #
+    # REFUSE POSITIVELY rather than degrade to the safest mode. "Unknown -> treat as replay" would be
+    # this file's own worst habit: guessing what the caller meant is exactly how the fall-through read
+    # as harmless. A caller that mistypes a mode has a bug, and the fastest way to tell them is loudly.
+    if mode not in _MODES:
+        raise ValueError(
+            f"unknown mode {mode!r} — expected one of {sorted(_MODES)}. Refusing rather than guessing: "
+            f"this used to fall through to a full re-author, which re-performs a cached flow's write.")
     governor = governor or PacingGovernor()
     key = flow_key(goal, url, scope)
     cached = cache.get(key)
@@ -1188,8 +1217,22 @@ async def _replay(
             cache.put(flow)
         _log.info("replay done: mode=%s success=%s healed=%d steps=%d",
                   mode, success, healed, len(flow.steps))
+        # INVIOLABLE #2: A FAILURE MUST CARRY ITS REASON IN THE FIELD A CALLER READS. This returned
+        # `note=""` on every failed replay while the cause sat in `traces[-1].meta["note"]` (e.g.
+        # "locator unresolved or ambiguous (drift)"). Not silently wrong — the caller does see
+        # `success=False` — but "loud yet unexplained" is not the contract this project states, and the
+        # engine is the surface `ultracua run`, the daemon and `run_cached`'s library callers read
+        # directly, none of which walk traces.
+        #
+        # Sourced from the last trace that recorded one rather than invented here, so the message stays
+        # the mechanism's own words; and set ONLY when failing, so the success path is untouched and no
+        # caller starts seeing a note where it never had one.
+        note = ""
+        if not success:
+            note = next((str(t.meta.get("note")) for t in reversed(traces)
+                         if getattr(t, "meta", None) and t.meta.get("note")), "")
         return FlowReport(
-            mode=mode, success=success, traces=traces, llm_calls=llm,
+            mode=mode, success=success, traces=traces, llm_calls=llm, note=note,
             healed_steps=healed, final_text=final_text, extra=extra,
         )
     finally:

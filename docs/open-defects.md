@@ -11,7 +11,7 @@ by applying this file's own sibling rule while redesigning R3.2; it is recorded 
 CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch was **PARKED, not
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
-The round-4 series has since grown to R4.30 as later slices filed against it: **16 open**, 10 fixed,
+The round-4 series has since grown to R4.32 as later slices filed against it: **16 open**, 12 fixed,
 4 parked, indexed and token-checked in the R4 STATUS INDEX at the top of that section.
 
 **THE PLAN.** `docs/correctness-plan.md` sequences every open item here — plus the test-machinery
@@ -770,7 +770,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **16 open**, 10 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **16 open**, 12 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -817,6 +817,8 @@ if and only if that branch is ever resumed.
 | R4.28 | open | `_write_owner` turns confident when a neighbour's grace tail expires — observation, harmful direction not reproduced |
 | R4.29 | fixed | a deferred write ESCAPED the learn watcher (removed with no drain) — closed in 0.96.0 by draining the remaining act window |
 | R4.30 | open | a commit deferred beyond `write_window_ms` is still unobserved — the residual R4.29 does not close; needs an over-refusal measurement first |
+| R4.31 | fixed | an unrecognised `mode` fell through to LEARN — re-authored the flow and RE-FIRED its write; closed in 0.98.0 |
+| R4.32 | fixed | every failed replay returned an EMPTY `note` while the cause sat in the traces; closed in 0.98.0 |
 
 
 **Scope.** The uncommitted `feat/shared-causal-attribution` work (would-be 0.76.0): extracting the
@@ -2837,6 +2839,51 @@ with it, in the same proportion and for the same reason.
 
 **Withdrawn from the entry above:** the framing that this is mainly about "a long debounce, a slow
 awaited round-trip". Both were tested and neither survives teardown.
+
+## ✅ FIXED in 0.98.0 — R4.31. An unrecognised `mode` fell through to LEARN, re-authoring the flow and RE-FIRING its write. **HIGH, all three inviolables**
+
+**Found by writing S14's property for inviolable #1** — the first real input it was given. That is the
+plan's own thesis paying out: this suite is regression-shaped, ~60 findings across four audit rounds and
+not one discovered by it, because a point assertion on a happy path cannot fail for a path nobody
+imagined.
+
+`flow.run_cached` dispatched on `mode in ("auto", "replay", "repair")` and then
+`mode in ("replay", "repair")`. **An unrecognised string matched neither and fell past both, onto the
+LEARN path.** Measured with a provider present, which is the daemon's ordinary state:
+
+| mode | report.mode | llm_calls | POSTs |
+|---|---|---|---|
+| `"replay"` | replay | 0 | 0 |
+| **`"bogus"`** | **learn** | **2** | **1 — the write fired again** |
+| **`"REPLAY"`** | **learn** | **2** | **1 — a CASE TYPO re-placed the order** |
+
+An LLM call the caller never asked for (#1), something other than what was requested and no reason given
+(#2), and a repeated commit (#3) — from one line of control flow. `daemon/server.py` passes
+`params.get("mode", "auto")` straight from JSON-RPC **without validating it**, so the bad value can
+arrive off the wire.
+
+**The fix REFUSES rather than degrades.** "Unknown -> treat as replay" would be this file's own worst
+habit: guessing what the caller meant is exactly why the fall-through read as harmless for so long. A
+caller who mistypes a mode has a bug and the fastest thing to do is tell them. `_MODES` is now declared
+ONCE beside the dispatch that reads it — the signature comment said `"auto" | "learn" | "replay"` while
+the body also accepted `"repair"`, so the documentation and the code had already drifted apart, which is
+how `repair` came to be an undocumented public mode nobody could discover.
+
+## ✅ FIXED in 0.98.0 — R4.32. Every failed replay returned an EMPTY `note` while the cause sat in the traces
+
+Inviolable #2's other half, and the second thing S14's properties turned up. `_replay` built its
+`FlowReport` with no `note`, so a caller checking the documented reason field on a failure got `""`
+while the real cause — e.g. `"locator unresolved or ambiguous (drift)"` — sat in
+`traces[-1].meta["note"]`, which no caller walks.
+
+**Severity, stated honestly: this is loud-but-unexplained, not silently wrong.** The caller does see
+`success=False`. It is filed because the engine is the surface `ultracua run`, the JSON-RPC daemon and
+every `run_cached` library caller read directly, and "a failure carries its reason" is a contract this
+project states rather than an aspiration.
+
+The note is sourced from the last trace that recorded one, so the message stays the mechanism's own
+words rather than something invented at the boundary, and it is set ONLY on failure so the success path
+is byte-identical and no caller starts seeing a note where it never had one.
 
 * **R4.28 — OPEN, and filed as an OBSERVATION rather than a defect: `_write_owner` becomes CONFIDENT
   because a neighbour's grace tail EXPIRED, not because evidence arrived.** Found while diagnosing an
