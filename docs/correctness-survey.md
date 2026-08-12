@@ -545,6 +545,21 @@ GUIDE.md:577-581 and README.md:75, both quoted as evidence below, were corrected
 
 **Disposition / fix shape.** Fact for the plan: any 'broken state degrades silently' claim about MCP should target list-shrinkage observability, not the annotations or the write rail, which verified sound.
 
+**✅ CLOSED in 0.99.0 (plan slice S10b).** `_tool_for` returns `FlowTool | SkippedFlow` — there is no
+`None` to return, so a drop must name itself — and `build_listing()` returns the pair. `QUIET_SKIPS` is
+an ALLOWLIST of the three outcomes allowed to pass unremarked, so a code added later is
+`needs_attention` by construction. The signal is carried by an always-listed read-only
+`ultracua_diagnostics` tool: chosen over `InitializationOptions.instructions` (which exists, and would
+have been cheaper) because instructions are computed ONCE at connect and a flow whose approval goes
+stale mid-session would never appear in them.
+
+**The audit found the fix reproducing the defect one layer up**, which is worth more than the fix: the
+first draft branched on `health.cached` and discarded `health.status`, collapsing an unreadable recipe
+AND an R3.13 learn-time write refusal into the quiet `not_learned`. `flows.health` keeps those apart
+deliberately — its own comments say so — and `QUIET_SKIPS` could not catch it, because they are not new
+codes defaulting to quiet but existing STATUSES mapped onto an existing quiet code. An allowlist cannot
+see that. Both now have their own loud codes, pinned by tests verified RED against the first draft.
+
 
 ### `DOC-1` (medium)
 
