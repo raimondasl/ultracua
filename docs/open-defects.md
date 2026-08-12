@@ -11,7 +11,7 @@ by applying this file's own sibling rule while redesigning R3.2; it is recorded 
 CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch was **PARKED, not
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
-The round-4 series has since grown to R4.27 as later slices filed against it: **18 open**, 5 fixed,
+The round-4 series has since grown to R4.28 as later slices filed against it: **19 open**, 5 fixed,
 4 parked, indexed and token-checked in the R4 STATUS INDEX at the top of that section.
 
 **THE PLAN.** `docs/correctness-plan.md` sequences every open item here — plus the test-machinery
@@ -770,7 +770,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **18 open**, 5 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **19 open**, 5 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -814,6 +814,7 @@ if and only if that branch is ever resumed.
 | R4.25 | fixed | the load-dependent "cluster of three" was one defect + one bad test — assertion fixed in 0.88.0 |
 | R4.26 | fixed | the recorder credited a DEFERRED write to the next click — closed in 0.88.0 |
 | R4.27 | open | the wire promotion marks ordinary GraphQL-style READS as writes (12/12 measured) |
+| R4.28 | open | `_write_owner` turns confident when a neighbour's grace tail expires — observation, harmful direction not reproduced |
 
 
 **Scope.** The uncommitted `feat/shared-causal-attribution` work (would-be 0.76.0): extracting the
@@ -2487,6 +2488,42 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   un-gate real writes to spare reads. This is the same no-oracle shape as `MUTATING_KEYWORDS` and
   `landed`: at the moment of the decision nothing in the system knows. Any fix must come from evidence
   the page can produce, and the direction of error must stay conservative.
+
+* **R4.28 — OPEN, and filed as an OBSERVATION rather than a defect: `_write_owner` becomes CONFIDENT
+  because a neighbour's grace tail EXPIRED, not because evidence arrived.** Found while diagnosing an
+  ubuntu-only CI failure of `test_the_control_a_write_deferred_two_tasks_is_still_over_gated` (PR #143,
+  and once before as a bare `gated=[1]` on PR #142). The test half is fixed in 0.94.0; this is the half
+  that is about the product.
+
+  `_write_owner` credits a step when it is the ONLY live candidate, and credits nobody when there are
+  two — "undecidable from timing", which is R3.2 and is the honest answer. But candidacy expires: a
+  step leaves `live_tails` when its `write_window_ms` grace tail runs out. So the SAME deferred write,
+  on the SAME fixture, is undecidable or confidently attributed depending only on how long the gap
+  between two steps happened to be. Measured on Windows by shrinking the tail rather than waiting for a
+  slow host — the same experiment from the other end, and deterministic:
+
+  | `write_window_ms` | AB-1 arm reached | gated |
+  |---|---|---|
+  | 30000 / 2000 (default) / 200 | yes | `[0, 1]` |
+  | 50 / 10 | **no** | **`[1]`** |
+
+  **What is NOT claimed.** In this fixture the surviving candidate is the step that really did cause the
+  write, so the tighter gate is correct and the outcome is SAFE — arguably better than the over-gate.
+  The harmful direction — a write caused by an EARLIER step whose tail expired, leaving a later
+  innocent step as the unique "owner" and confidently gated alone, with AB-1's blanket never firing —
+  is **not reproduced**, and this entry does not assert it. It is filed because the mechanism plainly
+  permits it and because this register's rule is to write down the measurement, not the inference.
+
+  **Why it is worth a row anyway.** It is the same shape as `landed` and the keyword classifier: a
+  question with no oracle answered by a proxy, where the proxy's confidence is an artefact of the
+  instrument. R3.2 says attribution from timing is impossible; the uniqueness test quietly re-introduces
+  it whenever the clock thins the candidate set to one. Any future work here must not "fix" this by
+  widening the tail in production — that trades one arbitrary threshold for another and would make every
+  ordinary two-step flow multi-write, which is the cost AB-1's own comment already prices.
+
+  **Reproduce it before acting on it**, with the harness above (`scratchpad/ab1_premise.py` shape: drive
+  `_learn_once` against the fixture at several `write_window_ms` values and read `arm_reached`/`gated`).
+  A fix built on the un-reproduced direction would be a fix built on a wrong diagnosis.
 
   **RE-MEASURED at 0.93.0, and the human-verdict verb does NOT dispose of it — 12 of 12 refused.** The
   plan sequenced R4.27's disposition behind the annotation work (`flow mark`, 0.93.0) on the argument

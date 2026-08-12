@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import http.server
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -240,6 +241,41 @@ def _prov(*names_and_intents) -> ScriptedProvider:
         + [{"action": "done", "intent": "done"}])
 
 
+def _pin_the_ab1_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the AB-1 arm reachable BY CONSTRUCTION instead of by the host being fast enough.
+
+    Every test below that spies on `_wire_writes_are_provable` depends on a wall-clock OVERLAP: the arm
+    runs only when `_write_owner` sees TWO live candidates — step 0's `write_window_ms` grace tail still
+    open under step 1's act window. Exceed the tail with one slow inter-step gap and the write acquires a
+    unique owner, the whole block is SKIPPED, and the test is evaluating nothing.
+
+    THAT IS NOT HYPOTHETICAL — it failed on an ubuntu CI shard (PR #143, `PREMISE LOST`), and the same
+    test failed the same way once before as a bare `gated=[1]` (PR #142, which is why the premise pins
+    exist at all). It reproduces on a fast quiet Windows host in seconds by shrinking the tail instead of
+    waiting for a slow host, which is the same experiment from the other end:
+
+        write_window_ms   AB-1 arm reached   gated
+                  30000         yes          [0, 1]
+                   2000         yes          [0, 1]      <- the default; ~10x local headroom
+                    200         yes          [0, 1]
+                     50         NO           [1]         <- the ubuntu failure, deterministically
+                     10         NO           [1]
+
+    So the cause is the overlap, not the platform: locally the inter-step gap is <200 ms against a 2000 ms
+    tail, and a loaded shared runner exceeding 2 s is ordinary — this register has recorded 5 s localhost
+    stalls twice under R4.24.
+
+    WHAT THIS IS NOT. It is not a de-flake by suppression, which S17 forbids after that verb turned out to
+    be hiding a live write-safety hole: the production default is untouched (this rebinds only the module
+    reference these tests import), no assertion is weakened, the premise pins stay, and nothing reruns.
+    It makes a test's own premise deterministic, which is R4.26's lesson applied to the harness.
+
+    What it does NOT make deterministic is the product's behaviour at the boundary — see R4.28, filed
+    from the table above: `_write_owner` becomes CONFIDENT because a neighbour's tail expired.
+    """
+    monkeypatch.setattr(_flowmod, "settings", replace(_flowmod.settings, write_window_ms=30_000))
+
+
 # ==================== the inference, and the sibling that disarmed it ====================
 
 
@@ -316,6 +352,8 @@ async def test_the_control_a_write_deferred_two_tasks_is_still_over_gated(
     dispatching a click first. If this ever goes red, the extra task — not the synthetic click — is
     what moved the verdict, and the finding below is misdiagnosed rather than fixed.
     """
+    _pin_the_ab1_overlap(monkeypatch)
+
     seen: list[bool] = []
     _real_provable = _flowmod._wire_writes_are_provable
 
@@ -405,6 +443,8 @@ async def test_a_page_synthesised_click_must_not_launder_a_deferred_write(
     failure, R4.5 still open" while never evaluating the decision point at all. So the adjudication is
     spied on, and its absence is an ERROR rather than a quiet expected failure.
     """
+    _pin_the_ab1_overlap(monkeypatch)
+
     seen: list[bool] = []
     _real_provable = _flowmod._wire_writes_are_provable
 
