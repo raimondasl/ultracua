@@ -576,3 +576,74 @@ def test_no_annotation_sequence_can_produce_a_write_with_no_mutation_gate(state,
     # Anti-vacuity: a cell where EVERY verdict refused proves nothing about the invariant, so make the
     # census visible rather than letting a wholly-refusing matrix read as a passing one.
     print(f"[annotation] {label:<28} {_seqlabel:<26} refused {refusals}/{len(verdicts)}")
+
+
+# ============================ dimension: WHEN the commit is dispatched (R4.29) ============================
+#
+# Added by the R4.29 slice. Every dimension above varies WHAT commits or WHERE; none varied WHEN, and the
+# defect lived exactly there: `_author_steps` removed its request listener the instant the loop broke, so
+# a commit the page had SCHEDULED but not yet dispatched was invisible from that moment — `wrote["hit"]`
+# unset, the unattributable-write refusal never armed, no wire promotion, and the flow cached as an
+# ordinary READ to be re-fired ungated on every replay.
+#
+# The offsets are all INSIDE `write_window_ms` (2 s), which is the span this file's subject already
+# promises to attribute. A commit deferred BEYOND it is a different question and is pinned separately as
+# a strict-xfail in `tests/test_watcher_drain.py` (R4.30) — not folded in here, because a matrix cell
+# that is expected to fail stops being an invariant.
+_DEFER_MS = [0, 150, 400, 900, 1500]
+
+
+@pytest.mark.parametrize("defer_ms", _DEFER_MS, ids=[f"defer{d}ms" for d in _DEFER_MS])
+async def test_a_commit_dispatched_LATE_is_still_seen_by_the_learn_watcher(
+        defer_ms: int, tmp_path: Path) -> None:
+    """INVIOLABLE #3 over WHEN the commit leaves. The bait carries no keyword, on purpose: a
+    keyword-named control would be gated by the classifier and the cell would pass without the wire
+    having seen anything, which is the shape that made R4.29 invisible for three CI rounds."""
+    from ultracua.cache import FlowCache, flow_key
+    from ultracua.flows import FlowSpec, _learn_once
+    from ultracua.providers.scripted import ScriptedProvider
+
+    body = ("fetch('/api/commit',{method:'POST',body:'x=1'});" if defer_ms == 0
+            else "setTimeout(function(){fetch('/api/commit',{method:'POST',body:'x=1'});}, "
+                 f"{defer_ms});")
+    page = ("<h1>Panel</h1>"
+            "<button type=button id='c'>Continue</button>"
+            "<button type=button id='a'>Show details</button>"
+            "<script>"
+            "document.getElementById('a').addEventListener('click',function(){" + body + "});"
+            "for (const id of ['c','a']) document.getElementById(id).addEventListener('click',"
+            "function(){document.querySelector('h1').textContent='clicked '+id;});"
+            "</script>")
+    site = _Site(page)
+    httpd, base = site.serve()
+    cache = FlowCache(root=tmp_path / "c")
+    try:
+        spec = FlowSpec(name="p", goal="work the panel", start_url=f"{base}/", headless=True)
+        res = await _learn_once(
+            spec,
+            provider=ScriptedProvider([
+                {"action": "click", "role": "button", "name": "Continue", "intent": "continue"},
+                {"action": "click", "role": "button", "name": "Show details",
+                 "intent": "show the details"},
+                {"action": "done", "intent": "done"},
+            ]),
+            router=None, cache=cache, verify_replay=False)
+        flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        gated = [i for i, s in enumerate(flow.steps) if s.mutating] if flow else None
+        marks = [s.mutating_sources for s in flow.steps] if flow else None
+        print(f"    defer={defer_ms:>4}ms  posts={len(site.posts)}  cached={bool(res.cached)}  "
+              f"gated={gated}  marks={marks}")
+
+        if not site.posts:
+            raise RuntimeError(
+                f"PREMISE LOST (defer={defer_ms}ms): the commit never reached the server, so this cell "
+                f"exercises nothing. cached={res.cached!r}")
+        if flow is None:
+            assert res.cached is False and res.note, "a refusal must be loud and carry its reason"
+            return
+        assert gated, (
+            f"defer={defer_ms}ms: a commit LEFT THE BROWSER and the recipe gates nothing — it will be "
+            f"re-fired ungated and un-keyed on every replay. marks={marks}")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

@@ -21,6 +21,7 @@ deterministic instance and read an outcome; the finalize result lands in
 from __future__ import annotations
 
 import json
+import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
@@ -521,6 +522,43 @@ async def _author_steps(
             tr.meta["stuck"] = no_progress  # bail: agent looping without progress
             break
     if page is not None:
+        # R4.29 — DRAIN BEFORE DROPPING THE OBSERVER. This used to remove the listener the instant the
+        # loop broke, so a commit the page had SCHEDULED but not yet dispatched was invisible from that
+        # moment. `write_window_ms` could not help: it bounds the attribution of requests that were
+        # OBSERVED, not the lifetime of the observer, which is why widening it was measured irrelevant.
+        #
+        # Everything downstream then failed at once and silently — `wrote["hit"]` unset, so
+        # `_learn_once`'s unattributable-write refusal never armed; no wire promotion; and the flow
+        # cached as an ordinary READ with no gate, no precondition and no Idempotency-Key, to be
+        # re-fired on every replay. Inviolable #3, and #2 with it.
+        #
+        # THE FIX IS TO KEEP A PROMISE THIS FILE ALREADY MAKES, not to widen anything. The comment on
+        # `act_window` says a request counts "within `write_window_ms` after it closes"; honouring that
+        # means the observer has to outlive the window. So: wait out whatever is LEFT of it. A write
+        # arriving in that period is counted exactly as it would have been mid-loop — no new requests
+        # become attributable, and a page that commits nothing simply waits and caches as a read.
+        #
+        # THE BOUND IS THE WINDOW ITSELF — ONE SETTING GOVERNS BOTH HALVES, ON PURPOSE. A first draft
+        # of this fix added a separate `write_drain_ms` (800ms) so the observer's lifetime could be tuned
+        # apart from the attribution window. That is the SHAPE OF THE BUG IT FIXES: two knobs for one
+        # concept, free to drift, and the drift is exactly "attributable for 2s, observed for 0". Keeping
+        # a single `write_window_ms` makes the divergence inexpressible rather than merely fixed.
+        #
+        # THE COST, MEASURED PROPERLY, AND THE FIRST MEASUREMENT WAS WRONG. An earlier serial run put the
+        # full drain at 175.5s against `drift_bench`'s 180s budget and produced a cost table that was
+        # non-monotone on its face — 0.4s of added sleep reading FASTER than no sleep at all, which no
+        # additive wait can do. That was host variance being read as signal, i.e. this repo's own rule
+        # ("timing under unknown load is not evidence") broken by the person quoting it. A controlled A/B,
+        # arms alternated to cancel drift, is monotone and reproduces to +-0.4s:
+        #
+        #     drain 0 -> 101.2s      drain 800ms -> 111.2 / 111.1s      drain FULL 2s -> 125.5 / 125.9s
+        #
+        # So the complete fix costs ~25s and leaves ~55s of budget headroom; the 800ms cap bought ~14s of
+        # that back in exchange for an uncovered band, and was not worth it. Replay is untouched either
+        # way — this is the LEARN path only.
+        remaining = act_window["until"] - time.monotonic()
+        if remaining > 0:
+            await asyncio.sleep(remaining)
         try:
             page.remove_listener("request", _watch_request)
         except Exception:  # noqa: BLE001
