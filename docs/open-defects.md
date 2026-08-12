@@ -11,7 +11,7 @@ by applying this file's own sibling rule while redesigning R3.2; it is recorded 
 CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch was **PARKED, not
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
-The round-4 series has since grown to R4.29 as later slices filed against it: **20 open**, 5 fixed,
+The round-4 series has since grown to R4.30 as later slices filed against it: **20 open**, 6 fixed,
 4 parked, indexed and token-checked in the R4 STATUS INDEX at the top of that section.
 
 **THE PLAN.** `docs/correctness-plan.md` sequences every open item here — plus the test-machinery
@@ -770,7 +770,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **20 open**, 5 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **20 open**, 6 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -815,7 +815,8 @@ if and only if that branch is ever resumed.
 | R4.26 | fixed | the recorder credited a DEFERRED write to the next click — closed in 0.88.0 |
 | R4.27 | open | the wire promotion marks ordinary GraphQL-style READS as writes (12/12 measured) |
 | R4.28 | open | `_write_owner` turns confident when a neighbour's grace tail expires — observation, harmful direction not reproduced |
-| R4.29 | open | a deferred write ESCAPES the learn watcher (removed with no drain) and the flow caches as a clean READ — **HIGH**, inviolables #2+#3, 5/6 measured |
+| R4.29 | fixed | a deferred write ESCAPED the learn watcher (removed with no drain) — closed in 0.96.0 by draining the remaining act window |
+| R4.30 | open | a commit deferred beyond `write_window_ms` is still unobserved — the residual R4.29 does not close; needs an over-refusal measurement first |
 
 
 **Scope.** The uncommitted `feat/shared-causal-attribution` work (would-be 0.76.0): extracting the
@@ -2220,6 +2221,23 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   running a command and reading a refusal each time, not an unattended `mode="auto"` loop firing
   invisibly. Revisit only with a remedy that does not depend on `record()` itself.
 
+* **R4.22 — OCCURRENCE 5 (0.96.0), and the first one a change could plausibly have aggravated.**
+  `test_mark_provenance.py::test_every_freshly_marked_step_names_the_signal_that_marked_it` failed on
+  `Page.goto: net::ERR_NO_BUFFER_SPACE`; the file passes standalone (10/10, 28 s). Same signature, same
+  platform, same "only in the full suite" shape as the previous four.
+
+  **What is different, and is flagged rather than asserted:** the R4.29 drain holds each learn's session
+  open for up to `write_window_ms` (2 s) longer, and the suite went 23m43s / 25m05s -> 28m26s. More
+  concurrent socket and handle lifetime across a 28-minute run is exactly the pressure this failure is
+  suspected to be about, so this slice is a candidate contributor. It is NOT diagnosed as one: a single
+  occurrence proves nothing, R4.22's own post-mortem ruled out the mechanism STATUS.md predicted, and
+  this register's rule is that a fix built on a wrong diagnosis is worse than none.
+
+  **What would make it evidence:** the instrument R4.22 already asks for — sampling handles/sockets
+  DURING the run and on success as well as failure — plus an A/B of suite-wide peak with the drain on
+  and off. Until then this is a fifth data point with a new correlate attached, recorded so the sixth
+  has something to compare against instead of starting from scratch again.
+
 * **R4.22 — the Windows `ERR_NO_BUFFER_SPACE` recurred (2nd occurrence), and the post-mortem RULED OUT
   what STATUS.md predicted it would implicate.** Recorded here rather than left in a CI comment, which is
   what cost "a day of hypothesis-guessing" the first time.
@@ -2490,7 +2508,70 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   `landed`: at the moment of the decision nothing in the system knows. Any fix must come from evidence
   the page can produce, and the direction of error must stay conservative.
 
-## R4.29 — A write deferred far enough ESCAPES the learn watcher entirely, and the flow caches as a clean READ. **HIGH, inviolables #2 and #3, measured 5/6 on Windows**
+## ✅ FIXED in 0.96.0 — R4.29. A write deferred past the loop ESCAPED the learn watcher entirely, and the flow cached as a clean READ. **HIGH, inviolables #2 and #3**
+
+**THE FIX.** `_author_steps` now waits out whatever is LEFT of the act window before removing its request
+listener. That is not a widening: the comment on `act_window` already promises that a request counts
+"within `write_window_ms` after it closes", and honouring that promise requires the observer to outlive
+the window. No new request becomes attributable; the observer simply stops leaving early.
+
+Measured against the realistic shape — a commit chained N bare tasks out — the fix converts every escape
+into a refusal: **18/18 across depths 2, 8 and 16**, where the same depths previously escaped or lost
+their POST entirely.
+
+**A CONSEQUENCE, stated because it looks like a downside and is the opposite.** Holding the page open
+also means a commit scheduled for +900 ms now actually LEAVES, where the session sometimes closed first
+and it never fired. Measured: the same cell reports "the commit never reached the server" without the
+wait and a POST with it. That is not a new write being caused — it is the same page doing the same
+thing, minus a race we were silently relying on. Closing fast enough to abort a deferred commit is not a
+safety property; it is a coin flip whose other face is this finding.
+
+**THE COST — AND THE FIRST MEASUREMENT OF IT WAS WRONG, WHICH THE PRE-MERGE AUDIT CAUGHT.** A serial
+run put the full drain at 175.5 s against `drift_bench`'s 180 s budget, and the cost table built from it
+was non-monotone on its face: 0.4 s of added sleep reading FASTER (106.6 s) than no sleep at all
+(115–127 s). No additive wait can do that. It was host variance read as signal — this file's own rule
+("timing under unknown load is not evidence") broken by the slice quoting it, and it was quoted in three
+places and used to pick a safety bound.
+
+A controlled A/B, arms alternated to cancel drift, is monotone and reproduces to ±0.4 s:
+
+| drain | bench wall |
+|---|---|
+| none | 101.2 s |
+| 800 ms | 111.2 / 111.1 s |
+| **full window (2 s)** | **125.5 / 125.9 s** |
+
+So the complete fix costs ~25 s and leaves ~55 s of budget headroom. **An 800 ms cap was drafted on the
+bad number and is NOT what shipped**: it bought ~14 s in exchange for an uncovered 800 ms–2 s band, and
+introduced a second setting (`write_drain_ms`) alongside `write_window_ms` — two knobs for one concept,
+free to drift, which is the SHAPE OF THIS VERY BUG. One setting now governs attribution and observation
+together, so "attributable for 2 s, observed for 0" is inexpressible rather than merely fixed.
+
+**A NUMBER IN THE FIRST FILING OF THIS ENTRY WAS WRONG AND IS WITHDRAWN.** It said "measured 5/6 on
+Windows" from a `setTimeout`-chain reproduction. Re-run on a quieter host the same chain measured **0/8**,
+and at 32 tasks the commit never left at all because the page was torn down first. Two contradictory
+rates from the same fixture is this register's own signal that a rare bug is a HARNESS problem, not a
+patience problem (R4.26). The race was then REMOVED rather than re-measured: the commit waits on a
+response the test server holds, released from inside `flows._make_finalize`'s callable, which
+`run_cached` awaits after `_author_steps` has returned and before the session closes. Order fixed by the
+call graph, not by the host — **10/10 against pre-fix source**. Quote that construction, never the 5/6.
+
+**THE PRE-MERGE AUDIT'S REAL CATCH WAS THE METHOD, NOT THE CODE — 22 filed, 3 survived, and all three
+were the same mistake.** The shipped mechanism came through clean. What did not was the MEASUREMENT
+around it: a bad bench number, the 800 ms cap chosen because of it, and a register entry describing the
+variant that number justified rather than the code beside it — two artifacts in one commit giving the
+next person opposite instructions about which knob to turn.
+
+That is worth more than the fix. Every previous audit here caught a defect in fix CODE; this one caught
+a defect in the EVIDENCE, and the evidence was what chose the safety bound. The tell was available for
+free and nobody looked: **a cost table where adding a sleep made the run faster is refuted on its face**,
+before any re-measurement. Serial timing runs on a developer host are not an A/B; alternate the arms,
+repeat, and check the series is monotone in the thing you varied — or say plainly that the number is not
+evidence, which this file already instructs and which the slice quoting that instruction ignored.
+
+**Original filing follows.**
+
+## R4.29 (as filed) — A write deferred far enough ESCAPES the learn watcher entirely
 
 **Found by following a CI flake instead of silencing it.** `test_a_page_synthesised_click_must_not_launder_a_deferred_write` kept losing its premise on ubuntu 2/2 while windows passed. Two diagnoses were
 built and both were wrong — a premise pin (0.93.0) and a `write_window_ms` pin (0.94.0) — so the third
@@ -2546,6 +2627,39 @@ against current main, fix in the mechanism, a dimension in `tests/test_write_saf
 siblings checked (`recorder.py` has its own instrumentation lifetime — check it), suite + `drift_bench`,
 and a pre-merge adversarial audit. It also needs a DETERMINISTIC harness rather than the 5/6 race above:
 build the mechanism on demand (R4.26), do not fish for it.
+
+**THE SIBLING CHECK CAME BACK 2-FOR-3, AND THAT IS WHY THIS WAS MISSED FOR SO LONG.** Three places
+attach an observer and tear it down. Two already wait:
+* `recorder.py` — `wait_for_timeout(max(settle_ms, 150))`, then awaits its pending drain tasks, then a
+  final `_drain()` before close. The recorder got this right first, which is this register's own
+  most-repeated shape pointing the usual direction.
+* `_maybe_heal` — wraps the actuation in `expect_request(..., timeout=write_settle_ms)`, added by R3
+  for precisely this reason ("Reading `wrote['hit']` the instant `act` returns is a zero-width window").
+* `_author_steps` — **had no wait at all.** Its own comment claimed the grace tail covered it, and the
+  grace tail governs ATTRIBUTION, not OBSERVATION. Two siblings with a guard, one without: the pattern
+  the top of this file says predicts the next bug, found by following a CI flake instead of silencing it.
+
+## R4.30 — OPEN. A commit deferred beyond `write_window_ms` is still unobserved
+
+The residual R4.29's fix does not close, pinned rather than described: `tests/test_watcher_drain.py::
+test_a_commit_deferred_BEYOND_the_window_is_still_lost`, strict-xfail, measured 10/10 at 0.96.0.
+
+The drain restores the observer's PROMISED lifetime; it does not extend it. A commit dispatched more
+than `write_window_ms` after the last act — a long debounce, a slow awaited round-trip — is still
+invisible, and the harm is identical to R4.29's: the flow caches as a clean read and replay re-fires the
+commit ungated and un-keyed.
+
+**Why it is not simply fixed by watching until the session closes.** That changes what counts as a
+CAUSED write. Today a request outside every act window is background noise by definition, and that
+definition is what stops an ordinary page's heartbeat or non-vendor analytics POST from refusing every
+flow it appears in. Removing it points straight at the population R4.27 already measures — 12 of 12
+GraphQL-style reads filed as writes — and D0 is blocked indefinitely for exactly that reason. So the
+prerequisite is a MEASUREMENT of what watching-until-close would refuse, on a real read population,
+BEFORE any code. Same gate as D0's lever (ii), same reason.
+
+Direction of error, for whoever picks this up: a missed late write is a silent ungated replay; an
+over-eager one breaks a large working read population. Neither is free, which is why this is filed
+rather than fixed in the slice that found it.
 
 * **R4.28 — OPEN, and filed as an OBSERVATION rather than a defect: `_write_owner` becomes CONFIDENT
   because a neighbour's grace tail EXPIRED, not because evidence arrived.** Found while diagnosing an
