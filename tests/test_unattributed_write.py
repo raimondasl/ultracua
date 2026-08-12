@@ -276,6 +276,43 @@ def _pin_the_ab1_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_flowmod, "settings", replace(_flowmod.settings, write_window_ms=30_000))
 
 
+def _attribution_state(cache: FlowCache, spec: FlowSpec, res=None) -> str:
+    """What the attribution machinery ACTUALLY did, for a premise-loss message to report.
+
+    THIS EXISTS BECAUSE TWO CONSECUTIVE DIAGNOSES OF THE SAME UBUNTU FAILURE WERE WRONG. The premise
+    message used to assert a cause — "most likely an inter-step gap exceeded `write_window_ms`" — and a
+    measured sweep then showed the pin above surviving gaps of 0/1/3/6 s while CI still lost the premise.
+    An inference dressed as an observation is the move this register has had to withdraw before (R4.5's
+    Idempotency-Key clause), and it costs a CI round every time.
+
+    `mutating_sources` is the sensor that settles it, because the mark records WHICH SIGNAL set it:
+
+        a step carrying `wire`      the write WAS observed and uniquely attributed to that step —
+                                    `wrote_by_step` was non-empty, so the AB-1 block was skipped
+        `overgate` present          AB-1 ran and blanketed; the arm was reached
+        no `wire` anywhere          the write was never attributed to ANY step: either `_in_act_window`
+                                    was false when the request fired, or the watcher had already been
+                                    removed. Nothing to do with the tail length.
+        `keyword` only              the classifier alone; the wire contributed nothing
+
+    Those are different failures with different fixes, and the old message could not tell them apart.
+    """
+    flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+    if flow is None:
+        note = getattr(res, "note", None)
+        return f"no flow cached (cached={getattr(res, 'cached', None)!r}, note={note!r})"
+    rows = [(s.intent, s.mutating, s.mutating_sources) for s in flow.steps]
+    marks = {m for s in flow.steps for m in (s.mutating_sources or [])}
+    if "wire" in marks:
+        verdict = "the write WAS uniquely attributed (a step carries `wire`), so the AB-1 block was SKIPPED"
+    elif "overgate" in marks:
+        verdict = "AB-1 ran and blanketed (`overgate` present)"
+    else:
+        verdict = ("the write was attributed to NO step — it fired outside every act window / grace "
+                   "tail, or after the watcher was removed. The tail length is not the variable here")
+    return f"{verdict}. steps={rows}"
+
+
 # ==================== the inference, and the sibling that disarmed it ====================
 
 
@@ -383,9 +420,9 @@ async def test_the_control_a_write_deferred_two_tasks_is_still_over_gated(
         # rather than accuse the mechanism.
         if not seen:
             raise RuntimeError(
-                "PREMISE LOST: the AB-1 adjudication was never reached, so `_wire_writes_are_provable` "
-                "was never consulted — the write was uniquely attributed instead. This control says "
-                "nothing about over-gating on such a run")
+                f"PREMISE LOST: the AB-1 adjudication was never reached, so "
+                f"`_wire_writes_are_provable` was never consulted. This control says nothing about "
+                f"over-gating on such a run. OBSERVED: {_attribution_state(cache, spec, res)}")
         flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
         if flow is None:
             assert res.cached is False and res.note, "a refusal must be loud and carry its reason"
@@ -470,9 +507,9 @@ async def test_a_page_synthesised_click_must_not_launder_a_deferred_write(
         if not seen:
             raise RuntimeError(
                 f"PREMISE LOST ({shape}): the AB-1 adjudication was never reached, so "
-                f"`_wire_writes_are_provable` was never consulted. The write was uniquely attributed "
-                f"instead — most likely an inter-step gap exceeded `write_window_ms` — and this test "
-                f"would otherwise XFAIL for a reason that has nothing to do with R4.5")
+                f"`_wire_writes_are_provable` was never consulted, and this test would otherwise XFAIL "
+                f"for a reason that has nothing to do with R4.5. "
+                f"OBSERVED: {_attribution_state(cache, spec, res)}")
         if not any(seen):
             raise RuntimeError(
                 f"PREMISE LOST ({shape}): the marker was NOT laundered (provable={seen}), so the "
