@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import http.server
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -240,6 +241,78 @@ def _prov(*names_and_intents) -> ScriptedProvider:
         + [{"action": "done", "intent": "done"}])
 
 
+def _pin_the_ab1_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the AB-1 arm reachable BY CONSTRUCTION instead of by the host being fast enough.
+
+    Every test below that spies on `_wire_writes_are_provable` depends on a wall-clock OVERLAP: the arm
+    runs only when `_write_owner` sees TWO live candidates — step 0's `write_window_ms` grace tail still
+    open under step 1's act window. Exceed the tail with one slow inter-step gap and the write acquires a
+    unique owner, the whole block is SKIPPED, and the test is evaluating nothing.
+
+    THAT IS NOT HYPOTHETICAL — it failed on an ubuntu CI shard (PR #143, `PREMISE LOST`), and the same
+    test failed the same way once before as a bare `gated=[1]` (PR #142, which is why the premise pins
+    exist at all). It reproduces on a fast quiet Windows host in seconds by shrinking the tail instead of
+    waiting for a slow host, which is the same experiment from the other end:
+
+        write_window_ms   AB-1 arm reached   gated
+                  30000         yes          [0, 1]
+                   2000         yes          [0, 1]      <- the default; ~10x local headroom
+                    200         yes          [0, 1]
+                     50         NO           [1]         <- the ubuntu failure, deterministically
+                     10         NO           [1]
+
+    So the cause is the overlap, not the platform: locally the inter-step gap is <200 ms against a 2000 ms
+    tail, and a loaded shared runner exceeding 2 s is ordinary — this register has recorded 5 s localhost
+    stalls twice under R4.24.
+
+    WHAT THIS IS NOT. It is not a de-flake by suppression, which S17 forbids after that verb turned out to
+    be hiding a live write-safety hole: the production default is untouched (this rebinds only the module
+    reference these tests import), no assertion is weakened, the premise pins stay, and nothing reruns.
+    It makes a test's own premise deterministic, which is R4.26's lesson applied to the harness.
+
+    What it does NOT make deterministic is the product's behaviour at the boundary — see R4.28, filed
+    from the table above: `_write_owner` becomes CONFIDENT because a neighbour's tail expired.
+    """
+    monkeypatch.setattr(_flowmod, "settings", replace(_flowmod.settings, write_window_ms=30_000))
+
+
+def _attribution_state(cache: FlowCache, spec: FlowSpec, res=None) -> str:
+    """What the attribution machinery ACTUALLY did, for a premise-loss message to report.
+
+    THIS EXISTS BECAUSE TWO CONSECUTIVE DIAGNOSES OF THE SAME UBUNTU FAILURE WERE WRONG. The premise
+    message used to assert a cause — "most likely an inter-step gap exceeded `write_window_ms`" — and a
+    measured sweep then showed the pin above surviving gaps of 0/1/3/6 s while CI still lost the premise.
+    An inference dressed as an observation is the move this register has had to withdraw before (R4.5's
+    Idempotency-Key clause), and it costs a CI round every time.
+
+    `mutating_sources` is the sensor that settles it, because the mark records WHICH SIGNAL set it:
+
+        a step carrying `wire`      the write WAS observed and uniquely attributed to that step —
+                                    `wrote_by_step` was non-empty, so the AB-1 block was skipped
+        `overgate` present          AB-1 ran and blanketed; the arm was reached
+        no `wire` anywhere          the write was never attributed to ANY step: either `_in_act_window`
+                                    was false when the request fired, or the watcher had already been
+                                    removed. Nothing to do with the tail length.
+        `keyword` only              the classifier alone; the wire contributed nothing
+
+    Those are different failures with different fixes, and the old message could not tell them apart.
+    """
+    flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+    if flow is None:
+        note = getattr(res, "note", None)
+        return f"no flow cached (cached={getattr(res, 'cached', None)!r}, note={note!r})"
+    rows = [(s.intent, s.mutating, s.mutating_sources) for s in flow.steps]
+    marks = {m for s in flow.steps for m in (s.mutating_sources or [])}
+    if "wire" in marks:
+        verdict = "the write WAS uniquely attributed (a step carries `wire`), so the AB-1 block was SKIPPED"
+    elif "overgate" in marks:
+        verdict = "AB-1 ran and blanketed (`overgate` present)"
+    else:
+        verdict = ("the write was attributed to NO step — it fired outside every act window / grace "
+                   "tail, or after the watcher was removed. The tail length is not the variable here")
+    return f"{verdict}. steps={rows}"
+
+
 # ==================== the inference, and the sibling that disarmed it ====================
 
 
@@ -316,6 +389,8 @@ async def test_the_control_a_write_deferred_two_tasks_is_still_over_gated(
     dispatching a click first. If this ever goes red, the extra task — not the synthetic click — is
     what moved the verdict, and the finding below is misdiagnosed rather than fixed.
     """
+    _pin_the_ab1_overlap(monkeypatch)
+
     seen: list[bool] = []
     _real_provable = _flowmod._wire_writes_are_provable
 
@@ -345,9 +420,9 @@ async def test_the_control_a_write_deferred_two_tasks_is_still_over_gated(
         # rather than accuse the mechanism.
         if not seen:
             raise RuntimeError(
-                "PREMISE LOST: the AB-1 adjudication was never reached, so `_wire_writes_are_provable` "
-                "was never consulted — the write was uniquely attributed instead. This control says "
-                "nothing about over-gating on such a run")
+                f"PREMISE LOST: the AB-1 adjudication was never reached, so "
+                f"`_wire_writes_are_provable` was never consulted. This control says nothing about "
+                f"over-gating on such a run. OBSERVED: {_attribution_state(cache, spec, res)}")
         flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
         if flow is None:
             assert res.cached is False and res.note, "a refusal must be loud and carry its reason"
@@ -405,6 +480,8 @@ async def test_a_page_synthesised_click_must_not_launder_a_deferred_write(
     failure, R4.5 still open" while never evaluating the decision point at all. So the adjudication is
     spied on, and its absence is an ERROR rather than a quiet expected failure.
     """
+    _pin_the_ab1_overlap(monkeypatch)
+
     seen: list[bool] = []
     _real_provable = _flowmod._wire_writes_are_provable
 
@@ -430,9 +507,9 @@ async def test_a_page_synthesised_click_must_not_launder_a_deferred_write(
         if not seen:
             raise RuntimeError(
                 f"PREMISE LOST ({shape}): the AB-1 adjudication was never reached, so "
-                f"`_wire_writes_are_provable` was never consulted. The write was uniquely attributed "
-                f"instead — most likely an inter-step gap exceeded `write_window_ms` — and this test "
-                f"would otherwise XFAIL for a reason that has nothing to do with R4.5")
+                f"`_wire_writes_are_provable` was never consulted, and this test would otherwise XFAIL "
+                f"for a reason that has nothing to do with R4.5. "
+                f"OBSERVED: {_attribution_state(cache, spec, res)}")
         if not any(seen):
             raise RuntimeError(
                 f"PREMISE LOST ({shape}): the marker was NOT laundered (provable={seen}), so the "
