@@ -2794,6 +2794,50 @@ Direction of error, for whoever picks this up: a missed late write is a silent u
 over-eager one breaks a large working read population. Neither is free, which is why this is filed
 rather than fixed in the slice that found it.
 
+### MEASURED at 0.97.0 — the proposed closure would refuse reads WITHOUT catching commits. Do not build it.
+
+The gate was "measure the refusal population first". Done, by OBSERVATION rather than a prototype: the
+fixture server timestamps every request, and a wrapper on `flows._make_finalize` marks the moment
+`_author_steps` returns — i.e. the moment the observer is dropped today. Anything non-idempotent logged
+after that marker is what "watch until close" would NEWLY count. No decision logic was altered.
+
+**First result: the exposure band is much narrower than this entry implied.** Sweeping the deferral:
+
+| deferral after the triggering click | commit fires? | seen today? |
+|---|---|---|
+| ≤ 2000 ms (inside `write_window_ms`) | yes | **yes** — the R4.29 drain covers it |
+| 2500 ms | **no — the page is already torn down** | n/a |
+| ≥ 3000 ms | no | n/a |
+
+A commit deferred past its own step's window mostly **never happens**: the session closes first, so there
+is no write to miss. The band is `[last act + write_window_ms, session close]`, and close follows fast.
+
+**And the case that sounds like R4.30 usually is not.** A commit deferred past its OWN step's window but
+with later steps still to run is observed inside a LATER step's window — already counted today. That is
+AB-1's territory (the gate lands on the wrong row), not this one. R4.30 is only the tail: a commit
+deferred past the LAST acting step's window, where teardown then wins the race.
+
+**Second result, and it settles the disposition.** Across eight ordinary read shapes — heartbeats at
+500 ms and 2 s, a 3 s autosave, first-party analytics, a 1 s GraphQL poll, a `pagehide` beacon, late
+telemetry, and a quiet control — **1 of 8 would be newly counted as writing** (first-party analytics
+landing at 2.5 s), while **0 of 2 deferred-commit shapes would be newly caught**, because neither commit
+fires before teardown.
+
+So the trade is not "a little over-refusal for a real safety gain". In the configuration measured it is
+**pure cost**: it refuses a read population and catches nothing. That is D0's outcome again, arrived at
+by measurement instead of by shipping it — and it is why this stays open as a bounded residual rather
+than becoming a fix.
+
+**What would change the answer, stated so the next person does not re-run what is already done.** All of
+the above is with a scripted provider, where steps are milliseconds apart. A real learn spends seconds
+per step on the LLM, so the session lives longer and the band widens — a commit deferred 3 s past the
+LAST step might then fire before close. Measuring THAT needs a paid provider arm or an artificially
+slowed one, and it is the only version of this question still open. The read-population cost would widen
+with it, in the same proportion and for the same reason.
+
+**Withdrawn from the entry above:** the framing that this is mainly about "a long debounce, a slow
+awaited round-trip". Both were tested and neither survives teardown.
+
 * **R4.28 — OPEN, and filed as an OBSERVATION rather than a defect: `_write_owner` becomes CONFIDENT
   because a neighbour's grace tail EXPIRED, not because evidence arrived.** Found while diagnosing an
   ubuntu-only CI failure of `test_the_control_a_write_deferred_two_tasks_is_still_over_gated` (PR #143,
