@@ -2233,10 +2233,48 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   occurrence proves nothing, R4.22's own post-mortem ruled out the mechanism STATUS.md predicted, and
   this register's rule is that a fix built on a wrong diagnosis is worse than none.
 
-  **What would make it evidence:** the instrument R4.22 already asks for — sampling handles/sockets
-  DURING the run and on success as well as failure — plus an A/B of suite-wide peak with the drain on
-  and off. Until then this is a fifth data point with a new correlate attached, recorded so the sixth
-  has something to compare against instead of starting from scratch again.
+  **A CORRECTION TO THIS ENTRY, MADE BEFORE ACTING ON IT.** As first written it said the evidence needed
+  was "the instrument R4.22 already asks for — sampling handles/sockets DURING the run and on success as
+  well as failure". That instrument **already exists**: `scripts/sample_resources.ps1`, built in 0.84.0,
+  sampling on a timer throughout and wired into CI on success as well as failure — and it measures the
+  one resource every hypothesis here had skipped, NON-PAGED POOL, which is what WSAENOBUFS actually
+  exhausts. Writing "what would make it evidence" for a tool already in the repo is how a slice ends up
+  rebuilding one; the register is meant to prevent that, so the miss is recorded rather than quietly
+  fixed.
+
+  It also has published passing-run baselines (R4.24): TIME_WAIT max 386 / 377, handles max 54262 /
+  52861, non-paged pool 189.9 / 195.9 MB. So the honest gap is not an instrument — it is **one
+  measurement**: does the drain move that profile?
+
+  **MEASURED (0.97.0), AND THE ANSWER IS NO — THE DRAIN IS NOT AN AGGRAVATOR.** Full suite, same host,
+  one variable: the drain's `await` patched out for the off arm (a low `write_window_ms` would have been
+  a CONFOUND, not a control — it also changes which requests are attributable, so the arms would run
+  different write-safety logic).
+
+  | | drain ON | drain OFF | |
+  |---|---|---|---|
+  | time_wait max | **389** | 409 | lower with the drain |
+  | time_wait mean | **170.4** | 239.2 | **29% lower** |
+  | nonpaged_pool max MB | **585.4** | 603.9 | lower |
+  | paged_pool max MB | **693.6** | 738.2 | lower |
+  | handles max | 153324 | 153294 | unchanged — ambient |
+  | processes max | 341 | 346 | unchanged — ambient |
+  | chrome_procs max | 8 | 8 | unchanged |
+
+  Every suite-attributable column moves the SAME way and it is the opposite of the hypothesis; the two
+  ambient columns are unchanged, which is the internal control saying the host was comparable across the
+  two runs. The mechanism is unsurprising once measured: the drain adds no sockets, it spreads the same
+  churn over more wall-clock, so instantaneous concurrency falls. **Occurrence 5's "candidate
+  contributor" note is withdrawn.**
+
+  **DO NOT COMPARE THESE TO THE CI BASELINES ABOVE.** They were taken on a working desktop with ~341
+  ambient processes against a runner's ~157, which by itself accounts for the 3x handles and non-paged
+  pool. Only the same-host A/B is evidence here. Reading a local number against a CI baseline is the
+  category error that produced the four discredited post-mortems in the first place.
+
+  **n=1 per arm**, stated rather than dressed up. What makes it worth acting on is not the sample size
+  but that four independent columns agree in direction while two controls stay flat — and that the
+  claimed effect was an INCREASE, which the data contradicts rather than merely fails to support.
 
 ### S10 (0.95.0) closed R4.15, R4.17, R4.18, R4.20 and R3.11 as ONE invariant — and its pre-merge audit found a CRITICAL inside the fix
 
@@ -2620,6 +2658,21 @@ A controlled A/B, arms alternated to cancel drift, is monotone and reproduces to
 | none | 101.2 s |
 | 800 ms | 111.2 / 111.1 s |
 | **full window (2 s)** | **125.5 / 125.9 s** |
+
+**AND THE SUITE COST WAS ALSO MIS-STATED — 0.97.0, corrected by A/B.** #145 reported "23m43s -> 28m26s"
+for the suite, which was again a comparison of two runs made at different times rather than a controlled
+one. Same host, one variable (the drain's `await` patched out):
+
+    drain ON  27m31s          drain OFF  19m03s          => ~8.5 min, about 45% overhead
+
+That is materially larger than the ~4-5 min the slice claimed, and it is the THIRD time in one session a
+cross-run comparison was published as a measurement here. The number is banked deliberately, not
+excused: the drain closes a HIGH write-safety hole and no cheaper variant has been shown correct. The
+lead worth pursuing is that the code WAITS before removing the listener when it could instead remove it
+LATER — `_watch_request` already discards anything outside the window, so natural post-loop work
+(finalize, verify-replay, teardown) could cover much of it at zero added wall-clock, with a bounded wait
+only for the remainder. Not attempted here: it is a patch on a patch in a write path, which this file
+calls its most defect-dense move, and it needs its own RED test and audit.
 
 So the complete fix costs ~25 s and leaves ~55 s of budget headroom. **An 800 ms cap was drafted on the
 bad number and is NOT what shipped**: it bought ~14 s in exchange for an uncovered 800 ms–2 s band, and
