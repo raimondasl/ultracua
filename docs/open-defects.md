@@ -11,7 +11,7 @@ by applying this file's own sibling rule while redesigning R3.2; it is recorded 
 CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch was **PARKED, not
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
-The round-4 series has since grown to R4.28 as later slices filed against it: **19 open**, 5 fixed,
+The round-4 series has since grown to R4.29 as later slices filed against it: **20 open**, 5 fixed,
 4 parked, indexed and token-checked in the R4 STATUS INDEX at the top of that section.
 
 **THE PLAN.** `docs/correctness-plan.md` sequences every open item here — plus the test-machinery
@@ -770,7 +770,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **19 open**, 5 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **20 open**, 5 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -815,6 +815,7 @@ if and only if that branch is ever resumed.
 | R4.26 | fixed | the recorder credited a DEFERRED write to the next click — closed in 0.88.0 |
 | R4.27 | open | the wire promotion marks ordinary GraphQL-style READS as writes (12/12 measured) |
 | R4.28 | open | `_write_owner` turns confident when a neighbour's grace tail expires — observation, harmful direction not reproduced |
+| R4.29 | open | a deferred write ESCAPES the learn watcher (removed with no drain) and the flow caches as a clean READ — **HIGH**, inviolables #2+#3, 5/6 measured |
 
 
 **Scope.** The uncommitted `feat/shared-causal-attribution` work (would-be 0.76.0): extracting the
@@ -2488,6 +2489,63 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   un-gate real writes to spare reads. This is the same no-oracle shape as `MUTATING_KEYWORDS` and
   `landed`: at the moment of the decision nothing in the system knows. Any fix must come from evidence
   the page can produce, and the direction of error must stay conservative.
+
+## R4.29 — A write deferred far enough ESCAPES the learn watcher entirely, and the flow caches as a clean READ. **HIGH, inviolables #2 and #3, measured 5/6 on Windows**
+
+**Found by following a CI flake instead of silencing it.** `test_a_page_synthesised_click_must_not_launder_a_deferred_write` kept losing its premise on ubuntu 2/2 while windows passed. Two diagnoses were
+built and both were wrong — a premise pin (0.93.0) and a `write_window_ms` pin (0.94.0) — so the third
+attempt changed the SENSOR rather than the inference: the premise message was made to report
+`mutating_sources` instead of guessing a cause. The next CI run answered it in one line:
+
+    OBSERVED: the write was attributed to NO step — it fired outside every act window / grace tail,
+    or after the watcher was removed. steps=[('continue', False, None),
+                                             ('confirm the address', True, ['keyword'])]
+
+**Mechanism.** `_author_steps` breaks out of its loop and immediately runs
+`page.remove_listener("request", _watch_request)` (`flow.py`), with **no drain and no settle**. A request
+the page has not dispatched YET is invisible from that instant. `write_window_ms` cannot help: it bounds
+the attribution of requests that were OBSERVED, not the lifetime of the observer. So the grace-tail work
+(R3.2's `graces` list, AB-1) is all downstream of a listener that may already be gone.
+
+**What that costs, measured.** Fixture: `Continue` arms, a benign bait named **`Show details`** — no
+`MUTATING_KEYWORDS` term anywhere, deliberately, so the classifier cannot accidentally cover the hole —
+schedules the commit N bare tasks out. Learn, then check the cached recipe:
+
+| deferral | POST left | cached | `wire` mark | gated |
+|---|---|---|---|---|
+| 2 tasks | yes | **refused** (`"a write fired on the wire during discovery but no step could…"`) | no | — |
+| 4 tasks | yes | **refused** | no | — |
+| **8 tasks** | **yes** | **CACHED** | **no** | **`[]`** |
+| timer 50 / 200 / 800 ms | no (browser torn down first) | cached | no | `[]` — harmless, nothing committed |
+
+**5 of 6 repetitions** of the 8-task cell cached a flow with `gated=[]` while the server recorded the
+POST. The sixth was refused, which is the boundary moving under ordinary timing — the same boundary the
+ubuntu runner crosses at 2 tasks because it is slower relative to the page's task queue.
+
+**Why this is worse than a missed gate.** Three guards fail together, and they fail QUIETLY:
+* `wrote["hit"]` is never set, so `_learn_once`'s "a write fired but nothing could be attributed"
+  refusal — the guard that exists exactly for this — never arms;
+* no wire promotion runs, so the commit's step is never marked `mutating`;
+* the flow therefore caches as an ordinary READ: no drift gate, no `precond_scope`, no Idempotency-Key,
+  and heal- and suffix-replan-eligible.
+Replay then re-fires that commit on every run, ungated and un-keyed. Inviolable #3, and #2 with it —
+nothing anywhere is loud.
+
+**This is NOT R4.5.** R4.5 is a page manufacturing a PROVABLE cause so the placement is trusted. This is
+the write never being seen at all. They share a fixture family, which is how one masked the other for
+three CI rounds.
+
+**Do not "fix" it by widening `write_window_ms`.** That was attempt two, measured: sweeping the injected
+inter-step gap with the tail at 30 s, the AB-1 arm survives 0/1/3/6 s gaps — the tail is simply not the
+variable. The fix has to be about the OBSERVER's lifetime: a bounded drain before the listener comes off,
+with the same "retrying must not become swallowing" rule the durable-write helper follows. Anything that
+waits must be bounded and must fail LOUD on expiry, or it becomes a stall on every read flow.
+
+**Sequencing.** The fix touches `flow.py`'s write path, so it takes the full gate: RED test verified
+against current main, fix in the mechanism, a dimension in `tests/test_write_safety_invariants.py`,
+siblings checked (`recorder.py` has its own instrumentation lifetime — check it), suite + `drift_bench`,
+and a pre-merge adversarial audit. It also needs a DETERMINISTIC harness rather than the 5/6 race above:
+build the mechanism on demand (R4.26), do not fish for it.
 
 * **R4.28 — OPEN, and filed as an OBSERVATION rather than a defect: `_write_owner` becomes CONFIDENT
   because a neighbour's grace tail EXPIRED, not because evidence arrived.** Found while diagnosing an
