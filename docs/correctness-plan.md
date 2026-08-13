@@ -446,7 +446,20 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
 
   **S11 REMAINS OPEN and its next attempt is now sequenced, because the order matters.** R4.33 first —
   the corpus row has to be able to fail for the finding before the bench can adjudicate anything about
-  it, and that is this plan's own "the net gets strengthened before it is relied on". Then attempt 2,
+  it, and that is this plan's own "the net gets strengthened before it is relied on". ✅ **R4.33 is DONE
+  in 0.101.0**: `row-nested-icon` is added as its own scenario, it binds nothing on any row including
+  its pristine arm while R3.7 is open, and the survival curve's numerators are unchanged — so attempt 2
+  now has **12 rows that must move** (the other two of its 14 carry `target_present=False` and must
+  never bind). That the row CAN move was verified by simulating a fix, not assumed. It also found R4.35
+  on its first run (a heal that re-grounds to a byte-identical recipe and reports a repair that changes
+  nothing), which is the argument for fixing an instrument rather than working around it.
+
+  **Two cautions for attempt 2, both of which this slice got wrong before an audit corrected them.**
+  The scenario's 9 new `predicted_mismatches` do NOT share one cause — two are pre-existing `predict()`
+  gaps visible on four other scenarios in the unchanged baseline — so triage them per row and do not
+  read the COUNT as the signal. And `_maybe_heal` never calls `locators.resolve`, so why a replay
+  refuses is never why a heal declines; the two allowlists in `tests/test_drift_bench.py` answer
+  different questions and had confidently-worded causes attached to them twice, wrongly. Then attempt 2,
   which must solve two things together or reopen the other: the id-bearing container chosen by the SAME
   rule on both sides (candidate: the nearest enclosing row-like container that can prove an identity),
   AND `rowIdOf` no longer borrowing an identity from a row-like DESCENDANT. Both change what a captured

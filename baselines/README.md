@@ -17,6 +17,60 @@ is produced by `drift_sandbox.py` (scripted/**key-less**) and `recorder_ceiling.
 | `drift.json` | drift-sandbox v1 (2 scenarios, 17 DOM drifts) | 2026-06-23 | **0-LLM resilience 12/12 (100%)** cosmetic drifts, **wrong-binds 0** — **SUPERSEDED by `drift_v2.json`**, which ports all 17 rows verbatim and gates this record's outcomes element-wise as its `v1_parity` block. Kept as the historical reference and a manually runnable cross-check; the CI gate now lives in v2 |
 | `recorder_ceiling.json` | recorder ceiling (MiniWoB++, 3 tasks × 3 seeds) | 2026-06-24 | **recorder 9/9 vs LLM authoring 4/9** on the *same* seeds — recorder solves all garbled-label instances 0-LLM, **re-grounding by role+name+css (ids stripped)**; the LLM (N=1) solves only single-target and **misses every multi-target selection** (the grounding ceiling) |
 
+## The 2026-08-13 re-baseline — the row S1b added for R3.7 could not fail for R3.7 (R4.33)
+
+**Deliberate re-baseline** (slice R4.33). The table below records `row-nested-action` as the row that
+lets the bench adjudicate the row-guard container walk. It cannot, and that was measured rather than
+argued: the scenario's survival curve, `bound_by` histogram and ladder rate are **byte-identical with
+and without a fix for R3.7**. Two independent reasons, and fixing either alone is not enough:
+
+* the control carries the visible text "Details", so the inner `<li>` does not collapse to the empty
+  string and the capture walk anchors on it exactly as the bind walk does;
+* even with an icon-only control, the row's only identity is the `href` of the link INSIDE that `<li>`,
+  so `rowIdOf` returns the same string for the `<li>` and the `<tr>` and the two walks agree anyway.
+
+`row-nested-action` is kept, with its claim corrected — a labelled nested action list is a legitimate
+shape, just not that one. **`row-nested-icon` is added** and is the faithful version: an icon-only
+control AND an `id` on the `<tr>`, so the outer row has an identity the nested container does not share.
+
+**While R3.7 is open this scenario binds NOTHING, including on its pristine arm.** That is the point of
+it. `pristine_anchors` declares what the page OFFERS, not what currently survives; the empty survival is
+the finding, made visible in the instrument for the first time.
+
+| | before | after |
+|---|---|---|
+| corpus | 171 rows | 185 rows |
+| `silent_wrong` | 2 (0.58%) | **2 (0.54%)** — same absolute; no new wrong bind |
+| survival k1 / k3 | 20/24 / 22/24 | 20/27 / 22/27 — the same numerators; the new rows add 3 to each denominator and survive none |
+| heal MECHANISM | 25/26 (0.96) | 36/38 (0.95) — one new decline (`row-nested-icon/reparent`) |
+| predicted agreement | 84.3% | 78% — 9 new mismatches, ALL on `row-nested-icon` and all with ONE cause |
+
+**Read the survival drop correctly.** The numerators are unchanged: nothing that used to bind stopped
+binding. The curve fell because 14 rows were added that bind nothing, and they bind nothing because of
+an OPEN finding. **12 of the 14 should move when R3.7 closes**; the remaining two (`target_removed`,
+`target_replaced_crosstag`) carry `target_present=False` and must never bind at all. That the row CAN
+move was verified rather than assumed: simulating a fix takes `bound_by` from `{'none': 14}` to
+`{'css': 4, 'none': 9, 'role+name': 1}` and survival from `0/3` to `k1 1/3, k3 2/3`.
+
+**The 9 new prediction mismatches do NOT have a single cause — and this paragraph said the opposite
+until an audit checked it.** Two of them are pre-existing `predict()` gaps that appear wherever their
+primitive appears, not row-guard effects at all: `decoy_substring+strip_aria_label` already mismatches
+on `cart-row`, `row-positional`, `row-shared-action` and `row-nested-action` in the unchanged baseline,
+and `reparent` on three of those. Under a simulated R3.7 fix the list was measured going 9 → 6 with a
+tenth appearing.
+
+So the instruction is the reverse of what was first written here: **triage these per row when R3.7
+closes, and do not read the count as the signal.** A shrinking list is not evidence the fix worked, and
+a residual list is not evidence it did not.
+
+**One thing the faithful row surfaced immediately, which is the whole argument for fixing an
+instrument** — three of its heal-eligible rows re-ground to a **byte-identical** recipe
+(`steps_hash` unchanged), so the heal reports a persisted repair that changes nothing. Filed as
+**R4.35** and named in `KNOWN_NO_DIGEST_MOVE`; no other corpus row does this, because every other drift
+changes the page enough that the re-grounded spec differs. R4.35 records a larger claimed population
+(7 rows, by "the next replay still refuses" rather than "the digest moved") as UNVERIFIED — it needs a
+replay-after-heal experiment this bench does not run, and should not be quoted until someone does it.
+
 ## The 2026-08-05 re-baseline — four row-identity shapes the corpus was blind to
 
 **Deliberate re-baseline** (slice S1b of `docs/correctness-plan.md`). Three planned slices name this
@@ -32,7 +86,7 @@ Four scenarios added, all targeting row 3 so they read like `cart-row`:
 |---|---|
 | `row-shared-action` | one shared endpoint + one shared `data-testid`; per-record identity ONLY in a hidden input — R3.1's discrimination rule, and where a priority order fabricates an identity every sibling has |
 | `row-positional` | the only per-row tokens are `data-index` / `id="row-N"`: they discriminate today and RENUMBER on delete, so the identity outlives the record (**D3**) |
-| `row-nested-action` | the control sits in `tr > td > ul.actions > li`, where `anchorOf` climbs past an empty-text container and `_ROW_OF_JS` stops at the first `li` (**S9**) |
+| `row-nested-action` | ~~the control sits in `tr > td > ul.actions > li`, where `anchorOf` climbs past an empty-text container and `_ROW_OF_JS` stops at the first `li` (**S9**)~~ — **this claim was false; see R4.33 and the 2026-08-13 entry above.** The row measures a labelled nested action list, on which the two walks agree |
 | `fuzzy-decoy` | "Save draft" substring-matches "Save" once `strip_aria_label` collapses the target's name; a SOLE surviving fuzzy candidate binds outright (**D2**) |
 
 The rows share one `href` where the shape requires the href to be non-discriminating; a wrong-row bind
