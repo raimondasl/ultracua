@@ -7,7 +7,7 @@ failing LOUD on drift.**
 
 **[docs/open-defects.md](docs/open-defects.md) — the standing defect register.** FOUR rounds. Rounds 1–2
 (30 findings) are fixed; **round 3 found 11 more in the 387 lines those fixes added, 1 critical, and
-refuted NONE of them** (**3 open** at 0.100.0 — R3.2, R3.7, R3.12; the count is asserted by
+refuted NONE of them** (**3 open** at 0.103.0 — R3.2, R3.7, R3.12; the count is asserted by
 `tests/test_register_count.py`, which caught this very line going stale inside the slice that wrote it —
 R3.6 closed after the number was typed); round 4 was a pre-merge audit that PARKED a change rather than
 ship it. Two are regressions the fixes introduced. Defect density in fix code measured ~3x
@@ -15,13 +15,16 @@ the code it replaced, so **a patch on a patch is the thing to be most suspicious
 findings are the same shape as the finding they were fixing, one level down. When you close something,
 change the shape so the invariant is enforced ONCE rather than adding another per-branch test.
 
-**Two of round 3 were answered that way in 0.73.0** (R3.1, R3.4): two transcriptions of a JS snippet
-became one, and a return type that could only say "absent" learned to say "unreadable". **A third one
-resisted it: R3.7's obvious fix — make the second transcription of the surrounding WALK agree with the
-first — was built in 0.100.0, passed its own 18-cell parity matrix, and turned a correct refusal into a
-silent wrong-row bind.** Parity is necessary and not sufficient; the guard's real question is
-CONTAINMENT, and two containers can produce the same identity string. Reverted, measured, and pinned by
-a containment property that is green on main. **A fourth
+**Two of round 3 were answered that way in 0.73.0** (R3.1, R3.4). **R3.7 has now defeated TWO attempts,
+both of which turned a LOUD false refusal into a SILENT wrong-record bind by different routes** — 0.100.0
+made the two DOM walks agree (losing containment: an ancestor borrows a nested row's identity), 0.103.0
+decoupled the identity from the anchor text (an identity-less wrapper captures `anchor_id=None`, which
+`resolve` reads as "no guard"). Both passed the full suite, `drift_bench` with every invariant holding,
+and their own purpose-built property matrices. **D5's two-strikes gate now applies: attempt 3 must change
+the SENSOR CLASS.** The overloaded thing is `anchor_id=None`, which means both "this row has no
+discriminating token" (accepted residual) and "I looked in the wrong container" (a silent disarm), and
+`resolve` cannot tell them apart. R4.34 and R4.37 are the other two doors into the same fault; a fix that
+does not dispose of all three has now failed twice. **A fourth
 (R3.2, write attribution) has now defeated three attempts** — 0.73.0's drain (reverted), 0.74.0's first
 refusal draft (over-refused), and a 0.76.0 causal-attribution branch that was green and still wrong
 (**parked**, see `docs/parked/README.md`). Read that history before touching attribution: it rules out
@@ -39,11 +42,18 @@ inventory it must dispose of.
 
 **Audit the fix, not just the code it fixes.** The reverted 0.73.0 redesign (754 tests green,
 `drift_bench` clean, every regression test verified RED against pre-fix source), the parked 0.76.0
-branch (785 tests, same clean bench), and 0.100.0's R3.7 attempt (its own 18-cell property matrix green,
-bench invariants all holding) were each critically wrong. **Green is not evidence in this codebase.**
-Four rounds running, fix code has been the defect source, and the only instrument that has ever caught
-it is an adversarial pass aimed squarely at the new code — four for four. Run one before you open the
-PR, not one release later.
+branch (785 tests, same clean bench), and BOTH R3.7 attempts (0.100.0 and 0.103.0 — each with its own
+purpose-built property matrix green, bench invariants all holding, and 0.103.0 additionally showing
+survival UP at every k with zero rows regressed) were critically wrong. **Green is not evidence in this
+codebase.** Four rounds running, fix code has been the defect source, and the only instrument that has
+ever caught it is an adversarial pass aimed squarely at the new code — five for five. Run one before you
+open the PR, not one release later.
+
+**And note what the two R3.7 attempts have in common: each was blind to a population no instrument
+contained.** Attempt 1 died on nested rows sharing an identity string; attempt 2 died on a nested wrapper
+that owns no identity at all. Both times every existing shape — 30 test cells and 185 corpus rows — was
+built from the same mental image of a row, so the gap was invisible to all of them at once. When a fix
+here looks clean, the question to ask is not "did the tests pass" but "what shape is not in them".
 
 Two things about HOW to run it, both learned by getting them wrong. Point it at a **committed** branch in
 an **isolated worktree**: an auditor that can edit the tree it is auditing will revert the file under

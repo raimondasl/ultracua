@@ -11,7 +11,7 @@ by applying this file's own sibling rule while redesigning R3.2; it is recorded 
 CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch was **PARKED, not
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
-The round-4 series has since grown to R4.36 as later slices filed against it: **19 open**, 13 fixed,
+The round-4 series has since grown to R4.37 as later slices filed against it: **20 open**, 13 fixed,
 4 parked, indexed and token-checked in the R4 STATUS INDEX at the top of that section.
 
 **THE PLAN.** `docs/correctness-plan.md` sequences every open item here — plus the test-machinery
@@ -770,7 +770,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **19 open**, 13 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **20 open**, 13 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -823,6 +823,7 @@ if and only if that branch is ever resumed.
 | R4.34 | open | a shared `aria-label` on a nested per-row container turns the row guard OFF → silent wrong-row bind; **HIGH**, inviolable #3 |
 | R4.35 | open | a heal on a ROW-GUARD refusal re-grounds to a byte-identical recipe and reports a repair that repairs nothing |
 | R4.36 | open | a load-dependent write-refusal MISS: `record()` cached an autosave write flow that must be refused; **inviolable #3** |
+| R4.37 | open | a control whose nested wrapper owns no identity captures no `anchor_id`, so the row guard silently does not run; **HIGH**, inviolable #3 |
 
 
 **Scope.** The uncommitted `feat/shared-causal-attribution` work (would-be 0.76.0): extracting the
@@ -2039,7 +2040,7 @@ inspect` then prints it to the terminal, and `flow approve --all` reprints it fl
 renderer whose own comment says it "must never be the thing that echoes a secret". Nothing logs or
 warns.
 
-### R3.7. `_ROW_OF_JS` does not mirror `anchorOf`'s walk as its comment claims — `anchorOf` SKIPS a row-like container whose collapsed text is empty and keeps climbing, `_ROW_OF_JS` stops at it unconditionally — so a nested action list makes the guard refuse a correct bind on a page that has not drifted at all
+### ⚠️ STILL OPEN — R3.7. `_ROW_OF_JS` does not mirror `anchorOf`'s walk as its comment claims — `anchorOf` SKIPS a row-like container whose collapsed text is empty and keeps climbing, `_ROW_OF_JS` stops at it unconditionally — so a nested action list makes the guard refuse a correct bind on a page that has not drifted at all
 
 *medium, lens `rowguard`, confidentiality (no inviolable), reproduced by an independent refuter*
 
@@ -2066,8 +2067,63 @@ icon-only controls records fine and caches fine. Every subsequent replay refuses
 page. The failure is discovered only in production, and the sink message accuses the page of drift
 that did not happen.
 
-**⚠️ STILL OPEN at 0.100.0 — ATTEMPT 1 WAS BUILT, PASSED EVERYTHING IT WAS ASKED TO PASS, AND TURNED A
-CORRECT REFUSAL INTO A SILENT WRONG-ROW BIND. It was reverted, and the measurement is the deliverable.**
+**⚠️ STILL OPEN at 0.103.0. ATTEMPT 2 WAS ALSO BUILT, ALSO PASSED EVERY GATE, AND ALSO PRODUCED A
+SILENT WRONG-RECORD BIND — a different route to the same failure class. Reverted. D5's two-strikes gate
+now applies: a third attempt must change the SENSOR CLASS, not refine the inference.**
+
+**Attempt 2 (0.103.0).** Decouple `anchor_id` from `anchor_source`: take the identity from the NEAREST
+enclosing row-like container by a purely structural walk shared verbatim by capture and bind, whatever
+the anchor TEXT did, and gate `resolve` on `anchor_id` alone. It closed R3.7 and R4.34 together, and on
+every instrument available it looked better than main: containment property green with pristine binds
+3 → 4, attempt 1's attack page refusing, `drift_bench` invariants all holding with survival UP at every
+k (k1 20→22, k3 22→25), **zero rows regressed** across 185 rows × 2 arms, suite 1031 green.
+
+**What it actually did.** `_nearestRow` stops at the INNERMOST row-like container. When that container is
+an action wrapper owning no identity — no `form[action]`, no `a[href]`, no hidden input, no `data-*` —
+`rowIdOf` returns null, `anchor_id` is captured as **None**, and the new gate reads "no identity" as "no
+guard". The record key one landmark up on the `<tr>` is never consulted. Measured on an ordinary
+client-rendered table (`<tr data-order-id="3"> > td > ul.actions > li > icon button`), recorded against
+record 3, replayed after record 3 was cancelled:
+
+| | capture | bind |
+|---|---|---|
+| main | `anchor_id='data-order-id:3'` | **REFUSED** |
+| attempt 2 | `anchor_id=None` | **bound record 7**, `bound_by='role+name'`, no `row_mismatch` |
+
+So it converted R3.7's LOUD false refusal into a SILENT wrong-record bind, for a sub-population of
+exactly the shape R3.7 is about. The audit measured 6 newly-broken cells in a 30-cell cross-product;
+an independent refuter reproduced it and also showed the mutation gate does not save it — a per-row
+`<form method="post">` with no `action` attribute is invisible to `_rowCands` AND becomes the
+fingerprint scope, so every row fingerprints identically, and a step not classified mutating has no gate
+at all.
+
+**WHY BOTH ATTEMPTS WERE BLIND, which is the transferable part.** Every shape in the suite and all 185
+corpus rows put an identity INSIDE the nested wrapper — the matrix formats a `<form action=...>` into
+the inner `<li>`, and `row-nested-icon` puts an `<a href=...>` there. The population where the wrapper
+owns NOTHING and the key is one level up was in no instrument at all. It is now
+`bare-nest/icon` in the containment matrix: GREEN on main, RED against attempt 2.
+
+**What this rules out for attempt 3.** Not "nearest container" as such — the flaw is that
+`anchor_id=None` is overloaded. It means both *"this row genuinely has no discriminating token"* (the
+documented, accepted residual, where the guard must stay off or a large population is refused) and
+*"I looked in the wrong place"*. `resolve` cannot tell them apart, and any rule that answers "which
+container" without also answering "and is that answer trustworthy" will keep landing here. The plan's own
+prescription — nearest row-like container **that can prove an identity**, plus `rowIdOf` no longer
+borrowing from a row-like DESCENDANT — was written before attempt 2 and NOT what attempt 2 implemented;
+it remains the best-argued candidate and is still unmeasured.
+
+**Per D5 the next attempt must change the sensor class.** The two spent strikes were both inferences
+from the same sensor: a string computed from one container, compared for equality. A third variant of
+"pick a better container" is attempt 2 again. What would qualify: making the ABSENCE of an identity a
+distinguishable state rather than a silent disarm (fail-closed with a measured over-refusal cost, or a
+third value the caller must dispose of), or a containment test that does not go through an identity
+string at all.
+
+
+---
+
+**ATTEMPT 1 (0.100.0), KEPT IN FULL — BUILT, PASSED EVERYTHING IT WAS ASKED TO PASS, AND TURNED A
+CORRECT REFUSAL INTO A SILENT WRONG-ROW BIND. Reverted; the measurement was the deliverable.**
 
 Attempt 1 was the fix this register and `docs/correctness-survey.md` both prescribe, and it is the
 obvious one: extract `_ROWWALK_JS`, give the bind side the same non-empty-text condition capture uses, so
@@ -3657,7 +3713,15 @@ digest`) simply cannot express "the repair was a no-op", which is why the three 
 set by EQUALITY in both directions, so a row joining it needs a finding and a row leaving it — which is
 what closing R3.7 does — forces the entry to be deleted.
 
-**The consequence worth stating:** `MECHANISM heal` counts these three as recoveries, so the published
+**UPDATE 0.103.0 — NO LONGER OBSERVABLE, AND THAT IS NOT THE SAME AS FIXED.** Closing R3.7 removed the
+refusals these heals were repairing: all three rows now survive at 0-LLM and never reach the heal, so
+the corpus contains no instance of the phenomenon and `KNOWN_NO_DIGEST_MOVE` was deleted (its equality
+pin is what forced the deletion rather than leaving an over-broad allowlist behind — that is the
+direction such lists usually rot in). The MECHANISM is untouched: a heal that re-grounds to a
+byte-identical recipe still reports a persisted repair that changes nothing. It is now a finding with no
+reproducer, which is exactly the state that becomes wallpaper, so it stays OPEN and says so.
+
+**The consequence worth stating:** `MECHANISM heal` counted these three as recoveries, so the published
 heal rate is optimistic by exactly the population whose refusal cause is not in the spec. Whether the
 ladder should DECLINE a re-ground that changes nothing is a real question and is not settled here —
 declining it would make the row honest but would also mean a heal that reaches the goal reports failure.
@@ -3692,9 +3756,12 @@ via Tier 1 `role+name`, uniquely and outright, with no `row_mismatch` and nothin
 are structurally identical and `scope_fingerprint` matches byte-for-byte — so on a write flow this fires
 another customer's commit under the recorded row's Idempotency-Key.
 
-**Pinned, not fixed.** `tests/test_row_identity_binding.py` carries it as a strict xfail, so the day the
-guard is re-armed on this population the marker XPASSes and the suite goes red until this entry is
-closed with it. The candidate remedy — capture `anchor_id` from the enclosing row whatever the anchor
+**A FIX WAS BUILT IN 0.103.0 AND REVERTED** — it closed this and R3.7 together and produced a silent
+wrong-record bind by a third route. See R3.7's entry for the measurement and for what D5 now requires of
+attempt 3. **R4.37 is the third door into this same fault** and any next attempt must dispose of all
+three, because a fix for one that ignores the others has now failed twice.
+
+The original filing follows. The candidate remedy — capture `anchor_id` from the enclosing row whatever the anchor
 source, and scope the guard on `anchor_id` alone — changes what capture MEANS and re-arms a guard on a
 population that has never had it, which is exactly the class of resolver trade `drift_bench` exists to
 adjudicate. It is not a comment-sized change and does not belong bundled into the slice that found it.
@@ -3753,3 +3820,48 @@ heavier instrument and more patience.
 reproduces, capture the CACHED FLOW, not just the boolean — whether the write step is gated, and onto
 which step, is the whole severity question. (3) Only then decide whether this is R4.26's mechanism on an
 uncovered path.
+## R4.37 — OPEN, HIGH, inviolable #3. A control whose nested wrapper owns no identity captures no `anchor_id`, so the row guard silently does not run — and the record key is one landmark up
+
+*high, lens `rowguard`, inviolable #3, reproduced against 0.101.0/main*
+
+**Where.** `src/ultracua/locators.py` — `anchorOf`'s row branch takes `rowIdOf(c)` from the container
+that supplied the anchor TEXT, combined with `resolve`'s gate `spec.anchor_source == "row" and
+spec.anchor_id`.
+
+**Mechanism.** The anchor walk stops at the first row-like container with non-empty collapsed text. For a
+control with VISIBLE TEXT inside a nested action wrapper (`tr > td > ul.actions > li > button`), that
+container is the inner `<li>` — whose text is the control's own label. If the wrapper owns no identity
+(no `form[action]`, no `a[href]`, no hidden input, no `data-*`), `rowIdOf` honestly returns null, so
+`anchor_id` is None and the guard never runs. The `<tr>`'s `data-order-id` — the actual record key, one
+landmark up — is never consulted.
+
+**Measured against main**, two rows, record 3 recorded, replayed after record 3 was cancelled (the shape
+`resolve`'s own docstring names):
+
+    MAIN  icon-only  src='row'  anchor_id='data-order-id:3'  -> REFUSED
+    MAIN  text-ctrl  src='row'  anchor_id=None               -> bound record 7   by='role+name'
+
+The two halves differ ONLY in whether the control has visible text. The icon-only variant is safe by
+accident: its wrapper collapses to the empty string, so the anchor walk climbs past it to the `<tr>` and
+picks up the real key. That accident is also R3.7 — the same climb that saves this case is the one that
+makes capture and bind disagree elsewhere.
+
+**Relationship to R3.7 and R4.34.** All three are the same underlying fault: `anchor_id` is decided by
+where the anchor TEXT came from, which has nothing to do with containment. R4.34 is the aria-label door
+into it, R4.37 is the visible-text door, and R3.7 is what the climb that avoids R4.37 costs elsewhere.
+**A fix for one that does not consider the other two has now failed twice** — see R3.7's entry.
+
+**Found by** the pre-merge audit of R3.7's attempt 2, as a by-product of the population analysis that
+killed it. It is NOT introduced by that attempt: it reproduces on main, and the attempt's own failure
+was the icon-only twin of this shape.
+
+**Pinned** by `test_a_control_in_an_identityless_wrapper_is_still_guarded_by_its_row` (strict xfail) and,
+in the safe direction, by `bare-nest/icon` in the containment matrix — which is green on main and was
+the cell that caught attempt 2.
+
+**Why the corpus never saw it, and this is the reusable lesson.** Every row shape in the suite and all
+185 `drift_bench` rows put an identity INSIDE the nested wrapper: the matrix formats a
+`<form action=...>` into the inner `<li>`, `row-nested-action` and `row-nested-icon` put an
+`<a href=...>` there. A wrapper that owns nothing was in no instrument. Two fix attempts, a 30-cell test
+matrix and a 185-row corpus were all blind to the same gap because they were built from the same mental
+image of what a row looks like.

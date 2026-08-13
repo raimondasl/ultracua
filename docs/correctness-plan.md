@@ -390,8 +390,29 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   is the limit of the enumerate-the-quiet-outcomes rule, and worth carrying forward.
 
 - **S11. R3.7** — `_ROW_OF_JS` does not mirror `anchorOf`'s walk; false refusal + phantom-drift
-  accusation + heal-LLM burn on nested action lists. ⚠️ **ATTEMPTED IN 0.100.0, MEASURED WRONG,
-  REVERTED. R3.7 stays OPEN; what shipped is the instrument that caught it.**
+  accusation + heal-LLM burn on nested action lists. ⚠️ **TWO ATTEMPTS SPENT, BOTH MEASURED WRONG,
+  BOTH REVERTED. R3.7 stays OPEN and D5's two-strikes gate now applies.**
+
+  Attempt 2 (0.103.0) decoupled `anchor_id` from `anchor_source` — identity from the NEAREST enclosing
+  row-like container, structurally, gating on `anchor_id` alone — and closed R3.7 and R4.34 together. It
+  passed everything, including a per-row check showing **zero regressions** and survival UP at every k.
+  It also converted R3.7's loud false refusal into a **silent wrong-record bind** wherever the nested
+  wrapper owns no identity: `rowIdOf` returns null, `anchor_id` is captured as None, and `resolve` reads
+  "no identity" as "no guard" while the record key sits one landmark up on the `<tr>`.
+
+  **What both attempts have in common is the reusable part.** Each died on a population no instrument
+  contained — attempt 1 on nested rows sharing an identity string, attempt 2 on a wrapper owning none.
+  30 test cells and 185 corpus rows were all built from the same mental image of a row, so a single
+  blind spot defeated all of them at once. The audit's population cross-product is what found both.
+
+  **What shipped instead:** `bare-nest/icon` in the containment matrix (green on main, RED against
+  attempt 2 — the cell that caught it), and **R4.37**, a live silent wrong-row bind on main that the
+  same population analysis exposed: a control with VISIBLE text in an identity-less wrapper captures no
+  `anchor_id` at all. R4.34, R4.37 and R3.7 are three doors into one fault, and attempt 3 must dispose of
+  all three — per D5 by changing the sensor class, since the overloaded `anchor_id=None` (meaning both
+  "no token exists" and "I looked in the wrong place") is what both attempts foundered on.
+
+  Attempt 1's record follows.
 
   The attempt was the fix this plan, the register and the survey all prescribe, and it is the obvious
   one: `_ROWWALK_JS` holding the landmark set, the normaliser, `rowIdOf` and the climb, with the bind

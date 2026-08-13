@@ -266,11 +266,9 @@ def _matrix_page(shell: str, nesting: str, control: str) -> str:
 
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
     "R3.7 — OPEN. Capture and bind name different rows whenever a text-less row-like container sits "
-    "between the control and its row: 6 of these 18 cells diverge, and replay then refuses a page that "
-    "never drifted. Kept STRICT so it XPASSes the moment someone makes the walks agree — at which point "
-    "the containment property below is what says whether they made it agree the RIGHT way. Parity alone "
-    "is satisfied by a bind walk that has stopped checking containment, which is exactly how the first "
-    "fix attempt passed this test while binding another customer's record."))
+    "between the control and its row. Kept STRICT so it XPASSes the moment the walks agree — at which "
+    "point the containment property below is what says whether they were made to agree the RIGHT way. "
+    "Parity alone was satisfied by BOTH failed attempts."))
 async def test_capture_and_bind_name_the_same_row_on_every_nesting_shape() -> None:
     """The divergence itself, enumerated rather than described.
 
@@ -361,7 +359,29 @@ _GROUP_HIDDEN = """<!doctype html><html><body><ul>
   </ul></li>
 </ul></body></html>"""
 
+# R4.34's shape: the nested per-row action container carries a design-system `aria-label`, identical on
+# every row. Capture's anchor TEXT therefore comes from that label (`anchor_source='label'`), which used
+# to mean no `anchor_id` was captured at all and the guard silently did not run on a per-record control.
+# This shape is the population the fix newly ARMS, and `drift_bench` cannot see it — every heading-
+# anchored corpus scenario has no enclosing row at all — so it is measured here instead.
+_LABELLED_NEST = """<!doctype html><html><body><table><tbody>
+  <tr id="order-3"><td>Acme</td><td><ul class="actions"><li aria-label="Row actions">
+    <form method="post" action="/cancel/3">%s</form></li></ul></td></tr>
+  <tr id="order-7"><td>Globex</td><td><ul class="actions"><li aria-label="Row actions">
+    <form method="post" action="/cancel/7">%s</form></li></ul></td></tr>
+</tbody></table></body></html>"""
+
+# R4.37's shape, and the one that caught R3.7's second attempt. The action wrapper owns NOTHING — no
+# `form[action]`, no `a[href]`, no hidden input, no `data-*` — while the record key sits one landmark up
+# on the `<tr>`. Every other shape in this file and in the drift corpus puts an identity INSIDE the
+# wrapper, which is why two fix attempts and a 185-row corpus were all blind to it.
+_BARE_NEST = """<!doctype html><html><body><table><tbody>
+  <tr data-order-id="3"><td>Acme Corp</td><td><ul class="actions"><li>%s</li></ul></td></tr>
+  <tr data-order-id="7"><td>Globex</td><td><ul class="actions"><li>%s</li></ul></td></tr>
+</tbody></table></body></html>"""
+
 _CONTAINMENT_SHAPES = [
+    ("bare-nest/icon", _BARE_NEST, _ICON),
     ("grouped-rows/icon", _GROUPED, _ICON),
     ("grouped-rows/text", _GROUPED, _TEXT),
     ("nested-actions/icon", _NESTED, _ICON),
@@ -437,9 +457,9 @@ _NESTED_PRISTINE = _NESTED_ICON.format(c3=_UNIQUE_ICON % 3, c7=_UNIQUE_ICON % 7)
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "R3.7 — OPEN. Learn succeeds (the learn loop actuates through `data-ultracua-ref` and never calls "
-    "`resolve`), the flow caches, and every replay afterwards refuses at the bind with `row_mismatch` — "
-    "accusing a pristine page of a drift that did not happen, and routing the step into the heal LLM."))
+    "R3.7 — OPEN. Learn succeeds and caches; every replay afterwards refuses at the bind with "
+    "`row_mismatch`, accusing a pristine page of a drift that did not happen and routing the step into "
+    "the heal LLM."))
 async def test_a_nested_icon_only_control_binds_on_a_page_that_never_drifted() -> None:
     spec = await _spec_of(_NESTED_PRISTINE, "#order-3")
     assert (spec.anchor_source, spec.anchor_id) == ("row", "id:order-3"), spec
@@ -496,13 +516,28 @@ _LABELLED_NEST = """<!doctype html><html><body><table><tbody>
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
+    "R4.37 — OPEN. A control whose nested wrapper owns no identity captures `anchor_id=None`, so the "
+    "row guard never runs even though the RECORD key is one landmark up on the `<tr>`. Silent wrong-row "
+    "bind, inviolable #3, live on main and independent of R3.7's fix attempts."))
+async def test_a_control_in_an_identityless_wrapper_is_still_guarded_by_its_row() -> None:
+    """The text-control half of `bare-nest`. Its icon-only twin is in the containment matrix above and
+    is GREEN — capture climbs past the text-less wrapper to the `<tr>` and arms the guard. Here the
+    wrapper has text (the control's own label), so capture stops at it, finds no identity, and the guard
+    silently does not run. The two halves differ only in whether the control has visible text."""
+    spec = await _spec_of(_BARE_NEST % (_TEXT % 3, _TEXT % 7), "tr:nth-child(1)")
+    assert spec.anchor_id, f"no identity captured, so the guard cannot run: {spec!r}"
+
+    row, action, bound_by = await _bind(_BARE_NEST % ("<span>Cancelled</span>", _TEXT % 7), spec)
+    assert row is None, f"bound row {row!r} (action {action!r}) via {bound_by!r}"
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
     "R4.34 — OPEN. A shared aria-label on the nested per-row action container makes capture anchor on it "
-    "with source='label', so the row guard never runs and a wrong-row bind goes through silently. Not a "
-    "false refusal like R3.7 but a wrong ACT, which on a write flow is inviolable #3. The fix changes "
-    "what `anchor_id` is captured for and must be adjudicated on drift_bench, so it gets its own slice."))
+    "with source='label', so no `anchor_id` is captured, the row guard never runs, and a wrong-row bind "
+    "goes through silently. Inviolable #3 on a write flow. Two fixes have now been measured wrong here; "
+    "see R3.7 and D5 before attempting a third."))
 async def test_a_labelled_nested_container_must_not_disable_the_row_guard() -> None:
-    """Kept STRICT so that whoever re-arms the guard on label anchors finds this XPASSing and has to
-    close R4.34 rather than discover the pin later."""
+    """Kept STRICT so whoever re-arms the guard on this population finds it XPASSing."""
     spec = await _spec_of(_LABELLED_NEST.format(c3="<button>Cancel</button>"), "#order-3")
     assert spec.anchor_source == "label", spec        # the premise: capture never reached the row
 
