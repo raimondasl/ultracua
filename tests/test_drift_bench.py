@@ -23,7 +23,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from benchmarks.drift_bench import KNOWN_WRONG_BINDS, MIN_HEAL_ELIGIBLE, measure
+from benchmarks.drift_bench import (KNOWN_NO_DIGEST_MOVE, KNOWN_WRONG_BINDS, MIN_HEAL_ELIGIBLE,
+                                     measure)
 
 # The bench costs ~50 s, so it runs ONCE and every assertion reads the same record.
 _REC: dict = {}
@@ -112,19 +113,26 @@ async def test_the_ladder_has_a_nonempty_heal_eligible_population() -> None:
 # discipline as the `silent_wrong` allowlist: a named, published exception — never a loosened threshold.
 # A row leaving this list is a fix; a row joining it needs a finding first.
 _KNOWN_HEAL_DECLINES = {
-    # `reparent` moves the control into a fresh `<div>` appended to the nearest `section/main/form/body`
-    # — for this fixture, out of the table altogether. The element is still present, so the row is
-    # heal-eligible, but it is genuinely in NO row any more, so the containment guard has nothing to
-    # confirm and refuses. That refusal is the guard working, and the cost of a guard that answers
-    # "cannot confirm" with a refusal rather than a bind.
+    # WHY THE REPLAY REFUSES IS NOT WHY THE HEAL DECLINES, and this list is about the second one.
+    # `_maybe_heal` never calls `locators.resolve` (grep it), so the row-containment guard cannot be the
+    # reason a heal declines — it is only the reason the replay drifted and made the row heal-eligible in
+    # the first place. Both entries below have had a confidently-worded cause attached to them and both
+    # were wrong; the honest state is that the DECLINE's cause is NOT ESTABLISHED.
     #
-    # THIS ENTRY USED TO BLAME R3.7, AND THAT ATTRIBUTION WAS WRONG (see R4.33). The divergence R3.7
-    # names cannot occur on this fixture at all — the row's only identity is the href of the link inside
-    # the nested container, so capture and bind produce the same string either way. The decline is
-    # therefore unchanged by S11's attempted fix, which is what the bench measured: the scenario's
-    # survival curve, `bound_by` histogram and ladder rate are byte-identical with and without it, so its
-    # single decline is too. A comment naming a finding is not evidence the finding is what happens here.
+    # What is measured for both: `reparent` lifts the control into a fresh `<div>` appended to the
+    # nearest `section/main/form/body` — for these fixtures, out of the table altogether — the target
+    # stays present, the row is heal-eligible, and the heal does not persist.
+    #
+    # The first entry ALSO used to blame R3.7 for the replay refusal, and that was wrong for its own
+    # reason (see R4.33): the divergence R3.7 names cannot occur on `row-nested-action` at all, because
+    # the row's only identity is the href of the link inside the nested container, so capture and bind
+    # produce the same string either way. Measured: the scenario's survival curve, `bound_by` histogram
+    # and ladder rate are byte-identical with and without S11's attempted fix.
+    #
+    # A comment naming a cause is not evidence of the cause. Two rewrites of these two lines have now
+    # proved that the expensive way.
     "row-nested-action/reparent",
+    "row-nested-icon/reparent",
 }
 
 
@@ -146,14 +154,40 @@ async def test_the_recovery_mechanism_persists_its_repairs() -> None:
 
 async def test_a_persisted_repair_always_invalidates_the_approval() -> None:
     """The tie-in to the 0.60.0 steps-hash gate: a self-healed recipe must never keep running under a stale
-    approval bit. Every re-cached row's digest must move, so an approved flow refuses on its next run."""
+    approval bit. Every re-cached row's digest must move, so an approved flow refuses on its next run.
+
+    The exception set is EXACT, not a tolerance, and is asserted in both directions below — a row that
+    stops needing it is a fix and must leave the list."""
     rec = await _record()
+    known = {f"{s}/{n}" for s, n in KNOWN_NO_DIGEST_MOVE}
     recovered = [r for r in rec["rows"] if r["outcome"] in ("healed", "replanned")]
     assert recovered, "no recovery happened, so this guarantee was not exercised"
     for r in recovered:
+        if r["row_id"] in known:
+            continue
         assert r["recached"], f"{r['row_id']} recovered without re-caching"
         assert r["steps_hash_after"] != r["steps_hash_before"], \
             f"{r['row_id']} was repaired but its approval digest did not move"
+
+
+async def test_the_no_digest_move_exception_is_exactly_the_rows_it_names() -> None:
+    """R4.35, pinned in the direction that a named exception usually is NOT.
+
+    A published exception list decays in two ways and only one of them is loud. A row JOINING it silently
+    is caught by the test above. A row that no longer needs it — because the finding was fixed — leaves
+    the list correct but over-broad, and nothing notices. So the set is compared for EQUALITY: closing
+    R3.7 makes these rows re-ground to a different spec, the digest moves, and this fails until the
+    entries are deleted.
+    """
+    rec = await _record()
+    known = {f"{s}/{n}" for s, n in KNOWN_NO_DIGEST_MOVE}
+    assert known, "an empty exception set would make the equality below vacuous"
+    actual = {r["row_id"] for r in rec["rows"]
+              if r["outcome"] in ("healed", "replanned") and not r["recached"]}
+    assert actual == known, (
+        f"the recovered-but-unchanged rows are {sorted(actual)}, the published list is {sorted(known)}. "
+        f"Rows that left the list are FIXED and their entries must be deleted; rows that joined need a "
+        f"finding first (see R4.35).")
 
 
 async def test_repair_mode_is_a_noop_on_rows_that_already_survive() -> None:

@@ -45,7 +45,10 @@ import re
 import threading
 from typing import Optional
 
-FIXTURES_VERSION = 1
+# 2: added the `row-nested-icon` scenario (R4.33) — the faithful R3.7 shape the `row-nested-action` row
+# was believed to be. A new corpus row changes `corpus_hash` too, so the re-baseline is required either
+# way; this makes the reason explicit rather than leaving it to a hash diff.
+FIXTURES_VERSION = 2
 
 # ---------------------------------------------------------------------------------------------------
 # The act log. Capture-phase, so it records what was actuated even if a handler stops propagation.
@@ -370,6 +373,38 @@ def _nested_action_rows() -> str:
     return "\n".join(out)
 
 
+def _nested_icon_rows() -> str:
+    """The faithful R3.7 shape, and the one `_nested_action_rows` was believed to be (R4.33).
+
+    TWO details are load-bearing and the first attempt at this fixture had neither:
+
+      * the control is ICON-ONLY, so the inner `<li>` collapses to the empty string and `anchorOf` climbs
+        past it to the `<tr>` while the bind walk stops at it;
+      * the `<tr>` carries its own `id`, so the row has an identity the nested container does NOT share.
+        Without it the row's only identity is the href of the link inside that container, both walks
+        return the same string, and the divergence cannot occur however the control is labelled — which
+        is exactly how the original row measured identically with and without a fix for R3.7.
+
+    Non-target rows carry a shared `aria-label`; only row 3 gets a unique one, matching `_row_target`.
+    """
+    out = []
+    for i in range(1, 13):
+        oracle, href, aria = _row_target(i)
+        label = aria or ' aria-label="Details"'
+        out.append(
+            '    <tr id="widget-row-%d"><td>Widget %d</td><td><ul class="actions"><li>'
+            '<a href="%s" data-oracle="%s"%s><svg width="10" height="10" aria-hidden="true">'
+            '<rect width="10" height="10"></rect></svg></a></li></ul></td></tr>'
+            % (i, i, href, oracle, label))
+    return "\n".join(out)
+
+
+NESTED_ICON_PAGE = (
+    '<!doctype html><html><head><meta charset=utf-8><title>Nested icons</title></head><body>\n'
+    '  <h1>Cart</h1>\n  <table><tbody>\n' + _nested_icon_rows() +
+    '\n  </tbody></table>\n</body></html>')
+
+
 NESTED_ACTION_PAGE = (
     '<!doctype html><html><head><meta charset=utf-8><title>Nested</title></head><body>\n'
     '  <h1>Cart</h1>\n  <table><tbody>\n' + _nested_action_rows() +
@@ -405,6 +440,7 @@ _PAGES = {
     "/shared-action": SHARED_ACTION_PAGE,
     "/positional": POSITIONAL_PAGE,
     "/nested-action": NESTED_ACTION_PAGE,
+    "/nested-icon": NESTED_ICON_PAGE,
     "/fuzzy-decoy": FUZZY_DECOY_PAGE,
 }
 
@@ -667,6 +703,27 @@ SCENARIOS: tuple = (
         # regression cover is the parity property in tests/test_row_identity_binding.py, which asserts
         # capture and bind name the same row over 18 shapes.
         "name": "row-nested-action", "path": "/nested-action",
+        "goal": "open the third widget's details",
+        "target_sel": '[data-oracle="go"]',
+        "pristine_anchors": ("role+name", "role+name~", "css", "anchor"),
+        "steps": [{"action": "click", "role": "link", "name": "Details for widget 3",
+                   "intent": "open the third widget's details"},
+                  {"action": "done", "intent": "done"}],
+        "golden": ["go", "DONE"], "source": "generated",
+    },
+    {
+        # R4.33: the row `row-nested-action` was believed to be. An ICON-ONLY control in a nested action
+        # list, on rows that carry their own `id` — so the capture walk climbs past the text-less `<li>`
+        # to the `<tr>` while the bind walk stops at the `<li>`, and the two name different containers.
+        #
+        # WHILE R3.7 IS OPEN THIS SCENARIO BINDS NOTHING, INCLUDING ON THE PRISTINE PAGE. That is the
+        # point of it and the reason it is a separate scenario rather than an edit to its sibling: the
+        # sibling keeps measuring a labelled nested action list, which is a legitimate shape whose
+        # numbers stay comparable, and this one measures the defect. `pristine_anchors` is declared as
+        # what the page OFFERS, not as what currently survives — measured to be exactly
+        # {role+name, role+name~, css, anchor} on the pristine page. The empty survival IS the finding;
+        # `baselines/README.md`'s 2026-08-13 entry is what stops it being read as a regression.
+        "name": "row-nested-icon", "path": "/nested-icon",
         "goal": "open the third widget's details",
         "target_sel": '[data-oracle="go"]',
         "pristine_anchors": ("role+name", "role+name~", "css", "anchor"),

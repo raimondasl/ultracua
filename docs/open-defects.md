@@ -11,7 +11,7 @@ by applying this file's own sibling rule while redesigning R3.2; it is recorded 
 CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch was **PARKED, not
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
-The round-4 series has since grown to R4.34 as later slices filed against it: **18 open**, 12 fixed,
+The round-4 series has since grown to R4.35 as later slices filed against it: **18 open**, 13 fixed,
 4 parked, indexed and token-checked in the R4 STATUS INDEX at the top of that section.
 
 **THE PLAN.** `docs/correctness-plan.md` sequences every open item here — plus the test-machinery
@@ -770,7 +770,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **18 open**, 12 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **18 open**, 13 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -819,8 +819,9 @@ if and only if that branch is ever resumed.
 | R4.30 | open | a commit deferred beyond `write_window_ms` is still unobserved — the residual R4.29 does not close; needs an over-refusal measurement first |
 | R4.31 | fixed | an unrecognised `mode` fell through to LEARN — re-authored the flow and RE-FIRED its write; closed in 0.98.0 |
 | R4.32 | fixed | every failed replay returned an EMPTY `note` while the cause sat in the traces; closed in 0.98.0 |
-| R4.33 | open | the corpus row added to adjudicate R3.7 cannot fail for it — two independent ways, both measured in S11 |
+| R4.33 | fixed | the corpus row added to adjudicate R3.7 could not fail for it — closed in 0.101.0 by the `row-nested-icon` scenario |
 | R4.34 | open | a shared `aria-label` on a nested per-row container turns the row guard OFF → silent wrong-row bind; **HIGH**, inviolable #3 |
+| R4.35 | open | a heal on a ROW-GUARD refusal re-grounds to a byte-identical recipe and reports a repair that repairs nothing |
 
 
 **Scope.** The uncommitted `feat/shared-causal-attribution` work (would-be 0.76.0): extracting the
@@ -3487,7 +3488,7 @@ own audit. Check the siblings while there: `record()` refuses the same class wit
 non-terminal property.
 
 
-## R4.33 — OPEN. The drift-corpus row added to adjudicate R3.7 cannot fail for R3.7, in two independent ways
+## ✅ FIXED in 0.101.0 — R4.33. The drift-corpus row added to adjudicate R3.7 cannot fail for R3.7, in two independent ways
 
 *low (an instrument defect, not a product one), lens `bench`, no inviolable, measured in S11*
 
@@ -3537,6 +3538,81 @@ unchanged, and reads that as evidence the fix worked — or worse, as evidence a
 happen. It is the bench equivalent of a regression test that passes against the old code, which this
 register already treats as proving nothing. The allowlist variant is worse, because an entry that
 names a now-CLOSED finding as its reason reads as a leftover somebody forgot to remove.
+
+**FIXED in 0.101.0.** `row-nested-icon` is added as a SEPARATE scenario rather than an edit to its
+sibling: `row-nested-action` keeps measuring a labelled nested action list — a legitimate shape whose
+numbers stay comparable — and the new one carries the icon-only control AND the `id` on the `<tr>` that
+the divergence needs. `FIXTURES_VERSION` 1 → 2, deliberate re-baseline written up in
+`baselines/README.md` with what moved and why.
+
+**The instrument now shows R3.7's damage for the first time:** the scenario binds nothing on any row,
+including its pristine arm, and the survival curve's numerators are unchanged (20/24 → 20/27 at k1) —
+nothing that used to bind stopped binding, 14 rows that bind nothing were added. **12 of those 14 should
+move when R3.7 closes; the other two (`target_removed`, `target_replaced_crosstag`) carry
+`target_present=False` and must NEVER bind** — an earlier draft of this entry said "a block of 14",
+which would have made a correct fix look incomplete. The audit also verified the row can move at all, by
+simulating a fix: `bound_by` goes `{'none': 14}` → `{'css': 4, 'none': 9, 'role+name': 1}` and survival
+`0/3` → `k1 1/3, k3 2/3`. A corpus row that could not move would have been as useless as the one it
+replaces.
+
+**And it found something on its first run, which is the argument for fixing an instrument rather than
+working around it.** Three of its heal-eligible rows re-ground to a byte-identical recipe, so the heal
+reports a persisted repair that repairs nothing — filed as **R4.35**. No other corpus row has ever done
+that, because every other drift changes the page enough that the re-grounded spec differs.
+
+**The cost side, corrected after the audit refuted the first version of it.** There are 9 new
+`predicted_mismatches`, all on this scenario — but they DO NOT have one cause, and the claim that they
+would "disappear with R3.7" was wrong. Checked against the two committed baselines:
+`decoy_substring+strip_aria_label` already mismatches on four other scenarios and `reparent` on three,
+i.e. they are pre-existing `predict()` gaps that appear wherever those primitives appear and have
+nothing to do with the row guard. Under a simulated R3.7 fix the audit measured the list going 9 → 6,
+with a tenth appearing. **So per-row triage IS required when R3.7 closes, and the COUNT is not the
+signal** — the opposite of what this entry first said.
+
+## R4.35 — OPEN. A heal on a row the ROW GUARD refused re-grounds to a byte-identical recipe, reports a persisted repair, and repairs nothing
+
+*low, lens `bench`/`heal`, no inviolable (loud, and the run itself succeeds), measured in R4.33*
+
+**Where.** The recovery ladder's persist step, observed through `benchmarks/drift_bench.py`'s
+`recached` (`steps_hash(after) != steps_hash(before)`) against `heal_persisted`.
+
+**Mechanism.** Every drift in this corpus until now was a page change: the target is renamed, hidden,
+reparented, its role swapped. Re-grounding after one of those produces a spec that genuinely differs, so
+the re-cache moves the digest, the approval re-gates, and the repair survives to the next run. R3.7's
+refusal is not like that. The spec is perfectly good; what fails is a disagreement between two walks
+over it. So the heal re-grounds, gets the SAME spec back, re-caches it, and reports success — and the
+next replay refuses identically.
+
+**Measured** on `row-nested-icon` at 0.101.0, three rows (`sibling_removed`, `aria_hide`,
+`aria_hide+sibling_removed`): `heal_persisted=True`, `acts == golden == ['go','DONE']`, and
+`steps_hash_after == steps_hash_before`. The EQUALITY is the evidence and the value is deliberately not
+quoted — `steps_hash` folds `start_url`, the fixture server binds an ephemeral port, so the digest
+differs every run; a first draft published one as if it were a fact.
+
+Of the scenario's 12 heal-eligible rows, 11 persist a heal, 8 of those move the digest, and one
+(`reparent`) declines — so this is a property of the refusal's CAUSE and not of the scenario. (A first
+draft said "the other nine move the digest"; it is eight.)
+
+**A larger population is claimed and NOT verified here.** The audit measured that 7 of the persisted
+heals leave the next 0-LLM replay still refusing — i.e. by the criterion this entry actually cares about
+("the repair does not survive"), the population is 7 and not 3, and 4 of those 7 DO move the digest. That
+would mean the digest is the wrong proxy for the harm. It is recorded rather than adopted because it was
+not reproduced independently, and it needs a replay-after-heal experiment the bench does not currently
+run. **Do not quote the 7 until someone measures it.** What IS pinned is the 3, because those are the
+rows the `heal_invalidates_approval` invariant has to be told about.
+
+**What is NOT claimed.** This is not a trust defect and the `heal_invalidates_approval` invariant is not
+violated in spirit: the heal did not pick a different element — it picked the same one — so there is
+nothing for the approval gate to re-gate. The invariant's predicate (`all recovered rows moved the
+digest`) simply cannot express "the repair was a no-op", which is why the three rows are named in
+`KNOWN_NO_DIGEST_MOVE` rather than the predicate being loosened. `tests/test_drift_bench.py` pins that
+set by EQUALITY in both directions, so a row joining it needs a finding and a row leaving it — which is
+what closing R3.7 does — forces the entry to be deleted.
+
+**The consequence worth stating:** `MECHANISM heal` counts these three as recoveries, so the published
+heal rate is optimistic by exactly the population whose refusal cause is not in the spec. Whether the
+ladder should DECLINE a re-ground that changes nothing is a real question and is not settled here —
+declining it would make the row honest but would also mean a heal that reaches the goal reports failure.
 
 ## R4.34 — OPEN, HIGH, inviolable #3. A shared `aria-label` on a nested per-row container turns the row guard OFF, and a wrong-row bind then goes through silently
 

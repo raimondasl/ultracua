@@ -186,6 +186,30 @@ KNOWN_WRONG_BINDS = (
     ("anchor-link", "positional-css-retarget-tokenless"),
 )
 
+# Recovered rows whose repair does NOT move the recipe digest, so `heal_invalidates_approval` cannot
+# apply to them. Same discipline as `KNOWN_WRONG_BINDS`: named rows with a measured reason, never a
+# loosened predicate. Deleting an entry is what closing the finding looks like.
+#
+# ALL THREE ARE R4.35, AND ALL THREE ARE ON THE SCENARIO ADDED TO EXPOSE R3.7 — which is how they were
+# found. Measured: `heal_persisted=True`, `acts == golden == ['go','DONE']`, and `steps_hash_after ==
+# steps_hash_before`. The equality is the evidence; the VALUE is deliberately not quoted here, because
+# `steps_hash` folds `start_url` and the fixture server binds an ephemeral port, so the digest differs
+# every run. (An earlier draft published one, which is a per-run constant masquerading as a fact.)
+#
+# The heal re-grounded to a spec BYTE-IDENTICAL to the one that had just been refused, because R3.7's
+# refusal is not a property of the spec at all — it is a disagreement between two walks over a spec that
+# is perfectly good. So there is nothing for the approval gate to re-gate: the heal did not pick
+# something else, which is what the invariant exists to catch.
+#
+# Of this scenario's 12 heal-eligible rows, 11 persist a heal and 8 of those move the digest; one
+# (`reparent`) declines. So the effect is three rows, not twelve — the rest re-ground to a genuinely
+# different spec because their mutation changed the page.
+KNOWN_NO_DIGEST_MOVE = (
+    ("row-nested-icon", "sibling_removed"),
+    ("row-nested-icon", "aria_hide"),
+    ("row-nested-icon", "aria_hide+sibling_removed"),
+)
+
 
 # ---------------------------------------------------------------------------------------------------
 # Row construction
@@ -695,7 +719,9 @@ def _invariants(rec: dict, rows: list, replay: list, repair: list, rep_surv: lis
         "heal_eligible_nonempty": len([r for r in replay if r["outcome"] == "drifted" and r.get("target_present") is not False]) >= MIN_HEAL_ELIGIBLE,
         "provider_actually_fired": any(r["heal_attempted"] for r in repair),
         "heal_invalidates_approval": all(r["recached"] for r in repair
-                                         if r["outcome"] in ("healed", "replanned")),
+                                         if r["outcome"] in ("healed", "replanned")
+                                         and r["row_id"] not in
+                                         {f"{s}/{n}" for s, n in KNOWN_NO_DIGEST_MOVE}),
 
         # --- write safety, both directions (inviolable #3) ---
         "no_write_double_submit": rec["write_double_submits"] == 0,
