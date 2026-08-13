@@ -85,6 +85,47 @@ class FlowTool:
     #                                 destructiveHint, the [WRITE] description prefix, and the elicit-or-refuse path
 
 
+DIAGNOSTICS_TOOL = "ultracua_diagnostics"
+
+
+@dataclass(frozen=True)
+class SkippedFlow:
+    """One saved flow that is NOT advertised, and why (MCP-1)."""
+
+    spec_name: str
+    code: str                       # one of the codes below; QUIET_SKIPS says which are ordinary
+    detail: str                     # operator-facing, already carries the remedy where one exists
+
+
+# THE QUIET SET, ENUMERATED — and this direction is the whole point. `flow run-all`'s exit code and its
+# webhook each tested `status == "failed"`, so a third bucket satisfying neither went invisible in both
+# and a flow could leave the fleet with cron reporting green (R3.9/CLI-1). The rule that came out of it:
+# enumerate the outcomes that are ALLOWED to be quiet, never the ones that must be loud, so a skip class
+# added tomorrow is loud by default because nobody put it here.
+#
+# Quiet means "ordinary, needs nobody": a flow that was never learned or approved is a normal
+# intermediate state, and a write withheld without `--expose-writes` is the default-deny doing its job.
+# Everything else means a human has something to fix.
+# NOT IN HERE, DELIBERATELY: `recipe_unreadable` and `learn_refused`. Both arrive with `cached=False`
+# and the first draft mapped them onto `not_learned`, which put a write-safety refusal in the quiet
+# bucket. An allowlist protects against a new CODE defaulting to quiet; it cannot protect against an
+# existing STATUS being mapped onto an existing quiet code, which is why `_tool_for` now branches on
+# `health.status` and this comment exists.
+QUIET_SKIPS = frozenset({"not_learned", "not_approved", "write_not_exposed"})
+
+
+@dataclass(frozen=True)
+class ToolListing:
+    """What `tools/list` advertised AND what it dropped — the pair, so the second cannot be forgotten."""
+
+    tools: "list[FlowTool]"
+    skipped: "list[SkippedFlow]"
+
+    @property
+    def needs_attention(self) -> "list[SkippedFlow]":
+        return [s for s in self.skipped if s.code not in QUIET_SKIPS]
+
+
 @dataclass
 class WriteConfirmRequest:
     """H2 stage 2: the SECRET-FREE payload handed to the `confirm` callback before a write fires — what the
@@ -140,17 +181,40 @@ def list_flow_tools(cache: Optional[FlowCache] = None, *, expose_writes: bool = 
     skipped (logged). Name collisions after sanitizing are skipped loudly (no silent shadowing)."""
     from .. import flows
 
+    return build_listing(cache, expose_writes=expose_writes).tools
+
+
+def build_listing(cache: Optional[FlowCache] = None, *, expose_writes: bool = False) -> ToolListing:
+    """`list_flow_tools`, plus WHAT IT DROPPED AND WHY — the pair that closes MCP-1.
+
+    Over stdio, stderr is not the protocol. Four paths dropped a flow with a `_log.warning`/`_log.error`
+    and the client just saw fewer tools, so an agent could not tell "that flow was retired" from "that
+    flow is broken and someone should look". Each individual skip is right — an unlisted tool beats a
+    listed tool that always fails — and the invisible AGGREGATE was the defect.
+
+    Returning the two together is what makes the second impossible to forget: `_tool_for` no longer has
+    a `None` to return, so a future drop path cannot be added without naming itself.
+    """
+    from .. import flows
+
     cache = cache or FlowCache()
     tools: list[FlowTool] = []
-    claimed: dict[str, str] = {}
+    skipped: list[SkippedFlow] = []
+    # RESERVED so a flow cannot shadow the diagnostics tool. Seeding `claimed` means a spec whose
+    # sanitized name collides takes the ordinary collision path and reports itself, rather than either
+    # silently winning (an agent calling "diagnostics" and replaying someone's flow) or being special-
+    # cased here with a second, parallel rule.
+    claimed: dict[str, str] = {DIAGNOSTICS_TOOL: "(reserved: the diagnostics tool)"}
     for spec_name in flows.list_specs():
         try:
             spec = flows.load_spec(spec_name)
         except Exception as exc:  # noqa: BLE001 — a malformed spec must not kill the tool list
             _log.warning("mcp: skipping unreadable spec %r: %s", spec_name, exc)
+            skipped.append(SkippedFlow(spec_name, "spec_unreadable",
+                                       f"the saved spec could not be read ({exc}); re-save or remove it"))
             continue
         try:
-            tool = _tool_for(spec, spec_name, cache, expose_writes=expose_writes, claimed=claimed)
+            verdict = _tool_for(spec, spec_name, cache, expose_writes=expose_writes, claimed=claimed)
         except CacheUnreadableError as exc:
             # This loop reads the cache TWICE — `health()` (which catches internally) and then
             # `_is_write_flow`, a second read at a second moment that a transient sharing violation can
@@ -158,15 +222,25 @@ def list_flow_tools(cache: Optional[FlowCache] = None, *, expose_writes: bool = 
             # DROP OUT of the advertised tools, never fall through to `_is_write_flow` returning False and
             # advertising an undeclared write as a read-only tool.
             _log.error("mcp: skipping %r — cached recipe unreadable: %s", spec_name, exc)
+            skipped.append(SkippedFlow(spec_name, "recipe_unreadable",
+                                       f"the cached recipe could not be read ({exc}); if this persists, "
+                                       f"re-learn the flow"))
             continue
-        if tool is not None:
-            tools.append(tool)
-    return tools
+        if isinstance(verdict, FlowTool):
+            tools.append(verdict)
+        else:
+            skipped.append(verdict)
+    return ToolListing(tools=tools, skipped=skipped)
 
 
 def _tool_for(spec, spec_name: str, cache: FlowCache, *, expose_writes: bool,
-              claimed: "dict[str, str]") -> "Optional[FlowTool]":
-    """Decide whether ONE spec is advertised, and as what. `None` = not advertised (reason logged).
+              claimed: "dict[str, str]") -> "FlowTool | SkippedFlow":
+    """Decide whether ONE spec is advertised, and as what — returning EITHER outcome, never `None`.
+
+    IT USED TO RETURN `None` FOR "not advertised", and that is what let MCP-1 exist: the reason lived
+    only in a log line, so four different drops were indistinguishable to any consumer and a fifth could
+    be added without anyone noticing. A `SkippedFlow` carries the reason out with the decision, so
+    dropping a flow WITHOUT saying why is no longer expressible here.
 
     Split out of `list_flow_tools` so every cache read on this path sits inside a single guarded call.
     The loop reads the cache TWICE — `health()` and then `_is_write_flow` — at two different moments, so
@@ -175,8 +249,32 @@ def _tool_for(spec, spec_name: str, cache: FlowCache, *, expose_writes: bool,
     from .. import flows
 
     health = flows.health(spec, cache=cache)
-    if not (health.approved and health.cached):  # only human-approved, learned flows
-        return None
+    # BRANCH ON THE STATUS, NOT ON `cached` — the first draft of this slice keyed on the boolean and threw
+    # the status away, which collapsed THREE different states into the quiet `not_learned`. Found by the
+    # pre-merge audit, and it is this register's most-repeated shape landing inside the fix for it:
+    # `flows.health` goes to deliberate effort to keep these apart, in words, at its own call site —
+    #
+    #     "it must not read as 'not learned' either, which is what silently flattening it to None
+    #      would do. Surface it as its own status."          (the unreadable branch)
+    #     "refused for firing a write nothing could account for, and it needs a human"   (R3.13)
+    #
+    # — and the consumer flattened them one layer up, reporting both as ordinary with the remedy "run
+    # `flow learn`". `QUIET_SKIPS` could not catch it: these are not new CODES defaulting to quiet, they
+    # are existing STATUSES mapped onto an existing quiet code, which an allowlist cannot see.
+    if health.status == "unreadable":
+        return SkippedFlow(spec_name, "recipe_unreadable",
+                           f"the cached recipe could not be read ({health.last_error}); if this persists, "
+                           f"re-learn the flow")
+    if health.status == "refused":
+        return SkippedFlow(spec_name, "learn_refused",
+                           f"REFUSED at learn time and never cached ({health.last_error}) — this needs a "
+                           f"human, not a re-run; see `flow status` and the refusal's own remedy")
+    if not health.cached:
+        return SkippedFlow(spec_name, "not_learned",
+                           "not learned yet — run `flow learn` or `flow record`")
+    if not health.approved:
+        return SkippedFlow(spec_name, "not_approved",
+                           "learned but not approved — review it and run `flow approve`")
     if health.approval_stale:
         # The approval bit is set but no longer binds the steps on disk (they were re-authored, or the
         # flow predates the binding). Pre-flight would refuse every call with `stale_approval`, so don't
@@ -184,7 +282,9 @@ def _tool_for(spec, spec_name: str, cache: FlowCache, *, expose_writes: bool,
         # fails. Logged, not silent: an operator needs to know why their tool vanished.
         _log.warning("mcp: skipping %r — approval no longer matches the flow's steps; review with "
                      "`flow inspect --name %s` and re-approve", spec_name, spec_name)
-        return None
+        return SkippedFlow(spec_name, "approval_stale",
+                           f"the approval no longer matches the steps on disk; review with "
+                           f"`flow inspect --name {spec_name}` and re-approve")
     is_write = _is_write_flow(spec, cache)
     if is_write:
         # A write is exposed ONLY behind --expose-writes AND only if it's a DECLARED write with a confirm
@@ -192,12 +292,19 @@ def _tool_for(spec, spec_name: str, cache: FlowCache, *, expose_writes: bool,
         # can't verify it landed -> never exposed. A declared write missing a confirm would only ever
         # refuse at preflight, so don't advertise it either.
         if not (expose_writes and spec.mutate is not None and spec.mutate.has_confirm()):
-            return None
+            return SkippedFlow(
+                spec_name, "write_not_exposed",
+                "a WRITE flow: exposed only with --expose-writes, and only when declared with a confirm "
+                "check" if spec.mutate is not None else
+                "an UNDECLARED write (mutating steps, no `mutate` spec) is never exposed — its writes "
+                "cannot be verified; declare it with `flow set-mutate` or re-record it")
     tname = _tool_name(spec_name)
     if tname in claimed:
         _log.warning("mcp: tool name %r from spec %r collides with spec %r — skipping the later one",
                      tname, spec_name, claimed[tname])
-        return None
+        return SkippedFlow(spec_name, "name_collision",
+                           f"its tool name {tname!r} is already taken by {claimed[tname]!r}; rename one "
+                           f"of the flows")
     claimed[tname] = spec_name
     # H2 stage 3: a slotted flow becomes a PARAMETERIZED tool (inputSchema from its non-secret slots).
     # Secret slots resolve from $env, so they're omitted from the schema — note them in the description.
@@ -212,6 +319,26 @@ def _tool_for(spec, spec_name: str, cache: FlowCache, *, expose_writes: bool,
     return FlowTool(name=tname, spec_name=spec_name, description=desc, is_write=is_write,
                     output_schema=spec.extract_schema,
                     input_schema=slots_to_input_schema(spec.slots))
+
+
+def _diagnostics(cache: FlowCache, *, expose_writes: bool) -> "ToolOutcome":
+    """MCP-1's answer: report what `tools/list` did NOT advertise, and why.
+
+    Reports OBSERVATIONS, never a verdict about whether the fleet is healthy — the same shape as the
+    audit judge. `needs_attention` is derived from `QUIET_SKIPS`, so the classification lives in one
+    place and a skip code added later is "needs attention" until someone deliberately says otherwise.
+    """
+    listing = build_listing(cache, expose_writes=expose_writes)
+    attention = listing.needs_attention
+    return ToolOutcome(True, data={
+        "advertised": [t.name for t in listing.tools],
+        "not_advertised": [{"flow": s.spec_name, "code": s.code, "detail": s.detail,
+                            "needs_attention": s.code not in QUIET_SKIPS}
+                           for s in listing.skipped],
+        "counts": {"advertised": len(listing.tools), "not_advertised": len(listing.skipped),
+                   "needs_attention": len(attention)},
+        "expose_writes": expose_writes,
+    })
 
 
 async def call_flow_tool(
@@ -233,6 +360,11 @@ async def call_flow_tool(
     from .. import flows
 
     cache = cache or FlowCache()
+    if name == DIAGNOSTICS_TOOL:
+        # Answered from a FRESH listing on every call, which is the reason this is a tool rather than a
+        # line in the server's `instructions`: instructions are computed once at connect, and a flow whose
+        # approval goes stale mid-session would never appear in them.
+        return _diagnostics(cache, expose_writes=expose_writes)
     resolved = {t.name: t for t in list_flow_tools(cache, expose_writes=expose_writes)}.get(name)
     if resolved is None:
         return ToolOutcome(
@@ -378,6 +510,18 @@ def build_server(cache: Optional[FlowCache] = None, *, name: str = "ultracua", e
                     destructiveHint=(True if t.is_write else None),
                     idempotentHint=(False if t.is_write else None)),
             ))
+        # MCP-1. ALWAYS listed, including when nothing was dropped — a tool that appears only when
+        # something is wrong is one an agent has never seen and will not think to call. Its description
+        # says when to reach for it, because that is the only discovery mechanism a tool has.
+        out.append(mtypes.Tool(
+            name=DIAGNOSTICS_TOOL,
+            description=("Why is a flow missing from this tool list? Reports every saved ultracua flow "
+                         "that was NOT advertised and the reason (not learned, not approved, approval "
+                         "stale, unreadable, name collision, or a write withheld), so a shrunken list "
+                         "can be told apart from a healthy one. Read-only; touches no browser."),
+            inputSchema={"type": "object", "properties": {}, "additionalProperties": False},
+            annotations=mtypes.ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+        ))
         return out
 
     @server.call_tool()

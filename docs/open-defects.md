@@ -2223,6 +2223,24 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   running a command and reading a refusal each time, not an unattended `mode="auto"` loop firing
   invisibly. Revisit only with a remedy that does not depend on `record()` itself.
 
+* **R4.22 — OCCURRENCE 6 (0.99.0), on a slice that cannot have caused it, which is the useful part.**
+  `test_flows.py::test_mutate_flow_does_not_retry_write_after_auth_refresh` failed on
+  `Page.goto: net::ERR_NO_BUFFER_SPACE`; it passes standalone. Seventh unrelated test in six
+  occurrences, consistent with "whichever test happened to be running".
+
+  **Why this one is worth a line rather than a tally bump.** The slice it landed in (S10b) changes the
+  MCP server's tool LISTING and nothing else — no browser code, no page script, no session lifetime, no
+  request path. Occurrence 5 arrived with a plausible aggravator attached (the R4.29 drain holding
+  sessions open longer) and the A/B then exonerated it. Occurrence 6 arrives with no candidate at all.
+  Two occurrences in a row that resist a change-linked explanation is the strongest evidence yet that
+  this is environmental — a host-level burst, not something this codebase does.
+
+  That still is not a diagnosis, and the instrument to get one already exists
+  (`scripts/sample_resources.ps1`, with baselines in R4.24). What is missing is a capture at the moment
+  of failure on a LOCAL run: CI uploads its samples, a developer-host failure discards them. Wiring the
+  sampler into the local suite the way CI has it is the cheapest remaining step, and it is the one that
+  would turn occurrence 7 into evidence.
+
 * **R4.22 — OCCURRENCE 5 (0.96.0), and the first one a change could plausibly have aggravated.**
   `test_mark_provenance.py::test_every_freshly_marked_step_names_the_signal_that_marked_it` failed on
   `Page.goto: net::ERR_NO_BUFFER_SPACE`; the file passes standalone (10/10, 28 s). Same signature, same

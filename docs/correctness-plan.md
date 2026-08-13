@@ -375,13 +375,19 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   not add capability. Bundling it into a slice that already grew a critical is how the audit surface
   gets too large to aim.
 
-- **S10b. MCP-1 — tool-list shrinkage is invisible to the client.** Four skip paths (unreadable spec,
-  unreadable recipe, stale approval, name collision) each drop a tool with a stderr log and no
-  protocol-level signal, so an agent cannot tell "flow retired" from "flow broken". Decide the SURFACE
-  first (a diagnostic tool, an `instructions` line, or a structured field), then build; the register's
-  reporting rule applies — whatever is added must have an acknowledgement path, or it earns its `|| true`.
+- **S10b. MCP-1 — tool-list shrinkage is invisible to the client.** ✅ **DONE in 0.99.0.** The surface
+  was decided first, as this bullet required: a diagnostic tool over an `instructions` line, because
+  instructions are computed once at connect and go stale mid-session. The mechanism is the durable half —
+  `_tool_for` returns `FlowTool | SkippedFlow`, so a drop cannot happen without naming itself, and
+  `QUIET_SKIPS` is an allowlist so tomorrow's skip code is loud by default.
 
-## Phase 6 — Remaining register items + systemic holes
+  **The acknowledgement question this bullet raised answered itself:** the report is PULL-based, so there
+  is nothing to `|| true`. Nothing alerts; an agent or operator asks and gets an answer.
+
+  **And the audit found the fix committing the defect one layer up** — branching on `health.cached` while
+  discarding `health.status` put an R3.13 write refusal in the quiet bucket. The allowlist could not
+  catch it: an existing status mapped onto an existing quiet code is invisible to a per-code guard. That
+  is the limit of the enumerate-the-quiet-outcomes rule, and worth carrying forward.
 
 - **S11. R3.7** — `_ROW_OF_JS` does not mirror `anchorOf`'s walk; false refusal + phantom-drift
   accusation + heal-LLM burn on nested action lists. Adjudicated on the S1b-extended corpus.
