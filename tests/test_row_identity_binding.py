@@ -33,7 +33,7 @@ import threading
 import pytest
 from playwright.async_api import async_playwright
 
-from ultracua.locators import DESCRIBE_JS, LocatorSpec, resolve
+from ultracua.locators import DESCRIBE_JS, LocatorSpec, _ROW_OF_JS, resolve
 
 # Two pending orders. Each row carries a real identity (an id AND a form action), and both rows' controls
 # share the accessible name "Cancel" — the shape the 0.64.0 fix was written for.
@@ -202,3 +202,312 @@ async def test_a_non_row_anchor_is_untouched_by_the_guard() -> None:
             assert sink.get("row_mismatch") is None      # the guard never ran
         finally:
             await browser.close()
+
+
+# ============ S11 / R3.7 — STILL OPEN, and the obvious fix was BUILT and MEASURED WRONG ============
+#
+# `anchorOf` (capture) and `_ROW_OF_JS` (bind) walk the DOM twice, in two transcriptions, under a comment
+# asserting they mirror each other. They do not: `anchorOf` requires a row-like container to have
+# non-empty collapsed text before anchoring on it and otherwise keeps climbing, while `_ROW_OF_JS` stops
+# at the first row-like container unconditionally. A nested action list with an ICON-ONLY control makes
+# the two name DIFFERENT containers, so replay refuses a bind on a page that never drifted.
+#
+# THE FIX EVERYONE REACHES FOR — share one walk, give the bind side the same non-empty-text condition —
+# WAS WRITTEN, PASSED THE PARITY MATRIX BELOW, AND TURNED A CORRECT REFUSAL INTO A SILENT WRONG-ROW BIND.
+# Measured at the wire: `POST /cancel/7` for a step recorded against `/cancel/3`, `bound_by='role+name'`,
+# no `row_mismatch`, nothing logged. The reason is worth stating precisely, because it is not obvious and
+# three independent auditors each had to reproduce it before believing it:
+#
+#   Skipping a text-less row-like container makes the bind walk climb OUT of the bound element's own row
+#   into an ANCESTOR that contains it. `rowIdOf` then hands that ancestor an identity borrowed from a row
+#   nested inside it — deliberately, since its `taken` set skips anything the container `contains`, so a
+#   row's own link is not treated as evidence the value is shared. When the recorded row is the first
+#   identity-bearing row inside that ancestor, the ancestor's identity string EQUALS the recorded one and
+#   the guard compares equal for two different records.
+#
+# So PARITY IS NECESSARY AND NOT SUFFICIENT. "Capture and bind name the same row" is satisfied by a bind
+# walk that has stopped being a containment check at all. The invariant that actually matters is
+# CONTAINMENT — pinned by `test_a_bind_outside_the_recorded_record_is_refused_on_every_nesting_shape`
+# below, which is GREEN against main and RED against the attempted fix. It is the artifact this slice
+# exists to leave behind: whatever closes R3.7 has to keep it green.
+
+_SHELLS = {
+    "tr": ('<table><tbody>\n{rows}\n</tbody></table>',
+           '<tr id="order-{n}"><td>Acme {n}</td><td>{payload}</td></tr>'),
+    "li": ('<ul>\n{rows}\n</ul>',
+           '<li id="order-{n}"><span>Acme {n}</span>{payload}</li>'),
+    "role-listitem": ('<div role="list">\n{rows}\n</div>',
+                      '<div role="listitem" id="order-{n}"><span>Acme {n}</span>{payload}</div>'),
+}
+
+# How far the control sits from its row. `direct` is the shape every earlier test in this file used.
+_NESTINGS = {
+    "direct": "{ctrl}",
+    "nested-li": '<ul class="actions"><li>{ctrl}</li></ul>',
+    "nested-li-deep": '<div class="cell"><ul class="actions"><li>{ctrl}</li></ul></div>',
+}
+
+# `icon-only` is the whole point: its container's collapsed text is empty, which is what the two walks
+# disagree about. `text` is the control — it must keep working exactly as it does.
+_CONTROLS = {
+    "text": "<button>Cancel</button>",
+    "icon-only": '<button aria-label="Cancel"><svg width="8" height="8"></svg></button>',
+}
+
+
+def _matrix_page(shell: str, nesting: str, control: str) -> str:
+    wrap, row = _SHELLS[shell]
+    rows = "\n".join(
+        row.format(n=n, payload=_NESTINGS[nesting].format(
+            ctrl='<form method="post" action="/cancel/%d">%s</form>' % (n, _CONTROLS[control])))
+        for n in (3, 7))
+    return "<!doctype html><html><body>" + wrap.format(rows=rows) + "</body></html>"
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
+    "R3.7 — OPEN. Capture and bind name different rows whenever a text-less row-like container sits "
+    "between the control and its row: 6 of these 18 cells diverge, and replay then refuses a page that "
+    "never drifted. Kept STRICT so it XPASSes the moment someone makes the walks agree — at which point "
+    "the containment property below is what says whether they made it agree the RIGHT way. Parity alone "
+    "is satisfied by a bind walk that has stopped checking containment, which is exactly how the first "
+    "fix attempt passed this test while binding another customer's record."))
+async def test_capture_and_bind_name_the_same_row_on_every_nesting_shape() -> None:
+    """The divergence itself, enumerated rather than described.
+
+    Both halves of the report are load-bearing. A cell whose capture stops producing a row anchor stops
+    exercising the guard entirely, so it is a FAILURE here rather than a skip: a matrix that quietly
+    tests nothing is a shape this repo has shipped twice.
+    """
+    report: list[str] = []
+    diverged: list[str] = []
+    disabled: list[str] = []
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch()
+        try:
+            page = await (await browser.new_context()).new_page()
+            for shell in _SHELLS:
+                for nesting in _NESTINGS:
+                    for control in _CONTROLS:
+                        await page.set_content(_matrix_page(shell, nesting, control))
+                        await page.evaluate("() => document.querySelector('#order-3 button')"
+                                            ".setAttribute('data-ultracua-ref','r1')")
+                        spec = LocatorSpec(**await page.evaluate(DESCRIBE_JS, "r1"))
+                        got = await page.locator('[data-ultracua-ref="r1"]').evaluate(_ROW_OF_JS)
+                        cell = "%-14s %-15s %-10s" % (shell, nesting, control)
+                        if spec.anchor_source != "row" or not spec.anchor_id:
+                            disabled.append(cell)
+                            report.append("%s GUARD OFF source=%r id=%r"
+                                          % (cell, spec.anchor_source, spec.anchor_id))
+                            continue
+                        agree = got == spec.anchor_id
+                        report.append("%s capture=%-18r bind=%-18r %s"
+                                      % (cell, spec.anchor_id, got, "ok" if agree else "DIVERGES"))
+                        if not agree:
+                            diverged.append(cell)
+        finally:
+            await browser.close()
+    printed = "\n".join(report)
+    print(printed)
+    assert not disabled, "these cells no longer exercise the row guard at all:\n" + printed
+    assert not diverged, "capture and bind name DIFFERENT rows:\n" + printed
+
+
+# ==================== THE CONTAINMENT PROPERTY — the invariant the parity one is not ====================
+#
+# Every control carries `data-record`; the recorded one is always 3. The page is then drifted the way
+# `resolve`'s own docstring describes — the recorded row survives, its control does not — which is
+# precisely what makes a sibling's control uniquely matchable at Tier 1.
+
+_ICON = '<button aria-label="Cancel" data-record="%d"><svg width="8" height="8"></svg></button>'
+_TEXT = '<button data-record="%d">Cancel</button>'
+_CANCELLED = "<span>Cancelled</span>"
+
+# A customer row containing two SUBSCRIPTION rows. The recorded subscription carries the only
+# identity-bearing link, so the enclosing `<tr>` inherits that same identity string — this is the shape
+# the first fix attempt bound wrongly.
+_GROUPED = """<!doctype html><html><body><table><tbody>
+  <tr><td>Acme</td><td><ul>
+    <li><a href="/sub/3">Plan A</a><form method="post" action="/cancel/3">%s</form></li>
+    <li><form method="post" action="/cancel/7">%s</form></li>
+  </ul></td></tr>
+  <tr><td>Globex</td><td><ul>
+    <li><a href="/sub/9">Plan B</a><form method="post" action="/cancel/9">
+      <button aria-label="Remove"><svg/></button></form></li>
+  </ul></td></tr>
+</tbody></table></body></html>"""
+
+# A nested action list on flat rows — R3.7's own shape.
+_NESTED = """<!doctype html><html><body><table><tbody>
+  <tr id="order-3"><td>Acme</td><td><ul class="actions"><li>
+    <form method="post" action="/cancel/3">%s</form></li></ul></td></tr>
+  <tr id="order-7"><td>Globex</td><td><ul class="actions"><li>
+    <form method="post" action="/cancel/7">%s</form></li></ul></td></tr>
+</tbody></table></body></html>"""
+
+# The control shape: the control sits directly in the row.
+_FLAT = """<!doctype html><html><body><table><tbody>
+  <tr id="order-3"><td>Acme</td><td><form method="post" action="/cancel/3">%s</form></td></tr>
+  <tr id="order-7"><td>Globex</td><td><form method="post" action="/cancel/7">%s</form></td></tr>
+</tbody></table></body></html>"""
+
+# A GROUP list item wrapping the record items, with one shared endpoint and a per-record hidden field —
+# `rowIdOf`'s own comment calls this "the very common" server-rendered shape.
+_GROUP_HIDDEN = """<!doctype html><html><body><ul>
+  <li>Pending<ul>
+    <li><form method="post" action="/cancel">
+        <input type="hidden" name="rec" value="3">%s</form></li>
+    <li><form method="post" action="/cancel">
+        <input type="hidden" name="rec" value="7">%s</form></li>
+  </ul></li>
+</ul></body></html>"""
+
+_CONTAINMENT_SHAPES = [
+    ("grouped-rows/icon", _GROUPED, _ICON),
+    ("grouped-rows/text", _GROUPED, _TEXT),
+    ("nested-actions/icon", _NESTED, _ICON),
+    ("nested-actions/text", _NESTED, _TEXT),
+    ("flat-rows/icon", _FLAT, _ICON),
+    ("flat-rows/text", _FLAT, _TEXT),
+    ("group-hidden/icon", _GROUP_HIDDEN, _ICON),
+]
+
+
+async def test_a_bind_outside_the_recorded_record_is_refused_on_every_nesting_shape() -> None:
+    """THE property, and the one artifact of this slice that must outlive it.
+
+    For every shape: with the recorded control gone, `resolve` must refuse or bind a control belonging to
+    the SAME record. Binding a different record's control is the wrong-row write the guard exists to stop,
+    and it fires under the recorded row's Idempotency-Key, so the mutation gate cannot object — per-row
+    forms are structurally identical and the scope fingerprint matches byte-for-byte.
+
+    The pristine column is not decoration. A guard that refuses everything satisfies the safety half
+    completely, and that regression has actually shipped here before — so a shape count is asserted on it.
+    """
+    report: list[str] = []
+    wrong: list[str] = []
+    bound_pristine = 0
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch()
+        try:
+            page = await (await browser.new_context()).new_page()
+            for name, tpl, control in _CONTAINMENT_SHAPES:
+                await page.set_content(tpl % (control % 3, control % 7))
+                await page.evaluate("() => document.querySelector('[data-record=\"3\"]')"
+                                    ".setAttribute('data-ultracua-ref','r1')")
+                spec = LocatorSpec(**await page.evaluate(DESCRIBE_JS, "r1"))
+
+                pristine = await resolve(page, spec, unique=True, sink={})
+                pristine_rec = None if pristine is None else await pristine.evaluate(
+                    "(el) => el.getAttribute('data-record')")
+                if pristine_rec == "3":
+                    bound_pristine += 1
+
+                await page.set_content(tpl % (_CANCELLED, control % 7))
+                sink: dict = {}
+                loc = await resolve(page, spec, unique=True, sink=sink)
+                got = "REFUSED" if loc is None else "record " + str(
+                    await loc.evaluate("(el) => el.getAttribute('data-record')"))
+                ok = loc is None or got == "record 3"
+                if not ok:
+                    wrong.append(f"{name} -> {got}")
+                report.append("%-20s id=%-18r pristine=%-8s gone=%-10s by=%-12r %s"
+                              % (name, spec.anchor_id, pristine_rec, got,
+                                 sink.get("bound_by"), "ok" if ok else "*** WRONG RECORD ***"))
+        finally:
+            await browser.close()
+    printed = "\n".join(report)
+    print(printed)
+    assert not wrong, "bound a DIFFERENT record's control:\n" + printed
+    assert bound_pristine >= 3, (
+        f"only {bound_pristine} shapes bind the recorded control on an UNTOUCHED page, so the refusals "
+        f"above prove nothing — a guard that refuses everything passes the safety half:\n{printed}")
+
+
+# The end-to-end consequence of R3.7, on the exact shape it names. Per-row-unique control names so Tier 1
+# binds outright — the point is that resolution SUCCEEDS and the guard then throws the correct bind away.
+_NESTED_ICON = """<!doctype html><html><body><table><tbody>
+  <tr id="order-3"><td>Acme Corp</td><td><ul class="actions"><li>
+    <form method="post" action="/cancel/3">{c3}</form></li></ul></td></tr>
+  <tr id="order-7"><td>Globex</td><td><ul class="actions"><li>
+    <form method="post" action="/cancel/7">{c7}</form></li></ul></td></tr>
+</tbody></table></body></html>"""
+
+_UNIQUE_ICON = '<button aria-label="Cancel order %d"><svg width="8" height="8"></svg></button>'
+_NESTED_PRISTINE = _NESTED_ICON.format(c3=_UNIQUE_ICON % 3, c7=_UNIQUE_ICON % 7)
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
+    "R3.7 — OPEN. Learn succeeds (the learn loop actuates through `data-ultracua-ref` and never calls "
+    "`resolve`), the flow caches, and every replay afterwards refuses at the bind with `row_mismatch` — "
+    "accusing a pristine page of a drift that did not happen, and routing the step into the heal LLM."))
+async def test_a_nested_icon_only_control_binds_on_a_page_that_never_drifted() -> None:
+    spec = await _spec_of(_NESTED_PRISTINE, "#order-3")
+    assert (spec.anchor_source, spec.anchor_id) == ("row", "id:order-3"), spec
+
+    row, action, bound_by = await _bind(_NESTED_PRISTINE, spec)
+    assert (row, action) == ("order-3", "/cancel/3"), (row, action, bound_by)
+
+
+# Both controls share one accessible name, so removing the recorded row's control is exactly what makes
+# the sibling's uniquely matchable — R1's shape, on R3.7's markup.
+_SHARED_ICON = '<button aria-label="Cancel"><svg width="8" height="8"></svg></button>'
+_NESTED_SHARED = _NESTED_ICON.format(c3=_SHARED_ICON, c7=_SHARED_ICON)
+_NESTED_SHARED_GONE = _NESTED_ICON.format(c3="<span>Cancelled</span>", c7=_SHARED_ICON)
+
+
+async def test_a_nested_icon_only_bind_outside_the_recorded_row_is_still_refused() -> None:
+    """The direction that must NOT move, on R3.7's own markup — whatever eventually closes R3.7."""
+    spec = await _spec_of(_NESTED_SHARED, "#order-3")
+    assert spec.anchor_source == "row" and spec.anchor_id, spec
+
+    row, action, bound_by = await _bind(_NESTED_SHARED_GONE, spec)
+    assert row is None, f"bound row {row!r} (action {action!r}) via {bound_by!r}"
+    assert bound_by == "none"
+
+
+# ==================== R4.34, OPEN: a labelled nested container turns the guard OFF ====================
+#
+# Found by the S11 matrix, and it is R3.7's root cause pointed the other way. `anchorOf` checks
+# aria-label BEFORE row-ness at every hop, so a nested per-row action container carrying a
+# design-system label — `<li aria-label="Row actions">`, `"Item actions"`, `"More options"` — makes the
+# capture return `source='label'` at the INNER container and never reach the row. The guard is scoped to
+# `anchor_source == "row"`, so it silently does not run, and `anchor_id` is not even captured.
+#
+# The exemption itself is deliberate and documented in `_resolve`: a renamed SECTION heading is cosmetic
+# drift the resolver must survive. What was never considered is that the same exemption reaches ROWS
+# through a nested container — the sibling-guard shape this codebase keeps re-finding.
+#
+# This is strictly worse than R3.7: R3.7 fails LOUD (a false refusal), this one fails WRONG. Measured
+# against 0.99.0 and 0.100.0 — `POST /cancel/7` where `/cancel/3` was recorded, `bound_by='role+name'`,
+# no `row_mismatch`, nothing logged. On a write flow that is inviolable #3 under the recorded row's
+# Idempotency-Key, and the mutation gate cannot object because per-row forms are structurally identical.
+#
+# NOT fixed here on purpose. The candidate remedy — capture `anchor_id` from the enclosing row whatever
+# the anchor source, and scope the guard on `anchor_id` alone — changes what capture MEANS, invalidates
+# no cached spec but re-arms the guard on a population that has never had it, and is exactly the kind of
+# resolver trade `drift_bench` exists to adjudicate. S11 fixes one walk; this gets its own slice and its
+# own audit.
+_LABELLED_NEST = """<!doctype html><html><body><table><tbody>
+  <tr id="order-3"><td>Acme Corp</td><td><ul class="actions"><li aria-label="Row actions">
+    <form method="post" action="/cancel/3">{c3}</form></li></ul></td></tr>
+  <tr id="order-7"><td>Globex</td><td><ul class="actions"><li aria-label="Row actions">
+    <form method="post" action="/cancel/7"><button>Cancel</button></form></li></ul></td></tr>
+</tbody></table></body></html>"""
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
+    "R4.34 — OPEN. A shared aria-label on the nested per-row action container makes capture anchor on it "
+    "with source='label', so the row guard never runs and a wrong-row bind goes through silently. Not a "
+    "false refusal like R3.7 but a wrong ACT, which on a write flow is inviolable #3. The fix changes "
+    "what `anchor_id` is captured for and must be adjudicated on drift_bench, so it gets its own slice."))
+async def test_a_labelled_nested_container_must_not_disable_the_row_guard() -> None:
+    """Kept STRICT so that whoever re-arms the guard on label anchors finds this XPASSing and has to
+    close R4.34 rather than discover the pin later."""
+    spec = await _spec_of(_LABELLED_NEST.format(c3="<button>Cancel</button>"), "#order-3")
+    assert spec.anchor_source == "label", spec        # the premise: capture never reached the row
+
+    row, action, bound_by = await _bind(
+        _LABELLED_NEST.format(c3="<span>Cancelled</span>"), spec)
+    assert row is None, (
+        f"bound row {row!r} (action {action!r}) via {bound_by!r} — the recorded row was order-3, "
+        f"and nothing refused")

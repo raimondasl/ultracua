@@ -7,7 +7,7 @@ failing LOUD on drift.**
 
 **[docs/open-defects.md](docs/open-defects.md) — the standing defect register.** FOUR rounds. Rounds 1–2
 (30 findings) are fixed; **round 3 found 11 more in the 387 lines those fixes added, 1 critical, and
-refuted NONE of them** (**3 open** at 0.95.0 — R3.2, R3.7, R3.12; the count is asserted by
+refuted NONE of them** (**3 open** at 0.100.0 — R3.2, R3.7, R3.12; the count is asserted by
 `tests/test_register_count.py`, which caught this very line going stale inside the slice that wrote it —
 R3.6 closed after the number was typed); round 4 was a pre-merge audit that PARKED a change rather than
 ship it. Two are regressions the fixes introduced. Defect density in fix code measured ~3x
@@ -16,7 +16,12 @@ findings are the same shape as the finding they were fixing, one level down. Whe
 change the shape so the invariant is enforced ONCE rather than adding another per-branch test.
 
 **Two of round 3 were answered that way in 0.73.0** (R3.1, R3.4): two transcriptions of a JS snippet
-became one, and a return type that could only say "absent" learned to say "unreadable". **A third
+became one, and a return type that could only say "absent" learned to say "unreadable". **A third one
+resisted it: R3.7's obvious fix — make the second transcription of the surrounding WALK agree with the
+first — was built in 0.100.0, passed its own 18-cell parity matrix, and turned a correct refusal into a
+silent wrong-row bind.** Parity is necessary and not sufficient; the guard's real question is
+CONTAINMENT, and two containers can produce the same identity string. Reverted, measured, and pinned by
+a containment property that is green on main. **A fourth
 (R3.2, write attribution) has now defeated three attempts** — 0.73.0's drain (reverted), 0.74.0's first
 refusal draft (over-refused), and a 0.76.0 causal-attribution branch that was green and still wrong
 (**parked**, see `docs/parked/README.md`). Read that history before touching attribution: it rules out
@@ -32,12 +37,20 @@ gets strengthened before it is relied on; a hole-widener never lands before its 
 ad hoc re-creates orderings the plan exists to prevent. `docs/correctness-survey.md` is the 58-item
 inventory it must dispose of.
 
-**Audit the fix, not just the code it fixes.** Both the reverted 0.73.0 redesign (754 tests green,
-`drift_bench` clean, every regression test verified RED against pre-fix source) and the parked 0.76.0
-branch (785 tests, same clean bench) were critically wrong. **Green is not evidence in this codebase.**
+**Audit the fix, not just the code it fixes.** The reverted 0.73.0 redesign (754 tests green,
+`drift_bench` clean, every regression test verified RED against pre-fix source), the parked 0.76.0
+branch (785 tests, same clean bench), and 0.100.0's R3.7 attempt (its own 18-cell property matrix green,
+bench invariants all holding) were each critically wrong. **Green is not evidence in this codebase.**
 Four rounds running, fix code has been the defect source, and the only instrument that has ever caught
-it is an adversarial pass aimed squarely at the new code — three for three. Run one before you open the
+it is an adversarial pass aimed squarely at the new code — four for four. Run one before you open the
 PR, not one release later.
+
+Two things about HOW to run it, both learned by getting them wrong. Point it at a **committed** branch in
+an **isolated worktree**: an auditor that can edit the tree it is auditing will revert the file under
+test to prove a point and silently invalidate whatever suite run you have in flight. And **reproduce its
+findings yourself before acting on one** — the first S11 audit's critical was real, but its end-to-end
+arm depended on a page detail the finding did not state, and only a hand-written repro showed which part
+was load-bearing.
 
 ## The three inviolables
 

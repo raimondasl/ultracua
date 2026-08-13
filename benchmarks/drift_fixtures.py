@@ -344,11 +344,22 @@ POSITIONAL_PAGE = (
 
 
 def _nested_action_rows() -> str:
-    """The control sits inside a NESTED action list — `tr > td > ul.actions > li > a` — and the inner
-    `li` has empty collapsed text apart from the control itself. `anchorOf` skips a row-like container
-    whose collapsed text is empty and keeps climbing to the `tr`; `_ROW_OF_JS` stops at the first `li`
-    unconditionally, so capture and bind can name DIFFERENT containers and the guard refuses a page that
-    never drifted (R3.7, slice S9)."""
+    """The control sits inside a NESTED action list — `tr > td > ul.actions > li > a`.
+
+    THIS ROW DOES NOT EXERCISE R3.7, despite having been added for it, and the claim it used to make here
+    was false in two independent ways (R4.33, measured in S11):
+
+      * the control carries VISIBLE TEXT, so the inner `<li>`'s collapsed text is "Details", not empty —
+        `anchorOf` anchors on the `<li>` exactly as the bind walk did, and the two never disagreed;
+      * even icon-only, the row's only identity is the `href` of the link INSIDE that `<li>`, so both
+        containers still produce the same string.
+
+    Measured: with the shipped markup the scenario's numbers are byte-identical with and without S11's
+    attempted fix. A faithful version needs an icon-only control AND an identity the outer row has and the inner
+    one does not (an `id` on the `<tr>`); that shape refuses 14/14 rows against main. Building it
+    properly needs a deliberate re-baseline and a triage of the prediction model against an
+    aria-label-only target, which is its own slice — see R4.33. What this row does measure, honestly, is
+    a nested action list whose control is labelled: a legitimate shape, just not that one."""
     out = []
     for i in range(1, 13):
         oracle, href, aria = _row_target(i)
@@ -651,10 +662,10 @@ SCENARIOS: tuple = (
         "golden": ["go", "DONE"], "source": "generated",
     },
     {
-        # R3.7 / slice S9: the control sits in a nested icon-list, so `anchorOf` (which skips a row-like
-        # container with empty collapsed text) and `_ROW_OF_JS` (which stops at the first `li`) can name
-        # DIFFERENT containers. The symptom is a refusal on a page that never drifted, which shows up
-        # here as lost survival on the PRISTINE arm — the one place a false refusal cannot hide.
+        # A nested action list — `tr > td > ul.actions > li > a` — with a LABELLED control. Added for
+        # R3.7 and measured in S11 not to reach it: see `_nested_action_rows` and R4.33. R3.7's own
+        # regression cover is the parity property in tests/test_row_identity_binding.py, which asserts
+        # capture and bind name the same row over 18 shapes.
         "name": "row-nested-action", "path": "/nested-action",
         "goal": "open the third widget's details",
         "target_sel": '[data-oracle="go"]',
