@@ -11,7 +11,7 @@ by applying this file's own sibling rule while redesigning R3.2; it is recorded 
 CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch was **PARKED, not
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
-The round-4 series has since grown to R4.35 as later slices filed against it: **18 open**, 13 fixed,
+The round-4 series has since grown to R4.36 as later slices filed against it: **19 open**, 13 fixed,
 4 parked, indexed and token-checked in the R4 STATUS INDEX at the top of that section.
 
 **THE PLAN.** `docs/correctness-plan.md` sequences every open item here — plus the test-machinery
@@ -770,7 +770,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **18 open**, 13 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **19 open**, 13 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -808,7 +808,7 @@ if and only if that branch is ever resumed.
 | R4.19 | open | `_reset_learn_baselines` clears shape/contracts but not `read_pin` |
 | R4.20 | fixed | seven durable renames, one retry — closed in 0.95.0 (S10) by one shared `fsio` helper |
 | R4.21 | open | `record()`'s refusal stays non-terminal — deliberate, but each retry re-fires the write |
-| R4.22 | open | Windows `ERR_NO_BUFFER_SPACE`, 4 occurrences, undiagnosed |
+| R4.22 | open | Windows `ERR_NO_BUFFER_SPACE`, **7 occurrences**, undiagnosed — occurrence 7 is the first with resource samples |
 | R4.23 | open | `test_flows_dry_run_holds_a_real_write_flow` failed once under load, undiagnosed |
 | R4.24 | open | a localhost round-trip stalled past the 5 s budget; ships unmitigated, 2 occurrences |
 | R4.25 | fixed | the load-dependent "cluster of three" was one defect + one bad test — assertion fixed in 0.88.0 |
@@ -822,6 +822,7 @@ if and only if that branch is ever resumed.
 | R4.33 | fixed | the corpus row added to adjudicate R3.7 could not fail for it — closed in 0.101.0 by the `row-nested-icon` scenario |
 | R4.34 | open | a shared `aria-label` on a nested per-row container turns the row guard OFF → silent wrong-row bind; **HIGH**, inviolable #3 |
 | R4.35 | open | a heal on a ROW-GUARD refusal re-grounds to a byte-identical recipe and reports a repair that repairs nothing |
+| R4.36 | open | a load-dependent write-refusal MISS: `record()` cached an autosave write flow that must be refused; **inviolable #3** |
 
 
 **Scope.** The uncommitted `feat/shared-causal-attribution` work (would-be 0.76.0): extracting the
@@ -2297,6 +2298,53 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   running a command and reading a refusal each time, not an unattended `mode="auto"` loop firing
   invisibly. Revisit only with a remedy that does not depend on `record()` itself.
 
+* **R4.22 — OCCURRENCE 7 (0.101.0, PR #152, run 31677764463, windows 1/2). THE FIRST ONE WITH RESOURCE
+  SAMPLES COVERING THE MOMENT OF FAILURE**, which is what occurrence 6 said would turn this into
+  evidence. It does — mostly by REFUTING things, which is worth more than another tally bump.
+
+  `test_audit.py::test_audit_quarantine_refuses_future_runs_and_release_clears` failed on
+  `Page.goto: net::ERR_NO_BUFFER_SPACE at http://127.0.0.1:50174/page1.html` at 07:41:32. Eighth distinct
+  test in seven occurrences, still consistent with "whichever test happened to be running".
+
+  **What the sampler measured on that runner** (`scripts/sample_resources.ps1`, ~7–9 s cadence, 119
+  samples over 14 min; the failure sample is the last one at or before 07:41:32):
+
+  | | at failure | run min | run max | verdict |
+  |---|---|---|---|---|
+  | `time_wait` | 186 | 25 | 359 | **refutes port exhaustion** — the ephemeral range is ~16k |
+  | `free_mb` | 12,935 | 12,838 | 13,535 | **refutes memory pressure** |
+  | `handles` | 51,680 | 47,508 | 55,644 | the peak was NOT at the failure |
+  | `processes` | 151 | 140 | 163 | flat |
+  | `nonpaged_pool_mb` | **207.0** | 171.2 | **207.1** | at its run maximum, risen 21% monotonically |
+  | `paged_pool_mb` | 265.2 | 168.5 | 299.5 | rising steadily |
+
+  **The one correlate is the nonpaged pool**, which is also the mechanism `ERR_NO_BUFFER_SPACE`
+  classically indicates on Windows (a socket-buffer allocation failing, not an address running out). The
+  two hypotheses this file has carried longest — TIME_WAIT/ephemeral-port exhaustion and handle
+  exhaustion — are contradicted by the numbers at the moment it happened.
+
+  **State the limit as loudly as the lead.** This is ONE sample from a ~7 s cadence, so a transient spike
+  between samples is entirely possible and would not appear here; a monotone rise ending at the maximum
+  is what you would also see if the pool simply grows with the run and the failure landed near the end.
+  Correlation at n=1 is a direction to look, not a cause. What would settle it is a sample cadence fine
+  enough to bracket the failure, or a nonpaged-pool watermark read at the moment `goto` raises.
+
+  **AND THE AGGRAVATOR HYPOTHESIS WAS EXONERATED, for the second time in three occurrences.** Unlike
+  occurrences 5 and 6, this one HAD a candidate: the slice adds 28 rows to `drift_bench`, and
+  `tests/test_drift_bench.py` and the failing `tests/test_audit.py` are both on shard 1, so the added
+  browser and socket churn lands on exactly the shard that failed. The re-run of the same commit passed
+  all five jobs. So a change that plainly increases load on the failing shard did not reproduce it —
+  which is the same shape as occurrence 5, where the R4.29 drain was the candidate and an A/B cleared it.
+
+  Three occurrences in a row now resist a change-linked explanation, and the one measurement we have
+  points at a host-level resource, not at anything this codebase does.
+
+* **R4.36 (filed here, and it is NOT R4.22) — the same CI run's OTHER shard failed a write-safety
+  refusal, with no resource signature at all.** Recorded as its own finding below; the two must not be
+  lumped together because their evidence points in opposite directions. Shard 2's samples at its failure
+  are calm (`time_wait` 130, `free_mb` 12,722, `nonpaged_pool_mb` 233.4 — mid-range on every axis), and
+  its failure is an ASSERTION, not a socket error.
+
 * **R4.22 — OCCURRENCE 6 (0.99.0), on a slice that cannot have caused it, which is the useful part.**
   `test_flows.py::test_mutate_flow_does_not_retry_write_after_auth_refresh` failed on
   `Page.goto: net::ERR_NO_BUFFER_SPACE`; it passes standalone. Seventh unrelated test in six
@@ -3650,3 +3698,58 @@ closed with it. The candidate remedy — capture `anchor_id` from the enclosing 
 source, and scope the guard on `anchor_id` alone — changes what capture MEANS and re-arms a guard on a
 population that has never had it, which is exactly the class of resolver trade `drift_bench` exists to
 adjudicate. It is not a comment-sized change and does not belong bundled into the slice that found it.
+
+
+## R4.36 — OPEN, HIGH, inviolable #3. Under CI load, `record()` CACHED an autosave write flow that the unattributed-write rule must refuse
+
+*high, lens `write-safety`, inviolable #3, observed once on CI, not yet reproduced locally*
+
+**Where.** `tests/test_record.py::test_record_write_flow_type_autosave_is_refused` (the assertion
+`res.cached is False and "single" in res.note`), guarding the refusal in `record()`'s write-attribution
+path.
+
+**What happened.** PR #152, run 31677764463, windows-latest 2/2, 07:42:59:
+
+    FAILED tests/test_record.py::test_record_write_flow_type_autosave_is_refused
+      - AssertionError: assert (True is False)
+
+`res.cached` was **True**. The fixture's autosave POST fires in a commitless turn — a `type` is not a
+commit — so the write is UNATTRIBUTED and the flow must be refused, uncached. Instead it cached. The
+test's own comment states the harm the refusal exists to prevent: *"never gating the benign Details
+click or caching the write ungated"*.
+
+**Why this is filed HIGH rather than as a flake.** A cached write flow is a flow an unattended
+`mode="auto"` loop will replay. If the write was cached ungated, or gated onto the wrong step, replay
+re-fires a commit — R3.2's harm class, and exactly what R4.26 was about on this same `record` path. The
+direction of the miss matters: an over-refusal is loud and recoverable, a MISSED refusal is silent and
+arms a replay.
+
+**What is NOT claimed.** The cached flow's contents were not inspected — the CI log carries the
+assertion, not the recipe — so it is not established whether the write was cached ungated, gated onto
+the benign step, or gated correctly with the note merely absent. That distinction decides the severity
+and it is the first thing a repro must answer.
+
+**Separated from R4.22 deliberately.** The same run's other shard failed with
+`net::ERR_NO_BUFFER_SPACE`, and it would be easy to file both as "CI was unhappy". The evidence points
+the other way: the resource samples for THIS shard are mid-range on every axis at the moment of failure
+(`time_wait` 130, `handles` 49,309, `free_mb` 12,722, `nonpaged_pool_mb` 233.4 against a run max of
+233.8), and the failure is an assertion rather than a socket error. Whatever this is, it is not the
+resource exhaustion R4.22 describes.
+
+**Load-dependent, and the family is known.** 10/10 passes standalone at ~1.6 s each on the developer
+host. The register has been here before: R4.25/R4.26 (0.87.0–0.88.0) found that a load-dependent
+write-refusal failure was NOT flakiness but the recorder crediting a deferred write to the next click,
+and the fix was measured at 0 failures in 25 loaded runs of the four load-dependent write-refusal tests.
+**This test is not one of those four.** So either the same class survives on a path the S17 work did not
+cover, or there is a second mechanism.
+
+**The rule this file already wrote for exactly this situation** (S17's bullet in the plan): do not
+de-flake it, do not add reruns, do not weaken the production bound. Reproduce under artificial load
+first — and note R4.26's harder lesson, that instrumenting the mechanism SUPPRESSED it (0 in 150 loaded
+runs with an in-page probe), so the answer was a deterministic harness built on demand rather than a
+heavier instrument and more patience.
+
+**Next step, in order.** (1) Reproduce under artificial load using the harness S17 built. (2) If it
+reproduces, capture the CACHED FLOW, not just the boolean — whether the write step is gated, and onto
+which step, is the whole severity question. (3) Only then decide whether this is R4.26's mechanism on an
+uncovered path.
