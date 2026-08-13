@@ -11,7 +11,7 @@ by applying this file's own sibling rule while redesigning R3.2; it is recorded 
 CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch was **PARKED, not
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
-The round-4 series has since grown to R4.32 as later slices filed against it: **16 open**, 12 fixed,
+The round-4 series has since grown to R4.34 as later slices filed against it: **18 open**, 12 fixed,
 4 parked, indexed and token-checked in the R4 STATUS INDEX at the top of that section.
 
 **THE PLAN.** `docs/correctness-plan.md` sequences every open item here — plus the test-machinery
@@ -770,7 +770,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **16 open**, 12 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **18 open**, 12 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -819,6 +819,8 @@ if and only if that branch is ever resumed.
 | R4.30 | open | a commit deferred beyond `write_window_ms` is still unobserved — the residual R4.29 does not close; needs an over-refusal measurement first |
 | R4.31 | fixed | an unrecognised `mode` fell through to LEARN — re-authored the flow and RE-FIRED its write; closed in 0.98.0 |
 | R4.32 | fixed | every failed replay returned an EMPTY `note` while the cause sat in the traces; closed in 0.98.0 |
+| R4.33 | open | the corpus row added to adjudicate R3.7 cannot fail for it — two independent ways, both measured in S11 |
+| R4.34 | open | a shared `aria-label` on a nested per-row container turns the row guard OFF → silent wrong-row bind; **HIGH**, inviolable #3 |
 
 
 **Scope.** The uncommitted `feat/shared-causal-attribution` work (would-be 0.76.0): extracting the
@@ -2061,6 +2063,77 @@ icon-only controls records fine and caches fine. Every subsequent replay refuses
 `bound_by='none'`, `row_mismatch="'id:order-3' -> href:/cancel/3"` — on the pristine, unmodified
 page. The failure is discovered only in production, and the sink message accuses the page of drift
 that did not happen.
+
+**⚠️ STILL OPEN at 0.100.0 — ATTEMPT 1 WAS BUILT, PASSED EVERYTHING IT WAS ASKED TO PASS, AND TURNED A
+CORRECT REFUSAL INTO A SILENT WRONG-ROW BIND. It was reverted, and the measurement is the deliverable.**
+
+Attempt 1 was the fix this register and `docs/correctness-survey.md` both prescribe, and it is the
+obvious one: extract `_ROWWALK_JS`, give the bind side the same non-empty-text condition capture uses, so
+the two walks cannot disagree. It reproduced the finding first (6 of 18 parity cells diverged against
+0.99.0; the end-to-end bind returned `None` with `bound_by='none'` on a pristine page), fixed all six,
+passed 26 tests in the row-guard files, and passed `drift_bench` with every invariant holding, no
+baseline regression and `writes double=0 suppressed=0 wrong_target=0`. The pre-merge audit found it
+anyway — three independent lenses, each with its own executed probe, plus a fourth reproduction written
+by hand afterwards.
+
+**Why it is wrong, stated precisely, because it is not obvious.** Skipping a text-less row-like container
+makes the bind walk climb OUT of the bound element's own row into an ANCESTOR that contains it. `rowIdOf`
+then hands that ancestor an identity borrowed from a row nested inside it — deliberately, since its
+`taken` set skips anything the container `contains`, so that a row's own link is not treated as evidence
+the value is shared (locators.py:163, :168). When the recorded row is the FIRST identity-bearing row
+inside that ancestor, the ancestor's identity string EQUALS the recorded one, and the guard compares
+equal for two different records.
+
+Measured end to end, on `resolve`'s own motivating drift (the recorded row survives, its control does
+not): post-attempt `resolve` binds subscription 7's control for a step recorded against subscription 3,
+`bound_by='role+name'`, `sink` carries no `row_mismatch`, nothing is logged, and at the wire the click
+POSTs `/cancel/7`. Pre-attempt code refuses the identical input. The mutation gate cannot object: per-row
+forms are structurally identical, so `scope_fingerprint` matched byte-for-byte (`69ecd918218fdef5` both
+sides). That is inviolable #3, introduced by the fix for a fail-loud finding.
+
+The audit also reported, and this one is recorded as its finding rather than as a measurement of ours —
+it was not independently reproduced here, and the code it describes is reverted — that the attempt moved
+the MIRROR direction too: a recorded row that renders icon-only at replay gets climbed past, so the guard
+refuses the CORRECT record. If true it means the attempt was wrong in both directions at once, which is
+worth knowing before attempt 2 rather than after.
+
+**PARITY IS NECESSARY AND NOT SUFFICIENT — this is the transferable part.** "Capture and bind name the
+same row" is satisfied by a bind walk that has stopped being a containment check at all, because two
+different containers can produce the same identity string. The guard's real question is CONTAINMENT: is
+the element I just bound inside the record that was recorded? The 18-cell parity matrix that attempt 1
+passed is measuring a proxy, and the proxy broke away from the thing it proxies.
+
+So the artifact this slice leaves is the CONTAINMENT property —
+`tests/test_row_identity_binding.py::test_a_bind_outside_the_recorded_record_is_refused_on_every_nesting_shape`
+— over seven nesting shapes, asserting that a bind is either refused or belongs to the recorded record,
+with a floor on how many shapes must still bind on an untouched page so that refusing everything cannot
+satisfy it. It is GREEN against main and RED against attempt 1, catching both wrong-record binds
+(`grouped-rows/icon`, `group-hidden/icon` — the latter being the shared-endpoint-plus-hidden-record-key
+shape `rowIdOf`'s own comment calls "very common"). **Whatever closes R3.7 has to keep it green**, and no
+fix should be believed because the parity matrix went green.
+
+**What the same measurement says about R3.7's own shape, which is wider than filed.** Across those seven
+shapes, main falsely refuses on four — and the causes are not all this finding. `nested-actions/text` and
+`grouped-rows/text` refuse because the row anchor is the control's own label, identical on every row, so
+Tier 3 is ambiguous; that is a different residual and must not be counted as R3.7. The cell where the
+cause is unambiguously this finding is `nested-actions/icon`, pinned as a strict xfail.
+
+**Direction for attempt 2, not a design.** Two sub-problems have to be solved together, and either alone
+reopens the other: (1) the id-bearing container must be chosen by the SAME rule on both sides — the
+candidate worth measuring is "the nearest enclosing row-like container that can prove an identity",
+which agrees by construction and never climbs past a row that could have objected; and (2) `rowIdOf`
+must stop borrowing an identity from a row-like DESCENDANT, or a text-less recorded row inside a
+borrowing ancestor rebuilds the same collision. Both change what a captured `anchor_id` MEANS for nested
+shapes, so this is a resolver trade and `drift_bench` adjudicates it — with the corpus row fixed first
+(R4.33), since today it cannot fail for this finding.
+
+**The corpus row named for this finding cannot fail for it — filed as R4.33.** `row-nested-action` was
+added by S1b to adjudicate R3.7 and measures a shape where the two walks agree, so the scenario's
+numbers are byte-identical with and without attempt 1. Building the faithful version needs an icon-only
+control AND a row identity the nested container does not share; measured in a scratch A/B, that shape
+refuses **14/14 rows** (`bound_by={'none': 14}`, survival 0 at every k, 12 rows routed into heal) against
+main, and recovers to 5 binds under attempt 1. It is not landed here: it needs a deliberate re-baseline
+and a triage of the prediction model against an aria-label-only target.
 
 ### ✅ FIXED in 0.79.0 — R3.8. The meta transient-retry fix does not hold on the path that actually writes: `_update_meta` re-saves the poisoned meta OVER the healthy sidecar, and unlike the code it replaced it leaves NO `.corrupt.*` backup — so one transient WinError 32 now destroys approval, contracts, shape, steps_hash and read_pin irrecoverably, while the log asserts "leaving the file untouched"
 
@@ -3412,3 +3485,92 @@ invocation refuse WITHOUT driving a browser. That is a real behaviour change —
 `health()`, the MCP tool list, `run_all`'s skip logic and the CLI — so it wants its own slice and its
 own audit. Check the siblings while there: `record()` refuses the same class with the same
 non-terminal property.
+
+
+## R4.33 — OPEN. The drift-corpus row added to adjudicate R3.7 cannot fail for R3.7, in two independent ways
+
+*low (an instrument defect, not a product one), lens `bench`, no inviolable, measured in S11*
+
+**Where.** `benchmarks/drift_fixtures.py` — `_nested_action_rows()` and the `row-nested-action` SCENARIO
+entry. Added by plan slice S1b, whose stated job was to give the bench fixtures for the shapes it is
+named as adjudicator for; the plan then scoped S11 as "adjudicated on the S1b-extended corpus".
+
+**Mechanism.** The row is a nested action list, `tr > td > ul.actions > li > a`, and its comment claims
+"the inner `li` has empty collapsed text apart from the control itself". That sentence contradicts
+itself: the control's own text IS the `li`'s collapsed text. The link renders "Details", so `anchorOf`
+anchors on the inner `<li>` exactly as the bind walk does and the two never disagree.
+
+Fixing only that is not enough, and this is the part worth carrying: with an icon-only control the row's
+sole identity is the `href` of the link INSIDE the nested `<li>`, so `rowIdOf` returns the same string
+for the `<li>` and the `<tr>` and the walks still agree. A faithful fixture needs BOTH an icon-only
+control AND an identity the outer row has that the inner container does not — an `id` on the `<tr>`,
+which is R3.7's own description (`id:order-3` at capture against `href:/cancel/3` at bind).
+
+**Measured, in a scratch A/B rather than asserted.** Shipped fixture: identical numbers under pre-S11
+and post-S11 `locators.py` (survival `k1:2/3 k2:2/3 k3:3/3 k4:1/3`, `bound_by={'css':5,'none':6,
+'role+name':1,'role+name~':2}` both arms). Corrected fixture, pre-S11 code: `bound_by={'none': 14}` —
+every row refuses, survival 0 at every k, 12 rows routed into heal. Post-S11: 5 binds, survival
+`k1:1/3 k2:1/3 k3:2/3 k4:1/3`. The first A/B is what makes this a finding; the second is what a working
+corpus row would have shown all along.
+
+**Not fixed in S11, deliberately** (and R3.7 itself did not land either, so the corpus row is now the
+FIRST thing its next attempt needs). Landing the corrected fixture bumps `FIXTURES_VERSION`, requires a
+deliberate re-baseline, and moves `predicted_agreement` for that scenario from 75% to 50% (3 mismatches
+to 6). **State that number with its caveat:** it was measured in ONE arm, with the corrected fixture AND
+attempt 1 both in place, so it does not separate the fixture's effect from the code's — it is evidence
+that triage is NEEDED, not a measurement of how much. The mechanism is clear enough to expect it: the
+prediction model's kill sets are calibrated on a target carrying BOTH visible text and an aria-label,
+and an icon-only target's name dies to `strip_aria_label` outright. Those mismatches would enter the
+baseline permanently and dilute the signal for every other row, so the shape wants triage in its own
+slice, not a bundled re-baseline. What S11 does instead is delete the false claim: the fixture
+now says what it actually measures and cites this finding.
+
+**A third site inherited the same wrong belief.** `tests/test_drift_bench.py`'s `_KNOWN_HEAL_DECLINES`
+allowlist carried `row-nested-action/reparent` with a comment attributing the decline to R3.7 and
+calling it a false refusal. It is neither: `reparent` moves the control out of the table entirely, so
+the element really is in no row and the containment guard correctly has nothing to confirm. Measured —
+the decline is unchanged by S11's fix (`declined=1` before and after), which is what an R3.7-caused
+decline could not be. The comment is corrected in S11; the entry stays, because the decline is real.
+
+**Failure.** Someone closes a row-guard finding, runs `drift_bench`, sees the scenario named for it
+unchanged, and reads that as evidence the fix worked — or worse, as evidence a regression did not
+happen. It is the bench equivalent of a regression test that passes against the old code, which this
+register already treats as proving nothing. The allowlist variant is worse, because an entry that
+names a now-CLOSED finding as its reason reads as a leftover somebody forgot to remove.
+
+## R4.34 — OPEN, HIGH, inviolable #3. A shared `aria-label` on a nested per-row container turns the row guard OFF, and a wrong-row bind then goes through silently
+
+*high, lens `rowguard`, inviolable #3, reproduced against 0.99.0 and 0.100.0*
+
+**Where.** `src/ultracua/locators.py` — `_climb`'s aria-label branch (it is checked BEFORE row-ness at
+every hop) in combination with `resolve`'s gate `if loc is None or not (spec.anchor_source == "row" and
+spec.anchor_id)`.
+
+**Mechanism.** The capture walk returns at the FIRST enclosing landmark that can anchor, checking
+aria-label, then heading, then row-ness. A nested per-row action container carrying a design-system
+label — `<li aria-label="Row actions">`, `"Item actions"`, `"More options"` — is a landmark with an
+aria-label, so capture returns `source='label'` at the INNER container and never reaches the row.
+`anchor_id` is therefore never captured, and the row guard, which is scoped to `anchor_source == "row"`,
+does not run at all. The exemption itself is deliberate and documented in `_resolve` — a renamed SECTION
+heading is cosmetic drift the resolver is required to survive — but nothing considered that the same
+exemption reaches ROWS through a nested container. This register's most-repeated shape: a guard that
+exists on one path and was never applied to a sibling that reaches the same mechanism.
+
+**This is strictly worse than R3.7 and is its root cause pointed the other way.** R3.7 fails LOUD — the
+two walks disagree and a correct bind is refused. Here the walk never reaches the row, so there is
+nothing to disagree with and the bind is simply unguarded.
+
+**Failure.** Two pending orders in an ordinary table, each row's actions in
+`<ul class="actions"><li aria-label="Row actions">`. Learn against order 3. Order 3 is later cancelled
+and renders a `Cancelled` badge instead of its button — R1's own shape. Replay binds order 7's Cancel
+via Tier 1 `role+name`, uniquely and outright, with no `row_mismatch` and nothing logged. Measured:
+`POST /cancel/7` where `/cancel/3` was recorded. The mutation gate cannot object, because per-row forms
+are structurally identical and `scope_fingerprint` matches byte-for-byte — so on a write flow this fires
+another customer's commit under the recorded row's Idempotency-Key.
+
+**Pinned, not fixed.** `tests/test_row_identity_binding.py` carries it as a strict xfail, so the day the
+guard is re-armed on this population the marker XPASSes and the suite goes red until this entry is
+closed with it. The candidate remedy — capture `anchor_id` from the enclosing row whatever the anchor
+source, and scope the guard on `anchor_id` alone — changes what capture MEANS and re-arms a guard on a
+population that has never had it, which is exactly the class of resolver trade `drift_bench` exists to
+adjudicate. It is not a comment-sized change and does not belong bundled into the slice that found it.

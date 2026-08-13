@@ -390,7 +390,68 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   is the limit of the enumerate-the-quiet-outcomes rule, and worth carrying forward.
 
 - **S11. R3.7** — `_ROW_OF_JS` does not mirror `anchorOf`'s walk; false refusal + phantom-drift
-  accusation + heal-LLM burn on nested action lists. Adjudicated on the S1b-extended corpus.
+  accusation + heal-LLM burn on nested action lists. ⚠️ **ATTEMPTED IN 0.100.0, MEASURED WRONG,
+  REVERTED. R3.7 stays OPEN; what shipped is the instrument that caught it.**
+
+  The attempt was the fix this plan, the register and the survey all prescribe, and it is the obvious
+  one: `_ROWWALK_JS` holding the landmark set, the normaliser, `rowIdOf` and the climb, with the bind
+  side given capture's non-empty-text condition so the walks cannot disagree. It reproduced the finding
+  first, fixed all 6 diverging cells, passed 26 tests in the row-guard files, and passed `drift_bench`
+  with every invariant holding and no baseline regression.
+
+  **It also turned a correct refusal into a silent wrong-row bind** — `POST /cancel/7` for a step
+  recorded against `/cancel/3`, `bound_by='role+name'`, no `row_mismatch`, nothing logged, and a
+  `scope_fingerprint` that matches byte-for-byte so the mutation gate cannot object. Inviolable #3,
+  introduced by the fix for a fail-loud finding. Three independent audit lenses found it, each with its
+  own probe; the mechanism is in R3.7's register entry.
+
+  **The transferable finding is that PARITY IS NOT THE INVARIANT.** "Capture and bind name the same row"
+  is satisfied by a bind walk that has stopped being a containment check, because two containers can
+  produce the same identity string. So the 18-cell parity matrix — which this plan would have accepted
+  as the property, and which the attempt passed — was measuring a proxy that broke away from the thing
+  it proxies. What ships instead is the CONTAINMENT property over seven nesting shapes: a bind is
+  refused or belongs to the recorded record, with a floor on how many shapes must still bind on an
+  untouched page so refusing everything cannot satisfy it. GREEN on main, RED against the attempt,
+  catching both wrong-record binds. Whatever closes R3.7 has to keep it green.
+
+  **This is why the plan's own rule is "audit the fix, not just the code it fixes".** Every gate this
+  plan specifies was green before the audit ran. The register's line that green is not evidence here now
+  has a fifth data point, and the first one where the defect was in a fix for a finding with no
+  inviolable at stake.
+
+  **Two further findings came out of building the instrument.**
+
+  *R4.33* — the corpus row S1b added to adjudicate R3.7 cannot fail for R3.7, in two independent ways
+  (the control carries text, so the nested container is not text-less; and even icon-only, the row's
+  only identity is the href inside that container, so both walks return the same string). Measured: the
+  shipped fixture reads identically with and without the attempted fix, while a faithful one refuses
+  14/14 rows against main. This bullet's own instruction — "adjudicated on the S1b-extended corpus" —
+  was therefore unsatisfiable as written, and the adjudication was done in a scratch A/B instead. The
+  corrected fixture is NOT landed: it needs a deliberate re-baseline plus a triage of the prediction
+  model against an aria-label-only target (75% → 50% agreement on that scenario — measured in one arm
+  with fixture and code changed together, so it sizes nothing; it says triage is needed), and bundling
+  that into this slice would enlarge the audit surface for no safety gain.
+
+  *R4.34* — the matrix's `GUARD OFF` branch turned up the same root cause pointing the other way, and
+  it is HIGH: a shared `aria-label` on a nested per-row container makes capture anchor on it with
+  `source='label'`, so the row guard never runs and a wrong-row bind goes through silently. R3.7 fails
+  loud; this fails WRONG, which on a write flow is inviolable #3 under the recorded row's
+  Idempotency-Key. Pinned as a strict xfail and given its own slice, because the remedy changes what
+  `anchor_id` is captured FOR and re-arms a guard on a population that has never had it — a resolver
+  trade, which means `drift_bench` adjudicates it.
+
+  Worth carrying forward: **the property matrix found the sibling, not the fix.** Enumerating the
+  shapes surfaced a cell whose disposition was "the guard is off here", and asking why that was true is
+  what produced R4.34. A bespoke test for the nested-icon case would have gone green and found nothing.
+
+  **S11 REMAINS OPEN and its next attempt is now sequenced, because the order matters.** R4.33 first —
+  the corpus row has to be able to fail for the finding before the bench can adjudicate anything about
+  it, and that is this plan's own "the net gets strengthened before it is relied on". Then attempt 2,
+  which must solve two things together or reopen the other: the id-bearing container chosen by the SAME
+  rule on both sides (candidate: the nearest enclosing row-like container that can prove an identity),
+  AND `rowIdOf` no longer borrowing an identity from a row-like DESCENDANT. Both change what a captured
+  `anchor_id` means for nested shapes, so it is a resolver trade, adjudicated on the bench, and it does
+  NOT bundle with R4.34 even though the two are adjacent.
 - **S12. R3.12** — reproduce first (register's own rule; it is code-reading-only today), then fix or
   refute the dryrun act-window mislabel.
 - **S13. Evals: port or delete (simplification).** Evals run nowhere, the runner cannot gate (H2), one

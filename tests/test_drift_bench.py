@@ -112,11 +112,18 @@ async def test_the_ladder_has_a_nonempty_heal_eligible_population() -> None:
 # discipline as the `silent_wrong` allowlist: a named, published exception — never a loosened threshold.
 # A row leaving this list is a fix; a row joining it needs a finding first.
 _KNOWN_HEAL_DECLINES = {
-    # R3.7 / plan slice S9. `_ROW_OF_JS` stops at the first `li` while `anchorOf` climbs past a
-    # row-like container with empty collapsed text, so on a nested icon-only action list capture and
-    # bind name DIFFERENT containers and the guard refuses a target that is still present. `reparent`
-    # is COSMETIC — the element is there — which is what makes this a false refusal rather than an
-    # honest one. Found by the corpus extension in slice S1b, on its first run.
+    # `reparent` moves the control into a fresh `<div>` appended to the nearest `section/main/form/body`
+    # — for this fixture, out of the table altogether. The element is still present, so the row is
+    # heal-eligible, but it is genuinely in NO row any more, so the containment guard has nothing to
+    # confirm and refuses. That refusal is the guard working, and the cost of a guard that answers
+    # "cannot confirm" with a refusal rather than a bind.
+    #
+    # THIS ENTRY USED TO BLAME R3.7, AND THAT ATTRIBUTION WAS WRONG (see R4.33). The divergence R3.7
+    # names cannot occur on this fixture at all — the row's only identity is the href of the link inside
+    # the nested container, so capture and bind produce the same string either way. The decline is
+    # therefore unchanged by S11's attempted fix, which is what the bench measured: the scenario's
+    # survival curve, `bound_by` histogram and ladder rate are byte-identical with and without it, so its
+    # single decline is too. A comment naming a finding is not evidence the finding is what happens here.
     "row-nested-action/reparent",
 }
 
