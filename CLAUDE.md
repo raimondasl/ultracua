@@ -147,15 +147,27 @@ mid-act, so both fields come from ONE source, the row is internally consistent, 
 Two independently-sourced facts is the standard R3.3 already set for `landed`; check that they really are
 two before pricing a defect on it. The same measurement exposed R4.39, a worse sibling one path over.
 
-**A green property is worth exactly what its STUB is worth — so test the stub.** S14's `no_llm` fixture
-said an LLM was "unreachable in BOTH directions", and on the path that mattered it was inert: `flows.py`
-does `from .providers import build_router`, so patching `ultracua.providers.build_router` never reached
-`ultracua.flows.build_router`. Nothing went red for several releases because every cell drove a module
-that imports no factory. Two rules fall out, both cheap: patch a factory on EVERY binding (derive the
-list from the live import graph, never hand-list it), and give the stub its own anti-vacuity test. The
-same slice found a cell that was green while exercising nothing at all — auth-refresh refuses early
-without a `storage_state`, so the path under test never ran. **If a cell claims to reach a mechanism,
-count the mechanism's calls and assert the count.**
+**A green property is worth exactly what its STUB is worth — so test the stub, and assume the stub is
+inert until measured.** S14's `no_llm` fixture said an LLM was "unreachable in BOTH directions" and was
+wrong twice over. First: `flows.py` does `from .providers import build_router`, so patching
+`ultracua.providers.build_router` never reached `ultracua.flows.build_router`. Fixing that by deriving
+the MODULES from the live import graph was not enough either, because the factory NAMES stayed
+hand-listed and the one that matters — `llm.build_client`, which the other two call — was missing: a
+replay was made to build **105 real Anthropic clients** while all 25 cells passed and the corpus cell
+printed "0 reached an LLM". A patch-list is only as good as its worst-known entry, so **close the class
+instead**: an AST scan now pins that SDK clients are constructed only inside the leaf adapters, which is
+what makes `build_client` provably the choke point.
+
+**And a cell that cannot fail is not a test — arm the violation and watch it go red.** Three cells in
+that same slice were green while exercising nothing: auth-refresh refuses early without a
+`storage_state` (so `_form_login` never ran), `dry_run` aborted at pre-flight for a step lacking
+`mutating=True` (so no browser opened), and a door called with a bad kwarg raised `TypeError`, which the
+harness accepted as a legitimate refusal. **If a cell claims to reach a mechanism, count the mechanism's
+calls and assert the count; and never let "any exception" stand in for "refused".**
+
+The third trap here is subtler and cost real time: `mode="replay"` nulls the provider at `flow.py:171`,
+so handing the engine a raising stub proves nothing on that path. The honest property was the STRUCTURAL
+one — assert the nulling holds — not a stub the engine never sees.
 
 **A test that ASSERTS the counterexample is worse than no test.** R3.12's first fix draft used a tuning
 constant as its candidate horizon, and a cell in its own matrix — `an expired tail is not a candidate` —

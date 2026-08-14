@@ -52,7 +52,12 @@ class _Exploding:
         raise LLMWasReached(f"a replay touched provider.{name} — inviolable #1")
 
 
-_FACTORIES = ("build_router", "get_provider")
+# `build_client` is the one that MATTERS, and leaving it out is what the pre-merge audit found: it is
+# what BOTH of the others call, so patching only them let a replay construct a real `AnthropicClient`
+# while all 25 cells stayed green (105 live clients built, and the corpus cell printed "0 reached an
+# LLM"). The modules are derived; these names are not, which is the residual leak — closed by
+# `test_llm_client_construction_has_a_single_choke_point` below rather than by a longer list.
+_FACTORIES = ("build_router", "get_provider", "build_client")
 
 
 def _provider_bindings() -> list:
@@ -77,6 +82,7 @@ def _provider_bindings() -> list:
     import ultracua.daemon.server  # noqa: F401
     import ultracua.flow  # noqa: F401
     import ultracua.flows  # noqa: F401
+    import ultracua.llm  # noqa: F401
     import ultracua.providers  # noqa: F401
 
     out = []
@@ -111,15 +117,83 @@ async def test_the_no_llm_fixture_actually_intercepts_every_binding(no_llm) -> N
     a green test that proves nothing, so the stub gets a test.
     """
     import ultracua.flows
+    import ultracua.llm
+    import ultracua.providers
 
     for mod, attr in _provider_bindings():
         fn = getattr(mod, attr)
         with pytest.raises(LLMWasReached):
             fn("anthropic")
-    # Named explicitly as well as swept: this is THE binding `replay()` calls (flows.py:2721), and the
-    # one the derived scan exists because of.
-    with pytest.raises(LLMWasReached):
-        ultracua.flows.build_router("anthropic")
+
+    # THE LOOP ABOVE CANNOT FAIL ON ITS OWN — it patches from `_provider_bindings()` and then asserts
+    # `_provider_bindings()` is patched, which is a tautology, and it is blind to any binding the scan
+    # never knew about. That blindness is not hypothetical: `llm.build_client` was missing from
+    # `_FACTORIES` and a replay was made to construct 105 real Anthropic clients with every cell green.
+    # So the bindings that have actually leaked are named here, by hand, where a shrunken `_FACTORIES`
+    # goes red instead of quietly covering less.
+    for label, fn in (("flows.build_router", ultracua.flows.build_router),        # flows.py:2721
+                      ("providers.build_router", ultracua.providers.build_router),
+                      ("llm.build_client", ultracua.llm.build_client)):           # what both call
+        try:
+            fn("anthropic")
+        except LLMWasReached:
+            continue
+        pytest.fail(f"{label} was NOT intercepted — an LLM is constructible during a replay and every "
+                    f"cell in this file would still pass")
+
+
+# The SDK constructors that actually open a client. Patching factory NAMES can only ever be as good as
+# the list of names; this closes the class instead — if every direct SDK construction lives in a known
+# leaf module, then `build_client` provably IS the choke point and patching it is sufficient.
+_SDK_CTORS = ("AsyncAnthropic", "AsyncOpenAI", "OpenAI", "GenerativeModel")
+_SDK_ALLOWED = ("src/ultracua/llm/anthropic.py", "src/ultracua/llm/openai.py",
+                "src/ultracua/llm/gemini.py", "src/ultracua/vision.py")
+
+
+async def test_llm_client_construction_has_a_single_choke_point() -> None:
+    """The residual the audit found, closed as a CLASS rather than by lengthening a list.
+
+    `_FACTORIES` is a hand-written list of names, and a hand-written list is exactly what leaked:
+    `build_client` was missing, so a replay could build a real `AnthropicClient` with every cell green.
+    Adding the name fixes the instance. This fixes the class — no module outside the LLM leaf adapters
+    may construct an SDK client directly, so all construction funnels through `llm.build_client`, which
+    the fixture does patch. A new backend added tomorrow either lands in an allowed leaf or fails here.
+    """
+    import ast
+
+    offenders = []
+    for py in sorted(Path("src/ultracua").rglob("*.py")):
+        rel = str(py).replace("\\", "/")
+        if rel in _SDK_ALLOWED:
+            continue
+        tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            nm = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else "")
+            if nm in _SDK_CTORS:
+                offenders.append(f"{rel}:{node.lineno} constructs {nm}")
+    # ANTI-VACUITY: the allowlisted leaves must actually contain the constructions, or this scan is
+    # looking for a pattern that does not exist and would pass however the code changed.
+    found_in_leaves = 0
+    for rel in _SDK_ALLOWED:
+        p = Path(rel)
+        if not p.exists():
+            continue
+        tree = ast.parse(p.read_text(encoding="utf-8"), filename=rel)
+        for node in ast.walk(tree):
+            fn = getattr(node, "func", None)
+            nm = getattr(fn, "id", "") or getattr(fn, "attr", "")
+            if isinstance(node, ast.Call) and nm in _SDK_CTORS:
+                found_in_leaves += 1
+    assert found_in_leaves >= 3, (
+        f"only {found_in_leaves} SDK construction(s) found in the allowed leaves — the scan is broken, "
+        f"so the assertion below would pass vacuously")
+    print(f"  {found_in_leaves} SDK constructions, all inside {len(_SDK_ALLOWED)} allowed leaf modules")
+    assert not offenders, (
+        "these construct an LLM SDK client OUTSIDE the leaf adapters, so `llm.build_client` is not the "
+        "choke point and patching it does not make an LLM unreachable:\n  " + "\n  ".join(offenders))
 
 
 _PAGE = ("<h1>Panel</h1>"
@@ -292,14 +366,14 @@ async def test_a_replay_with_no_cached_flow_says_so(tmp_path: Path, no_llm) -> N
 # mechanism". A property that visits one door is a per-path assertion wearing a property's clothes.
 
 
-def _seed_for(cache: FlowCache, spec, *, name: str = "Continue") -> str:
+def _seed_for(cache: FlowCache, spec, *, name: str = "Continue", mutating: bool = False) -> str:
     """A NAVIGATE-ONLY recipe for `spec` — no `extract`, so it is one of the shapes `replay`'s docstring
     calls 0-LLM. Seeding directly (rather than learning) keeps the cell about the door, not about a
     learn run that would legitimately use an LLM."""
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     cache.put(CachedFlow(
         key=key, goal=spec.goal, start_url=spec.start_url, created_ts=time.time(),
-        steps=[CachedStep(intent=f"click {name}", action="click",
+        steps=[CachedStep(intent=f"click {name}", action="click", mutating=mutating,
                           locator=LocatorSpec(role="button", name=name, tag="button"))]))
     return key
 
@@ -313,7 +387,15 @@ async def _door_replay(spec, cache):
 async def _door_run_batch(spec, cache):
     from ultracua.flows import run_batch
 
-    return await run_batch(spec, [{}], require_approved=False, cache=cache)
+    run = await run_batch(spec, [{}], require_approved=False, cache=cache)
+    # `run_batch` CATCHES per-row exceptions into `BatchRowResult`, so an LLMWasReached raised inside a
+    # row would never propagate and this door could not fail for the thing it exists to check. Measured
+    # by the pre-merge audit: replay and run_all propagate, run_batch swallows. Re-raise it.
+    for row in getattr(run, "rows", []) or []:
+        err = str(getattr(row, "error", "") or "")
+        if "inviolable #1" in err or "LLMWasReached" in err:
+            raise LLMWasReached(f"run_batch swallowed an LLM violation into a row result: {err}")
+    return run
 
 
 async def _door_run_all(spec, cache):
@@ -340,15 +422,38 @@ async def _door_preflight_keys(spec, cache):
     return preflight_keys(spec, None, cache=cache, require_approved=False)
 
 
-# Every public door that is documented as replaying a cached recipe. `audit_flows` is DELIBERATELY
-# absent and that is not an oversight: it is the H9 judge, its whole job is to ask an LLM, and it
-# "opens NO browser, never calls `replay`, and is never reached from the replay path" (its docstring).
-# Listing it here would assert the opposite of its contract. `learn`/`record` are absent for the same
-# reason in the other direction — they are the paths that MAY use an LLM.
+async def _door_run_cached(spec, cache):
+    from ultracua.cache import flow_key as _fk
+
+    _ = _fk  # the key is derived by run_cached from (goal, url, scope) — kept aligned with _seed_for
+    return await run_cached(url=spec.start_url, goal=spec.goal, provider=None, cache=cache,
+                            mode="replay", headless=True, scope=spec.scope)
+
+
+# Every public door onto a cached recipe. HOW MUCH EACH ONE ACTUALLY REPLAYS DIFFERS, and the pre-merge
+# audit measured it rather than letting the list imply parity — `run_cached` calls per door:
+#
+#   replay 1 | run_batch 1 | run_all 1 | run_cached 1        <- these genuinely replay
+#   canary 0 | canary_all 0                                  <- opens a browser, resolves ONE locator
+#   preflight_keys 0                                         <- sync, browserless, no page at all
+#
+# The three that do not replay are kept deliberately: they are public doors onto a cached recipe and a
+# future change could give them one, at which point this sweep is already watching. But the property's
+# enforcing power comes from the first four, and saying otherwise would overstate it.
+#
+# `run_cached` is listed EXPLICITLY because the coverage guard below cannot see it: it is re-exported
+# into `flows` (`flows.py:41`) so its `__module__` is `ultracua.flow`, and it is the raw engine surface
+# `daemon/server.py` drives — documented as deliberately bypassing everything `flows.replay` enforces.
+#
+# `audit_flows` is DELIBERATELY absent and that is not an oversight: it is the H9 judge, its whole job
+# is to ask an LLM, and it "opens NO browser, never calls `replay`, and is never reached from the replay
+# path" (its docstring). Listing it would assert the opposite of its contract. `learn`/`record` are
+# absent for the same reason in the other direction — they are the paths that MAY use an LLM.
 _DOORS = [
     ("flows.replay", _door_replay),
     ("flows.run_batch", _door_run_batch),
     ("flows.run_all", _door_run_all),
+    ("flow.run_cached", _door_run_cached),
     ("flows.canary", _door_canary),
     ("flows.canary_all", _door_canary_all),
     ("flows.preflight_keys", _door_preflight_keys),
@@ -383,6 +488,11 @@ async def test_no_replay_entry_point_can_reach_an_llm(
             print(f"  {label:24s} -> returned {type(out).__name__}: {str(out)[:90]}")
         except LLMWasReached:
             raise
+        except TypeError as exc:
+            # A HARNESS bug, not a refusal — and it would otherwise pass as one. Caught when the
+            # `run_cached` door was first added with a bad kwarg: the door raised TypeError, exercised
+            # nothing, and the cell went green. "Any exception is an acceptable outcome" is too wide.
+            pytest.fail(f"{label} was called incorrectly, so this cell exercised nothing: {exc}")
         except Exception as exc:  # noqa: BLE001 — a loud refusal is a fine outcome; an LLM call is not
             assert not isinstance(exc, LLMWasReached)
             assert str(exc), f"{label} failed with an EMPTY message (inviolable #2)"
@@ -410,6 +520,9 @@ async def test_the_door_list_covers_every_public_replay_verb(tmp_path: Path) -> 
         "serve_mcp": "a server loop, not a replay verb",
         "dry_run": "covered by its own cell below, which needs a write spec",
     }
+    # NOTE the limit of this guard, stated because the audit found it: the `__module__` filter below
+    # skips names RE-EXPORTED into `flows` (e.g. `run_cached`, whose `__module__` is `ultracua.flow`).
+    # Such a door can only be covered by being listed in `_DOORS` explicitly, which `run_cached` now is.
     covered = {label.split(".", 1)[1] for label, _ in _DOORS}
     missing, considered = [], []
     for name, fn in vars(flows_mod).items():
@@ -435,39 +548,79 @@ async def test_the_door_list_covers_every_public_replay_verb(tmp_path: Path) -> 
 
 async def test_dry_run_never_reaches_an_llm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_llm) -> None:
     """#1c, the WRITE door. `dry_run` replays a write flow with the arbiter armed; a write whose confirm
-    is text-based is one of the 0-LLM shapes, so nothing here may construct a provider either."""
+    is text-based is one of the 0-LLM shapes, so nothing here may construct a provider either.
+
+    THE FIRST DRAFT OF THIS CELL WAS VACUOUS AND GREEN, which the pre-merge audit measured: the seeded
+    step lacked `mutating=True`, so `dry_run` aborted at `_preflight_row` with `unkeyed_write` ("declared
+    a WRITE, but no recorded step is classified as mutating") and never opened a browser. Its only
+    assertion was `rep is not None`, which an aborted report satisfies. That is the same
+    green-while-exercising-nothing shape this slice credits itself with finding in the auth-refresh cell
+    — twice in one slice, which is why the premise is now COUNTED rather than assumed.
+    """
+    import ultracua.flows as flows_mod
     from ultracua.flows import FlowSpec, MutateSpec, dry_run, save_spec
 
     monkeypatch.setenv("ULTRACUA_HOME", str(tmp_path / "home"))
+    seen: dict = {"replays": 0}
+    # Patch the binding `flows.py` HOLDS (`from .flow import run_cached`, line 41) — not
+    # `ultracua.flow.run_cached`. Patching the source module leaves this one untouched, which is the
+    # very defect this slice fixed for `build_router`; the counter caught me repeating it here.
+    real = flows_mod.run_cached
+
+    async def _counting(*a, **kw):
+        seen["replays"] += 1
+        return await real(*a, **kw)
+
+    monkeypatch.setattr(flows_mod, "run_cached", _counting)
+
     httpd, base = _serve()
     cache = FlowCache(root=tmp_path / "c")
     try:
         spec = FlowSpec(name="panelw", start_url=f"{base}/", goal="work the panel", headless=True,
                         mutate=MutateSpec(confirm_text_contains="Panel"))
         save_spec(spec)
-        _seed_for(cache, spec)
+        _seed_for(cache, spec, mutating=True)      # without this the flow is refused before it replays
         rep = await dry_run(spec, cache=cache)
         assert rep is not None
+        assert rep.aborted != "unkeyed_write", (
+            f"premise lost: dry_run refused before replaying ({rep.aborted}: {rep.abort_detail})")
     finally:
         httpd.shutdown()
         httpd.server_close()
+    assert seen["replays"] >= 1, (
+        "premise lost: `dry_run` never reached `run_cached`, so this cell exercised no replay at all "
+        "and its 'no LLM' result is vacuous")
 
 
 # ==================== inviolable #1, ACROSS THE DRIFT CORPUS ====================
 
 
-async def test_no_corpus_row_can_reach_an_llm_in_replay_mode(capsys) -> None:
+async def test_no_corpus_row_can_reach_an_llm_in_replay_mode(capsys, no_llm) -> None:
     """#1d. The plan bullet's explicit ask, and the half that reaches the RECOVERY LADDER.
 
     The corpus is the only place in this repo where drift is produced systematically — and drift is
     what invokes the ladder (heal / suffix-replan / the drift gate), which H4 named as exactly where a
     stray provider call would hide. Every other cell in this file drives a hand-made fixture.
 
-    WHY THIS IS NOT `drift_bench` WITH AN EXTRA ASSERT. The bench's replay arm passes `provider=None`
-    (`drift_bench.py:492`), so `llm_calls == 0` there is close to tautological: with no provider object
-    in existence, a path that WANTED an LLM cannot call one, and the two outcomes that matter — "no
-    path asked" and "a path asked and silently skipped" — are indistinguishable. Handing those paths a
-    provider that RAISES is what separates them, which is why H4 specified a raising stub.
+    **WHAT THIS PROVES, CORRECTED AFTER THE PRE-MERGE AUDIT REFUTED THE FIRST VERSION.** The first
+    draft argued it beat `drift_bench` by handing the engine a provider that RAISES where the bench
+    passes `provider=None`. That is false, and the audit measured it: `flow.py:171` is
+    `heal_provider = provider if mode in ("auto", "repair") else None`, so in `mode="replay"` the
+    engine receives None whatever the caller passed. Reproduced directly —
+
+        mode=replay   -> _replay received provider of type ['NoneType']
+        mode=repair   -> _replay received provider of type ['_Exploding']
+
+    — so the raising stub was inert here and the cell was provider-identical to the bench, which is
+    exactly the tautology its own docstring claimed to escape.
+
+    So the claim is restated to what the sweep actually establishes, over 97 drifting rows:
+      1. no path CONSTRUCTS an LLM client — `no_llm` is now requested (the first draft did not take
+         the fixture at all, so construction was unpatched too), and `_FACTORIES` now includes
+         `build_client`, without which a real `AnthropicClient` could be built with every cell green;
+      2. `flow.py:171`'s nulling actually holds for every row, asserted directly below rather than
+         assumed — that structural fact is what makes replay 0-LLM, so it is the thing worth pinning;
+      3. `report.llm_calls` stays 0 across the corpus.
 
     ONLY the `replay` arm is swept. `repair` may legitimately call an LLM on a drifted row; asserting
     otherwise would go red for correct behaviour, the failure mode this file's docstring warns about.
@@ -488,6 +641,19 @@ async def test_no_corpus_row_can_reach_an_llm_in_replay_mode(capsys) -> None:
     srv = FixtureServer().start()
     reached: list = []
     ran = 0
+
+    # Pin the STRUCTURAL fact this property actually rests on (see the docstring): in mode="replay"
+    # the engine is handed no provider at all. If that ever changes, every row below silently starts
+    # relying on the stub instead — and the stub is the part that was measured inert.
+    import ultracua.flow as _flow_mod
+    real_replay = _flow_mod._replay
+    engine_saw: list = []
+
+    async def _spy(url, key, cached, cache, provider, *a, **kw):
+        engine_saw.append(type(provider).__name__)
+        return await real_replay(url, key, cached, cache, provider, *a, **kw)
+
+    _flow_mod._replay = _spy
     try:
         shared = await BrowserSession(headless=True).start()
         try:
@@ -506,6 +672,7 @@ async def test_no_corpus_row_can_reach_an_llm_in_replay_mode(capsys) -> None:
                     assert rep.success, f"{sc['name']}: pristine learn failed — its rows would prove nothing"
                     learned[sc["name"]] = root
 
+                engine_saw.clear()          # learn's verify-by-replay is not what is being pinned
                 for i, row in enumerate(rows):
                     sc = SCENARIOS_BY_NAME[row["scenario"]]
                     if sc["name"] not in learned:
@@ -528,14 +695,23 @@ async def test_no_corpus_row_can_reach_an_llm_in_replay_mode(capsys) -> None:
             await shared.close()
     finally:
         srv.stop()
+        _flow_mod._replay = real_replay
 
     with capsys.disabled():
-        print(f"\n  swept {ran}/{len(rows)} corpus rows in mode=replay with a raising provider; "
-              f"{len(reached)} reached an LLM")
-    assert ran >= 90, f"only {ran} rows actually ran — the sweep is not covering the corpus"
+        print(f"\n  swept {ran}/{len(rows)} corpus rows in mode=replay; {len(reached)} reached an LLM; "
+              f"engine was handed {sorted(set(engine_saw))} (construction blocked on "
+              f"{len(_provider_bindings())} bindings)")
+    # ORDER MATTERS, and the first draft got it wrong: with `ran >= 90` first, a real violation reported
+    # "only 62 rows actually ran" and never named the rows that reached an LLM. The finding goes first.
     assert not reached, (
         "these corpus rows reached an LLM during a mode='replay' run — inviolable #1:\n  " +
         "\n  ".join(f"{rid}: {why}" for rid, why in reached))
+    assert ran >= 90, f"only {ran} rows actually ran — the sweep is not covering the corpus"
+    # The structural fact (see the docstring): replay hands the engine NO provider. If this flips, the
+    # sweep silently starts depending on the stub, which was measured inert on this path.
+    assert set(engine_saw) == {"NoneType"}, (
+        f"mode='replay' handed the engine {sorted(set(engine_saw))} — `flow.py:171` used to null it, "
+        f"and every 0-LLM guarantee on this path rests on that")
 
 
 # ==================== inviolable #2, ACROSS EVERY FAILURE SHAPE ====================
@@ -552,6 +728,13 @@ def _failure_report_sites() -> list:
     AST rather than a regex, deliberately: S2's enforcement test was rebuilt this way after the regex
     version "was shown to be theatre". A regex for `success=False` also matches comments and prose, of
     which this codebase has a great deal on exactly this subject.
+
+    KNOWN EVASIONS, stated rather than implied away — the scan matches a literal `FlowReport(...)` call
+    with a constant `success=False`, so it would miss an aliased import, `FlowReport(**kw)`, a helper
+    factory, `dataclasses.replace`, a subclass, a non-constant `success=`, or a post-hoc
+    `rep.success = False`. The pre-merge audit verified that NONE of those shapes exists in `src/`
+    today, so the scan is complete against the current tree and would need extending the day one
+    appears. It is a floor, not a proof.
     """
     import ast
 
