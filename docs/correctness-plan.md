@@ -524,9 +524,60 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
 - **S13. Evals: port or delete (simplification).** Evals run nowhere, the runner cannot gate (H2), one
   grep-shaped check was red six releases (H3). Port load-bearing checks into pytest as behaviour;
   delete the rest and the runner. H6's ungated benchmarks get the same treatment: gate or delete.
-- **S14. Properties for inviolables #1 and #2 (H4).** #1: replay across the drift corpus with a
-  provider that raises on ANY call. #2: for every failure shape in the API map, a typed error or
-  nonempty note — never a bare False/log-only.
+- **S14. Properties for inviolables #1 and #2 (H4).** ✅ **DONE in 0.107.0 — but it had ALREADY PARTLY
+  LANDED, and nothing said so.** `tests/test_inviolable_properties.py` was written in `0ec0387` (~0.98.0)
+  and its docstring says "S14 / H4", yet this bullet was never marked, so the slice looked untouched.
+  That is the DOC-1 staleness this plan fixed once for the README, inside the plan itself — and it is why
+  the count guard in `tests/test_register_count.py` exists for the register but has no analogue here.
+
+  **What had landed was the SHAPE without the BREADTH.** It swept ONE hand-made fixture through ONE door
+  (`flow.run_cached`) and asserted #2 on TWO hand-picked failures. Both of this bullet's explicit asks —
+  "across the drift corpus" and "every failure shape" — and H4's own ("every replay-mode entry point")
+  were absent. A property that visits one path is a per-path assertion wearing a property's clothes, and
+  the register's standing pattern is that defects here live on the SIBLING path.
+
+  **Three things the breadth work found, none of which the green file could have told anyone:**
+
+  1. **The instrument was inert where it mattered most — TWICE, and the second one only the audit
+     caught.** `no_llm` claimed an LLM was "unreachable in BOTH directions", patching
+     `ultracua.providers.build_router`; `flows.py:47` binds the name at import, so measured,
+     `flows.build_router("anthropic")` ran the real code with the patch active. Deriving the MODULES
+     from the live import graph fixed that and was still not enough: the factory NAMES stayed
+     hand-listed and `llm.build_client` — which both others call — was missing. The audit armed it and
+     a replay built **105 real Anthropic clients** while all 25 cells passed and the corpus cell printed
+     "0 reached an LLM". Closed as a CLASS: an AST scan pins that SDK clients are constructed only in
+     the leaf adapters, making `build_client` provably the choke point.
+  2. **A reasonless failure report** at `flow.py:1019` — a bare `success=False` with no `note`, found by
+     an AST scan over every construction site rather than by another hand-picked cell. Believed
+     unreachable (`samples = max(1, samples)` guarantees the loop runs), so it was given a reason rather
+     than deleted on a reachability argument.
+  3. **THREE cells were green while exercising nothing**, one found here and two by the audit —
+     auth-refresh refuses early without a `storage_state` (so `_form_login` never ran); `dry_run`
+     aborted at pre-flight because the seeded step lacked `mutating=True` (so no browser opened, and its
+     only assertion was `rep is not None`, which an aborted report satisfies); and a door called with a
+     bad kwarg raised `TypeError`, which the harness accepted as a legitimate refusal. Each premise is now
+     COUNTED, and `TypeError` fails the cell instead of passing as a refusal.
+  4. **The corpus sweep's stated advantage over `drift_bench` did not exist.** It argued it beat the
+     bench by handing the engine a RAISING provider where the bench passes `provider=None`. But
+     `flow.py:171` is `heal_provider = provider if mode in ("auto", "repair") else None`, so in
+     `mode="replay"` the engine gets None whatever the caller passes — reproduced directly
+     (`replay -> ['NoneType']`, `repair -> ['_Exploding']`). The claim is restated to what the sweep
+     actually proves, and the STRUCTURAL fact (the nulling holds for all 97 rows) is now asserted
+     rather than assumed.
+
+  **What ships:** the derived provider-binding patch (now including `build_client`) plus an anti-vacuity
+  test on the STUB ITSELF and the choke-point scan above; a 7-door entry-point sweep — with the measured
+  note that only four of them (`replay`, `run_batch`, `run_all`, `run_cached`) actually replay, so the
+  list does not imply parity — plus a coverage guard that fails when a new public async verb in
+  `flows.py` is neither swept nor exempted with a reason; the auth-refresh recovery path; 97
+  drift-corpus rows in `mode=replay` (`per_k=1`, which drops only generated COSMETIC compositions and
+  keeps every scenario and every semantic/conflict/escalate/residual-hole row — printed by the test,
+  because a silent cap reads as full coverage); and #2 as two DERIVED properties (no failure report
+  without a reason; every typed error a distinct machine-readable code).
+
+  **The fix is verified the only way that counts: the violation was ARMED and the cells went red.** With
+  a replay constructing a real client, 10 cells fail — including the corpus sweep, `dry_run` and
+  `run_batch`. The audit measured **zero** failures for the same violation before.
 - **S15. Pin every remaining unpinned residual** (AB-2..5, 7, 9, 11, 13 — minus any closed by Phase 3
   decisions). Each pin DEMONSTRATES current behaviour and names the residual, so any silent change in
   either direction fails a test. AB-10 (possibly-dead belt-and-braces branch): coverage probe; delete
