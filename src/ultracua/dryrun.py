@@ -66,6 +66,16 @@ _log = get_logger("dryrun")
 # redirect leak in the module docstring. Deliberately a module constant so a test can assert on it.
 IDEMPOTENT_METHODS = ("GET", "HEAD", "OPTIONS")
 
+# How much the report may CLAIM about which step caused a held write. Three states, because two would
+# lie in the way R3.7 has now cost two attempts: `step == -1` alone would mean BOTH "nobody gated this"
+# and "more than one step could own it", and a consumer cannot tell those apart — different facts, and
+# different things for a human to do about them.
+#
+# QUIET IS AN ALLOWLIST (R3.9/CLI-1): `ATTRIBUTED` is the only state the report passes over in silence,
+# so a state added tomorrow is loud by default rather than invisible in a `!= "ambiguous"` test.
+ATTRIBUTED = "step"                          # only one step had acted, so only one step could own it
+ATTRIBUTION_STATES = (ATTRIBUTED, "ambiguous", "ungated")
+
 # Channels with no interception surface at any layer. Poisoned in-page so a call raises loudly rather than
 # escaping; reaching one is an abort, because "we could not observe this" is not a safe outcome.
 _UNINTERCEPTABLE_JS = r"""
@@ -101,6 +111,21 @@ class HeldWrite:
     late: bool = False                 # arrived in the grace tail after the window closed
     telemetry: bool = False            # classified as a telemetry host: recorded, still held
     ts: float = 0.0
+    # WAS this write gated (`in_window`) and WHICH step caused it (`attribution`) are different
+    # questions — collapsing them was R3.3's sixth-pass finding, so they stay on separate axes here.
+    # `in_window` still decides the `ungated-write` abort and nothing else reads `attribution` for it.
+    attribution: str = ATTRIBUTED
+    candidates: list = field(default_factory=list)     # when ambiguous: every step that could own it
+
+    @property
+    def earliest_step(self) -> int:
+        """The LOWEST step index this write could belong to, or -1 if none is known. Consumers that ask
+        "from which step is the report no longer representative" must use this, never `step`: an
+        ambiguous hold whose `step` is -1 would otherwise read as "no hold happened here" and quietly
+        certify the whole recipe."""
+        if self.attribution == ATTRIBUTED:
+            return self.step
+        return min(self.candidates) if self.candidates else -1
 
 
 @dataclass
@@ -142,6 +167,10 @@ class DryRunArbiter:
         self.observed: list = []        # (method, url) seen by context.on("request") — the second ledger
         self.faults: list = []
         self._window = {"open": False, "until": 0.0, "step": -1, "intent": "", "key": ""}
+        # Every step whose act window has OPENED, in order. This is the sound candidate set for any
+        # write that arrives: a step that has not yet acted cannot have caused one, and nothing
+        # available here can narrow it further. See `_attribute`.
+        self._opened: list = []
         self._inflight = 0
         self._grace_ms = 0.0
 
@@ -201,16 +230,49 @@ class DryRunArbiter:
         except Exception:                        # noqa: BLE001 — binary/unavailable body
             body = "<unavailable>"
         st = self._state()
+        step, intent, attribution, candidates = self._attribute(st)
         rec = HeldWrite(
-            step=self._window["step"], intent=self._window["intent"], method=method, url=r.url,
+            step=step, intent=intent, method=method, url=r.url,
             body=body, resource_type=getattr(r, "resource_type", "") or "",
             idempotency_key=(r.headers or {}).get("idempotency-key", ""),
             navigation=bool(r.is_navigation_request()), in_window=(st != "closed"),
             late=(st == "closing"), telemetry=not is_write_request(method, r.url), ts=time.time(),
+            attribution=attribution, candidates=candidates,
         )
         self.report.held.append(rec)
         self.report.requests_held += 1
         return rec
+
+    def _attribute(self, st: str) -> tuple:
+        """WHICH step may this held write be labelled with? The ONE place that decides, so the rule is
+        enforced once rather than per branch.
+
+        This does NOT attribute a deferred write — that is blocked indefinitely by decision D5 and no
+        amount of window arithmetic changes it. It decides only whether the report has EARNED the right
+        to name a step, and says so out loud when it has not.
+
+        THE RULE HAS NO CONSTANT IN IT, and that is the whole design. The sound candidate set for any
+        arriving write is *every step that has already acted*: a step whose window has not opened cannot
+        have caused it, and nothing observable here can narrow the set further — that narrowing IS the
+        blocked question. So a step is named only when it is the ONLY one that has acted.
+
+        Two earlier drafts of this function tried to narrow it and both were wrong, in the shapes this
+        register keeps producing:
+          * a grace tail as the candidate horizon — a *constant* then decided whether a name was
+            claimed, so the same causal situation reported "ambiguous" at 2000 ms and confidently named
+            the wrong step at 0 ms. D5's impossibility #1, re-derived one module over.
+          * treating a step that had written once as SETTLED, to keep ordinary multi-write reports
+            precise — but "we saw a write" is not "we saw all its writes". A control that fires an
+            analytics ping AND defers its real write marked itself settled, and the deferred write was
+            then named with the next step, silently: R3.12's exact row, reproduced 3/3.
+        """
+        if st == "closed":
+            # Outside every window. `_adjudicate` aborts on this; the label must not imply a step
+            # anyway — it used to inherit whichever step ran last.
+            return -1, "", "ungated", []
+        if len(self._opened) == 1:
+            return self._window["step"], self._window["intent"], ATTRIBUTED, []
+        return -1, "", "ambiguous", sorted(self._opened)
 
     def _adjudicate(self, rec: HeldWrite) -> None:
         if not rec.in_window:
@@ -248,6 +310,8 @@ class DryRunArbiter:
 
     # -- the act window ----------------------------------------------------------------------------
     def open_window(self, *, step: int, intent: str, key: str, grace_ms: float) -> None:
+        if step not in self._opened:
+            self._opened.append(step)
         self._window.update({"open": True, "until": 0.0, "step": step, "intent": intent, "key": key})
         self._grace_ms = grace_ms
 

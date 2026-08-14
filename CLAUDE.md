@@ -7,7 +7,7 @@ failing LOUD on drift.**
 
 **[docs/open-defects.md](docs/open-defects.md) — the standing defect register.** FOUR rounds. Rounds 1–2
 (30 findings) are fixed; **round 3 found 11 more in the 387 lines those fixes added, 1 critical, and
-refuted NONE of them** (**3 open** at 0.103.0 — R3.2, R3.7, R3.12; the count is asserted by
+refuted NONE of them** (**2 open** at 0.106.0 — R3.2, R3.7; the count is asserted by
 `tests/test_register_count.py`, which caught this very line going stale inside the slice that wrote it —
 R3.6 closed after the number was typed); round 4 was a pre-merge audit that PARKED a change rather than
 ship it. Two are regressions the fixes introduced. Defect density in fix code measured ~3x
@@ -139,6 +139,20 @@ believing it; two drafts of that file looked thorough while testing nothing.
 **Reproduce before fixing.** Several reported defects have been misdiagnosed — the symptom real, the stated
 cause wrong. The most recent: an audit blamed a row anchor's substring matching when the anchor never ran at
 all. A fix built on a wrong diagnosis is worse than none.
+
+**And reproduce the MITIGATION, not just the defect** — a finding's own hedge is the least-examined
+sentence in this register. R3.12 was rated medium because a mislabelled row would show "commit B's intent
+beside commit A's key"; reproducing it showed the key is a context header live for whichever step is
+mid-act, so both fields come from ONE source, the row is internally consistent, and nothing betrays it.
+Two independently-sourced facts is the standard R3.3 already set for `landed`; check that they really are
+two before pricing a defect on it. The same measurement exposed R4.39, a worse sibling one path over.
+
+**A test that ASSERTS the counterexample is worse than no test.** R3.12's first fix draft used a tuning
+constant as its candidate horizon, and a cell in its own matrix — `an expired tail is not a candidate` —
+was the proof that the constant could name a WRONG step, sitting there green and asserted as correct
+behaviour. The matrix was built to answer "what shape is missing"; it contained the refuting shape and
+called it a pass. When you write a cell whose expected value differs from a neighbouring cell's, and the
+only difference between them is a CONSTANT, that is not two cells — that is a counterexample.
 
 **Verify a regression test fails against the old code.** A test that passes both before and after proves
 nothing. This has caught several no-op "fixes".

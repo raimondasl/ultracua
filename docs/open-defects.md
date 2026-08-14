@@ -11,7 +11,7 @@ by applying this file's own sibling rule while redesigning R3.2; it is recorded 
 CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch was **PARKED, not
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
-The round-4 series has since grown to R4.38 as later slices filed against it: **21 open**, 13 fixed,
+The round-4 series has since grown to R4.39 as later slices filed against it: **22 open**, 13 fixed,
 4 parked, indexed and token-checked in the R4 STATUS INDEX at the top of that section.
 
 **THE PLAN.** `docs/correctness-plan.md` sequences every open item here — plus the test-machinery
@@ -770,7 +770,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **21 open**, 13 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **22 open**, 13 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -825,6 +825,7 @@ if and only if that branch is ever resumed.
 | R4.36 | open | a write leaving in a LATER dispatch was credited to the last commit — NARROWED in 0.105.0 (direct-`fetch` shape closed), see R4.38 |
 | R4.37 | open | a control whose nested wrapper owns no identity captures no `anchor_id`, so the row guard silently does not run; **HIGH**, inviolable #3 |
 | R4.38 | open | `ACTIVATION_CAUSED` matches an event's TYPE NAME with no provenance, so a write laundered through a synthetic `submit`/`reset` re-enters attribution; **HIGH**, inviolable #3 |
+| R4.39 | open | the wire Idempotency-Key is whichever step was mid-act, so a deferred write's key moves with PAGE TIMING and a retry cannot dedupe; **HIGH**, inviolable #3 |
 
 
 **Scope.** The uncommitted `feat/shared-causal-attribution` work (would-be 0.76.0): extracting the
@@ -3550,9 +3551,93 @@ lost to one bad file, which is the specific outcome both docstrings promise cann
 and cut several severities. Here every one of the 11 held, each reproduced by a second agent with
 its own probe. Read that as a statement about the code under audit, not about the refuters.
 
-### R3.12. `DryRunArbiter`'s act window has the SAME overlapping-tail shape R3.2 just removed — on a multi-write flow a deferred write is labelled with the NEXT commit's step and intent in the report a human approves from
+### ✅ FIXED in 0.106.0 — R3.12. `DryRunArbiter`'s act window has the SAME overlapping-tail shape R3.2 just removed — on a multi-write flow a deferred write is labelled with the NEXT commit's step and intent in the report a human approves from
 
-*medium, lens `writes`, NOTICED while redesigning R3.2 — **not reproduced end to end**, see below*
+*medium **as filed**; the mitigation that kept it there was measured FALSE, see below. Lens `writes`,
+NOTICED while redesigning R3.2, **reproduced end to end 3/3 at 0.105.0** before a line of fix was written*
+
+**REPRODUCED, and the entry's own hedge was the thing that needed correcting.** A two-commit flow —
+step 0 "Send invite" POSTing on a `setTimeout` past `write_settle_ms`, step 1 "Publish order" — dry-run
+at 0.105.0, 3/3 identical:
+
+    HELD POST /invite  -> labelled step=1 intent='publish the order'  in_window=True late=True
+
+`/invite` is step 0's write; no other control requests it. The report a human approves from says the
+publish step sends it.
+
+**THE STATED MITIGATION DOES NOT EXIST — it was reasoned, not measured, and it is wrong.** This entry
+claimed the row is "partly self-revealing … commit B's intent beside commit A's key", treating the
+window and the `Idempotency-Key` as two independent sources. They are one source. The key is a
+*context* header, live for whichever step is mid-act, so a write issued during step 1's act carries step
+1's key:
+
+    per-step keys   step 0 uca-7e04e8cb…   step 1 uca-7ac0e3c1…
+    the held row    step=1, intent='publish the order', key=uca-7ac0e3c1…   <- step 1's, not step 0's
+
+Every field agrees with every other field and all of them are wrong. Nothing in the report betrays it.
+
+**Why the naive fix is BLOCKED, and what shipped instead.** This entry proposed bounding attribution to
+the drained window rather than a 2 s tail. That is a temporal design, and **D5's impossibility #1 rules
+it out by measurement**: no constant is simultaneously long enough to catch a deferred write and short
+enough to exclude the next step. D5 was recorded after this entry and nobody had reconciled the two.
+
+So the fix does not attribute anything. It changes what the report is ALLOWED TO CLAIM. `HeldWrite`
+gains an `attribution` axis with three states — `step` / `ambiguous` / `ungated` — and one function,
+`DryRunArbiter._attribute`, decides it.
+
+**THE RULE HAS NO CONSTANT IN IT, and getting there took two wrong drafts that the pre-merge audit
+caught.** The sound candidate set for an arriving write is *every step that has already acted*: a step
+whose window has not opened cannot have caused it, and nothing observable can narrow the set further —
+that narrowing IS D5's blocked question. So a step is NAMED only when it is the only one that has acted;
+otherwise the row names none and lists the candidates.
+
+Both discarded drafts tried to narrow the set, and each failed in one of this register's standing
+shapes. **Both passed the full suite (1044 tests), the fix's own end-to-end tests, and a purpose-built
+matrix** — the sixth consecutive time that has been true in this area:
+
+| draft | narrowing | how it died |
+|---|---|---|
+| 1 | the grace tail is the candidate horizon | a CONSTANT then decided whether a name was claimed: the same causal situation reported `ambiguous` at 2000 ms and confidently named the wrong step at 0 ms. D5's impossibility #1, re-derived one module over — **and the counterexample was a cell in the fix's own matrix**, asserted as correct behaviour |
+| 2 | a step that has written once is `settled` | "we saw a write" is not "we saw all its writes". A control firing an analytics ping AND deferring its real write settled itself, and the deferred write was then confidently named with the NEXT step — R3.12's exact row, **silently** (no warning fired), reproduced 3/3 at deferrals of 150/300/600 ms |
+
+Draft 2's exposure was *wider* than the defect it was fixing: the prompt write resolves
+`expect_request` immediately, so the step's window closes in milliseconds and the deferral needed to
+escape drops from 1500 ms to 150 ms.
+
+**Two details that were nearly defects in the fix itself:**
+
+* **`step = -1` would have been the `anchor_id=None` fault again.** It already means "ungated"; making
+  it also mean "ambiguous" rebuilds the exact overloaded sentinel that has now cost R3.7 two attempts —
+  two different facts, one value, and the consumer cannot tell them apart. Hence a separate axis.
+* **`steps_representative` reads `held[].step` and filtered out `-1`.** Left alone, an unattributable
+  hold would have made a run that HELD a write report every step as representative — strictly more
+  dangerous than the mislabel being fixed. It now reads `earliest_step` and clamps an unknown to 0, so
+  not knowing always makes the artifact MORE conservative.
+
+**THE PRICE, measured rather than argued, and it is the design rather than a tuning artifact.** A
+multi-write flow's holds are never named. Measured on an ordinary 3-mutating-step recipe where only the
+last step writes, and writes PROMPTLY — the easiest possible attribution:
+
+    0.105.0   step 2 'confirm the order'                 steps_representative 2
+    0.106.0   ambiguous, candidates=[0, 1, 2]            steps_representative 0
+
+Draft 2 existed to buy that precision back and could not do it soundly. The report still lists every
+held request in order with its method, URL, body and key; what is lost is the per-step NAME, and
+recovering it needs the causal signal D5 blocks. Pinned as a matrix cell
+(`a mutating step that never writes keeps every later hold ambiguous`) so a future change is deliberate.
+
+**Residual, stated.** A write caused by a NON-mutating step's control never has a candidate of its own —
+such a step opens no window — so in a single-mutating-step flow it is named with that step. The audit
+confirmed this at the arbiter level and REFUTED it end-to-end: the learn path promotes a step to
+mutating from wire evidence (`flow.py:627-635`), so a control that writes during learn always gets a
+window. It survives only for a page that writes at replay and did not at learn. Note also that with one
+candidate "ambiguous" is not expressible — naming it is the only answer available.
+
+**And the sibling this reproduction exposed is worse than the finding: `R4.39`.** The same "whichever
+step is mid-act" fact that refuted the mitigation is live on the REPLAY path, where it picks the
+Idempotency-Key that actually rides the wire.
+
+*Original entry follows.*
 
 **Where.** `src/ultracua/dryrun.py:249-263` (`open_window` / `close_window` / `_state`), called from
 `src/ultracua/flow.py:1092` and `:1216-1217`.
@@ -4082,3 +4167,67 @@ question is PROVENANCE: was this `submit` dispatched *within* the commit's own d
 first.
 
 **Pinned** by `test_a_write_laundered_through_requestsubmit_is_not_credited_either` (strict xfail).
+
+## R4.39 — OPEN, HIGH, inviolable #3. The Idempotency-Key that rides the wire is whichever step was mid-act when the request was ISSUED, so a deferred write's key moves with PAGE TIMING and a retry cannot dedupe
+
+*high, lens `write-safety`, inviolable #3, measured at 0.106.0. Found by REPRODUCING R3.12 — it is the
+same "whichever step is mid-act" fact, one path over, and it is what refuted R3.12's stated mitigation.*
+
+**Where.** `src/ultracua/flow.py:1325` (`set_transient_headers({"Idempotency-Key": key})` in the mutation
+gate) and `:1457` (`set_transient_headers({})` in the `finally`), against the contract stated in
+`src/ultracua/flows.py:_plan_idempotency_keys`.
+
+**The contract, quoted.** `_plan_idempotency_keys` documents the preview as "computed with the SAME four
+inputs as `flow._replay_step` (scope, idx, intent, slot_values) so a dry-run preview is **byte-identical
+to the wire key**". All four inputs are RECIPE-side. The key is `sha256(scope|step_index|intent)`, and
+`safety.idempotency_key`'s own docstring calls it "run-INVARIANT so a retry of the SAME write dedupes".
+
+**Mechanism.** The key is not attached to a request; it is attached to the browser CONTEXT for the
+duration of one step's act and removed in that step's `finally`. So the key a request carries is decided
+by WHEN it leaves, not by what caused it. A write the page defers past `write_settle_ms` (1000 ms) leaves
+after its own step restored the base headers — under the next step's key, or under none.
+
+**Measured: ONE cached recipe, TWO replays, and only the SERVER's debounce changed between them.**
+Nothing recipe-side moved — same cache, same steps, same scope, same intents.
+
+    predicted   step 0 'send the invite'   uca-7e04e8cb7cd4b95bc0ddcb51
+                step 1 'publish the order' uca-7ac0e3c18b6bd47af1c4af6e
+
+    run 1  page debounce   50 ms   POST /invite  key=uca-7e04e8cb…   == step 0's key
+    run 2  page debounce 1500 ms   POST /invite  key=uca-7ac0e3c1…   == step 1's key
+
+Step 0's write carried DIFFERENT keys across two runs of one recipe. A retry mints a different key from
+the attempt it is retrying, so the backend dedupe this key exists for cannot fire — **a double-submit,
+and the direction of error the register rates worst** (a missed arm re-fires under the same key; this is
+the shape where it does not).
+
+**Three consequences, separated because they need different remedies.**
+
+1. **Retry dedupe is void for a deferred write.** Measured above. Needs no page change to be wrong —
+   only for the debounce to sit either side of `write_settle_ms` between the run and its retry. R4.26
+   measured renderer starvation moving exactly these timings by hundreds of ms; that this can be
+   *induced by load alone* is a CONSEQUENCE, not something reproduced here — the measurement above
+   changes the page, not the host.
+2. **`preflight_keys` is not the preview it says it is.** The MCP write surface uses it to check the
+   dedupe ledger BEFORE actuating. An operator pre-registering the predicted key registers one the write
+   will not carry.
+3. **Two distinct writes can share one key** (step N's own write and step N-1's deferred write, both
+   issued during N's act), which is the *suppressed*-write direction. Structurally reachable; **not
+   reproduced** — every construction tried either lost the race or ended the run first, and it is filed
+   as unproven rather than counted.
+
+**NOT the same finding as R3.12, and the distinction is the point.** R3.12 is what the dry-run REPORT
+claims; it is closed by refusing to claim. R4.39 is what the browser SENDS on a real replay, where
+refusing to claim changes nothing — the request still leaves with some key. This is why R3.12's fix is
+not extended to cover it.
+
+**What a fix must not be.** "Leave the key on the context for longer" re-keys a genuinely later write
+with an earlier step's key, which is the same defect pointing the other way. "Key every request in the
+run identically" collapses distinct writes onto one key — direction 3, deliberately. The key has to
+travel with the REQUEST rather than with the clock, which is a different mechanism from the one that
+exists; and note that deciding which key a deferred request should carry is D5's blocked question
+wearing a header. A fix that only ever REFUSES (fail loud when a write leaves outside its own step's
+act, rather than key it wrong) is available and is not blocked — cost unmeasured.
+
+**Pinned** by `tests/test_dryrun_attribution.py::test_the_wire_key_is_a_function_of_the_recipe_not_of_page_timing`
+(strict xfail).
