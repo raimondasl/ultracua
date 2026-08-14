@@ -483,9 +483,16 @@ class FixtureServer:
 
         class _H(http.server.BaseHTTPRequestHandler):
             # HTTP/1.1 so connections are KEPT ALIVE. Every response here sets Content-Length, which is what
-            # makes that safe. With HTTP/1.0 each of the ~700 requests in a run burned its own socket, and a
-            # handful of consecutive runs exhausted the ephemeral-port range (`net::ERR_NO_BUFFER_SPACE` on
-            # Windows). A benchmark that degrades when run repeatedly is a benchmark people stop re-running.
+            # makes that safe. With HTTP/1.0 each request burned its own socket, measured today as 695
+            # connections per run against 381 with keep-alive.
+            #
+            # THE ORIGINAL COMMENT ALSO BLAMED THIS FOR `net::ERR_NO_BUFFER_SPACE` ON WINDOWS, AND THAT
+            # PART DOES NOT HOLD AT TODAY'S VOLUMES (R4.22, measured at 0.104.0): the HTTP/1.0
+            # counterfactual is 695 connections over 173 s = 4.0/s, ~482 sockets held at a 120 s
+            # TIME_WAIT delay, 2.9% of the 16384-port ephemeral range. The whole suite runs at 1.04/s,
+            # 0.8%. The corpus has changed since the comment was written so this does not contradict it
+            # retroactively — but do NOT cite keep-alive as R4.22's remedy, and do not convert other
+            # fixtures on its authority. Keep it here: it halves churn and costs nothing.
             protocol_version = "HTTP/1.1"
 
             def log_message(self, *a) -> None:
