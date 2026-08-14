@@ -73,7 +73,7 @@ IDEMPOTENT_METHODS = ("GET", "HEAD", "OPTIONS")
 #
 # QUIET IS AN ALLOWLIST (R3.9/CLI-1): `ATTRIBUTED` is the only state the report passes over in silence,
 # so a state added tomorrow is loud by default rather than invisible in a `!= "ambiguous"` test.
-ATTRIBUTED = "step"                                   # this write arrived while exactly one step was live
+ATTRIBUTED = "step"                          # only one step had acted, so only one step could own it
 ATTRIBUTION_STATES = (ATTRIBUTED, "ambiguous", "ungated")
 
 # Channels with no interception surface at any layer. Poisoned in-page so a call raises loudly rather than
@@ -166,11 +166,11 @@ class DryRunArbiter:
         self.routed: list = []          # (method, url) seen by the route layer
         self.observed: list = []        # (method, url) seen by context.on("request") — the second ledger
         self.faults: list = []
-        self._window = {"open": False, "until": 0.0, "step": -1, "intent": "", "key": "",
-                        "settled": False}
-        # Windows that CLOSED without their own write being attributed, and whose grace tail has not yet
-        # expired: each is still a possible owner of whatever arrives next. See `_record`.
-        self._pending: list = []
+        self._window = {"open": False, "until": 0.0, "step": -1, "intent": "", "key": ""}
+        # Every step whose act window has OPENED, in order. This is the sound candidate set for any
+        # write that arrives: a step that has not yet acted cannot have caused one, and nothing
+        # available here can narrow it further. See `_attribute`.
+        self._opened: list = []
         self._inflight = 0
         self._grace_ms = 0.0
 
@@ -249,21 +249,30 @@ class DryRunArbiter:
 
         This does NOT attribute a deferred write — that is blocked indefinitely by decision D5 and no
         amount of window arithmetic changes it. It decides only whether the report has EARNED the right
-        to name a step, and says so out loud when it has not. The grace tail still appears in the rule,
-        but it now governs how OFTEN "ambiguous" is reported and never whether a WRONG step is named, so
-        no constant can be tuned into a false claim — which is the property D5's impossibility #1 says a
-        temporal *attribution* design can never have.
+        to name a step, and says so out loud when it has not.
+
+        THE RULE HAS NO CONSTANT IN IT, and that is the whole design. The sound candidate set for any
+        arriving write is *every step that has already acted*: a step whose window has not opened cannot
+        have caused it, and nothing observable here can narrow the set further — that narrowing IS the
+        blocked question. So a step is named only when it is the ONLY one that has acted.
+
+        Two earlier drafts of this function tried to narrow it and both were wrong, in the shapes this
+        register keeps producing:
+          * a grace tail as the candidate horizon — a *constant* then decided whether a name was
+            claimed, so the same causal situation reported "ambiguous" at 2000 ms and confidently named
+            the wrong step at 0 ms. D5's impossibility #1, re-derived one module over.
+          * treating a step that had written once as SETTLED, to keep ordinary multi-write reports
+            precise — but "we saw a write" is not "we saw all its writes". A control that fires an
+            analytics ping AND defers its real write marked itself settled, and the deferred write was
+            then named with the next step, silently: R3.12's exact row, reproduced 3/3.
         """
         if st == "closed":
             # Outside every window. `_adjudicate` aborts on this; the label must not imply a step
             # anyway — it used to inherit whichever step ran last.
             return -1, "", "ungated", []
-        live = self._live_candidates()
-        if live:
-            cands = sorted({p[0] for p in live} | {self._window["step"]})
-            return -1, "", "ambiguous", cands
-        self._window["settled"] = True
-        return self._window["step"], self._window["intent"], ATTRIBUTED, []
+        if len(self._opened) == 1:
+            return self._window["step"], self._window["intent"], ATTRIBUTED, []
+        return -1, "", "ambiguous", sorted(self._opened)
 
     def _adjudicate(self, rec: HeldWrite) -> None:
         if not rec.in_window:
@@ -301,26 +310,10 @@ class DryRunArbiter:
 
     # -- the act window ----------------------------------------------------------------------------
     def open_window(self, *, step: int, intent: str, key: str, grace_ms: float) -> None:
-        # R3.12. There is ONE slot, so opening a window destroys the previous step's claim on it — while
-        # that step's grace tail says a write of its own may still be coming. Carry it forward as a
-        # PENDING candidate instead of letting the new step inherit its writes.
-        #
-        # A window that already saw its own write is `settled` and is NOT carried: without that, every
-        # ordinary multi-write flow (each write landing in its own window, tens of ms apart, all well
-        # inside a 2 s tail) would report every hold as ambiguous — honest and useless, which is D0's
-        # shape wearing a reporting hat.
-        prev = self._window
-        if prev["step"] >= 0 and not prev["open"] and not prev["settled"]:
-            self._pending.append((prev["step"], prev["intent"], prev["until"]))
-        self._window.update({"open": True, "until": 0.0, "step": step, "intent": intent, "key": key,
-                             "settled": False})
+        if step not in self._opened:
+            self._opened.append(step)
+        self._window.update({"open": True, "until": 0.0, "step": step, "intent": intent, "key": key})
         self._grace_ms = grace_ms
-
-    def _live_candidates(self) -> list:
-        """Pending windows whose grace tail has not expired. Pruned here so the list cannot grow."""
-        now = time.time()
-        self._pending = [p for p in self._pending if now < p[2]]
-        return self._pending
 
     def close_window(self) -> None:
         # A grace tail, mirroring `flow._author_steps`' act window: a click-triggered write can land a few

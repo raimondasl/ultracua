@@ -147,6 +147,13 @@ mid-act, so both fields come from ONE source, the row is internally consistent, 
 Two independently-sourced facts is the standard R3.3 already set for `landed`; check that they really are
 two before pricing a defect on it. The same measurement exposed R4.39, a worse sibling one path over.
 
+**A test that ASSERTS the counterexample is worse than no test.** R3.12's first fix draft used a tuning
+constant as its candidate horizon, and a cell in its own matrix — `an expired tail is not a candidate` —
+was the proof that the constant could name a WRONG step, sitting there green and asserted as correct
+behaviour. The matrix was built to answer "what shape is missing"; it contained the refuting shape and
+called it a pass. When you write a cell whose expected value differs from a neighbouring cell's, and the
+only difference between them is a CONSTANT, that is not two cells — that is a counterexample.
+
 **Verify a regression test fails against the old code.** A test that passes both before and after proves
 nothing. This has caught several no-op "fixes".
 

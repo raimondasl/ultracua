@@ -214,6 +214,7 @@ async def _flow_dry_run(args: argparse.Namespace) -> None:
     whatever the page computed, which for a real flow can include values a human typed — persisting it
     would create a secrets-at-rest problem the rest of the project takes care to avoid.
     """
+    from .dryrun import ATTRIBUTED
     from .flows import dry_run, load_spec
 
     spec = load_spec(args.name)
@@ -234,15 +235,18 @@ async def _flow_dry_run(args: argparse.Namespace) -> None:
 
     print(f"dry run of {spec.name!r} — {len(rep.held)} request(s) HELD, none sent\n")
     for h in rep.held:
-        if h.attribution == "ambiguous":
+        # Keyed off the ONE attributed state, never off a list of the noisy ones: `== "ambiguous"` would
+        # render a state added tomorrow through the CONFIDENT branch, which is the quiet-by-default
+        # failure this project already shipped once (R3.9/CLI-1).
+        if h.attribution == ATTRIBUTED and h.step >= 0:
+            where = f"step {h.step} {h.intent!r}"
+        elif h.attribution == "ungated":
+            where = "outside any step"
+        else:
             # Never render this as a step. A write deferred out of an earlier step arrives inside a
             # later step's window, and naming either one is the R3.12 defect.
-            where = ("NOT ATTRIBUTABLE to a step — candidates: "
-                     + ", ".join(str(c) for c in h.candidates))
-        elif h.step >= 0:
-            where = f"step {h.step} {h.intent!r}"
-        else:
-            where = "outside any step"
+            cands = ", ".join(str(c) for c in h.candidates) or "unknown"
+            where = f"NOT ATTRIBUTABLE to a step ({h.attribution}) — candidates: {cands}"
         print(f"  HELD  {where}")
         print(f"        {h.method} {h.url}")
         if h.idempotency_key:

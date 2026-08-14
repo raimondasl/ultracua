@@ -33,13 +33,17 @@ from ultracua.config import settings
 _DEFER_MS = settings.write_settle_ms + 500
 
 
-def _page(defer_ms: int, *, b_writes: bool) -> bytes:
+def _page(defer_ms: int, *, b_writes: bool, a_pings: bool = False) -> bytes:
+    """`a_pings` gives step 0's control a PROMPT write as well as its deferred one — an analytics ping,
+    a draft save, a validation call. That shape defeated this file's first fix (see the F1 cell)."""
     b_body = "fetch('/publish', {method: 'POST', body: 'go=1'});" if b_writes else ""
+    ping = "fetch('/track', {method: 'POST', body: 'e=1'});" if a_pings else ""
     return (
         "<!doctype html><html><body><h1>Invites</h1>"
         "<button id=a>Send invite</button><button id=b>Publish order</button><div id=out></div>"
         "<script>"
         "document.getElementById('a').addEventListener('click', function () {"
+        f"  {ping}"
         f"  setTimeout(function () {{ fetch('/invite', {{method: 'POST', body: 'who=alice'}}); }}, {defer_ms});"
         "});"
         "document.getElementById('b').addEventListener('click', function () {"
@@ -147,12 +151,51 @@ async def test_a_write_deferred_out_of_its_step_is_not_labelled_with_the_next_co
             f"an unattributable hold must be stated in the report, not just in the row: {rep.warnings}")
 
 
+async def test_a_step_that_ALSO_writes_promptly_can_still_own_a_later_write(
+    tmp_path, monkeypatch,
+) -> None:
+    """F1 — the shape that got past this file's first fix, and the reason it is here end-to-end and not
+    only as a matrix cell.
+
+    The first draft treated a step that had already written as SETTLED and dropped it from the candidate
+    set, to keep ordinary multi-write reports precise. But "we saw a write" is not "we saw all its
+    writes": a control that fires an analytics ping AND defers its real write marked itself settled, and
+    the deferred write was then confidently named with the NEXT step — R3.12's exact row, with no
+    warning anywhere in the report. Reproduced 3/3 at deferrals of 150/300/600 ms.
+
+    Note the deferral needed drops sharply in this shape: the prompt write resolves `expect_request`
+    immediately, so step 0's window closes in milliseconds rather than after `write_settle_ms`.
+    """
+    hits: list = []
+    flow, rep = await _learn_then_dry_run(tmp_path, monkeypatch, hits,
+                                          _page(300, b_writes=False, a_pings=True))
+    assert rep.aborted is None, f"{rep.aborted}: {rep.abort_detail}"
+    deferred = [h for h in rep.held if "/invite" in h.url]
+    ping = [h for h in rep.held if "/track" in h.url]
+    # THE PREMISE, both halves: the ping must have been held (or the step never looked settled) and the
+    # deferred write must have been held (or there is nothing to mislabel).
+    assert ping, f"premise lost: step 0's PROMPT write was not held ({[h.url for h in rep.held]})"
+    assert len(deferred) == 1, f"premise lost: step 0's deferred write was not held ({[h.url for h in rep.held]})"
+    h = deferred[0]
+    claims_a_step = getattr(h, "attribution", "step") == "step"
+    assert not (claims_a_step and h.step != 0), (
+        f"step 0 fired a prompt write and a deferred one; the deferred one is named step {h.step} "
+        f"({h.intent!r}). A step that has written is not a step that has FINISHED writing")
+
+
 async def test_the_unattributable_hold_still_makes_later_steps_unrepresentative(
     tmp_path, monkeypatch,
 ) -> None:
     """`steps_representative` is computed from `held[].step`. A hold that names no step must make the
     report MORE conservative, never less: 'every step is representative' on a run that held a write is
-    the single most dangerous thing this artifact could imply."""
+    the single most dangerous thing this artifact could imply.
+
+    NOT a RED-against-0.105.0 test, and labelled so deliberately: 0.105.0 passes it (its mislabelled row
+    still carried a step index, which happened to be < len(steps)). This guards a trap the FIX opens —
+    filtering `step == -1` out would have made an unattributable hold certify the whole recipe — so it
+    is a regression guard on new code, not evidence the defect existed. Calling it RED evidence was an
+    overstatement in this slice's first commit message.
+    """
     hits: list = []
     flow, rep = await _learn_then_dry_run(tmp_path, monkeypatch, hits,
                                           _page(_DEFER_MS, b_writes=False))
@@ -330,38 +373,47 @@ _CELLS = [
      lambda a, w: (a.open_window(step=0, intent="pay", key="k", grace_ms=2000),
                    a.close_window(), w())[-1],
      "step", 0),
-    ("two writes, each landing in its own window",
-     lambda a, w: (a.open_window(step=0, intent="pay", key="k", grace_ms=2000), w(),
-                   a.close_window(),
-                   a.open_window(step=1, intent="ship", key="k2", grace_ms=2000), w())[-1],
-     "step", 1),
-    # R3.12 ITSELF: step 0's window closed having seen NO write, so step 0 is still a live candidate
-    # when step 1's write arrives. Pre-fix this read `step=1, intent='ship'`.
+    ("a single mutating step firing SEVERAL writes: all attributable",
+     lambda a, w: (a.open_window(step=0, intent="pay", key="k", grace_ms=2000), w(), w(),
+                   a.close_window(), w())[-1],
+     "step", 0),
+    # R3.12 ITSELF. Pre-fix this read `step=1, intent='ship'`.
     ("step 0 wrote nothing in its window; a write arrives under step 1",
      lambda a, w: (a.open_window(step=0, intent="pay", key="k", grace_ms=2000), a.close_window(),
                    a.open_window(step=1, intent="ship", key="k2", grace_ms=2000), w())[-1],
      "ambiguous", [0, 1]),
-    ("three steps, two of them unsettled",
+    ("three steps that have all acted",
      lambda a, w: (a.open_window(step=0, intent="a", key="k", grace_ms=2000), a.close_window(),
                    a.open_window(step=1, intent="b", key="k2", grace_ms=2000), a.close_window(),
                    a.open_window(step=2, intent="c", key="k3", grace_ms=2000), w())[-1],
      "ambiguous", [0, 1, 2]),
-    # THE PRICE, pinned rather than asserted in prose. A mutating step that never writes at all is
-    # common — `MUTATING_KEYWORDS` measures 28% false positives — and it makes the NEXT step's genuine,
-    # promptly-sent write unattributable. That is a real cost of refusing to guess; it is paid in report
-    # precision, never in a wrong claim, and this cell exists so a future change to it is deliberate.
-    ("a non-writing mutating step makes the next step's prompt write ambiguous",
+    # THE F1 CELL. A first draft treated a step that had already written as SETTLED, so it was dropped
+    # from the candidate set — and a control that fires an analytics ping AND defers its real write then
+    # had that write named with the NEXT step, silently. "We saw a write" is not "we saw all its
+    # writes"; there is no observable that says a step is finished writing.
+    ("a step that already wrote can STILL be the owner of a later write",
+     lambda a, w: (a.open_window(step=0, intent="pay", key="k", grace_ms=2000), w(),
+                   a.close_window(),
+                   a.open_window(step=1, intent="ship", key="k2", grace_ms=2000), w())[-1],
+     "ambiguous", [0, 1]),
+    # THE F2 CELL, kept because it is the counterexample that killed the first draft's stated property.
+    # Causally identical to the R3.12 cell — step 0 acted, wrote nothing, a write arrives under step 1 —
+    # and differing ONLY in `grace_ms`. A draft whose candidate horizon was the grace tail said
+    # "ambiguous" at 2000 ms and confidently named step 1 at 0 ms. The rule must not read `grace_ms` at
+    # all, so both spellings must agree.
+    ("grace_ms cannot change WHO is named (0 ms must agree with 2000 ms)",
+     lambda a, w: (a.open_window(step=0, intent="pay", key="k", grace_ms=0), a.close_window(),
+                   a.open_window(step=1, intent="ship", key="k2", grace_ms=2000), w())[-1],
+     "ambiguous", [0, 1]),
+    # THE PRICE, pinned rather than asserted in prose, and re-measured after F5: it is not one step, it
+    # is EVERY step that has acted. A multi-write flow's holds are never named. That is the cost of a
+    # sound rule — narrowing the candidate set is the question D5 blocks — and this cell exists so a
+    # future change to it is deliberate rather than accidental.
+    ("a mutating step that never writes keeps every later hold ambiguous",
      lambda a, w: (a.open_window(step=0, intent="payment history", key="k", grace_ms=2000),
                    a.close_window(),
                    a.open_window(step=1, intent="pay", key="k2", grace_ms=2000), w())[-1],
      "ambiguous", [0, 1]),
-    # A stale candidate must EXPIRE. grace_ms=0 means step 0's tail is already over when step 1 opens,
-    # so it is not carried and step 1's write is attributable — the half that keeps this from degrading
-    # into "everything after the first quiet step is ambiguous forever".
-    ("an expired tail is not a candidate",
-     lambda a, w: (a.open_window(step=0, intent="pay", key="k", grace_ms=0), a.close_window(),
-                   a.open_window(step=1, intent="ship", key="k2", grace_ms=2000), w())[-1],
-     "step", 1),
     ("no window ever opened",
      lambda a, w: w(),
      "ungated", -1),

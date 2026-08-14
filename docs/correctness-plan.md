@@ -506,6 +506,16 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   `steps_representative` filtered `-1` out, so an unattributable hold would have certified every step as
   representative — strictly worse than the mislabel. Both are pinned.
 
+  **AND THE PRE-MERGE AUDIT EARNED ITS KEEP AGAIN — SIX FOR SIX.** Two drafts of the fix shipped into
+  the audit's hands, both green on 1044 suite tests plus their own purpose-built matrix, and both were
+  wrong. Draft 1 used the grace tail as the candidate horizon, so a CONSTANT decided whether a name was
+  claimed — D5's impossibility #1, one module over, **with the counterexample sitting in the fix's own
+  matrix asserted as correct**. Draft 2 treated a step that had written once as finished writing, which
+  handed a control that pings analytics AND defers its real write straight back to R3.12's row, silently
+  and at a 10x smaller deferral. The shipped rule has no constant in it: name a step only when it is the
+  only one that has acted. The lesson is the one this project keeps paying for — *the instrument shared
+  the fix's blind spot*, and here it did worse, containing the refutation as a green assertion.
+
   **It also exposed a worse sibling: `R4.39`,** live on the REPLAY path. The same "whichever step is
   mid-act" fact picks the Idempotency-Key that actually rides the wire, so one recipe replayed twice —
   with only the page's debounce changed — sent step 0's write under two different keys. A retry cannot

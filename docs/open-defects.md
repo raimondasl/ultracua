@@ -3583,15 +3583,28 @@ enough to exclude the next step. D5 was recorded after this entry and nobody had
 
 So the fix does not attribute anything. It changes what the report is ALLOWED TO CLAIM. `HeldWrite`
 gains an `attribution` axis with three states — `step` / `ambiguous` / `ungated` — and one function,
-`DryRunArbiter._attribute`, decides it. A window that closes without its own write being seen is carried
-as a PENDING candidate until its grace tail expires; any write arriving while a pending candidate is
-live is `ambiguous`, names no step, and lists every candidate.
+`DryRunArbiter._attribute`, decides it.
 
-*The grace tail is still in the rule, and that is not the blocked design.* It now governs how OFTEN the
-report says "ambiguous" and never whether a WRONG step is named — so no constant can be tuned into a
-false claim. That is precisely the property D5 says a temporal *attribution* rule can never have.
+**THE RULE HAS NO CONSTANT IN IT, and getting there took two wrong drafts that the pre-merge audit
+caught.** The sound candidate set for an arriving write is *every step that has already acted*: a step
+whose window has not opened cannot have caused it, and nothing observable can narrow the set further —
+that narrowing IS D5's blocked question. So a step is NAMED only when it is the only one that has acted;
+otherwise the row names none and lists the candidates.
 
-**Three details that were nearly defects in the fix itself:**
+Both discarded drafts tried to narrow the set, and each failed in one of this register's standing
+shapes. **Both passed the full suite (1044 tests), the fix's own end-to-end tests, and a purpose-built
+matrix** — the sixth consecutive time that has been true in this area:
+
+| draft | narrowing | how it died |
+|---|---|---|
+| 1 | the grace tail is the candidate horizon | a CONSTANT then decided whether a name was claimed: the same causal situation reported `ambiguous` at 2000 ms and confidently named the wrong step at 0 ms. D5's impossibility #1, re-derived one module over — **and the counterexample was a cell in the fix's own matrix**, asserted as correct behaviour |
+| 2 | a step that has written once is `settled` | "we saw a write" is not "we saw all its writes". A control firing an analytics ping AND deferring its real write settled itself, and the deferred write was then confidently named with the NEXT step — R3.12's exact row, **silently** (no warning fired), reproduced 3/3 at deferrals of 150/300/600 ms |
+
+Draft 2's exposure was *wider* than the defect it was fixing: the prompt write resolves
+`expect_request` immediately, so the step's window closes in milliseconds and the deferral needed to
+escape drops from 1500 ms to 150 ms.
+
+**Two details that were nearly defects in the fix itself:**
 
 * **`step = -1` would have been the `anchor_id=None` fault again.** It already means "ungated"; making
   it also mean "ambiguous" rebuilds the exact overloaded sentinel that has now cost R3.7 two attempts —
@@ -3600,15 +3613,25 @@ false claim. That is precisely the property D5 says a temporal *attribution* rul
   hold would have made a run that HELD a write report every step as representative — strictly more
   dangerous than the mislabel being fixed. It now reads `earliest_step` and clamps an unknown to 0, so
   not knowing always makes the artifact MORE conservative.
-* **The liveness half is load-bearing.** Carrying every closed window as a candidate marks every hold in
-  every ordinary multi-write flow ambiguous — honest and useless, D0's shape wearing a reporting hat. A
-  window that saw its own write is `settled` and is not carried.
 
-**The price, pinned rather than argued.** A mutating step that writes nothing — common, since
-`MUTATING_KEYWORDS` measures 28% false positives — makes the NEXT step's promptly-sent write ambiguous
-for the length of the grace tail. That cost is a matrix cell
-(`a non-writing mutating step makes the next step's prompt write ambiguous`) so a future change to it is
-deliberate rather than accidental.
+**THE PRICE, measured rather than argued, and it is the design rather than a tuning artifact.** A
+multi-write flow's holds are never named. Measured on an ordinary 3-mutating-step recipe where only the
+last step writes, and writes PROMPTLY — the easiest possible attribution:
+
+    0.105.0   step 2 'confirm the order'                 steps_representative 2
+    0.106.0   ambiguous, candidates=[0, 1, 2]            steps_representative 0
+
+Draft 2 existed to buy that precision back and could not do it soundly. The report still lists every
+held request in order with its method, URL, body and key; what is lost is the per-step NAME, and
+recovering it needs the causal signal D5 blocks. Pinned as a matrix cell
+(`a mutating step that never writes keeps every later hold ambiguous`) so a future change is deliberate.
+
+**Residual, stated.** A write caused by a NON-mutating step's control never has a candidate of its own —
+such a step opens no window — so in a single-mutating-step flow it is named with that step. The audit
+confirmed this at the arbiter level and REFUTED it end-to-end: the learn path promotes a step to
+mutating from wire evidence (`flow.py:627-635`), so a control that writes during learn always gets a
+window. It survives only for a page that writes at replay and did not at learn. Note also that with one
+candidate "ambiguous" is not expressible — naming it is the only answer available.
 
 **And the sibling this reproduction exposed is worse than the finding: `R4.39`.** The same "whichever
 step is mid-act" fact that refuted the mitigation is live on the REPLAY path, where it picks the

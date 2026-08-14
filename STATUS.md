@@ -1,10 +1,10 @@
 # ultracua — status & observations (2026-07-01)
 
-> **Counts refreshed 2026-08-13 (0.105.0, 1038 tests — 1028 passing + 8 strict-xfail for R4.5, R4.30, R3.7, R4.34 and R4.37); the NARRATIVE below is still the 2026-07-01
+> **Counts refreshed 2026-08-14 (0.106.0, 1056 tests — 1046 passing + 10 strict-xfail for R3.7, R4.5, R4.30, R4.34, R4.37, R4.38 and R4.39); the NARRATIVE below is still the 2026-07-01
 > snapshot and lags ~16 versions.** What it says about the shipped core remains true; what it omits is
 > everything the correctness plan has landed since 0.75.0 — S2–S9, S17 and S6/AB-1, the CLI exit-truth
 > and fleet-visibility work, and the standing defect register's growth to a round-4 series of 32. The
-> honest current state of the open findings is `docs/open-defects.md` (3 open in round 3, 21 in round
+> honest current state of the open findings is `docs/open-defects.md` (2 open in round 3, 22 in round
 > 4, both machine-checked) and `docs/correctness-plan.md`, not this file. Rewriting the narrative is
 > Phase 7's job; the numbers are corrected here so nobody quotes a stale one in the meantime.
 
@@ -21,8 +21,8 @@ engine is the moat, and it is not yet hardened for unattended production.** Phas
 engine), A–C (the Flow API: define → learn → approve → replay → auth-refresh → health), and D
 (write flows) are shipped and merged, and the ops layer has since hardened (logging, CI,
 retry/backoff, fleet supervisor + freshness canary, a cross-process meta lock, and a standing
-locator-resilience benchmark). **1039 tests**, all key-less (real headless Chromium against local
-fixtures, run in CI on Linux + Windows, sharded two ways per OS); version **0.105.0**. Secrets handling is a real strength:
+locator-resilience benchmark). **1056 tests**, all key-less (real headless Chromium against local
+fixtures, run in CI on Linux + Windows, sharded two ways per OS); version **0.106.0**. Secrets handling is a real strength:
 credentials are env-sourced at runtime and **never persisted** — only the resulting `storage_state`
 cookies are saved (atomically).
 
