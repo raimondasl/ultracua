@@ -486,8 +486,31 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   AND `rowIdOf` no longer borrowing an identity from a row-like DESCENDANT. Both change what a captured
   `anchor_id` means for nested shapes, so it is a resolver trade, adjudicated on the bench, and it does
   NOT bundle with R4.34 even though the two are adjacent.
-- **S12. R3.12** — reproduce first (register's own rule; it is code-reading-only today), then fix or
-  refute the dryrun act-window mislabel.
+- **S12. R3.12** — ✅ **DONE in 0.106.0.** Reproduce-first was the whole value of the slice: the finding
+  CONFIRMED 3/3, and the same reproduction **refuted the mitigation the entry used to rate itself
+  medium**. R3.12 claimed the mislabelled row is "partly self-revealing — commit B's intent beside
+  commit A's key", treating the window and the `Idempotency-Key` as independent sources. They are one
+  source: the key is a context header live for whichever step is mid-act, so every field on the row
+  agrees with every other and all of them are wrong.
+
+  **The fix shape this bullet inherited was BLOCKED, and nobody had noticed.** The entry proposed
+  bounding attribution to the drained window instead of a 2 s tail — a temporal design, which `D5`'s
+  impossibility #1 rules out by measurement. D5 was written after R3.12 and the two were never
+  reconciled. What shipped therefore does not attribute anything; it changes what the report may CLAIM
+  (`step` / `ambiguous` / `ungated`, one deciding function, candidates listed). The grace tail survives
+  in the rule but now governs how OFTEN "ambiguous" is said and never whether a WRONG step is named —
+  the property D5 says a temporal *attribution* rule cannot have.
+
+  **Two near-misses inside the fix, both the register's own shapes.** Reusing `step = -1` for
+  "ambiguous" would have rebuilt the `anchor_id=None` overload that has cost R3.7 two attempts; and
+  `steps_representative` filtered `-1` out, so an unattributable hold would have certified every step as
+  representative — strictly worse than the mislabel. Both are pinned.
+
+  **It also exposed a worse sibling: `R4.39`,** live on the REPLAY path. The same "whichever step is
+  mid-act" fact picks the Idempotency-Key that actually rides the wire, so one recipe replayed twice —
+  with only the page's debounce changed — sent step 0's write under two different keys. A retry cannot
+  dedupe. HIGH, inviolable #3, filed and pinned strict-xfail; NOT fixed here, because refusing to claim
+  fixes a report and changes nothing about what the browser sends.
 - **S13. Evals: port or delete (simplification).** Evals run nowhere, the runner cannot gate (H2), one
   grep-shaped check was red six releases (H3). Port load-bearing checks into pytest as behaviour;
   delete the rest and the runner. H6's ungated benchmarks get the same treatment: gate or delete.

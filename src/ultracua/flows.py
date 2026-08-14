@@ -2575,7 +2575,7 @@ async def dry_run(spec: FlowSpec, params: Optional[dict] = None, *,
     both `on_drift='relearn'` refusals, the slot-binding guard, and the parameterized-write precheck
     refusal.
     """
-    from .dryrun import DryRunArbiter
+    from .dryrun import ATTRIBUTED, DryRunArbiter
 
     cache = cache or _default_cache()
     key = flow_key(spec.goal, spec.start_url, spec.scope)
@@ -2627,8 +2627,14 @@ async def dry_run(spec: FlowSpec, params: Optional[dict] = None, *,
     rep.writes_reached = sum(1 for h in rep.held if h.in_window)
     # The FIRST hold makes every later step unrepresentative: it was fulfilled with a synthesized response,
     # so the page state after it is fictional and write #2's body may be computed from it.
-    first_hold_step = min((h.step for h in rep.held if h.step >= 0), default=-1)
-    rep.steps_representative = first_hold_step if first_hold_step >= 0 else len(cached.steps)
+    # `earliest_step`, never `step`: a hold the arbiter could not attribute reports -1 there, and
+    # filtering those out would make a run that HELD a write certify every step as representative — the
+    # single most dangerous thing this artifact could imply. An unknown provenance clamps to 0 instead,
+    # so not knowing always makes the report MORE conservative (R3.12).
+    if rep.held:
+        rep.steps_representative = min(max(h.earliest_step, 0) for h in rep.held)
+    else:
+        rep.steps_representative = len(cached.steps)
     if rep.held and rep.writes_planned > rep.writes_reached:
         rep.warnings.append(
             f"only {rep.writes_reached} of {rep.writes_planned} planned writes were reached — the flow "
@@ -2637,6 +2643,14 @@ async def dry_run(spec: FlowSpec, params: Optional[dict] = None, *,
         rep.warnings.append(
             f"steps after index {rep.steps_representative} ran against a SYNTHESIZED response and are not "
             f"representative of a real run")
+    # Keyed off the ONE quiet state, not off a list of noisy ones, so an attribution state added later is
+    # loud by default (R3.9/CLI-1's rule, applied before it can be re-earned).
+    unattributed = [h for h in rep.held if h.attribution != ATTRIBUTED]
+    if unattributed:
+        rep.warnings.append(
+            f"{len(unattributed)} held request(s) could NOT be attributed to a step — more than one "
+            f"mutating step was a live candidate, so the report names none. A write deferred out of an "
+            f"earlier step arrives here; do not read these bodies as belonging to the step they follow")
     if not report.success and rep.aborted is None and not rep.held:
         rep.warnings.append(f"replay did not complete: {report.note or report.mode}")
     return rep

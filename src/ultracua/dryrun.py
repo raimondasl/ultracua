@@ -66,6 +66,16 @@ _log = get_logger("dryrun")
 # redirect leak in the module docstring. Deliberately a module constant so a test can assert on it.
 IDEMPOTENT_METHODS = ("GET", "HEAD", "OPTIONS")
 
+# How much the report may CLAIM about which step caused a held write. Three states, because two would
+# lie in the way R3.7 has now cost two attempts: `step == -1` alone would mean BOTH "nobody gated this"
+# and "more than one step could own it", and a consumer cannot tell those apart — different facts, and
+# different things for a human to do about them.
+#
+# QUIET IS AN ALLOWLIST (R3.9/CLI-1): `ATTRIBUTED` is the only state the report passes over in silence,
+# so a state added tomorrow is loud by default rather than invisible in a `!= "ambiguous"` test.
+ATTRIBUTED = "step"                                   # this write arrived while exactly one step was live
+ATTRIBUTION_STATES = (ATTRIBUTED, "ambiguous", "ungated")
+
 # Channels with no interception surface at any layer. Poisoned in-page so a call raises loudly rather than
 # escaping; reaching one is an abort, because "we could not observe this" is not a safe outcome.
 _UNINTERCEPTABLE_JS = r"""
@@ -101,6 +111,21 @@ class HeldWrite:
     late: bool = False                 # arrived in the grace tail after the window closed
     telemetry: bool = False            # classified as a telemetry host: recorded, still held
     ts: float = 0.0
+    # WAS this write gated (`in_window`) and WHICH step caused it (`attribution`) are different
+    # questions — collapsing them was R3.3's sixth-pass finding, so they stay on separate axes here.
+    # `in_window` still decides the `ungated-write` abort and nothing else reads `attribution` for it.
+    attribution: str = ATTRIBUTED
+    candidates: list = field(default_factory=list)     # when ambiguous: every step that could own it
+
+    @property
+    def earliest_step(self) -> int:
+        """The LOWEST step index this write could belong to, or -1 if none is known. Consumers that ask
+        "from which step is the report no longer representative" must use this, never `step`: an
+        ambiguous hold whose `step` is -1 would otherwise read as "no hold happened here" and quietly
+        certify the whole recipe."""
+        if self.attribution == ATTRIBUTED:
+            return self.step
+        return min(self.candidates) if self.candidates else -1
 
 
 @dataclass
@@ -141,7 +166,11 @@ class DryRunArbiter:
         self.routed: list = []          # (method, url) seen by the route layer
         self.observed: list = []        # (method, url) seen by context.on("request") — the second ledger
         self.faults: list = []
-        self._window = {"open": False, "until": 0.0, "step": -1, "intent": "", "key": ""}
+        self._window = {"open": False, "until": 0.0, "step": -1, "intent": "", "key": "",
+                        "settled": False}
+        # Windows that CLOSED without their own write being attributed, and whose grace tail has not yet
+        # expired: each is still a possible owner of whatever arrives next. See `_record`.
+        self._pending: list = []
         self._inflight = 0
         self._grace_ms = 0.0
 
@@ -201,16 +230,40 @@ class DryRunArbiter:
         except Exception:                        # noqa: BLE001 — binary/unavailable body
             body = "<unavailable>"
         st = self._state()
+        step, intent, attribution, candidates = self._attribute(st)
         rec = HeldWrite(
-            step=self._window["step"], intent=self._window["intent"], method=method, url=r.url,
+            step=step, intent=intent, method=method, url=r.url,
             body=body, resource_type=getattr(r, "resource_type", "") or "",
             idempotency_key=(r.headers or {}).get("idempotency-key", ""),
             navigation=bool(r.is_navigation_request()), in_window=(st != "closed"),
             late=(st == "closing"), telemetry=not is_write_request(method, r.url), ts=time.time(),
+            attribution=attribution, candidates=candidates,
         )
         self.report.held.append(rec)
         self.report.requests_held += 1
         return rec
+
+    def _attribute(self, st: str) -> tuple:
+        """WHICH step may this held write be labelled with? The ONE place that decides, so the rule is
+        enforced once rather than per branch.
+
+        This does NOT attribute a deferred write — that is blocked indefinitely by decision D5 and no
+        amount of window arithmetic changes it. It decides only whether the report has EARNED the right
+        to name a step, and says so out loud when it has not. The grace tail still appears in the rule,
+        but it now governs how OFTEN "ambiguous" is reported and never whether a WRONG step is named, so
+        no constant can be tuned into a false claim — which is the property D5's impossibility #1 says a
+        temporal *attribution* design can never have.
+        """
+        if st == "closed":
+            # Outside every window. `_adjudicate` aborts on this; the label must not imply a step
+            # anyway — it used to inherit whichever step ran last.
+            return -1, "", "ungated", []
+        live = self._live_candidates()
+        if live:
+            cands = sorted({p[0] for p in live} | {self._window["step"]})
+            return -1, "", "ambiguous", cands
+        self._window["settled"] = True
+        return self._window["step"], self._window["intent"], ATTRIBUTED, []
 
     def _adjudicate(self, rec: HeldWrite) -> None:
         if not rec.in_window:
@@ -248,8 +301,26 @@ class DryRunArbiter:
 
     # -- the act window ----------------------------------------------------------------------------
     def open_window(self, *, step: int, intent: str, key: str, grace_ms: float) -> None:
-        self._window.update({"open": True, "until": 0.0, "step": step, "intent": intent, "key": key})
+        # R3.12. There is ONE slot, so opening a window destroys the previous step's claim on it — while
+        # that step's grace tail says a write of its own may still be coming. Carry it forward as a
+        # PENDING candidate instead of letting the new step inherit its writes.
+        #
+        # A window that already saw its own write is `settled` and is NOT carried: without that, every
+        # ordinary multi-write flow (each write landing in its own window, tens of ms apart, all well
+        # inside a 2 s tail) would report every hold as ambiguous — honest and useless, which is D0's
+        # shape wearing a reporting hat.
+        prev = self._window
+        if prev["step"] >= 0 and not prev["open"] and not prev["settled"]:
+            self._pending.append((prev["step"], prev["intent"], prev["until"]))
+        self._window.update({"open": True, "until": 0.0, "step": step, "intent": intent, "key": key,
+                             "settled": False})
         self._grace_ms = grace_ms
+
+    def _live_candidates(self) -> list:
+        """Pending windows whose grace tail has not expired. Pruned here so the list cannot grow."""
+        now = time.time()
+        self._pending = [p for p in self._pending if now < p[2]]
+        return self._pending
 
     def close_window(self) -> None:
         # A grace tail, mirroring `flow._author_steps`' act window: a click-triggered write can land a few

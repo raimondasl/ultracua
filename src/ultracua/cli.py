@@ -234,7 +234,15 @@ async def _flow_dry_run(args: argparse.Namespace) -> None:
 
     print(f"dry run of {spec.name!r} — {len(rep.held)} request(s) HELD, none sent\n")
     for h in rep.held:
-        where = f"step {h.step} {h.intent!r}" if h.step >= 0 else "outside any step"
+        if h.attribution == "ambiguous":
+            # Never render this as a step. A write deferred out of an earlier step arrives inside a
+            # later step's window, and naming either one is the R3.12 defect.
+            where = ("NOT ATTRIBUTABLE to a step — candidates: "
+                     + ", ".join(str(c) for c in h.candidates))
+        elif h.step >= 0:
+            where = f"step {h.step} {h.intent!r}"
+        else:
+            where = "outside any step"
         print(f"  HELD  {where}")
         print(f"        {h.method} {h.url}")
         if h.idempotency_key:
