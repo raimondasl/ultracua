@@ -11,7 +11,7 @@ by applying this file's own sibling rule while redesigning R3.2; it is recorded 
 CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch was **PARKED, not
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
-The round-4 series has since grown to R4.37 as later slices filed against it: **20 open**, 13 fixed,
+The round-4 series has since grown to R4.38 as later slices filed against it: **21 open**, 13 fixed,
 4 parked, indexed and token-checked in the R4 STATUS INDEX at the top of that section.
 
 **THE PLAN.** `docs/correctness-plan.md` sequences every open item here — plus the test-machinery
@@ -770,7 +770,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **20 open**, 13 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **21 open**, 13 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -808,7 +808,7 @@ if and only if that branch is ever resumed.
 | R4.19 | open | `_reset_learn_baselines` clears shape/contracts but not `read_pin` |
 | R4.20 | fixed | seven durable renames, one retry — closed in 0.95.0 (S10) by one shared `fsio` helper |
 | R4.21 | open | `record()`'s refusal stays non-terminal — deliberate, but each retry re-fires the write |
-| R4.22 | open | Windows `ERR_NO_BUFFER_SPACE`, **7 occurrences**, undiagnosed — socket churn MEASURED and refuted at 0.104.0 |
+| R4.22 | open | Windows `ERR_NO_BUFFER_SPACE`, **8 occurrences**; socket churn refuted at 0.104.0, and occurrence 8 (local) argues local ≠ CI |
 | R4.23 | open | `test_flows_dry_run_holds_a_real_write_flow` failed once under load, undiagnosed |
 | R4.24 | open | a localhost round-trip stalled past the 5 s budget; ships unmitigated, 2 occurrences |
 | R4.25 | fixed | the load-dependent "cluster of three" was one defect + one bad test — assertion fixed in 0.88.0 |
@@ -822,8 +822,9 @@ if and only if that branch is ever resumed.
 | R4.33 | fixed | the corpus row added to adjudicate R3.7 could not fail for it — closed in 0.101.0 by the `row-nested-icon` scenario |
 | R4.34 | open | a shared `aria-label` on a nested per-row container turns the row guard OFF → silent wrong-row bind; **HIGH**, inviolable #3 |
 | R4.35 | open | a heal on a ROW-GUARD refusal re-grounds to a byte-identical recipe and reports a repair that repairs nothing |
-| R4.36 | open | a load-dependent write-refusal MISS: `record()` cached an autosave write flow that must be refused; **inviolable #3** |
+| R4.36 | open | a write leaving in a LATER dispatch was credited to the last commit — NARROWED in 0.105.0 (direct-`fetch` shape closed), see R4.38 |
 | R4.37 | open | a control whose nested wrapper owns no identity captures no `anchor_id`, so the row guard silently does not run; **HIGH**, inviolable #3 |
+| R4.38 | open | `ACTIVATION_CAUSED` matches an event's TYPE NAME with no provenance, so a write laundered through a synthetic `submit`/`reset` re-enters attribution; **HIGH**, inviolable #3 |
 
 
 **Scope.** The uncommitted `feat/shared-causal-attribution` work (would-be 0.76.0): extracting the
@@ -2354,6 +2355,40 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   running a command and reading a refusal each time, not an unattended `mode="auto"` loop firing
   invisibly. Revisit only with a remedy that does not depend on `record()` itself.
 
+* **R4.22 — OCCURRENCE 8 (0.105.0), THE FIRST ON A DEVELOPER HOST, and it argues the local and CI
+  failures are NOT the same phenomenon.** `test_write_safety_invariants.py::…[fetch-first-plain-loud]`
+  failed a full local suite run with `Page.goto: net::ERR_NO_BUFFER_SPACE at http://127.0.0.1:50143/`.
+  Ninth distinct test in eight occurrences. A re-run passed (1030 passed / 9 xfailed).
+
+  **This is the local capture the entry has been asking for since occurrence 6** — "CI uploads its
+  samples, a developer-host failure discards them". Two earlier failures in the same session were the
+  same shape and were LOST, because the suite was piped through `tail`. The error text survives here only
+  because that was changed; the instrument is a redirect, and it should stay one.
+
+  **What the host looks like, measured on a healthy run of the same suite, same machine, 2 s sampling:**
+
+  | | this developer host | CI (occurrence 7) |
+  |---|---|---|
+  | `free_mb` | **517 min**, 1330 start | 12,838 min |
+  | `nonpaged_pool_mb` | **4573 → 4684** | 171 → 207 |
+  | `handles` | 177k → 186k | 47k → 56k |
+  | `time_wait` | 50–388 | 25–359 |
+
+  The developer host runs at **25× the nonpaged pool and 3× the handles of the CI runner, and dips to
+  517 MB free**. That is a machine near memory exhaustion, and `WSAENOBUFS` is exactly what Windows
+  raises when a socket allocation cannot be satisfied. **So the local occurrence has an obvious candidate
+  that CI's numbers exclude** — occurrence 7 failed with 12.9 GB free. Treating all eight occurrences as
+  one phenomenon is the "two failures lumped together" mistake this register warns about; the honest
+  reading is that the CI series remains undiagnosed and the local one is probably host pressure.
+
+  **Stated as the limit it is:** the sampler covered the SUCCESSFUL re-run, not the failing run. This is a
+  healthy-run BASELINE on the failing host — which is one of the two holes the sampler was built to close
+  — and not a capture at the moment of failure. Do not quote it as one.
+
+  **The socket-churn refutation holds on both**, and was independently reproduced on this very run by
+  `scripts/count_fixture_connections.py`: 1890 connections over 1751 s = **1.08/s, 0.8%** of the
+  ephemeral range, against 1.04/s measured at 0.104.0.
+
 * **R4.22 — MEASURED at 0.104.0, and the leading hypothesis is REFUTED. Socket churn is not the cause.**
   Seven occurrences produced two standing hypotheses — ephemeral-port exhaustion and handle exhaustion —
   and a strong-looking lead: `benchmarks/drift_fixtures.py` sets `protocol_version = "HTTP/1.1"` with a
@@ -3821,9 +3856,81 @@ population that has never had it, which is exactly the class of resolver trade `
 adjudicate. It is not a comment-sized change and does not belong bundled into the slice that found it.
 
 
-## R4.36 — OPEN, HIGH, inviolable #3. Under CI load, `record()` CACHED an autosave write flow that the unattributed-write rule must refuse
+## ⚠️ NARROWED in 0.105.0, STILL OPEN — R4.36, HIGH, inviolable #3. Under CI load, `record()` CACHED an autosave write flow that the unattributed-write rule must refuse
 
-*high, lens `write-safety`, inviolable #3, observed once on CI, not yet reproduced locally*
+*high, lens `write-safety`, inviolable #3, observed on CI and then reproduced 4/4 deterministically*
+
+**⚠️ NARROWED in 0.105.0 and STILL OPEN. The direct-`fetch` shape is closed; the mainstream
+`requestSubmit()` idiom is not — see R4.38, filed by this slice's own audit. What follows
+described the change as a fix; it is a strict narrowing, and the difference matters because a
+closed finding stops being looked at.**
+
+**It is R4.26's residual rather than a new mechanism.** R4.26 established that a
+timer is not a turn boundary and added `inDispatch()` — but it left the boundary a timer and made the new
+signal a CONJUNCT. `inDispatch()` answers "is SOME dispatch in progress", which closes the case where a
+deferred write leaves in a BARE task and nothing else. When the `setTimeout(..., 0)` reset is overdue and
+a LATER, UNRELATED dispatch is running, both conjuncts are true and the write is credited to a commit
+that did not cause it.
+
+**Reproduced deterministically — no artificial load and no retries**, which is what the entry's own next
+step asked for. A benign `Details` click whose handler busy-waits (so its reset is overdue), one real
+keystroke queued during that block into an autosaving field. Chromium serves input tasks ahead of overdue
+timers — the same ordering R4.26 measured — so the write leaves inside the `input` dispatch with the
+click's turn still open. **4/4 against 0.104.0.**
+
+**And it answers the severity question this entry left open.** The cached recipe's ONLY step is the benign
+click, carrying `mutating=True`, a `precond_scope`, and `mutating_sources=['wire']`: not "cached ungated"
+but **gated onto the wrong step**, with the demonstrated write absent from the recipe entirely. That is
+R3.2's harm class. The matrix cell shows the same shape from the other side —
+`steps=[('click Commit', False), ('click Next', True)]`, the real commit ungated and the benign click
+gated.
+
+**ONE KEYSTROKE IS LOAD-BEARING and cost the first three attempts at this harness.** With three
+characters the second and third writes land after the reset, go unattributed, and `record` refuses for a
+DIFFERENT write — the flow is correctly refused, the misattribution is still there, and a test built that
+way passes while proving nothing. The shipped test pins `saves == 1` as a premise for exactly this reason.
+
+**THE FIX: ask WHICH dispatch, not WHETHER.** The turn belongs to the commit's own event, captured at
+commit time (`__ucev`). A write is in that turn if the current dispatch IS that event — which holds
+through its microtask continuations, since `window.event` is restored only when the dispatch ends — or if
+the current dispatch is one the activation itself CAUSED. That whitelist is closed by the platform rather
+than by taste: `submit`, `reset`, `formdata`. So a native submit button, `requestSubmit()` and
+Enter-submit stay attributable, and `form.submit()` fires no event at all so it remains the commit's own
+dispatch.
+
+`input` and `change` are deliberately excluded. They are caused by the user editing a field, not by the
+activation — that is R4.36 — and `change` additionally fires on BLUR, arbitrarily far from any commit.
+**The cost is real and accepted:** a page that writes from a `change` handler after a checkbox click is
+now REFUSED rather than attributed. Fail-loud, in `record()`, where a human reads the refusal — the
+direction this register requires when a cause cannot be proven.
+
+**The instrument had the defect encoded in it, which is why the matrix could not have caught this.**
+`tests/test_write_safety_invariants.py` asserted its per-cell premise as
+`inDispatch is (timing not in _MUST_REFUSE)` — "a refused write is one that left OUTSIDE a dispatch" —
+and that equivalence IS the belief R4.36 walks through. Every REFUSED cell it had defers into a bare
+task. Shape and verdict are now declared independently (`_IN_DISPATCH` beside `_MUST_REFUSE`), so a cell
+can exist for every combination of the two, and the naive-`window.event` premise is stated as the
+invariant it actually is — the naive read agrees with the native one except where the page fakes it —
+rather than derived from the verdict.
+
+Both regression tests verified RED against 0.104.0: the field-shaped one in
+`tests/test_turn_boundary.py`, and the decision-point cell
+`dispatch_of_a_later_noncommit_event` in the matrix. `drift_bench` invariants all hold with
+`writes double=0 suppressed=0 wrong_target=0` — required here because this changes what runs IN the page.
+
+**THE RESIDUAL SENTENCE THAT WAS HERE WAS FALSE, and the audit caught it.** It said "a write deferred
+into a bare task still cannot be attributed at all, by design". A bare task that calls
+`form.requestSubmit()` — or merely `div.dispatchEvent(new Event('reset'))` — puts the write inside a
+dispatch the whitelist accepts by NAME, and attribution resumes. Under the narrowest reading ("no
+dispatch is running at the instant of the write") the sentence survives; under the reading an engineer
+would rely on ("deferring into a bare task cannot recover attribution") it is false. Measured: the
+entire difference between refused and attributed is one string, `uc-fake` vs `reset`. See R4.38.
+
+**What DID move:** a write leaving inside a non-whitelisted later dispatch — the direct-`fetch` autosave
+— is now refused, 4/4.
+
+
+The original filing follows.
 
 **Where.** `tests/test_record.py::test_record_write_flow_type_autosave_is_refused` (the assertion
 `res.cached is False and "single" in res.note`), guarding the refusal in `record()`'s write-attribution
@@ -3919,3 +4026,59 @@ the cell that caught attempt 2.
 `<a href=...>` there. A wrapper that owns nothing was in no instrument. Two fix attempts, a 30-cell test
 matrix and a 185-row corpus were all blind to the same gap because they were built from the same mental
 image of what a row looks like.
+
+
+## R4.38 — OPEN, HIGH, inviolable #3. `ACTIVATION_CAUSED` matches an event's TYPE NAME with no provenance check, so a write laundered through a synthetic `submit`/`reset`/`formdata` dispatch is credited to the last commit
+
+*high, lens `write-safety`, inviolable #3, reproduced 4/4 against 0.105.0 and identically against 0.104.0*
+
+**Where.** `src/ultracua/recorder.py` — `attributedSeq`'s second arm,
+`ACTIVATION_CAUSED[cur.type]`, where `ACTIVATION_CAUSED = { submit: 1, reset: 1, formdata: 1 }`.
+
+**Mechanism.** R4.36's fix replaced "is SOME dispatch running" with "is it the commit's dispatch, or one
+the activation CAUSED". The second half is answered by a dict lookup on the event's type NAME. It asks
+nothing about the event's target, its provenance, or whether the commit's activation had any part in
+creating it — so ANY dispatch named `submit`, `reset` or `formdata` re-opens attribution while
+`__ucturn === 1`. The turn is still closed by `setTimeout(..., 0)`, so R4.36's overdue-reset window is
+unchanged.
+
+**Two consequences, both measured.**
+
+1. **R4.36's own field shape survives for the mainstream idiom.** Take the harness in
+   `tests/test_turn_boundary.py` and change one thing — the autosaving field calls
+   `form.requestSubmit()` instead of `fetch` — and the write lands inside a `submit` dispatch the
+   whitelist accepts. That is the Turbo/Rails/Stimulus auto-submit pattern, not a contrivance.
+   Measured 4/4: `cached=True`, the recipe's ONLY step the benign `Details` click carrying
+   `mutating=True`, a `precond_scope` and `mutating_sources=['wire']`, with the demonstrated write
+   absent from the recipe entirely.
+
+       shape=fetch   saves=1 cached=False   refused (R4.36's fix working)
+       shape=submit  saves=1 cached=True    step 0 'click Details' mutating=True sources=['wire']
+
+2. **A BARE TASK can re-enter attribution**, which is the state R4.26's `inDispatch()` exists to refuse.
+   A `setTimeout(() => form.requestSubmit(), N)` debounce — or literally
+   `div.dispatchEvent(new Event('reset'))` on a plain `<div>` with no form and no activation anywhere —
+   puts the write inside an accepted dispatch. The audit's A/B isolated it to the string: same page,
+   same bare task, same `dispatchEvent`, same write, and only the event's NAME differs —
+   `submit`/`reset`/`formdata` cache, `uc-fake` refuses.
+
+**NOT A REGRESSION, and this is load-bearing for how to treat it.** The 0.105.0 predicate is strictly
+narrower than 0.104.0's: `OLD = __ucturn===1 && cur`, `NEW = __ucturn===1 && cur && __ucev && (cur ===
+__ucev || WL[cur.type])`, so `NEW ⊆ OLD` and no misattribution the fix *creates* is possible. Both
+probes cache identically on 0.104.0. R4.36's narrowing is a real improvement that does not reach this
+shape.
+
+**Why the instrument missed it, again.** `tests/test_turn_boundary.py` and all six record-path matrix
+cells stay green throughout — every one of them writes with `fetch`. One idiom was not in the shape set,
+which is the third time in this register's recent history that a fix and its instrument shared a blind
+spot because the same person built both from the same mental image.
+
+**What a fix has to answer, and why it is not a one-line whitelist edit.** Deleting the whitelist
+re-breaks native submit buttons, `requestSubmit()` and Enter-submit — all legitimately activation-caused,
+all currently attributable, and all shapes `tests/test_write_safety_invariants.py` covers. The real
+question is PROVENANCE: was this `submit` dispatched *within* the commit's own dispatch? That is the same
+"which task / which dispatch nesting" question the turn boundary has failed to answer twice
+(R4.26, R4.36), so the next attempt should be treated as the third strike on that mechanism and read D5
+first.
+
+**Pinned** by `test_a_write_laundered_through_requestsubmit_is_not_credited_either` (strict xfail).

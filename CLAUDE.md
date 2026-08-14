@@ -144,6 +144,11 @@ all. A fix built on a wrong diagnosis is worse than none.
 nothing. This has caught several no-op "fixes".
 
 **The instrument can suppress the defect — and a rare bug is a harness problem, not a patience problem.**
+R4.36 is the third time this paid: a CI-only write-refusal MISS (NARROWED, not closed — see R4.38) reproduced 4/4 by making the turn-reset
+timer overdue ON PURPOSE — a busy-waiting click handler plus one keystroke queued during the block —
+instead of waiting for a starved renderer. Its harness carries a premise worth copying, `saves == 1`:
+with three keystrokes the flow refuses for a LATER write, so the test passes while the misattribution
+it exists to catch survives untouched.
 R4.26 reproduced 1 run in 40 under load and **zero in 150** once an in-page probe was added to watch it.
 Waiting longer with a heavier instrument was never going to produce the trace. The deterministic harness
 built instead REFUTED the inferred cause on its first run — the guess was that an overdue timer preempts

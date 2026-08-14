@@ -387,6 +387,25 @@ _TIMING = {
     # timers fire in arming order. The write's timer is therefore armed before the turn-reset of the
     # very commit it is about to be credited to, and beats it every time.
     "timer_armed_by_an_earlier_commit": ("window.__armed = true;", _ARM_ON_NEXT_JS),
+    # R4.36. The write leaves inside a dispatch — just not the COMMIT'S dispatch. Every cell above
+    # defers into a BARE task, which is why `inDispatch()` closed them all and why this shape survived
+    # it: both of the old conjuncts (`__ucturn === 1`, `inDispatch()`) are TRUE here.
+    #
+    # Deterministic by listener phase, with no scheduling race. The arming listener is on `window` in
+    # the BUBBLE phase, so it runs after the recorder's `document` capture listener has already opened
+    # the turn for this click; it then synchronously dispatches a non-commit event whose handler
+    # writes. The decision-point state is exactly the field one — turn open, current dispatch is not
+    # the commit's — which in the field is produced by an overdue turn-reset and a keystroke
+    # (tests/test_turn_boundary.py reproduces that shape end to end).
+    "dispatch_of_a_later_noncommit_event": (
+        "window.__armed_nc = true;",
+        "window.addEventListener('click', function(ev){"
+        " if (window.__armed_nc && ev.target && ev.target.id === 'next') {"
+        "  window.__armed_nc = false;"
+        "  var t = document.getElementById('out');"
+        "  t.addEventListener('uc-later', function(){" + _POST_JS + "});"
+        "  t.dispatchEvent(new Event('uc-later'));"
+        " } }, false);"),
     # The same thing against a HOSTILE page. `window.event` is a configurable accessor, so a page can
     # redefine it to return a truthy fake and make every deferred write look like it left inside a
     # dispatch — which would hand R4.26 straight back. Measured: the redefinition succeeds, a plain
@@ -397,7 +416,15 @@ _TIMING = {
         "Object.defineProperty(window, 'event', {configurable: true,"
         " get: function(){ return {type: 'FAKE'}; }});" + _ARM_ON_NEXT_JS),
 }
-_MUST_REFUSE = {"timer", "timer_armed_by_an_earlier_commit", "timer_with_window_event_shadowed"}
+_MUST_REFUSE = {"timer", "timer_armed_by_an_earlier_commit", "timer_with_window_event_shadowed",
+                "dispatch_of_a_later_noncommit_event"}
+
+# The SHAPE each cell produces — whether its write leaves the browser INSIDE an event dispatch —
+# DECLARED, not derived. It used to be derived from `_MUST_REFUSE` ("a refused write is one that left
+# outside a dispatch"), and that equivalence was itself the blind spot R4.36 walked through: a write can
+# leave inside a dispatch that simply is not the COMMIT'S, and must still be refused. Keeping shape and
+# verdict independent is what lets a cell exist for every combination of the two.
+_IN_DISPATCH = {"sync", "microtask", "dispatch_of_a_later_noncommit_event"}
 
 
 def _timing_page(commit_body: str, extra: str) -> str:
@@ -446,9 +473,9 @@ async def test_a_recorded_write_is_gated_on_the_step_that_wrote_or_refused(timin
             f"{timing}: the demo must commit exactly once; saw {len(site.posts)} POST(s)")
         # PIN THE PREMISE — each cell must actually produce the write SHAPE it is named for, or it is
         # asserting the product's behaviour on an input it never generated.
-        assert seen.get("inDispatch") is (timing not in _MUST_REFUSE), (
+        assert seen.get("inDispatch") is (timing in _IN_DISPATCH), (
             f"{timing}: this cell is supposed to issue its write "
-            f"{'INSIDE' if timing not in _MUST_REFUSE else 'OUTSIDE'} an event dispatch and did the "
+            f"{'INSIDE' if timing in _IN_DISPATCH else 'OUTSIDE'} an event dispatch and did the "
             f"opposite, so it exercised the wrong shape entirely (inDispatch={seen.get('inDispatch')})")
         if timing.startswith("timer_"):
             # ...and for R4.26's cells specifically: the deferred write must land AFTER the benign
@@ -460,11 +487,19 @@ async def test_a_recorded_write_is_gated_on_the_step_that_wrote_or_refused(timin
         # truthy at the moment of the write — from the fake — or the shadowing never took and the cell
         # is just a duplicate of the one above it. Everywhere else the naive read agrees with the
         # native one, which is what makes the shadowed cell the only thing separating the two.
+        # Stated as the invariant it actually is — the naive read AGREES with the native one everywhere
+        # except the cell where the page fakes it — rather than derived from the verdict, which coupled
+        # it to `_MUST_REFUSE` and made a refused-but-genuinely-in-a-dispatch cell inexpressible.
         shadowed = timing == "timer_with_window_event_shadowed"
-        assert seen.get("plainEvent") is (shadowed or timing not in _MUST_REFUSE), (
-            f"{timing}: the page's naive `window.event` read was {seen.get('plainEvent')} at the moment "
-            f"of the write, which is not the setup this cell is named for "
-            f"(native reading of the same moment: {seen.get('inDispatch')})")
+        if shadowed:
+            assert seen.get("plainEvent") is True and seen.get("inDispatch") is False, (
+                f"{timing}: the shadowing never took — a naive `window.event` read must return the "
+                f"page's FAKE (got {seen.get('plainEvent')}) while the native getter returns the truth "
+                f"(got {seen.get('inDispatch')}), or this cell is a duplicate of the one above it")
+        else:
+            assert seen.get("plainEvent") == seen.get("inDispatch"), (
+                f"{timing}: the naive `window.event` read ({seen.get('plainEvent')}) disagrees with the "
+                f"native getter ({seen.get('inDispatch')}) on a cell that does not shadow it")
 
         if timing in _MUST_REFUSE:
             assert res.cached is False and flow is None, (
