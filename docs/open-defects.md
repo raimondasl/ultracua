@@ -808,7 +808,7 @@ if and only if that branch is ever resumed.
 | R4.19 | open | `_reset_learn_baselines` clears shape/contracts but not `read_pin` |
 | R4.20 | fixed | seven durable renames, one retry — closed in 0.95.0 (S10) by one shared `fsio` helper |
 | R4.21 | open | `record()`'s refusal stays non-terminal — deliberate, but each retry re-fires the write |
-| R4.22 | open | Windows `ERR_NO_BUFFER_SPACE`, **7 occurrences**, undiagnosed — occurrence 7 is the first with resource samples |
+| R4.22 | open | Windows `ERR_NO_BUFFER_SPACE`, **7 occurrences**, undiagnosed — socket churn MEASURED and refuted at 0.104.0 |
 | R4.23 | open | `test_flows_dry_run_holds_a_real_write_flow` failed once under load, undiagnosed |
 | R4.24 | open | a localhost round-trip stalled past the 5 s budget; ships unmitigated, 2 occurrences |
 | R4.25 | fixed | the load-dependent "cluster of three" was one defect + one bad test — assertion fixed in 0.88.0 |
@@ -2353,6 +2353,60 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   a page re-fires the write each time — but the harm profile differs from R3.13's: this is a human
   running a command and reading a refusal each time, not an unattended `mode="auto"` loop firing
   invisibly. Revisit only with a remedy that does not depend on `record()` itself.
+
+* **R4.22 — MEASURED at 0.104.0, and the leading hypothesis is REFUTED. Socket churn is not the cause.**
+  Seven occurrences produced two standing hypotheses — ephemeral-port exhaustion and handle exhaustion —
+  and a strong-looking lead: `benchmarks/drift_fixtures.py` sets `protocol_version = "HTTP/1.1"` with a
+  comment saying HTTP/1.0 "burned its own socket" per request and that consecutive runs exhausted the
+  ephemeral-port range with this exact error, while **28 of the suite's 32 fixture servers never got
+  that fix**. That is this register's most-repeated shape (a guard applied to one path and not its
+  siblings) with the remedy already written down. It is wrong, and the numbers say so.
+
+  **The mechanism is real.** Counting TCP connections accepted against HTTP requests served:
+
+  | protocol | connections | requests | requests per connection |
+  |---|---|---|---|
+  | HTTP/1.0 | 13 | 13 | **1.0** |
+  | HTTP/1.1 | 1 | 25 | **25.0** |
+
+  Every fixture request under HTTP/1.0 does burn its own ephemeral port.
+
+  **The pressure is not.** A full suite run, instrumented end to end
+  (`scripts/count_fixture_connections.py`, shipped so the next occurrence gets a number):
+
+      1884 connections over 1806 s = 1.04/s
+      steady state at Windows' 120 s TIME_WAIT delay ~= 125 sockets held
+      = 0.8% of the 16384-port ephemeral range (49152-65535)
+
+  **The model validates against occurrence 7's independent samples**, which is what makes this a
+  refutation rather than a counter-story: predicted ~125 sockets held, and
+  `scripts/sample_resources.ps1` measured TIME_WAIT at **130** on shard 2 and **186** (peak 359) on
+  shard 1, on a different machine. The suite's socket behaviour is understood and it is two orders of
+  magnitude away from exhaustion.
+
+  **It does not explain the one correlate either.** Occurrence 7's only rising signal was the nonpaged
+  pool (171.2 → 207.1 MB, +35.9 MB). TIME_WAIT entries cost on the order of a kilobyte, so ~125 held
+  sockets account for **~0.13 MB — 0.4% of the observed rise**. Whatever is consuming that pool, it is
+  not fixture sockets.
+
+  **So the 28-file conversion is NOT being done**, and that is the finding. It would remove roughly half
+  the suite's connections (measured on the bench: 695 → 381), cost nothing in correctness, and fix
+  nothing — while touching 28 files. A textual screen (not a per-path verification, and it should not be
+  quoted as one) flags 5 of them as containing no `Content-Length` at all, which under keep-alive makes a
+  client wait for a body that never ends instead of closing — so the conversion is not even mechanical. A change justified by a plausible mechanism and a comment, with no
+  measurement, is what this register keeps filing findings about; the fact that it would have been a
+  textbook sibling-guard fix is precisely why it needed a number first.
+
+  **A note on that comment, stated carefully.** The bench's own claim that HTTP/1.0 "exhausted the
+  ephemeral-port range" does not reproduce at today's volumes: the HTTP/1.0 counterfactual runs at
+  695 connections over 173 s = 4.0/s, ~482 held, **2.9%** of the range. That measures today's bench, not
+  the historical one — the corpus has changed since — so the comment is annotated rather than
+  contradicted. Keep the keep-alive: it halves churn and costs nothing. Do not cite it as R4.22's remedy.
+
+  **What is now ruled out, so nobody re-spends it:** ephemeral-port exhaustion (0.8%), handle exhaustion
+  (occurrence 7's peak was not at the failure), memory pressure (12.9 GB free), and fixture socket churn
+  as the nonpaged-pool driver (0.4% of the rise). What remains is the pool itself, unexplained, and the
+  standing observation that three occurrences in a row resist any change-linked explanation.
 
 * **R4.22 — OCCURRENCE 7 (0.101.0, PR #152, run 31677764463, windows 1/2). THE FIRST ONE WITH RESOURCE
   SAMPLES COVERING THE MOMENT OF FAILURE**, which is what occurrence 6 said would turn this into
