@@ -3,7 +3,7 @@
 **Goal.** Bring ultracua to a state with no known testing holes and no known correctness issues, for
 users. Simplify and make more conservative where that closes a hole. Nothing lands without a test that
 failed first; nothing merges that is not green; anything touching write safety gets a pre-merge
-adversarial audit — the only instrument that has ever caught a wrong fix here (three for three).
+adversarial audit — the only instrument that has ever caught a wrong fix here (five for five).
 
 **Grounding.** Survey at v0.75.0 (main; all 118 PRs merged; no open PRs): 11 open register items
 (R3.2, R3.3, R3.5–R3.11, R3.12, R3.13), 6 test-machinery holes (H1–H6), 5 CLI/API truthfulness defects
@@ -518,6 +518,28 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   closing it is what the fix's test does.
 
   **S6 is UNBLOCKED.** Its oracle was honest all along; the mechanism under it was not, and now is.
+
+  **AND THE SAME FAMILY PRODUCED R4.36, NARROWED (not closed) in 0.105.0 — R4.26's residual.**
+  R4.26 proved a timer is not a turn boundary and added `inDispatch()`; it left the boundary a timer and
+  made the new signal a CONJUNCT, which closes only the case where the write leaves in a BARE task. A
+  write leaving inside a LATER, UNRELATED dispatch while the overdue reset is still pending satisfies
+  both conjuncts. Fixed by asking WHICH dispatch — the commit's own event, plus the platform-closed set
+  of activation-caused events (`submit`/`reset`/`formdata`) — so native submit, `requestSubmit()` and
+  Enter-submit stay attributable while `input`/`change` do not.
+
+  **It did NOT close the finding, and the slice's own audit is what established that.** The whitelist
+  matches on the event's TYPE NAME with no provenance check, so the same field shape with
+  `form.requestSubmit()` in place of `fetch` — the mainstream autosave idiom — is still credited to the
+  benign click, and a BARE TASK that synthesises a `submit`/`reset` re-enters attribution entirely
+  (**R4.38**). The narrowing is real and strictly safe (`NEW ⊆ OLD`), but "fixed" was the wrong verdict
+  and a closed finding stops being looked at.
+
+  Two things carry forward. The deterministic-harness lesson held a third time: the field shape is a
+  scheduling race, and it was reproduced 4/4 by making the reset overdue on purpose rather than by
+  waiting. And **the matrix could not have caught it, because the defect was encoded in the
+  instrument**: its per-cell premise asserted `inDispatch is (timing not in _MUST_REFUSE)` — "a refused
+  write is one that left outside a dispatch" — which is the exact belief the finding walks through.
+  Shape and verdict are now declared independently, so a cell can exist for every combination.
 
   Original bullet follows. Found while
   landing S1: it fails intermittently in the full suite and never in isolation (5/5 isolated, 3/3 whole

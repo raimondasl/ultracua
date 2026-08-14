@@ -86,7 +86,10 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
   // (click/press/select), and `__ucturn` counts the commits in the CURRENT synchronous turn (reset on the next
   // macrotask). A wire-write is attributed ONLY to a turn that holds EXACTLY ONE commit; everything else
   // (deferred, or a nested synthetic commit sharing the turn) is left unattributed so `record` fails LOUD.
-  let __uclast = null, __ucturn = 0;
+  // `__ucev` is the EVENT OBJECT of the commit that opened the current turn. R4.36: `__ucturn` alone
+  // (even with `inDispatch()`) cannot tell "still in the commit's turn" from "a LATER dispatch, while
+  // the commit's reset timer happens to still be pending" — see `attributedSeq`.
+  let __uclast = null, __ucturn = 0, __ucev = null;
   const COMMIT = { click: 1, press: 1, select: 1 };
   const nextSeq = () => {
     let n = 0;
@@ -158,6 +161,7 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
       if (COMMIT[action]) {
         __uclast = seq;
         __ucturn += 1;
+        __ucev = curEvent();      // the dispatch this turn belongs to, for `attributedSeq` (R4.36)
         // The turn ends when control returns to the event loop: reset on the next MACROTASK, so the count
         // stays live through this turn's synchronous code AND its microtask continuations, but a later
         // timer/await-network continuation runs in a fresh turn with __ucturn back to 0 (its write is deferred).
@@ -239,10 +243,39 @@ _CAPTURE_JS = ("(() => { if (window.top !== window) return;"  # capture only in 
     const d = Object.getOwnPropertyDescriptor(window, 'event');
     if (d && typeof d.get === 'function') __ucevget = d.get;
   } catch (e) {}
-  const inDispatch = () => {
-    try { return !!(__ucevget ? __ucevget.call(window) : window.event); } catch (e) { return false; }
+  const curEvent = () => {
+    try { return (__ucevget ? __ucevget.call(window) : window.event) || null; } catch (e) { return null; }
   };
-  const attributedSeq = () => (__ucturn === 1 && inDispatch() ? __uclast : null);
+  const inDispatch = () => !!curEvent();
+  // R4.36. `inDispatch()` answers "is SOME dispatch in progress", and that is not the question. The turn
+  // is still closed by a `setTimeout(..., 0)`, so when that reset is overdue — a busy renderer is enough,
+  // and Chromium serves INPUT tasks ahead of overdue timers — a LATER, UNRELATED dispatch satisfies both
+  // conjuncts and the write is credited to a commit that did not cause it. Measured 4/4 on a benign
+  // `Details` click followed by one keystroke into an autosaving field: the click cached
+  // `mutating=True` with a precond_scope and `mutating_sources=['wire']`, i.e. the wrong step gated as
+  // the commit, which is R3.2's harm class. The earlier `timer*` cells never caught it because every one
+  // of them leaves the write in a BARE task, where `inDispatch()` is false.
+  //
+  // So ask WHICH dispatch. The turn belongs to the commit's own event (`__ucev`); a write is in that turn
+  // if the current dispatch IS that event — which holds through its microtask continuations, since
+  // `window.event` is restored only when the dispatch ends — or if the current dispatch is one the
+  // activation itself CAUSED. That whitelist is small and closed by the platform, not by taste: `submit`,
+  // `reset` and `formdata` are dispatched as a consequence of activating a control, which is why a native
+  // submit button, `requestSubmit()` and Enter-submit stay attributable. `form.submit()` fires no event at
+  // all, so it is still simply the commit's own dispatch.
+  //
+  // `input` and `change` are deliberately NOT here. They are caused by the user editing a field, not by
+  // the activation — that is precisely R4.36 — and `change` additionally fires on BLUR, arbitrarily far
+  // from any commit. The cost is real and accepted: a page that writes from a `change` handler after a
+  // checkbox click is now REFUSED rather than attributed. That is fail-loud, in `record()`, where a human
+  // reads the refusal — the direction this register requires when the cause cannot be proven.
+  const ACTIVATION_CAUSED = { submit: 1, reset: 1, formdata: 1 };
+  const attributedSeq = () => {
+    if (__ucturn !== 1) return null;
+    const cur = curEvent();
+    if (!cur || !__ucev) return null;
+    return (cur === __ucev || ACTIVATION_CAUSED[cur.type]) ? __uclast : null;
+  };
   // `src` (fetch/xhr/beacon) tags which entry point fired the marker. The Python side reconciles the
   // fetch+xhr markers against the fetch/xhr requests Playwright saw on the wire: a write from a web worker /
   // cross-realm context (which this init-script can't reach) surfaces as a fetch/xhr request with NO marker,
