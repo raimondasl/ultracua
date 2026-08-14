@@ -147,6 +147,16 @@ mid-act, so both fields come from ONE source, the row is internally consistent, 
 Two independently-sourced facts is the standard R3.3 already set for `landed`; check that they really are
 two before pricing a defect on it. The same measurement exposed R4.39, a worse sibling one path over.
 
+**A green property is worth exactly what its STUB is worth — so test the stub.** S14's `no_llm` fixture
+said an LLM was "unreachable in BOTH directions", and on the path that mattered it was inert: `flows.py`
+does `from .providers import build_router`, so patching `ultracua.providers.build_router` never reached
+`ultracua.flows.build_router`. Nothing went red for several releases because every cell drove a module
+that imports no factory. Two rules fall out, both cheap: patch a factory on EVERY binding (derive the
+list from the live import graph, never hand-list it), and give the stub its own anti-vacuity test. The
+same slice found a cell that was green while exercising nothing at all — auth-refresh refuses early
+without a `storage_state`, so the path under test never ran. **If a cell claims to reach a mechanism,
+count the mechanism's calls and assert the count.**
+
 **A test that ASSERTS the counterexample is worse than no test.** R3.12's first fix draft used a tuning
 constant as its candidate horizon, and a cell in its own matrix — `an expired tail is not a candidate` —
 was the proof that the constant could name a WRONG step, sitting there green and asserted as correct

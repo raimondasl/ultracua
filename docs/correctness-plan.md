@@ -524,9 +524,43 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
 - **S13. Evals: port or delete (simplification).** Evals run nowhere, the runner cannot gate (H2), one
   grep-shaped check was red six releases (H3). Port load-bearing checks into pytest as behaviour;
   delete the rest and the runner. H6's ungated benchmarks get the same treatment: gate or delete.
-- **S14. Properties for inviolables #1 and #2 (H4).** #1: replay across the drift corpus with a
-  provider that raises on ANY call. #2: for every failure shape in the API map, a typed error or
-  nonempty note — never a bare False/log-only.
+- **S14. Properties for inviolables #1 and #2 (H4).** ✅ **DONE in 0.107.0 — but it had ALREADY PARTLY
+  LANDED, and nothing said so.** `tests/test_inviolable_properties.py` was written in `0ec0387` (~0.98.0)
+  and its docstring says "S14 / H4", yet this bullet was never marked, so the slice looked untouched.
+  That is the DOC-1 staleness this plan fixed once for the README, inside the plan itself — and it is why
+  the count guard in `tests/test_register_count.py` exists for the register but has no analogue here.
+
+  **What had landed was the SHAPE without the BREADTH.** It swept ONE hand-made fixture through ONE door
+  (`flow.run_cached`) and asserted #2 on TWO hand-picked failures. Both of this bullet's explicit asks —
+  "across the drift corpus" and "every failure shape" — and H4's own ("every replay-mode entry point")
+  were absent. A property that visits one path is a per-path assertion wearing a property's clothes, and
+  the register's standing pattern is that defects here live on the SIBLING path.
+
+  **Three things the breadth work found, none of which the green file could have told anyone:**
+
+  1. **The instrument was inert where it mattered most.** `no_llm` claimed an LLM was "unreachable in
+     BOTH directions — call and construction", patching `ultracua.providers.build_router`. But
+     `flows.py:47` does `from .providers import build_router`, binding the name at import; measured,
+     `flows.build_router("anthropic")` ran the real code and returned a router with the patch active.
+     Nothing went red because every existing cell drove `run_cached`, which imports no factory at all —
+     the blindness would appear the moment the property reached `flows.replay`, which is exactly what
+     this bullet asks for. The patch set is now DERIVED from the live import graph.
+  2. **A reasonless failure report** at `flow.py:1019` — a bare `success=False` with no `note`, found by
+     an AST scan over every construction site rather than by another hand-picked cell. Believed
+     unreachable (`samples = max(1, samples)` guarantees the loop runs), so it was given a reason rather
+     than deleted on a reachability argument.
+  3. **The first draft of the auth-refresh cell was VACUOUS and green.** Auth refresh refuses early
+     without a `storage_state` path, so `_form_login` was never called and "no LLM was reached" was
+     true of a code path that never ran. A premise counter on the actual call caught it; the cell went
+     from 1.5 s to 7.3 s once it did real work.
+
+  **What ships:** the derived provider-binding patch plus an anti-vacuity test on the STUB ITSELF; a
+  6-door entry-point sweep with a coverage guard that fails when a new public async verb in `flows.py`
+  is neither swept nor exempted with a reason; the auth-refresh recovery path; 97 drift-corpus rows in
+  `mode=replay` against a raising provider (`per_k=1`, which drops only generated COSMETIC compositions
+  and keeps every scenario and every semantic/conflict/escalate/residual-hole row — stated in the test's
+  output, because a silent cap reads as full coverage); and #2 as two DERIVED properties (no failure
+  report without a reason; every typed error a distinct machine-readable code).
 - **S15. Pin every remaining unpinned residual** (AB-2..5, 7, 9, 11, 13 — minus any closed by Phase 3
   decisions). Each pin DEMONSTRATES current behaviour and names the residual, so any silent change in
   either direction fails a test. AB-10 (possibly-dead belt-and-braces branch): coverage probe; delete

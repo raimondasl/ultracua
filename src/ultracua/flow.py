@@ -1016,7 +1016,14 @@ async def _learn_n(
             last.extra["reflections"] = list(reflections)
         if _router is not None:  # cumulative cost across every attempt (incl. reflection calls)
             last.extra["usage"] = _router.totals.since(_usnap).as_dict(settings.model)
-    return last if last is not None else FlowReport(mode="learn", success=False)
+    # BELIEVED UNREACHABLE — `samples = max(1, samples)` above means `range(samples)` always runs at
+    # least once, and the only `except` in the loop re-raises. Kept as belt-and-braces rather than
+    # deleted, but it no longer returns a REASONLESS failure: a bare `success=False` with an empty
+    # `note` is what a caller cannot explain, and inviolable #2's property now enforces that over every
+    # construction site (S14). If this line ever fires, the note is what tells you it did.
+    return last if last is not None else FlowReport(
+        mode="learn", success=False,
+        note="best-of-N produced no attempt at all (samples exhausted without a report)")
 
 
 async def _replay(
