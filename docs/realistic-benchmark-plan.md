@@ -282,13 +282,30 @@ with `safety.is_write_request`:
 **6 of 7 ordinary read controls put a request on the wire that `is_write_request()` calls a write** —
 R4.27's 12/12 reproduced on a real commercial ERP, first attempt.
 
-**But state this precisely, because the obvious extrapolation is wrong.** This measures the
-*classifier*, not the outcome. §9.5 learned an Odoo read end-to-end and the engine reported
-`performed_write=False` **and** `write_unattributed=False` — so wire promotion did **not** fire on those
-same `web_search_read` POSTs in the one case measured. The engine-level over-gating rate on Odoo is
-therefore **unmeasured**, and reconciling that gap (why does the classifier say write while the watcher
-does not promote?) is the first thing v1 must instrument. Quoting 6/7 as an over-gating rate would be
-exactly the kind of un-run inference this register exists to catch.
+**This measures the *classifier*. The engine-level consequence was measured separately — and it
+follows.** See §9.5a: over 4 reps of an ordinary "sort this list" read, `performed_write` was **4/4**,
+and the cached recipe records the step as:
+
+```
+step0: action=click  mutating=True  sources=['wire']  precond_scope=set
+       intent='sort the list by customer'
+```
+
+So **clicking a column header is cached as a write**, promoted by the wire. Downstream that means the
+flow is approval-gated, mints an Idempotency-Key, runs the mutation gate at replay, and is refused from
+`run_batch`/MCP with no heal, replan, or auth-refresh retry — R4.27's over-gating **confirmed end to
+end on a real ERP**, not merely at the classifier.
+
+> **Correction.** The first version of this section hedged that promotion did *not* fire, on the
+> strength of one run reporting `performed_write=False`. That run is the outlier and the hedge was
+> wrong: its SPA had not rendered (§9.5), so the click never happened and there was no POST to
+> attribute. The hedge was right to demand the measurement and wrong about its result.
+
+One second-order consequence worth its own line: because `performed_write` is true,
+`flow.py:889` (`if verify_replay and not performed_write`) **skips verify-by-replay**. The
+write-flow exemption — which exists so re-replaying a real write cannot double-submit — is being
+applied to a pure read, so a misclassified read is cached *without* the verification every other read
+gets. Nothing here is unsafe, but the read loses a guard by being mistaken for a write.
 
 ### 9.3 Row identity is positional — and it is the *availability* cost, not a silent-wrong one
 
@@ -329,29 +346,77 @@ must contain both; they behave differently.
 
 ### 9.5 Two build risks found early, both cheap to have found now
 
-* **An ordinary 2-step Odoo read did not cache.** A `ScriptedProvider` learn reported
-  `mode=learn success=True`, but `extra['cached'] = False` in **both** arms — with verify-by-replay on
-  *and* with `verify_replay=False` — and the subsequent replay returned `mode=miss, "no cached flow for
-  key"`. The cause is **not isolated**, and is deliberately not guessed here. Resolving it is the first
-  task of v1; if it turns out to be substrate-shaped rather than harness-shaped it is the one result
-  that could still send us to the SuiteCRM fallback.
+* **An ordinary 2-step Odoo read did not cache** — **diagnosed, see §9.5a. Harness-shaped, not
+  substrate-shaped; Odoo stands.**
 * **`networkidle` never fires on Odoo** (the bus holds a long-poll open). The engine waits on it in four
   places — `flow.py:1135`, `flows.py:1008`, `flows.py:1072`, `flows.py:1144` — all wrapped in
   `try/except` and therefore **tolerated, not fatal**. The cost is real though: a write confirm burns 8 s
   and a form login 10 s of dead wall-clock per occurrence. Budget it, and do not misread it as "Odoo is
   slow".
 
+### 9.5a Why the read flow did not cache — root cause, measured
+
+**The engine's first snapshot ran before Odoo's OWL SPA had rendered.** The chain, read out of
+`flow.py` and then reproduced:
+
+1. `run_cached` navigates and snapshots immediately — there is no SPA-settle step between them.
+   Measured: the first observation contained **5 elements**; once the list renders it contains **80**.
+2. With the target absent, the scripted teacher returned `ref=None`.
+3. `session.act` then ran `page.click('[data-ultracua-ref="None"]')` (`browser.py:263`), which matches
+   nothing and times out, so `ok=False` (`flow.py:504`).
+4. Steps are appended only `if ok:` (`flow.py:523`), so **no `CachedStep` was recorded**.
+5. `if success and steps:` (`flow.py:880`) is therefore false, `cached_here` stays False
+   (`flow.py:848`), and `extra["cached"]` is False (`flow.py:904`). Replay then misses.
+
+The tell that pointed here before any re-run: `extra` carried **no `"verify"` key**. That key is set on
+both branches inside `if success and steps:`, so its absence proves the gate never opened — the failure
+was upstream of verify-by-replay, which is why turning `verify_replay=False` changed nothing.
+
+**Confirmed by fixing it.** Adding a `prepare` hook that waits for `tr.o_data_row` before the loop:
+
+| arm | elements seen | target | cached | replay |
+|---|---:|---|---|---|
+| as Gate-0 ran it | 5 | `ref=None` | **False** | `mode=miss` |
+| + wait for the list | 80 | `ref=e29` | **True** | `mode=replay, success=True, llm_calls=0` |
+
+Over 4 reps with the hook: **cached 4/4, replay 4/4 at 0 LLM calls, `performed_write` 4/4,
+`write_unattributed` 0/4.**
+
+**Two things this leaves behind.**
+
+* *For the benchmark:* every scenario needs a per-scenario readiness hook, and the harness must treat a
+  near-empty first observation as a **harness error, not a learn failure** — otherwise the corpus will
+  silently score substrate races as discovery misses, which is precisely the "a cell that cannot fail"
+  trap one level up. Cheap and mandatory in v1.
+* *For the engine (candidate finding, not filed):* on any SPA, `run_cached` can snapshot a near-empty
+  page and burn the whole learn, and the failure is **quiet** — `success=True` with nothing cached in
+  the original probe, and a later replay reporting only `no cached flow for key`, which reads as "never
+  learned" rather than "learned against an unrendered page". Failing safe, but neither loud nor
+  diagnosable. A settle-or-refuse step after navigation (or simply refusing to author from an
+  observation below some element floor) would close it. Worth a register entry if the maintainer agrees;
+  deliberately not filed from here, since the register count is machine-checked.
+
+One run of the bare arm also tripped `write_unattributed=True`, taking the explicit refusal path at
+`flow.py:863` — which sets `success=False` **and persists a refusal marker**. So the unrendered-page
+configuration can leave a sticky refusal behind, not just an un-cached flow. It did not recur in the 4
+hooked reps (0/4).
+
 ### 9.6 What Gate-0 changes in the plan
 
-1. Substrate confirmed: **proceed with Odoo**; SuiteCRM stays the fallback pending §9.5's caching result.
-2. Add to v1 an instrumented reconciliation of §9.2 — classifier-says-write vs watcher-does-not-promote —
-   before any availability number is published.
-3. Scenario-design constraint: row-targeted write scenarios need a record-URL entry path, and the corpus
+1. Substrate confirmed: **proceed with Odoo.** §9.5a resolved the one open risk as harness-shaped, so
+   the SuiteCRM fallback is no longer on the table for that reason.
+2. The availability finding is now end-to-end, not classifier-only (§9.2): an ordinary list sort caches
+   as `mutating=True, sources=['wire']`. v1 should publish **both** numbers — controls whose traffic
+   `is_write_request` flags, and flows whose recipe ends up write-marked — because they are different
+   questions and this spike briefly conflated them.
+3. Every scenario carries a readiness hook, and a near-empty first observation is a harness error, never
+   a scored discovery failure (§9.5a).
+4. Scenario-design constraint: row-targeted write scenarios need a record-URL entry path, and the corpus
    must carry **both** a self-identifying target (order-number cell) and a positional-token target (row
    action button), because Gate-0 measured them behaving differently.
-4. Wall-clock model: add the tolerated-`networkidle` dead time (8–10 s per login/confirm) to §6's
+5. Wall-clock model: add the tolerated-`networkidle` dead time (8–10 s per login/confirm) to §6's
    estimate.
-5. The snapshot-budget saturation (80 of ~163) belongs in the learn-cost model.
+6. The snapshot-budget saturation (80 of ~163) belongs in the learn-cost model.
 
 **What Gate-0 does not prove.** One app, one version, one list view, one host, on demo data — it says
 nothing about write correctness end-to-end (no write scenario was driven through the engine), nothing
