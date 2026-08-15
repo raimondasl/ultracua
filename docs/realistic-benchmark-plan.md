@@ -204,11 +204,54 @@ them.
 
 | # | slice | days | why here |
 |---|---|---:|---|
-| **B1** | **Usage accounting reaches every caller** (code, not bench) | 1–2 | Prerequisite: today a "0-LLM" replay can make an uncounted paid call (`flows.py:2716-2721`) and `LearnResult`/`replay()` discard usage entirely. Ship it as ONE invariant — *every LLM call a flow makes is counted and costed, on every entry point* — not two per-path patches, per this repo's standing rule about enforcing an invariant once. Publishing cost numbers before this lands would publish wrong ones. |
+| **B1** | **The run record** (code, not bench) — *rescoped, see §7a* | 3–4 | An audit against the R1–R10 outcome list found the original scope ("thread usage through") was **roughly a third** of what v1 needs, and aimed at one field inside an object thrown away a line later. Publishing cost numbers before this lands publishes wrong ones. |
 | **B2** | **Substrate lifecycle + harness skeleton** | 3 | `benchmarks/customer_bench.py`, compose for Odoo + Gitea, seeding, reset (Postgres template + filestore + warmup for Odoo; delete one SQLite file for Gitea), `libfaketime` for Odoo's clock-coupled demo data, and a **per-scenario readiness hook**. Carries R4.40's guard: a near-empty first observation is a **harness error, never a scored discovery failure**. Two smoke scenarios only. |
 | **B3** | **Outcome vocabulary + record/baseline format** | 2 | Reads `{ok, wrong_data, refused, over_gated}`, writes `{true, incorrect_target, double, suppressed, refused_correctly, refused_wrongly}`, emitted in `variance.py`'s record shape so `compare_records` gating comes free. `over_gated` is derived from the recipe's `mutating` flags + `FlowMeta` + `FlowReplayError.code`, never guessed. |
 | **B4** | **The v1 corpus + oracles** | 4–5 | 14 scenarios (below) and their server-side oracles: SQL for Odoo, API for Gitea, plus an Idempotency-Key logging proxy. The long pole, and the one where the house rules bite hardest — see the two gates below. |
 | **B5** | **Baseline, nightly job, honesty page** | 1–2 | Capture `baselines/customer_v1.json`; a nightly (not per-PR — the suite is already ~21 min against a 25-min timeout) ubuntu Docker job; and a `baselines/README.md` entry saying per number what it does and does not prove. |
+
+### 7a · B1 rescoped — "the run record"
+
+The original B1 was *"thread usage into `LearnResult` and `replay()`"*. Audited against the R1–R10
+outcome list, that is **necessary and about a third of what v1 needs** — and it aims at one field
+inside a `FlowReport` that `_attempt_replay` discards a line later. Four gaps are *missing calls*, not
+missing plumbing, so no amount of threading reaches them. All four were verified in source, not taken
+from the audit:
+
+| gap | verified at | what breaks in B3/B4 |
+|---|---|---|
+| **G1** `extra["usage"]` is **absent, not zero**, on `mode="replay"` | `flow.py:172` nulls the heal provider, so `_router` is None at `flow.py:1068` — its own comment reads "costs nothing there", treating an absent key as a saving | "0-LLM" and "no key configured" become indistinguishable — the headline claim is unfalsifiable on the exact path the bench measures |
+| **G2** `llm_calls` counts **decides, not API calls** | one `llm += 1` (`flow.py:419`) covers a fast call *and* a strong retry (`providers/llm_agent.py:124`); best-of-N attempts and `_reflect` add none | the "complete count" acceptance criterion fails even after B1 |
+| **G3** vision bypasses the Router entirely | `vision.py:66-68` constructs `AsyncAnthropic()` directly | a vision-tier scenario reports cost 0 |
+| **G4** cost is priced at one model for two tiers | `UsageTotals.as_dict(model)` takes a single model (`obs.py:117`) and callers pass `settings.model` (`flow.py:1221`) while the fast tier ran `settings.fast_model` | every scenario that escalated is mispriced |
+
+Plus four discards, all in the same function and therefore **one edit**: the `FlowReport` itself
+(`flows.py:2252` — traces, timings, minted keys), `landed`/`committed` on the **success** path,
+`run_batch` stringifying the exception so `code`/`retryable`/`landed` are lost, and no `on_step` reaching
+`replay()` (so the harness cannot attach a request listener on the gated path — R6/R8-sent).
+
+**The invariant, stated once:** *every LLM call the engine causes is counted by one run-scoped
+accounting object, and every outcome the engine already computes leaves on the record the caller
+receives — no caller re-derives an engine fact.*
+
+Concretely: a `RunRecord` returned alongside `replay()`'s data **without changing the default return
+shape**; `_attempt_replay` returns its report rather than dropping it; usage sourced from a run-scoped
+accounting object passed *into* `run_cached` (covering the finalize and verifier routers, not just
+`provider.router`) that emits **explicit zeros**; `BatchRowResult` keeps `code`/`retryable`/`landed`;
+`on_step` threaded through. Counting moves to the Router, so R3's count never comes from `llm_calls`.
+
+**Explicitly OUT of B1 — harness-side, and must not enter `src/`:** HAR enabling, `is_write_request`
+wire counting, and every ground-truth judgement (`wrong_data`, `incorrect_target`, `double`,
+`suppressed`, `refused_correctly` vs `refused_wrongly`, `over_gated`). This repo's measured hazard is
+that fix code is its highest-defect-density area; a benchmark must not push observability hacks into the
+engine.
+
+**Ordering:** G1–G4 must land **before B3**, since they are the accounting *class* — and they want an
+AST choke-point pin in the shape S14 used, because a patch-list has already failed here once at 105 real
+clients. The four discards ride with B1; deferring them means touching `_attempt_replay`'s return twice,
+and the second patch is this codebase's most-repeated defect shape. Distinct codes for the five
+refusals that currently share `replay_error` can follow. `incorrect_target`/`double`/`suppressed` block
+**B4**, not B1, and are fixture work.
 
 ### The v1 corpus (14), chosen so the contrast is the headline
 
@@ -234,6 +277,26 @@ architecture rather than to task difficulty.
 2. **An adversarial pass on the corpus PR specifically**, aimed at the new harness code. Five for five,
    it is the only instrument here that has ever caught a green-but-wrong change, and a benchmark cell
    that cannot fail is this codebase's best-documented trap.
+
+### 7b · Two findings the B1 audit turned up on the way
+
+Neither is a benchmark concern; both are recorded here because the audit found them and they should not
+evaporate with it.
+
+* **Vision-tier calls are invisible to cost accounting.** `vision.py:66-68` builds `AsyncAnthropic()`
+  directly rather than going through the `Router`, so nothing it spends reaches `router.totals`. G3
+  above; a cost blind spot, not a safety one.
+* **The S14 choke-point pin has an allowlist entry that voids its own inference.**
+  `tests/test_inviolable_properties.py:150` allows direct SDK construction in
+  `src/ultracua/vision.py` alongside the three `llm/` leaf adapters. But the test's stated reasoning is
+  *"if every direct SDK construction lives in a known leaf module, then `build_client` provably IS the
+  choke point and patching it is sufficient"* — and that holds only for leaves `build_client` actually
+  dispatches to. `vision.py` is not one: it constructs its own client and never calls `build_client`, so
+  the `no_llm` fixture (which patches `build_client`) would **not** intercept a vision call. Reachable
+  only on the opt-in recovery paths, so this is not an inviolable-#1 violation today — but it is the
+  same shape as the defect S14 was written to close (the one that built 105 real clients with every cell
+  green), and the allowlist is what re-opened it. Worth filing as R4.41 if the maintainer agrees;
+  **not filed from here**, since the register count is machine-checked.
 
 ### v1 acceptance criteria
 
