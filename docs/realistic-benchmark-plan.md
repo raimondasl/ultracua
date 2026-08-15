@@ -253,6 +253,26 @@ and the second patch is this codebase's most-repeated defect shape. Distinct cod
 refusals that currently share `replay_error` can follow. `incorrect_target`/`double`/`suppressed` block
 **B4**, not B1, and are fixture work.
 
+**Status (0.108.0, branch `feat/b1-run-record`).** G1, G2 and G4 are landed with tests; G3's plumbing
+exists but vision does not yet report into it; the discards are not started.
+
+| gap | state |
+|---|---|
+| G1 explicit zero | **done** — and see the note below, because the first attempt at it was worse than the bug |
+| G2 count from the Router | **done** (pinned, not changed — `llm_calls` deliberately still counts decides, since scripted teachers have no router and re-sourcing it would zero the count across most of the suite and all of `drift_bench`) |
+| G4 per-response-model pricing | **done** |
+| G3 vision spend | plumbing done (`RouterWatch` marks an unobservable spender), vision not yet reporting |
+| G5–G7, G9, G10 (the discards) | not started — one edit to `_attempt_replay`'s return |
+
+**The note, because it is the reusable lesson.** The first version of G1 emitted an unconditional zero
+whenever no router was visible. That is *worse than the absent key it replaced*: a run holds up to three
+routers, `mode="replay"` nulls the agent provider (`flow.py:172`), and the extraction router lives inside
+the `finalize` closure — so an extracting replay observed nothing, and reported `cost_usd: 0.0` over a
+real paid call. An absent key is a shrug; a zero is a claim. The shipped shape only claims zero when the
+run could see **every** router it could have spent through, and otherwise reports
+`unobserved_llm_path`. Whoever finishes G3 should keep that property: making vision visible is what lets
+a vision-tier run claim zero honestly, and until then it must not.
+
 ### The v1 corpus (14), chosen so the contrast is the headline
 
 Paired deliberately: the same read *intent* on both substrates, so a difference is attributable to
