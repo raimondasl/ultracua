@@ -33,7 +33,13 @@ def test_usage_totals_accumulate_and_cost() -> None:
     cost = t.cost_usd("claude-opus-4-8")  # $5/Mtok in (+cache), $25/Mtok out
     assert abs(cost - ((3000 + 500) * 5 + 1500 * 25) / 1_000_000) < 1e-9
     assert t.cost_usd("some-unpriced-model") is None  # unknown price -> None, never a crash
-    assert "cost_usd" in t.as_dict("claude-opus-4-8") and "cost_usd" not in t.as_dict("unknown")
+    # `cost_usd` is now ALWAYS a key, and carries the distinction the omission used to blur:
+    # a number when priced, None when the spend cannot be priced. This assertion used to read
+    # `"cost_usd" not in t.as_dict("unknown")` — an absent key that a reader could not tell from
+    # "this run was free", which is the exact ambiguity B1 removes (see tests/test_run_record.py).
+    assert t.as_dict("claude-opus-4-8")["cost_usd"] is not None
+    unknown = t.as_dict("unknown")
+    assert unknown["cost_usd"] is None and unknown["cost_unpriced_calls"] == 2
 
 
 def test_usage_totals_add_tolerates_none() -> None:

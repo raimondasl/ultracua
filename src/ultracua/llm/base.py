@@ -68,7 +68,11 @@ class Router:
                 resp = await asyncio.wait_for(
                     t.client.complete(model_req), timeout=settings.llm_timeout_s
                 )
-                self.totals.add(resp.usage)
+                # Price by what ANSWERED, not by what the call site is configured with: one run
+                # spends at both tiers whenever the fast model escalates, and they are 5x apart.
+                # `resp.model` is the served model; `t.model` is the requested one, and they can
+                # differ (an adapter may normalise or a backend may substitute).
+                self.totals.add(resp.usage, model=(getattr(resp, "model", "") or t.model))
                 return resp
             except Exception as exc:  # noqa: BLE001 - classify, then retry transient or re-raise
                 last = exc

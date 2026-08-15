@@ -904,9 +904,10 @@ async def _learn(
         extra["cached"] = cached_here
         extra["performed_write"] = performed_write
         extra.setdefault("write_unattributed", write_unattributed)
-        used = _router.totals.since(_usnap) if _router is not None else None
-        if used is not None:
-            extra["usage"] = used.as_dict(settings.model)
+        # Always present, for the reason given on the replay path: a key-less learn (scripted
+        # teacher, no router) must SAY it spent nothing rather than stay silent about it.
+        used = _router.totals.since(_usnap) if _router is not None else UsageTotals()
+        extra["usage"] = used.as_dict(settings.model)
         _log.info(
             "learn done: success=%s steps=%d llm_calls=%d cached=%s%s",
             success, len(steps), llm, success and bool(steps),
@@ -1216,9 +1217,13 @@ async def _replay(
         if replanned and not success and isinstance(fin, dict) and fin.get("solved"):
             success = True
         extra = {"finalize": fin} if finalize else {}
-        _used = _router.totals.since(_usnap) if _router is not None else None
-        if _used is not None:
-            extra["usage"] = _used.as_dict(settings.model)
+        # ALWAYS report usage, including the 0-LLM path, where `_router` is None because
+        # `run_cached` nulls the heal provider for mode="replay" (flow.py:172). Omitting the key
+        # there made "this replay called no LLM" and "no provider was configured" the same
+        # observation — so the project's headline claim was unfalsifiable on exactly the path it
+        # is claimed about. An explicit zero is the claim; an absent key is a shrug.
+        _used = _router.totals.since(_usnap) if _router is not None else UsageTotals()
+        extra["usage"] = _used.as_dict(settings.model)
         final_text = await _body_text(session)
         if dirty and success:
             cache.put(flow)

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 # --- logging ----------------------------------------------------------------------------------
@@ -78,43 +78,94 @@ def _price(model: str) -> Optional[tuple]:
 
 @dataclass
 class UsageTotals:
+    """Token/cost accounting for a set of LLM calls.
+
+    Costs are accumulated PER RESPONSE MODEL, not priced once at a call site's configured model.
+    A single run routinely spends at two prices — the fast tier answers most steps and escalates
+    to the strong tier when unsure (`providers/llm_agent.py`) — and the tiers here are 5x apart,
+    so pricing the whole run at either one is wrong by a wide margin in whichever direction the
+    caller happened to pass. The flat token counters are kept beside the buckets because every
+    existing reader (baselines, `variance.py`) indexes them by name.
+    """
+
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     calls: int = 0
+    # model -> (input, output, cache_read, cache_write, calls). Keyed by what the RESPONSE said
+    # served the request, so an escalation is priced at the strong tier and the rest is not.
+    per_model: dict = field(default_factory=dict)
 
-    def add(self, usage) -> None:
+    def add(self, usage, model: str = "") -> None:
         """Accumulate one response's Usage (duck-typed; tolerant of None / missing fields)."""
         if usage is None:
             return
-        self.input_tokens += getattr(usage, "input_tokens", 0) or 0
-        self.output_tokens += getattr(usage, "output_tokens", 0) or 0
-        self.cache_read_tokens += getattr(usage, "cache_read_tokens", 0) or 0
-        self.cache_write_tokens += getattr(usage, "cache_write_tokens", 0) or 0
+        i = getattr(usage, "input_tokens", 0) or 0
+        o = getattr(usage, "output_tokens", 0) or 0
+        cr = getattr(usage, "cache_read_tokens", 0) or 0
+        cw = getattr(usage, "cache_write_tokens", 0) or 0
+        self.input_tokens += i
+        self.output_tokens += o
+        self.cache_read_tokens += cr
+        self.cache_write_tokens += cw
         self.calls += 1
+        prev = self.per_model.get(model, (0, 0, 0, 0, 0))
+        self.per_model[model] = (prev[0] + i, prev[1] + o, prev[2] + cr, prev[3] + cw, prev[4] + 1)
 
     def snapshot(self) -> tuple:
+        # The 6th element is additive: every existing reader indexes [0:5] positionally.
         return (self.input_tokens, self.output_tokens, self.cache_read_tokens,
-                self.cache_write_tokens, self.calls)
+                self.cache_write_tokens, self.calls, dict(self.per_model))
 
     def since(self, snap: tuple) -> "UsageTotals":
         """A delta UsageTotals = self minus an earlier snapshot() (for per-run scoping)."""
+        was = snap[5] if len(snap) > 5 else {}
+        delta = {}
+        for m, cur in self.per_model.items():
+            old = was.get(m, (0, 0, 0, 0, 0))
+            d = tuple(cur[k] - old[k] for k in range(5))
+            if d[4]:
+                delta[m] = d
         return UsageTotals(
             input_tokens=self.input_tokens - snap[0], output_tokens=self.output_tokens - snap[1],
             cache_read_tokens=self.cache_read_tokens - snap[2],
             cache_write_tokens=self.cache_write_tokens - snap[3], calls=self.calls - snap[4],
+            per_model=delta,
         )
 
-    def cost_usd(self, model: str) -> Optional[float]:
+    def unpriced_calls(self, fallback_model: str = "") -> int:
+        """Calls whose serving model has no price entry — their cost is UNKNOWN, never zero."""
+        n = 0
+        for m, v in self.per_model.items():
+            if _price(m) is None and not (fallback_model and _price(fallback_model)):
+                n += v[4]
+        return n
+
+    def cost_usd(self, model: str = "") -> Optional[float]:
+        """Total $ across every serving model. `model` is only a FALLBACK price, used for calls
+        recorded before per-model accounting existed (an old snapshot delta) or by a client that
+        did not report one. Returns None when any spend cannot be priced — an unknown bill must
+        never render as 0.0, which would understate it silently."""
+        if self.per_model:
+            total = 0.0
+            for m, (i, o, cr, cw, _c) in self.per_model.items():
+                p = _price(m) or (_price(model) if model else None)
+                if p is None:
+                    return None
+                total += ((i + cr + cw) * p[0] + o * p[1]) / 1_000_000
+            return total
+        if not self.calls and not (self.input_tokens or self.output_tokens):
+            return 0.0                      # nothing was spent — say so, rather than "unknown"
         p = _price(model)
         if p is None:
             return None
-        price_in, price_out = p
         billed_in = self.input_tokens + self.cache_read_tokens + self.cache_write_tokens
-        return (billed_in * price_in + self.output_tokens * price_out) / 1_000_000
+        return (billed_in * p[0] + self.output_tokens * p[1]) / 1_000_000
 
     def as_dict(self, model: str = "") -> dict:
+        """`cost_usd` is ALWAYS present. Absent and zero are different claims — absent reads as
+        "nobody looked", and that ambiguity is what made a 0-LLM replay's cost unfalsifiable."""
         d = {
             "calls": self.calls,
             "input_tokens": self.input_tokens,
@@ -122,9 +173,13 @@ class UsageTotals:
             "cache_read_tokens": self.cache_read_tokens,
             "cache_write_tokens": self.cache_write_tokens,
         }
-        cost = self.cost_usd(model) if model else None
-        if cost is not None:
-            d["cost_usd"] = round(cost, 6)
+        cost = self.cost_usd(model)
+        d["cost_usd"] = round(cost, 6) if cost is not None else None
+        unpriced = self.unpriced_calls(model)
+        if unpriced:
+            d["cost_unpriced_calls"] = unpriced
+        if self.per_model:
+            d["by_model"] = {m: v[4] for m, v in sorted(self.per_model.items())}
         return d
 
     def summary(self, model: str = "") -> str:
