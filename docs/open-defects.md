@@ -11,8 +11,11 @@ by applying this file's own sibling rule while redesigning R3.2; it is recorded 
 CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch was **PARKED, not
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
-The round-4 series has since grown to R4.39 as later slices filed against it: **22 open**, 13 fixed,
-4 parked, indexed and token-checked in the R4 STATUS INDEX at the top of that section.
+The round-4 series has since grown to R4.40 as later slices filed against it:
+**23 open**, 13 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
+`_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
+guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
 
 **THE PLAN.** `docs/correctness-plan.md` sequences every open item here — plus the test-machinery
 holes, CLI/API truthfulness defects and unpinned residuals found by the survey in
@@ -770,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **22 open**, 13 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **23 open**, 13 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -826,6 +829,7 @@ if and only if that branch is ever resumed.
 | R4.37 | open | a control whose nested wrapper owns no identity captures no `anchor_id`, so the row guard silently does not run; **HIGH**, inviolable #3 |
 | R4.38 | open | `ACTIVATION_CAUSED` matches an event's TYPE NAME with no provenance, so a write laundered through a synthetic `submit`/`reset` re-enters attribution; **HIGH**, inviolable #3 |
 | R4.39 | open | the wire Idempotency-Key is whichever step was mid-act, so a deferred write's key moves with PAGE TIMING and a retry cannot dedupe; **HIGH**, inviolable #3 |
+| R4.40 | open | `_learn` snapshots straight after navigate with no settle floor, so a client-rendered page is authored against its unrendered skeleton — quiet, and one variant PERSISTS a refusal |
 
 
 **Scope.** The uncommitted `feat/shared-causal-attribution` work (would-be 0.76.0): extracting the
@@ -4231,3 +4235,94 @@ act, rather than key it wrong) is available and is not blocked — cost unmeasur
 
 **Pinned** by `tests/test_dryrun_attribution.py::test_the_wire_key_is_a_function_of_the_recipe_not_of_page_timing`
 (strict xfail).
+
+---
+
+## R4.40 — `_learn` authors against an unrendered page, and says nothing
+
+**Severity: MEDIUM** (availability + diagnosability; one variant persists state). Not an inviolable
+violation — the default direction is fail-safe, nothing is cached and nothing wrong is actuated. Filed
+because the failure is **quiet**, because it is guaranteed on client-rendered apps rather than rare, and
+because one measured variant converts a rendering race into a **persistent refusal a human must clear**.
+
+**Found** while running Gate-0 of `docs/realistic-benchmark-plan.md` against a real Odoo 17 instance —
+i.e. by pointing the engine at an ordinary SPA, not by reading code.
+
+### The mechanism
+
+`run_cached` navigates and then snapshots with nothing in between: the decide loop's first act is
+`obs = await session.snapshot()` (`flow.py:402`), and the only hook that could wait is the caller's
+optional `prepare` (`flow.py:812`). There is **no floor on what counts as an observation worth authoring
+from.** On a page whose content is client-rendered, the first snapshot is the skeleton.
+
+Measured on Odoo's Sales-Orders list: the first observation held **5 elements**; once the list renders it
+holds **80** (of ~163 candidate interactables — the cap is a separate matter). With the target absent,
+the run proceeds:
+
+1. the provider cannot find the target and returns `ref=None`;
+2. `session.act` runs `page.click('[data-ultracua-ref="None"]')` (`browser.py:263`), which matches
+   nothing and times out, so `ok=False` (`flow.py:504`);
+3. steps are appended only `if ok:` (`flow.py:523`), so **no `CachedStep` is recorded**;
+4. `if success and steps:` (`flow.py:880`) never opens, `cached_here` stays False (`flow.py:848`), and
+   `extra["cached"]` is False (`flow.py:904`).
+
+### Why it is filed as quiet rather than merely unlucky
+
+The learn **reported `success=True` with nothing cached**, and the later replay said only
+`no cached flow for key` — which reads as *"this flow was never learned"* rather than *"this flow was
+learned against a page that had not rendered"*. An operator following that message investigates the
+wrong thing. Note also which key `extra` did **not** contain: `"verify"`. It is set on both branches
+inside the `success and steps` gate, so its absence is the only available evidence that the gate never
+opened — a diagnostic that exists by accident and is documented nowhere.
+
+### The variant that persists
+
+One bare run instead tripped `write_unattributed=True` — Odoo's background RPC traffic with no
+successful step to attribute it to — taking the refusal at `flow.py:863`, which sets `success=False`
+**and calls `cache.remember_refusal(...)`**. That marker is terminal until a human runs `flow release`.
+So a transient rendering race can leave sticky state behind, not just an un-cached flow. Measured 1 of 1
+in the bare configuration and **0 of 4** once the page was allowed to render, which is consistent with
+it being a race rather than deterministic — the rate is not otherwise characterised.
+
+### Confirmed by removing the cause
+
+A `prepare` hook waiting for the list before the loop:
+
+| arm | elements | target | `cached` | replay |
+|---|---:|---|---|---|
+| as found | 5 | `ref=None` | False | `mode=miss` |
+| + wait for render | 80 | `ref=e29` | **True** | `mode=replay`, `success=True`, `llm_calls=0` |
+
+Four reps with the hook: cached 4/4, replay 4/4 at 0 LLM calls, `write_unattributed` 0/4.
+
+### The direction that is NOT measured, and matters more than the one that is
+
+Every measurement above used a `ScriptedProvider`, which returns `ref=None` when its target is missing —
+so it fails closed **by construction**. A real provider does not have that property: handed a 5-element
+skeleton it will author against *whatever is present* (a spinner, the nav chrome), and the resulting
+recipe could plausibly survive verify-by-replay, because the replay races the same way the learn did.
+That path would cache a **wrong recipe** rather than none, and is the reason this is filed as a defect in
+`_learn` rather than as a note in the benchmark plan. **It is unproven** — no LLM arm has been run — and
+it should be the first thing any fix attempt reproduces, because if it is real the severity is higher
+than MEDIUM and the fail-safe framing above is wrong.
+
+### What a fix must not be
+
+* **"Wait for `networkidle`."** Measured on this same substrate: Odoo holds a long-poll open, so
+  `networkidle` never fires. The engine already waits on it in four places (`flow.py:1135`,
+  `flows.py:1008`, `flows.py:1072`, `flows.py:1144`), all inside `try/except`, so each burns its full
+  timeout (8–10 s) and proceeds. Adding a fifth would add dead wall-clock to every learn and fix nothing.
+* **"Sleep after navigate."** A timer is not a boundary — R4.26's lesson, one subsystem over. It trades a
+  guaranteed failure for a load-dependent one and makes the remaining failures rarer and therefore
+  harder to catch, which this register rates as worse.
+* **"Tell callers to pass `prepare`."** The hook already exists and works; the defect is that the default
+  path has no floor and no diagnostic. A fix that only documents the hook leaves the quiet failure and
+  the persistable refusal exactly where they are.
+
+The available shapes that are not blocked: refuse to author when the first observation is implausibly
+small **and say so** (a floor is a guess, but a LOUD guess, and this register prefers that direction);
+or settle on a page-derived signal rather than a clock. Cost unmeasured for both.
+
+**Not pinned by a test.** No regression test is added with this entry — the reproducer needs a
+client-rendered fixture the suite does not have, and the un-measured LLM direction above would change
+what the test should assert. Filing ahead of the fix deliberately.

@@ -3,8 +3,8 @@
 > **Counts refreshed 2026-08-14 (0.107.0, 1071 tests — 1061 passing + 10 strict-xfail for R3.7, R4.5, R4.30, R4.34, R4.37, R4.38 and R4.39); the NARRATIVE below is still the 2026-07-01
 > snapshot and lags ~16 versions.** What it says about the shipped core remains true; what it omits is
 > everything the correctness plan has landed since 0.75.0 — S2–S9, S17 and S6/AB-1, the CLI exit-truth
-> and fleet-visibility work, and the standing defect register's growth to a round-4 series of 32. The
-> honest current state of the open findings is `docs/open-defects.md` (2 open in round 3, 22 in round
+> and fleet-visibility work, and the standing defect register's growth to a round-4 series of 40. The
+> honest current state of the open findings is `docs/open-defects.md` (2 open in round 3, 23 in round
 > 4, both machine-checked) and `docs/correctness-plan.md`, not this file. Rewriting the narrative is
 > Phase 7's job; the numbers are corrected here so nobody quotes a stale one in the meantime.
 
