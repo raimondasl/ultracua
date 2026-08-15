@@ -195,6 +195,33 @@ class FlowSpec:
 
 
 @dataclass
+class RunRecord:
+    """What a replay COST and what it OBSERVED — the facts the engine already computes, delivered
+    to the caller instead of recomputed by it.
+
+    An out-parameter rather than a return value, deliberately: `replay()` returns bare data for a
+    read and a status envelope for a write, and every caller and test in the tree depends on that
+    shape. Pass `record=RunRecord()` to opt in; pass nothing and behaviour is byte-identical.
+
+    `usage` is always populated and always carries `cost_usd` — which is `None`, never 0.0, when a
+    run could not observe every router it might have spent through (see `obs.RouterWatch`).
+    """
+
+    mode: str = ""                      # replay | replay+heal | replay+replan | miss | escalate
+    ok: bool = False
+    usage: dict = field(default_factory=dict)
+    llm_calls: int = 0                  # DECIDE calls; API calls are usage["calls"] (they differ)
+    healed_steps: int = 0
+    total_ms: float = 0.0
+    traces: list = field(default_factory=list)
+    landed: bool = False                # evidence-bounded (see CLAUDE.md) — never read as truth
+    committed: bool = False
+    auth_refreshed: bool = False
+    failure_code: str = ""
+    idempotency_keys: list = field(default_factory=list)
+
+
+@dataclass
 class LearnResult:
     spec: FlowSpec
     cached: bool       # did a replayable flow get cached?
@@ -2062,7 +2089,7 @@ def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Op
 
 
 async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, cached_flow, mode="replay",
-                          provider=None, params=None):
+                          provider=None, params=None, record=None, on_step=None):
     """One replay attempt. Returns (ok, data, reason, kind).
 
     `kind` classifies a failure for the typed taxonomy: "" (ok) | "miss" | "escalate" | "shape" |
@@ -2090,6 +2117,9 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, cached
     committed = False     # did ANYTHING commit (the first recipe write ran ok) — the disclosure gate
 
     def _fail(reason: str, kind: str):
+        if record is not None:
+            record.ok, record.landed, record.committed = False, landed, committed
+            record.failure_code = kind
         return False, None, reason, kind, landed, committed
 
     # A learned pin anchors the OLD final page; a repaired flow may end elsewhere, so only trust the
@@ -2102,12 +2132,29 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, cached
         finalize=_make_finalize(spec, router, out, pin=pin, redact=_secret_values(spec)),
         pre_write=_make_pre_write(spec, out),
         redact=_secret_values(spec),   # B2: never ship a resolved secret to a provider
+        # G9: let a caller observe each step on the GATED path. `run_cached` already accepts it;
+        # `replay()` simply never passed it, so a harness had to bypass every safety gate to watch
+        # a run. Read-only by convention — the callback receives the StepTrace, not the session.
+        on_step=on_step,
         # B1: THE case this exists for. On mode="replay" the engine nulls the heal provider, so
         # without this the run observes no router while the extraction call below is really
         # spending — and would report a confident zero. `router` is None for a pinned/navigate-only
         # read, where zero is the truth.
         aux_routers=(router,) if router is not None else (),
     )
+    if record is not None:
+        # Populated HERE, not at the success return: `_fail` has seven exits below this line and a
+        # record only filled on success would be empty in exactly the cases a caller most needs it.
+        record.mode = report.mode
+        record.usage = dict(report.extra.get("usage") or {})
+        record.llm_calls = report.llm_calls
+        record.healed_steps = report.healed_steps
+        record.total_ms = report.total_ms
+        record.traces = list(report.traces)
+        record.idempotency_keys = [
+            t.meta["idempotency_key"] for t in report.traces
+            if isinstance(t.meta, dict) and t.meta.get("idempotency_key")
+        ]
     # ===== THE WRITE-LANDED EVIDENCE, read from `out` — NOT inferred from position =====
     #
     # `finalize` runs UNCONDITIONALLY (`flow.py` calls it outside the step loop), so the confirm's
@@ -2258,6 +2305,10 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, cached
         if mode == "replay" and spec.audit:
             _capture_audit(cache, key, spec, meta, report, data, eff=eff,
                            truncated=bool(out.get("truncated")), cached_flow=cached_flow)
+    if record is not None:
+        # G6: computed on the success path and previously dropped here. `landed` on an OK run is
+        # what tells a caller a write actually committed, and `_ok()` never saw it.
+        record.ok, record.landed, record.committed = True, landed, committed
     return True, data, "", "", landed, committed
 
 
@@ -2669,6 +2720,7 @@ async def replay(
     spec: FlowSpec, *, require_approved: bool = False, on_drift: str = "raise",
     check_shape: bool = True, auth_refresh: bool = True, provider_name: Optional[str] = None,
     provider=None, router=None, cache: Optional[FlowCache] = None, params: Optional[dict] = None,
+    record: Optional["RunRecord"] = None, on_step=None,
 ) -> Any:
     """Replay the learned flow at 0-LLM navigation and return the extracted data.
 
@@ -2752,7 +2804,8 @@ async def replay(
     committed_any = False   # weaker, and deliberately separate — see `_attempt_replay`'s two predicates
     try:
         ok, data, reason, kind, landed, committed = await _attempt_replay(
-            spec, router, cache, key, meta, check_shape, cached_flow=cached_flow, params=params)
+            spec, router, cache, key, meta, check_shape, cached_flow=cached_flow, params=params,
+            record=record, on_step=on_step)
         landed_any = landed_any or landed
         committed_any = committed_any or committed
         if ok:
@@ -2787,12 +2840,14 @@ async def replay(
         if retry_ok:
             try:
                 await refresh_auth(spec, headless=spec.headless)
+                if record is not None:
+                    record.auth_refreshed = True     # G10: previously a log line and nothing else
                 if await _precheck_done(spec):  # the first attempt's write may have landed
                     _record_run(cache, key, ok=True)
                     return {"status": "already-done", "data": None}
                 ok, data, reason2, kind2, landed2, committed2 = await _attempt_replay(
                     spec, router, cache, key, meta, check_shape, cached_flow=cached_flow,
-                    params=params)
+                    params=params, record=record, on_step=on_step)
                 landed_any = landed_any or landed2
                 committed_any = committed_any or committed2
                 if ok:
@@ -2827,7 +2882,7 @@ async def replay(
             # flow. It can't fix data-SHAPE drift (the steps still replay) — that falls to a full relearn.
             ok, data, reason3, _kind3, landed3, committed3 = await _attempt_replay(
                 spec, router, cache, key, meta, check_shape, cached_flow=cached_flow,
-                mode="repair", provider=provider, params=params
+                mode="repair", provider=provider, params=params, record=record, on_step=on_step
             )
             landed_any = landed_any or landed3
             committed_any = committed_any or committed3
@@ -3402,6 +3457,13 @@ class BatchRowResult:
     data: Any = None                 # replay()'s return (read data, or {"status","data"} for a write)
     error: Optional[str] = None
     idempotency_keys: list = field(default_factory=list)  # sha256 write-key PREVIEW (secret-safe)
+    # G7: the typed taxonomy, kept rather than flattened into `error`. `str(exc)` is a human
+    # sentence, so a consumer wanting to know WHICH refusal happened had to parse prose — and a
+    # reworded message would silently reclassify it. `landed` is the evidence bound (never truth,
+    # see CLAUDE.md) that says whether this row's write may have committed.
+    code: str = ""
+    retryable: bool = False
+    landed: bool = False
 
 
 @dataclass
@@ -3516,7 +3578,10 @@ async def run_batch(
             resolved = _preflight_row(spec, row, meta=meta, cached_flow=cached_flow,
                                       require_approved=require_approved, on_drift="raise")
         except FlowReplayError as exc:
-            invalid.append(BatchRowResult(index=i, status="invalid", ok=False, error=str(exc)))
+            invalid.append(BatchRowResult(index=i, status="invalid", ok=False, error=str(exc),
+                                          code=getattr(exc, "code", ""),
+                                          retryable=bool(getattr(exc, "retryable", False)),
+                                          landed=bool(getattr(exc, "landed", False))))
             resolved_rows.append(None)
             preview_keys.append([])
             continue
@@ -3611,7 +3676,10 @@ async def run_batch(
                     ledger.record(i, preview_keys[i], getattr(exc, "code", "landed"))
                 report.append(BatchRowResult(index=i, status="failed", ok=False,
                                              ms=(time.perf_counter() - t0) * 1000.0, error=str(exc),
-                                             idempotency_keys=preview_keys[i]))
+                                             idempotency_keys=preview_keys[i],
+                                             code=getattr(exc, "code", ""),
+                                             retryable=bool(getattr(exc, "retryable", False)),
+                                             landed=bool(getattr(exc, "landed", False))))
                 if on_row_error == "stop":
                     stopped = True
             except Exception as exc:  # noqa: BLE001 - a crash (browser/unexpected) hard-stops (page state is

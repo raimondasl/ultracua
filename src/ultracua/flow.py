@@ -782,7 +782,7 @@ async def _learn(
     aux_routers: tuple = (),
 ) -> FlowReport:
     max_steps = max_steps or settings.max_steps
-    _usage_watch = UsageTotals.observe(provider, *aux_routers)  # per-run token/cost accounting
+    _usage_watch = UsageTotals.observe(provider, grounding, *aux_routers)  # per-run cost accounting
     session = await BrowserSession(
         headless=headless, browser=browser, record_har_path=record_har_path,
         storage_state=storage_state, window_size=window_size,
@@ -1002,7 +1002,7 @@ async def _learn_n(
     reported cumulatively across attempts. (Needs `verify_replay=True` to actually retry.)
     """
     samples = max(1, samples)
-    _usage_watch = UsageTotals.observe(provider, *aux_routers)
+    _usage_watch = UsageTotals.observe(provider, grounding, *aux_routers)
     last: Optional[FlowReport] = None
     used = 0
     reflections: list = []
