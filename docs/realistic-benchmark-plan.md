@@ -301,11 +301,28 @@ end on a real ERP**, not merely at the classifier.
 > wrong: its SPA had not rendered (§9.5), so the click never happened and there was no POST to
 > attribute. The hedge was right to demand the measurement and wrong about its result.
 
-One second-order consequence worth its own line: because `performed_write` is true,
-`flow.py:889` (`if verify_replay and not performed_write`) **skips verify-by-replay**. The
-write-flow exemption — which exists so re-replaying a real write cannot double-submit — is being
-applied to a pure read, so a misclassified read is cached *without* the verification every other read
-gets. Nothing here is unsafe, but the read loses a guard by being mistaken for a write.
+One second-order consequence worth its own line: a promoted read **loses verify-by-replay**
+(`flow.py:889`, `if verify_replay and not performed_write`). The write-flow exemption — which exists so
+re-replaying a real write cannot double-submit — is applied to a pure read, so a misclassified read is
+cached *without* the verification every other read gets. Nothing here is unsafe, but the read loses a
+guard by being mistaken for a write.
+
+> **Second correction, same section.** The sentence above was first written from *reading* `flow.py`,
+> and the run it cited could not have shown it: `run_cached`'s own default is **`verify_replay: bool =
+> False`** (`flow.py:117`) — the Flow API turns it on, the engine path does not — so verification was
+> off in every probe, for a reason that had nothing to do with `performed_write`. Re-measured with the
+> control that was missing:
+>
+> | | `performed_write` | `extra["verify"]` |
+> |---|---|---|
+> | `verify_replay=False`, promoting read | True | absent |
+> | `verify_replay=False`, menu navigation | False | absent |
+> | `verify_replay=True`, promoting read | True | **absent — skipped** |
+> | `verify_replay=True`, menu navigation | False | **`passed`** |
+>
+> The claim survives; the evidence for it did not exist until now. Third time in this spike that a
+> mechanism read correctly out of the source still needed a measurement to show which branch actually
+> ran.
 
 ### 9.3 Row identity is positional — and it is the *availability* cost, not a silent-wrong one
 
@@ -368,9 +385,17 @@ must contain both; they behave differently.
 5. `if success and steps:` (`flow.py:880`) is therefore false, `cached_here` stays False
    (`flow.py:848`), and `extra["cached"]` is False (`flow.py:904`). Replay then misses.
 
-The tell that pointed here before any re-run: `extra` carried **no `"verify"` key**. That key is set on
-both branches inside `if success and steps:`, so its absence proves the gate never opened — the failure
-was upstream of verify-by-replay, which is why turning `verify_replay=False` changed nothing.
+What actually proves the gate never opened is `cached=False` **alongside** `success=True`: with
+`success` true, an empty `steps` is the only way past `flow.py:880` without caching.
+
+> **Correction.** This paragraph first offered a different tell — that `extra` carried no `"verify"`
+> key, "set on both branches inside the gate, so its absence proves the gate never opened". That is
+> wrong twice over: the key is set on the two branches of the *inner* `verify_replay` test, not on both
+> paths, and `run_cached` defaults to `verify_replay=False` (`flow.py:117`), under which the caching
+> branch omits the key too. So its absence proved nothing, and the follow-up sentence — that this was
+> "why turning `verify_replay=False` changed nothing" — had the causation backwards: it changed nothing
+> because it was **already** the default. The conclusion (`steps` was empty) was right; the argument
+> given for it was not.
 
 **Confirmed by fixing it.** Adding a `prepare` hook that waits for `tr.o_data_row` before the loop:
 
@@ -401,10 +426,54 @@ One run of the bare arm also tripped `write_unattributed=True`, taking the expli
 configuration can leave a sticky refusal behind, not just an un-cached flow. It did not recur in the 4
 hooked reps (0/4).
 
+### 9.5b Does the misfiling SATURATE? — and is Odoo therefore still the right substrate
+
+If *every* Odoo read promotes to a write, the availability metric has no dynamic range here, and whole
+regimes — heal, replan, `run_batch`, MCP exposure, auth-refresh retry — are structurally unreachable for
+reads, so the corpus could never score them. Measured across five distinct ordinary reads, learned
+key-lessly:
+
+| read flow | `performed_write` | recipe has a mutating step | marked by |
+|---|---|---|---|
+| sort by Customer | True | **yes** | `wire` |
+| sort by Number | True | **yes** | `wire` |
+| open a record | True | **yes** | `keyword,wire` |
+| search for a customer | True | — (learn failed; see below) | — |
+| navigate to Products (menu) | **False** | no | — |
+
+**4 of 5 promoted; 3 of 5 produced a recipe containing a mutating step.** So it is high but **not**
+total, and the split is principled rather than random: **a control that fetches data promotes; pure
+client-side navigation does not.** Note also `open a record`, marked `keyword,wire` — the intent text
+"open the order detail" trips the keyword classifier on `order`, so it would have been misfiled even
+without the wire. That is the 28%-false-positive surface showing up unprompted on a real app.
+
+**The honest reading, and it is two-sided.** The population that saturates *is* the population that
+matters — list filtering, sorting, searching, opening records is what a customer read flow does. The
+non-saturated band is menu navigation, which is not where the value is. So on Odoo:
+
+* it is an **excellent instrument for the misfiling itself**, and the ideal *regression* substrate for
+  any future fix to it — today's floor is near-total, so improvement would be unmistakable;
+* it is a **poor instrument for everything downstream of that** on read flows, because a write-marked
+  recipe cannot exercise heal, replan, `run_batch`, MCP, or auth-refresh at all.
+
+**Consequent change to the plan (§2):** keep Odoo as primary, but the corpus needs a **second,
+classic server-rendered substrate** where reads stay GETs, so the non-saturated regime is reachable and
+the recovery/batch/MCP machinery can actually be scored. Without it the benchmark would report one very
+loud number and be structurally silent on the rest — and would over-report ultracua as broken on reads
+by measuring only the architecture where it misfiles.
+
+**One flow failed to learn** (`search-a-customer`: `success=False`, nothing cached, and
+`performed_write=True` with no recipe to hang it on). Not diagnosed — the scripted `type`+`press` pair
+is the most likely culprit rather than the substrate, and it is called out here rather than quietly
+dropped because a benchmark that silently loses a scenario is the failure mode this document keeps
+warning about.
+
 ### 9.6 What Gate-0 changes in the plan
 
-1. Substrate confirmed: **proceed with Odoo.** §9.5a resolved the one open risk as harness-shaped, so
-   the SuiteCRM fallback is no longer on the table for that reason.
+1. Substrate confirmed **but no longer sole**: proceed with Odoo (§9.5a resolved the open risk as
+   harness-shaped), and add a classic server-rendered second substrate so the non-saturated read regime
+   is reachable at all (§9.5b). Filed also as a candidate engine finding, **R4.40**, in
+   `docs/open-defects.md`.
 2. The availability finding is now end-to-end, not classifier-only (§9.2): an ordinary list sort caches
    as `mutating=True, sources=['wire']`. v1 should publish **both** numbers — controls whose traffic
    `is_write_request` flags, and flows whose recipe ends up write-marked — because they are different
