@@ -251,6 +251,10 @@ heal figure is a *ceiling* measured with a perfect-vision provider, not a heal r
 **Still open:** the **model-accuracy factor** (the paid `--provider anthropic` arm is built but unrun, so
 `real recovery = ceiling × accuracy` has one unmeasured term); **real frozen page snapshots** (v2 refutes
 "single cosmetic mutation on a 2-section page" but not "toy page"); an optional embedding/visual anchor rank.
+Both of the first two are sequenced by
+[`docs/realistic-benchmark-plan.md`](docs/realistic-benchmark-plan.md) — a costed plan for a
+realistic customer-scenario benchmark (real app, server-verified writes, and the **availability**
+direction this project has never metered).
 
 - *Enables:* "a vendor portal redesigns its checkout and the flow heals the changed step."
 - *Closes:* fingerprint over-sensitivity, single-step-local heal, accessible-name brittleness, the drift
