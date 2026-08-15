@@ -11,8 +11,8 @@ by applying this file's own sibling rule while redesigning R3.2; it is recorded 
 CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch was **PARKED, not
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
-The round-4 series has since grown to R4.40 as later slices filed against it:
-**23 open**, 13 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+The round-4 series has since grown to R4.41 as later slices filed against it:
+**24 open**, 13 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **23 open**, 13 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **24 open**, 13 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -830,6 +830,7 @@ if and only if that branch is ever resumed.
 | R4.38 | open | `ACTIVATION_CAUSED` matches an event's TYPE NAME with no provenance, so a write laundered through a synthetic `submit`/`reset` re-enters attribution; **HIGH**, inviolable #3 |
 | R4.39 | open | the wire Idempotency-Key is whichever step was mid-act, so a deferred write's key moves with PAGE TIMING and a retry cannot dedupe; **HIGH**, inviolable #3 |
 | R4.40 | open | `_learn` snapshots straight after navigate with no settle floor, so a client-rendered page is authored against its unrendered skeleton — quiet, and one variant PERSISTS a refusal |
+| R4.41 | open | the SDK choke-point pin allowlists `vision.py`, which does NOT route through `build_client` — so the inference the test states does not hold and `no_llm` would not intercept a vision call |
 
 
 **Scope.** The uncommitted `feat/shared-causal-attribution` work (would-be 0.76.0): extracting the
@@ -4326,3 +4327,75 @@ or settle on a page-derived signal rather than a clock. Cost unmeasured for both
 **Not pinned by a test.** No regression test is added with this entry — the reproducer needs a
 client-rendered fixture the suite does not have, and the un-measured LLM direction above would change
 what the test should assert. Filing ahead of the fix deliberately.
+
+---
+
+## R4.41 — the SDK choke-point pin allowlists a module that is not on the choke point
+
+**Severity: MEDIUM** (test-integrity; no inviolable violated *today*). Filed because the guard states an
+inference its own allowlist breaks, and it is the same shape as the defect the guard was written to
+close.
+
+**Found** while auditing cost instrumentation for the benchmark plan — i.e. by asking "where can an LLM
+call originate", not by reading the test.
+
+### What the pin claims, and where it stops being true
+
+`tests/test_inviolable_properties.py::test_llm_client_construction_has_a_single_choke_point` walks the
+AST of everything under `src/ultracua`, forbids direct construction of `AsyncAnthropic` / `AsyncOpenAI` /
+`OpenAI` / `GenerativeModel`, and exempts `_SDK_ALLOWED`. Its docstring states the reasoning plainly:
+
+> "no module outside the LLM leaf adapters may construct an SDK client directly, so all construction
+> funnels through `llm.build_client`, which the fixture does patch."
+
+That inference is sound for the three entries it was written for — `llm/anthropic.py`, `llm/openai.py`,
+`llm/gemini.py` are precisely the leaves `build_client` **dispatches to**, so exempting them does not
+widen what is reachable without going through it.
+
+`src/ultracua/vision.py` is the fourth entry (`tests/test_inviolable_properties.py:150`) and is **not**
+such a leaf. It constructs its own client at `vision.py:66-68`:
+
+```python
+from anthropic import AsyncAnthropic
+...
+self._client = AsyncAnthropic()
+```
+
+and never calls `build_client`. So the allowlist does not merely exempt a module from the scan — it
+**removes the only evidence for the claim that `build_client` is the choke point**, for that module. A
+`no_llm`-style fixture that patches `build_client` (and `flows.build_router` / `providers.build_router`,
+the other two names the file checks) would **not** intercept a vision call.
+
+### Why it is filed, and why it is not filed as HIGH
+
+Reachability today is narrow. `_vision_decide` is called from the decide loop
+(`flow.py:408-409`, when `not obs.elements and grounding is not None`) and from the heal path — all of
+which are learn/recovery, i.e. paths where an LLM call is expected and inviolable #1 ("replay never
+calls an LLM") is not in force. A plain replay does not reach it. **No violation is claimed, and none
+was observed.**
+
+What is wrong is the *guarantee*. This file's own history is the argument: S14 added the AST scan
+precisely because a hand-written `_FACTORIES` list had let a replay construct **105 real Anthropic
+clients** with every cell green. The scan was the fix that "closes the class instead of lengthening a
+list" — and an allowlist entry for a module that bypasses the choke point lengthens a list again,
+inside the guard that replaced it. A future slice that gives `grounding` a path into a replay-side
+rung would find the guard already silently not covering it.
+
+### Two dispositions, and the cheap one is not the right one
+
+* **Cheap and wrong:** delete `vision.py` from `_SDK_ALLOWED`. The scan goes red and the only way to
+  green it is to route vision through `build_client` — which may be correct (see below) but is a
+  behaviour change smuggled in as a test edit.
+* **Right:** decide whether vision *should* be a `build_client` consumer. It probably should — it is a
+  second Anthropic client with its own configuration, and routing it through the factory would also
+  close the cost blind spot that surfaced beside this (vision spend never reaches `router.totals`, so a
+  vision-tier run reports `cost_usd` 0). If it should not, then the allowlist needs a comment saying
+  *why* this entry does not undermine the docstring — and the docstring needs to stop claiming what it
+  currently claims.
+
+Either way the invariant to restore is the one the test already names: **every SDK client construction
+is reachable from one patchable point**, and the allowlist may only contain modules for which that is
+true.
+
+**Not pinned by a new test.** The existing test passes and will keep passing; the defect is in what it
+proves, not in whether it runs. A regression test belongs with whichever disposition is chosen.
