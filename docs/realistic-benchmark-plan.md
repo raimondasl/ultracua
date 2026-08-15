@@ -65,7 +65,10 @@ state; (b) server-side ground truth for writes; (c) freezable versions, ideally 
 | **REAL** (11 deterministic replicas of real sites) | rejected | Best determinism in the field and programmatic write checks, but a hosted-replica dependency, single-version (no drift arm), and a CC BY-NC-SA question |
 | **WebArena** (already in-repo: `benchmarks/webarena_run.py`) | KEEP AS FOOTNOTE | It ran once — shopping_admin 6/8, shopping 6/8, 2 replay regressions (STATUS.md:47). But reset is minutes-heavy, hosting is t3a.xlarge-class, images are one frozen version and hard to rebuild. Keep for literature comparability; do not extend. |
 | **Similo / VON-Similo relocalization dataset** (10,376 element pairs, 30 real apps × 16 Wayback snapshots 2018–2023) | **FREE RESOLVER ARM** | Real old→new page pairs for `locators.resolve` alone. Retires half of "real frozen snapshots remain unbuilt" (ROADMAP.md:252) for ~0 cost. Limits in §8. |
+| **Gitea** (`gitea/gitea:1.22`, SQLite) | **PAIRED SECOND SUBSTRATE** | Chosen after §9.5b showed Odoo saturates. Measured (§9.5c): **0 of 5** read controls classified as writes — all GETs — and writes marked by the **structural** classifier (`source=form_method`), the path Odoo never exercises. A read flow learns, **passes verify-by-replay**, caches as a read and replays 0-LLM. 242 MB image vs Odoo's 2.73 GB; a 2 MB SQLite file, so reset is deleting one file. Rich API for server-side truth; dense release history for the drift arm |
 | Live public sites (the `examples/hn_digest.py` pattern) | SMOKE ONLY | One or two read-only flows as a reality anchor and a Windows-local smoke; non-deterministic, so never gated |
+| **WooCommerce** (WordPress admin) | DEFERRED, needs its own spike | The only candidate that is **domain-matched** with Odoo — orders in both — which would let a scenario hold the task constant and vary only the transport. Not chosen for v1 because modern WooCommerce admin has React screens (Analytics certainly; the Orders list depends on version and HPOS), risking exactly the saturation the pairing exists to escape. Revisit only if the controlled comparison is wanted, and spike first |
+| **Redmine** | ALTERNATIVE to Gitea | Classic Rails, same server-rendered properties, a more business-shaped domain than dev tooling. Hold in reserve if Gitea's domain framing becomes a problem; not measured |
 | WorkArena · Mind2Web-Live/WebCanvas · WebVoyager · τ²-bench · TheAgentCompany | rejected | ServiceNow instances are un-freezable; live-web tasks rot with no reset or server truth; τ-bench has no browser — though **its final-DB-state-vs-expected oracle is exactly the pattern our write oracles should copy** |
 
 ---
@@ -172,6 +175,7 @@ refuted shape.
 |---|---|---|
 | Instrumentation PRs (holes a + b) | ~1–2 days | prerequisite; valuable on their own |
 | Odoo compose + reset/warmup/filestore/faketime harness | ~3–4 days | the critique-adjusted reset engineering is most of it |
+| Gitea substrate (compose, API seeding, reset) | ~0.5 day | 242 MB image, ~30 s boot, reset = delete one 2 MB SQLite file; adds little to nightly wall-clock |
 | Scenario authoring, cohorts A+B (~27) + oracles | ~6–9 days | the long pole; ~2–3 h each including the arm-the-violation check per cell |
 | Sealed cohort C (~6) | ~1–2 days | by a non-register-reader |
 | Harness + outcome buckets + report/baseline format | ~2–3 days | mostly reuse of `variance.py` and `write_flow_bench.py` |
@@ -188,23 +192,64 @@ refuted shape.
 
 ## 7 · Phasing and gates
 
-0. **Gate 0 — the 1-day spike (first).** Hand-learn two scenarios on Odoo (`filter-orders`,
-   `cancel-order-row-N`) and inspect what `locators.resolve` binds: does the OWL UI expose stable
-   accessible roles, or does everything bind positional CSS? This gates the substrate. Odoo fails →
-   SuiteCRM; both fail → authored modern-transport fixtures (a weaker realism claim that still delivers
-   the availability metric). **Result recorded in §9.**
-1. **v1 (~2 weeks)** — instrumentation PRs; one Odoo version; 12 scenarios (the R4.27 six, one debounced
-   read, the core writes, `idempotent-replay` with mechanism assertions); server-side oracles;
-   `variance.py`-format report with the new buckets; nightly run. **Deliverable: the first gated
-   availability number.**
-2. **v2 (+1–2 weeks)** — the rest of cohort A (row-identity writes, batch/resume, auth), cohort B
-   fixtures, the sealed cohort's first run, the A/B variant layer.
-3. **v3 (+1 week)** — drift arm across two further Odoo versions; versioning arm at 4 waypoints; the
-   Similo resolver arm; a `baselines/README.md` entry stating per number what it does and does not prove.
+**Gate 0 is done** (§9) — Odoo passes, Gitea is the measured pairing (§9.5c). What follows is v1 as
+five slices, one PR each per house convention, in dependency order.
 
-Each phase ships the way everything here ships: an adversarial pass aimed at the new harness code before
-the PR — the corpus-authoring PRs especially, since **a benchmark cell that cannot fail** is this
-codebase's best-documented trap.
+### v1 — "the first availability number", ~11–14 working days
+
+**The deliverable, stated as the thing that must be true at the end:** for every scenario, on both
+substrates, the bench reports outcome + LLM calls + tokens + $ + wall-clock; writes are adjudicated
+server-side; and the headline is a *pair* of availability numbers with the Odoo/Gitea contrast beside
+them.
+
+| # | slice | days | why here |
+|---|---|---:|---|
+| **B1** | **Usage accounting reaches every caller** (code, not bench) | 1–2 | Prerequisite: today a "0-LLM" replay can make an uncounted paid call (`flows.py:2716-2721`) and `LearnResult`/`replay()` discard usage entirely. Ship it as ONE invariant — *every LLM call a flow makes is counted and costed, on every entry point* — not two per-path patches, per this repo's standing rule about enforcing an invariant once. Publishing cost numbers before this lands would publish wrong ones. |
+| **B2** | **Substrate lifecycle + harness skeleton** | 3 | `benchmarks/customer_bench.py`, compose for Odoo + Gitea, seeding, reset (Postgres template + filestore + warmup for Odoo; delete one SQLite file for Gitea), `libfaketime` for Odoo's clock-coupled demo data, and a **per-scenario readiness hook**. Carries R4.40's guard: a near-empty first observation is a **harness error, never a scored discovery failure**. Two smoke scenarios only. |
+| **B3** | **Outcome vocabulary + record/baseline format** | 2 | Reads `{ok, wrong_data, refused, over_gated}`, writes `{true, incorrect_target, double, suppressed, refused_correctly, refused_wrongly}`, emitted in `variance.py`'s record shape so `compare_records` gating comes free. `over_gated` is derived from the recipe's `mutating` flags + `FlowMeta` + `FlowReplayError.code`, never guessed. |
+| **B4** | **The v1 corpus + oracles** | 4–5 | 14 scenarios (below) and their server-side oracles: SQL for Odoo, API for Gitea, plus an Idempotency-Key logging proxy. The long pole, and the one where the house rules bite hardest — see the two gates below. |
+| **B5** | **Baseline, nightly job, honesty page** | 1–2 | Capture `baselines/customer_v1.json`; a nightly (not per-PR — the suite is already ~21 min against a 25-min timeout) ubuntu Docker job; and a `baselines/README.md` entry saying per number what it does and does not prove. |
+
+### The v1 corpus (14), chosen so the contrast is the headline
+
+Paired deliberately: the same read *intent* on both substrates, so a difference is attributable to
+architecture rather than to task difficulty.
+
+| Odoo (saturating) | Gitea (non-saturating) | what the pair isolates |
+|---|---|---|
+| `odoo-sort-list` | `gitea-sort-list` | the cleanest read: JSON-RPC POST vs GET |
+| `odoo-filter-status` | `gitea-filter-state` | filtering — R4.27's core, vs query-param GET |
+| `odoo-open-record` | `gitea-open-issue` | record navigation (Odoo's also trips the *keyword* classifier on "order") |
+| `odoo-search` | `gitea-search` | debounced/typed search |
+| `odoo-menu-nav` | `gitea-menu-nav` | the control Odoo does **not** promote — the in-substrate control group |
+| `odoo-create-lead` (write) | `gitea-comment` (write) | wire-marked write vs `form_method`-marked write |
+| `odoo-idempotent-replay` | `gitea-start-timer` | replay of a landed write; and a real write with **no enclosing form**, catchable only by the wire |
+
+### Two gates B4 must pass, because this repo's history says so
+
+1. **Arm every oracle.** Each one is demonstrated RED against a deliberately broken run before it is
+   trusted. A count is never an oracle on its own — assert the *linkage set* — and `idempotent-replay`
+   must assert the mechanism ran, since `_precheck_done` (`flows.py:2705-2708`) returns `already-done`
+   before any browser action and would otherwise pass inert.
+2. **An adversarial pass on the corpus PR specifically**, aimed at the new harness code. Five for five,
+   it is the only instrument here that has ever caught a green-but-wrong change, and a benchmark cell
+   that cannot fail is this codebase's best-documented trap.
+
+### v1 acceptance criteria
+
+* Two availability numbers published per substrate — **controls whose traffic `is_write_request` flags**
+  and **flows whose recipe ends up write-marked** — because §9.2 briefly conflated them.
+* Per-scenario cost in calls, tokens and $, including the extraction call B1 makes visible.
+* Every write verified server-side; `landed` used nowhere as an oracle.
+* Gitea's row-identity shape measured (the gap §9.5c leaves open).
+* Every oracle shown RED once.
+
+### Deliberately NOT in v1
+
+The drift arm, the versioning arm at 4 waypoints, cohort B's iframe/consent/locale fixtures, the sealed
+cohort C, the A/B variant layer, and the Similo resolver arm. Those are v2 (+1–2 weeks) and v3
+(+1 week) as before. Sealed cohort C should not slip far — it is the anti-overfit measure, and the
+A-vs-C gap is what tells a reader how much of the headline is register-shaped.
 
 ---
 
@@ -468,12 +513,40 @@ is the most likely culprit rather than the substrate, and it is called out here 
 dropped because a benchmark that silently loses a scenario is the failure mode this document keeps
 warning about.
 
+### 9.5c The pairing, measured — Gitea
+
+Chosen by running the same four questions against `gitea/gitea:1.22` (SQLite, seeded via its API with a
+repo and 8 issues) that Gate-0 asked of Odoo. Key-less, no LLM.
+
+| | Odoo 17 | Gitea 1.22 |
+|---|---|---|
+| ordinary read controls classified as writes | **6 of 7** | **0 of 5** — every one a GET |
+| how a write gets marked | `wire` promotion | **`source=form_method`** — the structural classifier |
+| a read flow, end to end | cached with `mutating=True` | `cached=True`, `mutating=False`, **`verify=passed`**, replay `llm_calls=0` |
+| image / reset unit | 2.73 GB / Postgres template + filestore + asset recompile | **242 MB** / one 2 MB SQLite file |
+
+The end-to-end row is the one that decided it: a read that learns, **passes verify-by-replay**, caches
+as a genuine read and replays at zero LLM calls — the regime Odoo structurally cannot reach. It also
+supplied the `verify=passed` control that §9.2's correction needed.
+
+Write marking is the other half. `Close Issue`, `Comment`, `Star` and `Unwatch` all come back
+`mutating=True source=form_method` from real `<form method="post">` controls. Two mixed cases worth
+keeping in the corpus: **`Start Timer`** is a genuine write with *no enclosing form*, so nothing but the
+wire can catch it; and **`Edit`** is correctly not marked, because it only opens an editor.
+
+**Two limits on this measurement, stated rather than smoothed over.** The G2 target happened to be a
+bulk-select checkbox, which captured **`anchor_id=None`** — the overloaded state R3.7/R4.37 are about.
+The issue-title link, which should pick up an href-based identity, was **not measured**, so Gitea's
+row-identity shape is genuinely unknown beyond "different from `datapoint_N`"; measuring it is a v1
+task, not a claim. And Gitea is dev tooling: the "pull yesterday's order count" framing is a stretch,
+which is the one real argument for the deferred WooCommerce option in §2.
+
 ### 9.6 What Gate-0 changes in the plan
 
 1. Substrate confirmed **but no longer sole**: proceed with Odoo (§9.5a resolved the open risk as
-   harness-shaped), and add a classic server-rendered second substrate so the non-saturated read regime
-   is reachable at all (§9.5b). Filed also as a candidate engine finding, **R4.40**, in
-   `docs/open-defects.md`.
+   harness-shaped), paired with **Gitea** so the non-saturated read regime is reachable at all
+   (§9.5b measured the need, §9.5c measured the pairing). Filed also as a candidate engine finding,
+   **R4.40**, in `docs/open-defects.md`.
 2. The availability finding is now end-to-end, not classifier-only (§9.2): an ordinary list sort caches
    as `mutating=True, sources=['wire']`. v1 should publish **both** numbers — controls whose traffic
    `is_write_request` flags, and flows whose recipe ends up write-marked — because they are different
