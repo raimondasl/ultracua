@@ -1283,6 +1283,10 @@ async def _learn_once(
         finalize=_make_finalize(spec, router, out, redact=_secret_values(spec)),
         pre_write=_make_pre_write(spec, out),
         verify_replay=verify_replay, redact=_secret_values(spec),
+        # B1: the extraction router spends inside the `finalize` closure, where the engine cannot
+        # see it. Hand it over so the run's usage covers it (deduped by identity — on this path it
+        # is usually `provider.router` already).
+        aux_routers=(router,) if router is not None else (),
     )
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     # ONLY the flow THIS attempt authored counts. `cache.get(key)` also returns a PRE-EXISTING flow, which
@@ -2098,6 +2102,11 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, cached
         finalize=_make_finalize(spec, router, out, pin=pin, redact=_secret_values(spec)),
         pre_write=_make_pre_write(spec, out),
         redact=_secret_values(spec),   # B2: never ship a resolved secret to a provider
+        # B1: THE case this exists for. On mode="replay" the engine nulls the heal provider, so
+        # without this the run observes no router while the extraction call below is really
+        # spending — and would report a confident zero. `router` is None for a pinned/navigate-only
+        # read, where zero is the truth.
+        aux_routers=(router,) if router is not None else (),
     )
     # ===== THE WRITE-LANDED EVIDENCE, read from `out` — NOT inferred from position =====
     #

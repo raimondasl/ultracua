@@ -130,6 +130,14 @@ async def run_cached(
     # H5: a `dryrun.DryRunArbiter`, not a bool — the CALLER owns the arbiter so it can read the held
     # writes afterwards, and so the object that made the hold guarantee is the one that reports it.
     dry_run: Optional[object] = None,
+    # B1: routers this run will spend through that the engine cannot otherwise see. The one that
+    # matters is the extraction router `flows.py` builds for a data replay and hands over inside the
+    # `finalize` closure: on `mode="replay"` the agent provider is nulled (below), so without this
+    # the run would observe no router at all and report a CONFIDENT ZERO over real spending. Pass
+    # them and the zero becomes true; omit them and the report says `unobserved_llm_path` instead
+    # of lying. Deduplicated by identity — the agent's router and the extraction router are usually
+    # the same object.
+    aux_routers: tuple = (),
 ) -> FlowReport:
     cache = cache or FlowCache()
     # R4.31 — AN UNRECOGNISED MODE IS A CALLER ERROR AND MUST SAY SO, NOT BE GUESSED AT.
@@ -174,7 +182,7 @@ async def run_cached(
             url, key, cached, cache, heal_provider, headless, on_step,
             prepare, finalize, goal, governor, scope, browser, record_har_path, extra_headers,
             storage_state, window_size=window_size, params=params, dry_run=dry_run,
-            pre_write=pre_write, redact=redact,
+            pre_write=pre_write, redact=redact, aux_routers=aux_routers,
         )
         if report.success or mode in ("replay", "repair") or report.mode == "escalate":
             return report
@@ -209,13 +217,13 @@ async def run_cached(
             url, goal, key, provider, cache, max_steps, headless, on_step,
             prepare, finalize, governor, scope, browser, verifier, grounding,
             record_har_path, extra_headers, storage_state, verify_replay, samples, reflect,
-            window_size=window_size, redact=redact,
+            window_size=window_size, redact=redact, aux_routers=aux_routers,
         )
     return await _learn(
         url, goal, key, provider, cache, max_steps, headless, on_step,
         prepare, finalize, governor, scope, browser, verifier, grounding,
         record_har_path, extra_headers, storage_state, verify_replay,
-        window_size=window_size, redact=redact,
+        window_size=window_size, redact=redact, aux_routers=aux_routers,
     )
 
 
@@ -771,10 +779,10 @@ async def _learn(
     reflections: Optional[list] = None,
     window_size: Optional[tuple[int, int]] = None,
     redact: tuple = (),
+    aux_routers: tuple = (),
 ) -> FlowReport:
     max_steps = max_steps or settings.max_steps
-    _router = getattr(provider, "router", None)  # for per-run token/cost accounting, if available
-    _usnap = _router.totals.snapshot() if _router is not None else None
+    _usage_watch = UsageTotals.observe(provider, *aux_routers)  # per-run token/cost accounting
     session = await BrowserSession(
         headless=headless, browser=browser, record_har_path=record_har_path,
         storage_state=storage_state, window_size=window_size,
@@ -906,8 +914,8 @@ async def _learn(
         extra.setdefault("write_unattributed", write_unattributed)
         # Always present, for the reason given on the replay path: a key-less learn (scripted
         # teacher, no router) must SAY it spent nothing rather than stay silent about it.
-        used = _router.totals.since(_usnap) if _router is not None else UsageTotals()
-        extra["usage"] = used.as_dict(settings.model)
+        used = _usage_watch.delta()
+        extra["usage"] = _usage_watch.as_dict(settings.model)
         _log.info(
             "learn done: success=%s steps=%d llm_calls=%d cached=%s%s",
             success, len(steps), llm, success and bool(steps),
@@ -975,6 +983,7 @@ async def _learn_n(
     verifier: Optional[Verifier] = None, grounding: Optional[Any] = None,
     record_har_path: Optional[str] = None, extra_headers: Optional[dict] = None,
     storage_state: Optional[str] = None, verify_replay: bool = False, samples: int = 1,
+    aux_routers: tuple = (),
     reflect: bool = False, window_size: Optional[tuple[int, int]] = None,
     redact: tuple = (),
 ) -> FlowReport:
@@ -989,8 +998,7 @@ async def _learn_n(
     reported cumulatively across attempts. (Needs `verify_replay=True` to actually retry.)
     """
     samples = max(1, samples)
-    _router = getattr(provider, "router", None)
-    _usnap = _router.totals.snapshot() if _router is not None else None
+    _usage_watch = UsageTotals.observe(provider, *aux_routers)
     last: Optional[FlowReport] = None
     used = 0
     reflections: list = []
@@ -1001,6 +1009,7 @@ async def _learn_n(
                 url, goal, key, provider, cache, max_steps, headless, on_step, prepare, finalize,
                 governor, scope, browser, verifier, grounding, record_har_path, extra_headers,
                 storage_state, verify_replay, reflections or None, window_size, redact,
+                aux_routers,
             )
         except Exception:  # an attempt that raised mid-way may have fired a write — never silently retry
             _log.warning("best-of-N: attempt %d raised — stopping (a write may have fired)", used)
@@ -1015,8 +1024,8 @@ async def _learn_n(
         last.extra["samples_used"] = used
         if reflections:
             last.extra["reflections"] = list(reflections)
-        if _router is not None:  # cumulative cost across every attempt (incl. reflection calls)
-            last.extra["usage"] = _router.totals.since(_usnap).as_dict(settings.model)
+        # Cumulative cost across every attempt (incl. reflection calls), always present.
+        last.extra["usage"] = _usage_watch.as_dict(settings.model)
     # BELIEVED UNREACHABLE — `samples = max(1, samples)` above means `range(samples)` always runs at
     # least once, and the only `except` in the loop re-raises. Kept as belt-and-braces rather than
     # deleted, but it no longer returns a REASONLESS failure: a bare `success=False` with an empty
@@ -1049,6 +1058,7 @@ async def _replay(
     dry_run: Optional[object] = None,
     pre_write: Optional[Prepare] = None,
     redact: tuple = (),
+    aux_routers: tuple = (),
 ) -> FlowReport:
     session = await BrowserSession(
         headless=headless, browser=browser, record_har_path=record_har_path,
@@ -1066,8 +1076,7 @@ async def _replay(
     # and reports zeros; a HEAL or suffix-replan does, and its cost was previously invisible — `llm_calls`
     # counts `decide()` calls, which is not a price. Without this no benchmark can put a dollar figure on
     # a recovery. (`_router` is None on the 0-LLM path, so this costs nothing there.)
-    _router = getattr(provider, "router", None)
-    _usnap = _router.totals.snapshot() if _router is not None else None
+    _usage_watch = UsageTotals.observe(provider, *aux_routers)
     try:
         if extra_headers:
             await session.set_extra_http_headers(extra_headers)
@@ -1222,8 +1231,7 @@ async def _replay(
         # there made "this replay called no LLM" and "no provider was configured" the same
         # observation — so the project's headline claim was unfalsifiable on exactly the path it
         # is claimed about. An explicit zero is the claim; an absent key is a shrug.
-        _used = _router.totals.since(_usnap) if _router is not None else UsageTotals()
-        extra["usage"] = _used.as_dict(settings.model)
+        extra["usage"] = _usage_watch.as_dict(settings.model)
         final_text = await _body_text(session)
         if dirty and success:
             cache.put(flow)

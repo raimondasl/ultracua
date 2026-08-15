@@ -182,8 +182,81 @@ class UsageTotals:
             d["by_model"] = {m: v[4] for m, v in sorted(self.per_model.items())}
         return d
 
+    @staticmethod
+    def observe(*owners) -> "RouterWatch":
+        """Watch every distinct Router behind `owners` (a provider, a Router, or None) and report
+        their combined delta. Deduplicated BY IDENTITY, because the agent provider and the
+        extraction router are frequently the same object (`flows._router` returns
+        `provider.router` when it exists) and counting it twice would double every token while
+        every existing test stayed green."""
+        return RouterWatch(owners)
+
     def summary(self, model: str = "") -> str:
         cost = self.cost_usd(model) if model else None
         tail = f", ~${cost:.4f}" if cost is not None else ""
         return (f"{self.calls} call(s), in={self.input_tokens} out={self.output_tokens} "
                 f"cache_r={self.cache_read_tokens}{tail}")
+
+
+class RouterWatch:
+    """Run-scoped usage accounting across EVERY router a single run can touch.
+
+    A run holds up to three: the agent provider's, the extraction-only one that `flows.py` builds
+    for a data replay, and (out of band) the audit judge's. The agent's is None on `mode="replay"`
+    because the heal provider is nulled, so a router-of-the-provider snapshot sees nothing while a
+    data replay is genuinely spending money on extraction.
+
+    That distinction is why `complete()` exists. Reporting a flat zero when some spending router
+    was never observed would be a CONFIDENT WRONG NUMBER, which is worse than the absent key this
+    replaced — so an unobserved path yields `observed=False` and the caller reports unknown, not
+    zero. Only a run that could see every router it could have used is allowed to claim zero.
+    """
+
+    def __init__(self, owners) -> None:
+        self._pairs = []          # [(totals, snapshot)] — identity-deduped
+        self._unobserved = False
+        seen = set()
+        for o in owners:
+            if o is None:
+                continue
+            r = getattr(o, "router", o)
+            t = getattr(r, "totals", None)
+            if not isinstance(t, UsageTotals):
+                # An owner that could spend but exposes no totals (e.g. the vision grounding
+                # object, which drives the SDK directly). Do not silently drop it.
+                self._unobserved = True
+                continue
+            if id(t) in seen:
+                continue
+            seen.add(id(t))
+            self._pairs.append((t, t.snapshot()))
+
+    def mark_unobserved(self) -> None:
+        """Declare that some LLM-capable path in this run is not being watched."""
+        self._unobserved = True
+
+    @property
+    def observed(self) -> bool:
+        return not self._unobserved
+
+    def delta(self) -> UsageTotals:
+        out = UsageTotals()
+        for totals, snap in self._pairs:
+            d = totals.since(snap)
+            out.input_tokens += d.input_tokens
+            out.output_tokens += d.output_tokens
+            out.cache_read_tokens += d.cache_read_tokens
+            out.cache_write_tokens += d.cache_write_tokens
+            out.calls += d.calls
+            for m, v in d.per_model.items():
+                prev = out.per_model.get(m, (0, 0, 0, 0, 0))
+                out.per_model[m] = tuple(prev[k] + v[k] for k in range(5))
+        return out
+
+    def as_dict(self, model: str = "") -> dict:
+        d = self.delta().as_dict(model)
+        if self._unobserved:
+            # The honest shape: we cannot claim zero, and we must not imply we can.
+            d["cost_usd"] = None
+            d["unobserved_llm_path"] = True
+        return d

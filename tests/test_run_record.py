@@ -107,3 +107,78 @@ class _FakeUsage:
     def __init__(self, i: int, o: int) -> None:
         self.input_tokens, self.output_tokens = i, o
         self.cache_read_tokens = self.cache_write_tokens = 0
+
+
+# --- RouterWatch: the run-scoped view across every router one run can spend through -------------
+# A run holds up to three (the agent's, the extraction-only one flows.py builds for a data replay,
+# the audit judge's). Getting this wrong is silent in BOTH directions, which is why both are pinned.
+
+@pytest.mark.asyncio
+async def test_watch_does_not_double_count_a_router_reachable_twice() -> None:
+    """The failure the design review flagged as silent: `flows._router` returns `provider.router`
+    when the provider has one, so the agent router and the "extraction" router are frequently the
+    SAME object. Counting it once per reference doubles every token while every existing test stays
+    green, because nothing else asserts on the total.
+
+    Cannot pass vacuously: it spends exactly one call and demands exactly one be counted, so a
+    double-count reads 2 and a broken watch reads 0.
+    """
+    r = _router()
+    prov = _Provider(r)
+    w = UsageTotals.observe(prov, r, r)      # same totals reachable three ways
+    await r.complete(_req(), tier="fast")
+    d = w.delta()
+    assert d.calls == 1, f"one API call must be counted once, got {d.calls}"
+    assert d.cost_usd() == pytest.approx(_PER_CALL_HAIKU)
+
+
+@pytest.mark.asyncio
+async def test_watch_sums_across_distinct_routers() -> None:
+    """The other direction: the extraction router is usually a DIFFERENT object on the replay path,
+    and its spend is the whole reason this exists.
+
+    Cannot pass vacuously: the two routers are on different tiers, so the expected cost is a sum
+    neither router alone can produce.
+    """
+    agent, extraction = _router(), _router()
+    w = UsageTotals.observe(_Provider(agent), extraction)
+    await agent.complete(_req(), tier="fast")
+    await extraction.complete(_req(), tier="strong")
+    d = w.delta()
+    assert d.calls == 2
+    assert d.cost_usd() == pytest.approx(_PER_CALL_HAIKU + _PER_CALL_OPUS)
+
+
+def test_an_unobserved_llm_path_reports_unknown_never_zero() -> None:
+    """The hazard the explicit-zero change introduced, and the reason it could not ship alone.
+
+    Before B1, a data replay reported NO usage key — an honest shrug. Emitting an unconditional
+    zero instead would have been strictly worse: a confident wrong number over real extraction
+    spend. So a run that cannot see one of its LLM-capable paths must say UNKNOWN.
+
+    Cannot pass vacuously: it asserts the zero is withheld specifically when an owner exposes no
+    totals, while the sibling test above asserts a fully-observed run DOES report zero.
+    """
+    w = UsageTotals.observe(_Spender())        # LLM-capable, exposes no UsageTotals
+    assert w.observed is False
+    d = w.as_dict("claude-opus-4-6")
+    assert d["cost_usd"] is None, "an unobserved spending path must not be reported as free"
+    assert d["unobserved_llm_path"] is True
+
+
+def test_a_fully_observed_run_that_spent_nothing_does_claim_zero() -> None:
+    """The control for the test above — without it, "always say unknown" would pass that one and
+    destroy the 0-LLM claim this slice exists to make falsifiable."""
+    w = UsageTotals.observe(_Provider(_router()))
+    assert w.observed is True
+    d = w.as_dict("claude-opus-4-6")
+    assert d["cost_usd"] == 0.0 and "unobserved_llm_path" not in d
+
+
+class _Provider:
+    def __init__(self, router) -> None:
+        self.router = router
+
+
+class _Spender:
+    """An LLM-capable owner with no `totals` — what the vision grounding object looks like today."""
