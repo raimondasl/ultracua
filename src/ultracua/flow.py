@@ -983,9 +983,13 @@ async def _learn_n(
     verifier: Optional[Verifier] = None, grounding: Optional[Any] = None,
     record_har_path: Optional[str] = None, extra_headers: Optional[dict] = None,
     storage_state: Optional[str] = None, verify_replay: bool = False, samples: int = 1,
-    aux_routers: tuple = (),
     reflect: bool = False, window_size: Optional[tuple[int, int]] = None,
     redact: tuple = (),
+    # APPEND-ONLY, and this comment is why: inserting it above `reflect` put a new parameter in a
+    # slot the dispatch was already filling POSITIONALLY, so `reflect` became `aux_routers` and the
+    # keyword form then collided. Seven tests went red with a TypeError. New parameters on the
+    # positional call chain go at the END.
+    aux_routers: tuple = (),
 ) -> FlowReport:
     """Best-of-N authoring: re-author up to `samples` times and keep the FIRST sample the verify-by-replay
     oracle confirms. Each attempt is a fresh `_learn` (fresh session -> the LLM resamples at
