@@ -230,6 +230,131 @@ style says pin it either way).
 
 ---
 
-## 9 · Gate-0 result
+## 9 · Gate-0 result — measured 2026-08-14
 
-*(pending — filled by the spike; see the PR that adds this section)*
+**Verdict: Odoo PASSES as the substrate.** Ran against `odoo:17` + `postgres:15` on this Windows host
+(Docker 29.7.2, linux containers), `sale_management` with demo data — 20 demo orders, S00001–S00020.
+Every probe below is **key-less**: ultracua's own perception stack (`snapshot.capture`,
+`locators.describe`, `locators.resolve`) and `safety` classifiers, plus one `ScriptedProvider` learn. No
+LLM was called and no paid API was touched.
+
+Four findings change the plan. Two more are recorded because **the spike refuted its own hypotheses**,
+and this register's rule is that a refuted inference is worth as much as a confirmed one.
+
+### 9.1 Grounding — no test-ids, and the list saturates the snapshot budget
+
+`describe()` on a Sales-Orders list cell captures **no `testid`, no `elem_id`, no `placeholder`**:
+
+```
+{"role": "td", "name": "S00016", "tag": "td", "text": "S00016",
+ "css": "div > table > tbody > tr:nth-of-type(1) > td:nth-of-type(2)",
+ "anchor": "S00016 08/14/2026 ... Gemini Furniture Marc Demo Order ",
+ "anchor_source": "row", "anchor_id": "data-id:datapoint_2"}
+```
+
+Odoo marks up with semantic classes (`o_data_row`, `o_field_cell`) and `name="..."`, so **Tier-1 test-id
+binding is unavailable across the whole app** and `role` comes back as the bare tag (`td`) rather than a
+`KNOWN_ROLES` member. Binding therefore lands on `exact-text` for record cells and `role+name` for real
+buttons — i.e. the app behaves like `drift_sandbox`'s *roleless span-link* scenario, which is a mild
+vindication of that corpus's relevance. Measured binds: order-number cell → `bound_by='exact-text'`;
+top-level button → `bound_by='role+name'`.
+
+**Snapshot budget:** `capture(max_elements=80)` returned 80 elements on a page holding ~163 candidate
+interactables. **An Odoo list view saturates the default budget**, so at learn time roughly half the page
+is invisible to the author. This is a discovery-cost finding, not a blocker, but it belongs in the v1
+cost model and may explain authoring failures when they appear.
+
+### 9.2 The availability signal is present, strong, and *at the classifier* — 6 of 7
+
+Every list read in Odoo is a POST to the RPC endpoint. Running each control and classifying its traffic
+with `safety.is_write_request`:
+
+| ordinary READ control | requests | classified WRITE | endpoint |
+|---|---:|---:|---|
+| sort by Number | 1 | **1** | `sale.order/web_search_read` |
+| sort by Customer | 1 | **1** | `sale.order/web_search_read` |
+| sort by Order Date | 1 | **1** | `sale.order/web_search_read` |
+| open Filters menu | 0 | 0 | (pure client-side) |
+| open a record (row click) | 9 | **4** | `sale.order/web_read` |
+| back via breadcrumb | 1 | **1** | `sale.order/web_search_read` |
+| debounced search + Enter | 1 | **1** | `sale.order/web_search_read` |
+
+**6 of 7 ordinary read controls put a request on the wire that `is_write_request()` calls a write** —
+R4.27's 12/12 reproduced on a real commercial ERP, first attempt.
+
+**But state this precisely, because the obvious extrapolation is wrong.** This measures the
+*classifier*, not the outcome. §9.5 learned an Odoo read end-to-end and the engine reported
+`performed_write=False` **and** `write_unattributed=False` — so wire promotion did **not** fire on those
+same `web_search_read` POSTs in the one case measured. The engine-level over-gating rate on Odoo is
+therefore **unmeasured**, and reconciling that gap (why does the classifier say write while the watcher
+does not promote?) is the first thing v1 must instrument. Quoting 6/7 as an over-gating rate would be
+exactly the kind of un-run inference this register exists to catch.
+
+### 9.3 Row identity is positional — and it is the *availability* cost, not a silent-wrong one
+
+The row identity `describe()` captures is `data-id:datapoint_N` — an OWL render-order token, not a
+record key. Measured behaviour:
+
+* **A pure read renumbers every row.** Clicking the Customer column header (a sort) moved **15 of 15**
+  rows: `S00016: datapoint_2 → datapoint_56`. Re-resolving specs captured before the sort returned
+  `REFUSED, bound_by='none', 'data-id:datapoint_2' -> data-id:datapoint_56` — a **refusal of a bind that
+  was pointing at the correct record**. This is the R3.7 shape (loud, safe, wrong) on a real app, with no
+  drift involved at all.
+* **A real membership change also refuses.** Creating *and confirming* a new order that sorts first
+  (`S00022` for "AAA Advance Corp") re-minted the tokens; the pre-change row-action spec resolved
+  `REFUSED, 'data-id:datapoint_56' -> data-id:datapoint_59`. **No silent wrong-record bind was observed.**
+
+So the direction of error on Odoo is the safe one — but the availability price is severe and concrete:
+**a row-targeted flow refuses as soon as anything enters or reorders the list**, which on a live ERP is
+daily. That is a scenario-design constraint for the corpus (`cancel-order-row-N` must enter by record
+URL, not by row position, or it measures only the refusal) and it is precisely the kind of number this
+benchmark exists to publish.
+
+Note also which targets are safe and why: an order-number cell binds by `exact-text` on `S00016`, and
+that text *is* the record identity, so it is robust. A row **action button** (`Order Upsell`, icon
+controls) has no record-identifying text and depends entirely on the positional `anchor_id`. The corpus
+must contain both; they behave differently.
+
+### 9.4 Two hypotheses this spike refuted — recorded so they are not re-derived
+
+* **"The datapoint token is session-monotonic, so a recipe with a refetch step can never rebind."**
+  **Refuted.** Three fresh sessions produced identical tokens: `datapoint_2` on load and `datapoint_56`
+  after the same sort, every time. The token is deterministic for a fixed step sequence, which is
+  exactly what deterministic replay performs — so replay rebinds fine. The hazard is data change (§9.3),
+  not session variance.
+* **"A new record that sorts first will produce a silent wrong-record bind."** First attempt was
+  **inconclusive, not negative** — the created order was a *draft*, so it never entered the filtered
+  "Sales Orders" list and the data never actually shifted. The corrected run (create **and confirm**)
+  produced a refusal, not a wrong bind (§9.3).
+
+### 9.5 Two build risks found early, both cheap to have found now
+
+* **An ordinary 2-step Odoo read did not cache.** A `ScriptedProvider` learn reported
+  `mode=learn success=True`, but `extra['cached'] = False` in **both** arms — with verify-by-replay on
+  *and* with `verify_replay=False` — and the subsequent replay returned `mode=miss, "no cached flow for
+  key"`. The cause is **not isolated**, and is deliberately not guessed here. Resolving it is the first
+  task of v1; if it turns out to be substrate-shaped rather than harness-shaped it is the one result
+  that could still send us to the SuiteCRM fallback.
+* **`networkidle` never fires on Odoo** (the bus holds a long-poll open). The engine waits on it in four
+  places — `flow.py:1135`, `flows.py:1008`, `flows.py:1072`, `flows.py:1144` — all wrapped in
+  `try/except` and therefore **tolerated, not fatal**. The cost is real though: a write confirm burns 8 s
+  and a form login 10 s of dead wall-clock per occurrence. Budget it, and do not misread it as "Odoo is
+  slow".
+
+### 9.6 What Gate-0 changes in the plan
+
+1. Substrate confirmed: **proceed with Odoo**; SuiteCRM stays the fallback pending §9.5's caching result.
+2. Add to v1 an instrumented reconciliation of §9.2 — classifier-says-write vs watcher-does-not-promote —
+   before any availability number is published.
+3. Scenario-design constraint: row-targeted write scenarios need a record-URL entry path, and the corpus
+   must carry **both** a self-identifying target (order-number cell) and a positional-token target (row
+   action button), because Gate-0 measured them behaving differently.
+4. Wall-clock model: add the tolerated-`networkidle` dead time (8–10 s per login/confirm) to §6's
+   estimate.
+5. The snapshot-budget saturation (80 of ~163) belongs in the learn-cost model.
+
+**What Gate-0 does not prove.** One app, one version, one list view, one host, on demo data — it says
+nothing about write correctness end-to-end (no write scenario was driven through the engine), nothing
+about drift across Odoo versions, and nothing about the LLM-authoring success rate on these pages, which
+remains the plan's largest cost uncertainty. It answers the one question it was scoped to answer: does
+Odoo's OWL UI ground stably enough to build on. It does.
