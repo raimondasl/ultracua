@@ -294,3 +294,59 @@ def test_mark_ok_clears_a_previous_attempts_failure() -> None:
     r.ok, r.failure_code = False, "drift"
     _mark_ok(r)
     assert r.ok is True and r.failure_code == ""
+
+
+def test_accounting_failure_DURING_the_run_is_reported() -> None:
+    """The flag is set while the run is happening, so a watch that reads it at CONSTRUCTION can
+    never see it. The first placement probed the owner and tripped an inviolable test; the second
+    moved the storage onto UsageTotals and kept the timing bug — the guard was inert both times,
+    and the commit message claimed it had a caller when it did not.
+
+    Cannot pass vacuously: the flag is set AFTER observe() returns, which is the only ordering
+    that occurs in production (vision sets it inside decide()).
+    """
+    t = UsageTotals()
+    prov = _Provider(Router(fast=Tier(MockClient(), _HAIKU)))
+    spender = _Grounder(t)
+    w = UsageTotals.observe(prov, spender)
+    assert w.observed is True                      # nothing has gone wrong yet
+
+    t.accounting_failed = True                     # ...now it does, mid-run
+
+    assert w.observed is False, "a failure during the run must reach the report"
+    d = w.as_dict("claude-opus-4-6")
+    assert d["cost_usd"] is None and d["unobserved_llm_path"] is True
+
+
+class _Grounder:
+    """Shaped like AnthropicGrounding: owns a UsageTotals, has no router."""
+
+    def __init__(self, totals) -> None:
+        self.totals = totals
+
+
+def test_a_previous_attempts_False_never_survives_as_a_confident_denial() -> None:
+    """F3/F4, one defect in two places. A `False` means "THAT attempt did not confirm a write",
+    never "no write happened in this run".
+
+    Two paths let one survive into a claim it cannot support: a post-auth-refresh precheck that
+    succeeds — whose own inline comment says the first attempt's write may have landed — and a
+    later attempt that raises, where the honest answer is unknown rather than the earlier
+    attempt's answer. Both are the confident denial M4 exists to forbid.
+
+    Cannot pass vacuously: it sets False explicitly and asserts None, which a no-op cannot satisfy.
+    """
+    from ultracua.flows import _forget_negative_write_evidence, _mark_ok
+
+    r = _rec()
+    r.landed, r.committed = False, False
+    _mark_ok(r)
+    assert r.landed is None and r.committed is None, (
+        "ok=True over landed=False asserts that nothing committed, on a path that holds no such "
+        "evidence")
+
+    # ...and a True is never downgraded: evidenced spend stays evidenced.
+    r2 = _rec()
+    r2.landed, r2.committed = True, True
+    _forget_negative_write_evidence(r2)
+    assert r2.landed is True and r2.committed is True

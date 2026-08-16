@@ -239,11 +239,6 @@ class RouterWatch:
                 # object, which drives the SDK directly). Do not silently drop it.
                 self._unobserved = True
                 continue
-            if t.accounting_failed:
-                # The spender tried to record its own usage and could not, so its totals understate
-                # the run and the run may not claim a total. This is what gives `mark_unobserved` a
-                # real caller rather than leaving it a guard nothing invokes.
-                self.mark_unobserved()
             if id(t) in seen:
                 continue
             seen.add(id(t))
@@ -255,7 +250,15 @@ class RouterWatch:
 
     @property
     def observed(self) -> bool:
-        return not self._unobserved
+        """Evaluated on READ, never latched at construction.
+
+        The first two attempts at this got the timing wrong in the same way: a spender sets
+        `accounting_failed` while the run is happening (`vision.py`, inside `decide()`), and the
+        watch is built before the run starts. A check in `__init__` therefore could not fire, so
+        the guard was inert while its commit message claimed it had a caller. Anything that can
+        become true mid-run must be asked for at report time.
+        """
+        return not (self._unobserved or any(t.accounting_failed for t, _ in self._pairs))
 
     def delta(self) -> UsageTotals:
         out = UsageTotals()
@@ -280,7 +283,7 @@ class RouterWatch:
 
     def as_dict(self, model: str = "") -> dict:
         d = self.delta().as_dict(model)
-        if self._unobserved:
+        if not self.observed:
             # The honest shape: we cannot claim zero, and we must not imply we can.
             d["cost_usd"] = None
             d["unobserved_llm_path"] = True

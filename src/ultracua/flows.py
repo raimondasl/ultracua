@@ -2120,6 +2120,24 @@ def _absorb_usage(record, usage: dict) -> None:
         dst["by_model"] = by
 
 
+def _forget_negative_write_evidence(record) -> None:
+    """Downgrade a `False` landed/committed to None, keeping any `True`.
+
+    A `False` means "THAT attempt did not confirm a write" — never "no write happened in this run".
+    Two places used to let one survive into a claim it does not support: a post-auth-refresh
+    precheck that succeeds (whose own comment says the first attempt's write may have landed), and
+    a later attempt that RAISES (where the answer is unknown, not the previous attempt's answer).
+    Both are the confident-denial M4 forbids, so both go through here. True is never touched: a
+    write that was once evidenced as landed stays landed.
+    """
+    if record is None:
+        return
+    if record.landed is False:
+        record.landed = None
+    if record.committed is False:
+        record.committed = None
+
+
 def _mark_ok(record) -> None:
     """A successful return must clear the failure a PREVIOUS attempt recorded.
 
@@ -2130,6 +2148,7 @@ def _mark_ok(record) -> None:
     """
     if record is not None:
         record.ok, record.failure_code = True, ""
+        _forget_negative_write_evidence(record)
 
 
 async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, cached_flow, mode="replay",
@@ -2177,6 +2196,7 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, cached
         # case is "raised, unknown", never a confident denial.
         record.attempts += 1
         record.mode = "raised"
+        _forget_negative_write_evidence(record)
     report = await run_cached(
         url=spec.start_url, goal=spec.goal, provider=provider, cache=cache, mode=mode,
         max_steps=spec.max_steps, headless=spec.headless, scope=spec.scope,
@@ -2949,7 +2969,17 @@ async def replay(
                 return _ok(data)
             # Full re-author from scratch (also refreshes the sidecar metadata: shape, pin, approval).
             _relearn_watch = UsageTotals.observe(provider, router)
-            res = await learn(spec, provider=provider, router=router, cache=cache)
+            try:
+                res = await learn(spec, provider=provider, router=router, cache=cache)
+            except BaseException:
+                # F2: a relearn authors the whole flow and is the largest spend here. `learn()` has
+                # no internal try/except, so a provider 500 mid-authoring propagated straight past
+                # a sequential absorb and the record reported the earlier attempts' cents against
+                # dollars actually spent — M2's own failure class, one leg over.
+                if record is not None:
+                    _absorb_usage(record, _relearn_watch.as_dict(settings.model))
+                    record.mode = "raised"
+                raise
             if record is not None:
                 # M2: a relearn re-authors the whole flow and is the single largest spend here. It
                 # sat entirely outside the record, so a run that drifted -> replanned -> relearned
