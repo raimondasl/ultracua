@@ -96,6 +96,12 @@ class UsageTotals:
     # model -> (input, output, cache_read, cache_write, calls). Keyed by what the RESPONSE said
     # served the request, so an escalation is priced at the strong tier and the rest is not.
     per_model: dict = field(default_factory=dict)
+    # Set by a spender that tried to record its own usage and could not (see `vision.py`). It rides
+    # HERE rather than on the spending object because `RouterWatch` must never probe a foreign
+    # attribute: `test_a_navigate_only_replay_never_reaches_a_provider` hands replay a provider that
+    # raises on any attribute access it does not explicitly permit, and inviolable #1 is exactly
+    # that — a replay does not poke at a provider. Reading a field of our own dataclass is safe.
+    accounting_failed: bool = False
 
     def add(self, usage, model: str = "") -> None:
         """Accumulate one response's Usage (duck-typed; tolerant of None / missing fields)."""
@@ -131,7 +137,7 @@ class UsageTotals:
             input_tokens=self.input_tokens - snap[0], output_tokens=self.output_tokens - snap[1],
             cache_read_tokens=self.cache_read_tokens - snap[2],
             cache_write_tokens=self.cache_write_tokens - snap[3], calls=self.calls - snap[4],
-            per_model=delta,
+            per_model=delta, accounting_failed=self.accounting_failed,
         )
 
     def unpriced_calls(self, fallback_model: str = "") -> int:
@@ -228,16 +234,16 @@ class RouterWatch:
                 continue
             r = getattr(o, "router", o)
             t = getattr(r, "totals", None)
-            if getattr(o, "accounting_failed", False):
-                # The owner tried to record its spend and could not (see vision.py). Its totals
-                # understate the run, so the run may not claim a total. This is what makes
-                # `mark_unobserved` reachable rather than a guard nothing calls.
-                self._unobserved = True
             if not isinstance(t, UsageTotals):
                 # An owner that could spend but exposes no totals (e.g. the vision grounding
                 # object, which drives the SDK directly). Do not silently drop it.
                 self._unobserved = True
                 continue
+            if t.accounting_failed:
+                # The spender tried to record its own usage and could not, so its totals understate
+                # the run and the run may not claim a total. This is what gives `mark_unobserved` a
+                # real caller rather than leaving it a guard nothing invokes.
+                self.mark_unobserved()
             if id(t) in seen:
                 continue
             seen.add(id(t))

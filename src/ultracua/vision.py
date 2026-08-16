@@ -67,7 +67,6 @@ class AnthropicGrounding:
         # it deliberately does NOT change how the client is constructed: that is R4.41's separate
         # question, and answering it here would smuggle a behaviour change into an accounting fix.
         self.totals = UsageTotals()
-        self.accounting_failed = False
 
     def _sdk(self):
         if self._client is None:
@@ -109,9 +108,9 @@ class AnthropicGrounding:
             _r = from_native(msg)
             self.totals.add(_r.usage, model=_r.model or self.model)
         except Exception:  # noqa: BLE001 - accounting must never break the grounding call itself
-            # ...but it must not pretend the spend was zero either. This flag makes the run report
-            # `unobserved_llm_path` instead of a total that silently omits every grounding call.
-            self.accounting_failed = True
+            # ...but it must not pretend the spend was zero either. The flag rides on `totals`,
+            # not on self, so the watch reads it without probing a foreign attribute.
+            self.totals.accounting_failed = True
         block = next((b for b in msg.content if b.type == "tool_use"), None)
         if block is None:
             return Action(action="give_up", intent="vision: no tool call"), ttft
