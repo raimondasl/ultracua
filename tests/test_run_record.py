@@ -182,3 +182,115 @@ class _Provider:
 
 class _Spender:
     """An LLM-capable owner with no `totals` — what the vision grounding object looks like today."""
+
+
+def test_an_unpriced_serving_model_is_not_repriced_at_the_fallback() -> None:
+    """The fallback exists for a response that reported NO model. Applying it to a model that WAS
+    reported but is simply not in the price table invents a number — and the pre-existing cells all
+    used an unpriced-or-empty fallback, the one shape where the guard happens to fire.
+
+    This is the defect the per-model change exists to prevent, one layer down: `_PRICES` is
+    Anthropic-only, so every OpenAI/Gemini response id and every future Claude id lands here, and
+    all three production call sites pass a fallback that IS priced (`settings.model`).
+
+    Cannot pass vacuously: the fallback is priced, so a wrong implementation returns a definite
+    number and this asserts it does not.
+    """
+    t = UsageTotals()
+    t.add(_FakeUsage(1_000_000, 100_000), model="gpt-5-turbo")   # real id, absent from _PRICES
+    d = t.as_dict("claude-opus-4-8")                             # a PRICED fallback
+    assert d["cost_usd"] is None, (
+        f"a reported-but-unpriced model was repriced at the fallback: {d['cost_usd']}")
+    assert d["cost_unpriced_calls"] == 1
+
+
+def test_the_empty_model_bucket_still_uses_the_fallback() -> None:
+    """The control. Narrowing the fallback must not disable it for the case it was written for —
+    a client that reports no model at all."""
+    t = UsageTotals()
+    t.add(_FakeUsage(1_000_000, 100_000), model="")
+    d = t.as_dict("claude-opus-4-8")
+    assert d["cost_usd"] == pytest.approx((1_000_000 * 5.0 + 100_000 * 25.0) / 1_000_000)
+    assert "cost_unpriced_calls" not in d
+
+
+# --- the record across MULTIPLE attempts --------------------------------------------------------
+# `replay()` hands ONE record to up to three `_attempt_replay` calls and then a relearn. Each of
+# those spends money. Reporting only the last is an understated bill, which is the failure class
+# this whole slice exists to end — so it is pinned at the helper, where it is testable key-lessly.
+
+def _rec():
+    from ultracua.flows import RunRecord
+    return RunRecord()
+
+
+def test_usage_accumulates_across_attempts_rather_than_overwriting() -> None:
+    """M2. A run that auth-refreshed and retried spent BOTH attempts' money.
+
+    Cannot pass vacuously: the two attempts have different costs, so an implementation that
+    assigns reports 0.02 and one that sums reports 0.03 — the assertion distinguishes them.
+    """
+    from ultracua.flows import _absorb_usage
+
+    r = _rec()
+    _absorb_usage(r, {"calls": 1, "input_tokens": 10, "output_tokens": 5,
+                      "cache_read_tokens": 0, "cache_write_tokens": 0, "cost_usd": 0.01})
+    _absorb_usage(r, {"calls": 2, "input_tokens": 20, "output_tokens": 5,
+                      "cache_read_tokens": 0, "cache_write_tokens": 0, "cost_usd": 0.02})
+    assert r.usage["calls"] == 3
+    assert r.usage["input_tokens"] == 30
+    assert r.usage["cost_usd"] == pytest.approx(0.03)
+
+
+def test_one_unpriceable_attempt_makes_the_whole_run_unpriceable() -> None:
+    """Sticky-None. A partial sum presented as the total is exactly the understated bill this
+    accounting exists to prevent, so once any attempt is unknown the run total is unknown.
+
+    Cannot pass vacuously: the priced attempt alone would give 0.01, and this asserts None.
+    """
+    from ultracua.flows import _absorb_usage
+
+    r = _rec()
+    _absorb_usage(r, {"calls": 1, "cost_usd": 0.01})
+    _absorb_usage(r, {"calls": 1, "cost_usd": None, "cost_unpriced_calls": 1})
+    assert r.usage["cost_usd"] is None
+    assert r.usage["calls"] == 2
+
+
+def test_unobserved_is_sticky_across_attempts() -> None:
+    """One blind attempt makes the run's total untrustworthy, so the flag must survive a later
+    fully-observed attempt rather than being overwritten by it."""
+    from ultracua.flows import _absorb_usage
+
+    r = _rec()
+    _absorb_usage(r, {"calls": 1, "cost_usd": None, "unobserved_llm_path": True})
+    _absorb_usage(r, {"calls": 1, "cost_usd": 0.01})
+    assert r.usage["unobserved_llm_path"] is True
+
+
+def test_landed_and_committed_default_to_unknown_not_to_false() -> None:
+    """M4. The engine can raise before the question is answerable — a `finalize` extraction whose
+    provider 500s does so AFTER the commit has POSTed. A two-state field defaulting to False then
+    asserts "nothing committed" over a write that may have landed.
+
+    Cannot pass vacuously: it asserts `is None`, which a `bool = False` default cannot satisfy.
+    """
+    r = _rec()
+    assert r.landed is None and r.committed is None, (
+        "unknown must be representable — a two-state boolean answering a three-state question is "
+        "the trap this register records shipping three separate times")
+
+
+def test_mark_ok_clears_a_previous_attempts_failure() -> None:
+    """M3. `replay()` can return data from the relearn or the precheck after an earlier attempt
+    stamped ok=False and a failure_code, and only `_attempt_replay`'s success exit cleared them —
+    which neither of those paths reaches. A caller saw ok=False on a call that returned data.
+
+    Cannot pass vacuously: it sets the failed state first and asserts BOTH fields moved.
+    """
+    from ultracua.flows import _mark_ok
+
+    r = _rec()
+    r.ok, r.failure_code = False, "drift"
+    _mark_ok(r)
+    assert r.ok is True and r.failure_code == ""

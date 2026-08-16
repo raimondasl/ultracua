@@ -919,7 +919,9 @@ async def _learn(
         _log.info(
             "learn done: success=%s steps=%d llm_calls=%d cached=%s%s",
             success, len(steps), llm, success and bool(steps),
-            f" usage=[{used.summary(settings.model)}]" if used is not None else "",
+            # Read the WATCH, not the raw delta: `delta()` bypasses the unobserved override, so
+            # the operator log asserted "~$0.0000" on the very runs whose record says unknown.
+            f" usage=[{_usage_watch.summary(settings.model)}]",
         )
         return FlowReport(
             mode="learn", success=success, traces=traces, llm_calls=llm,

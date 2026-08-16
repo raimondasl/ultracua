@@ -138,7 +138,7 @@ class UsageTotals:
         """Calls whose serving model has no price entry — their cost is UNKNOWN, never zero."""
         n = 0
         for m, v in self.per_model.items():
-            if _price(m) is None and not (fallback_model and _price(fallback_model)):
+            if _price(m) is None and not (not m and fallback_model and _price(fallback_model)):
                 n += v[4]
         return n
 
@@ -150,7 +150,14 @@ class UsageTotals:
         if self.per_model:
             total = 0.0
             for m, (i, o, cr, cw, _c) in self.per_model.items():
-                p = _price(m) or (_price(model) if model else None)
+                # `not m` is load-bearing. The fallback is for a response that reported NO model;
+                # applying it to a model that WAS reported but is simply absent from `_PRICES`
+                # invents a number. `_PRICES` is Anthropic-only, so every OpenAI/Gemini id and
+                # every future Claude id lands here — and all three production call sites pass
+                # `settings.model`, which is always priced. Without this condition the "unknown
+                # cost is never 0.0" guarantee is unreachable on every default path, and a GPT run
+                # silently bills at Opus rates.
+                p = _price(m) or (_price(model) if (not m and model) else None)
                 if p is None:
                     return None
                 total += ((i + cr + cw) * p[0] + o * p[1]) / 1_000_000
@@ -221,6 +228,11 @@ class RouterWatch:
                 continue
             r = getattr(o, "router", o)
             t = getattr(r, "totals", None)
+            if getattr(o, "accounting_failed", False):
+                # The owner tried to record its spend and could not (see vision.py). Its totals
+                # understate the run, so the run may not claim a total. This is what makes
+                # `mark_unobserved` reachable rather than a guard nothing calls.
+                self._unobserved = True
             if not isinstance(t, UsageTotals):
                 # An owner that could spend but exposes no totals (e.g. the vision grounding
                 # object, which drives the SDK directly). Do not silently drop it.
@@ -252,6 +264,13 @@ class RouterWatch:
                 prev = out.per_model.get(m, (0, 0, 0, 0, 0))
                 out.per_model[m] = tuple(prev[k] + v[k] for k in range(5))
         return out
+
+    def summary(self, model: str = "") -> str:
+        d = self.as_dict(model)
+        cost = d.get("cost_usd")
+        tail = f", ~${cost:.4f}" if cost is not None else ", cost UNKNOWN"
+        return (f"{d['calls']} call(s), in={d['input_tokens']} out={d['output_tokens']} "
+                f"cache_r={d['cache_read_tokens']}{tail}")
 
     def as_dict(self, model: str = "") -> dict:
         d = self.delta().as_dict(model)

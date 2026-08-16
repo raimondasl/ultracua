@@ -42,7 +42,7 @@ from .flow import run_cached
 from .fsio import durable_rename, durable_write_text
 from .ledger import LedgerError, RunLedger
 from .locators import resolve
-from .obs import get_logger
+from .obs import UsageTotals, get_logger
 from .pin import find_pin, read_pin
 from .providers import build_router, get_provider
 from .recorder import caption_intents, record_demo
@@ -207,15 +207,21 @@ class RunRecord:
     run could not observe every router it might have spent through (see `obs.RouterWatch`).
     """
 
-    mode: str = ""                      # replay | replay+heal | replay+replan | miss | escalate
+    mode: str = ""                      # replay | replay+heal | replay+replan | miss | escalate | raised
     ok: bool = False
+    attempts: int = 0                   # how many _attempt_replay passes fed this record
     usage: dict = field(default_factory=dict)
     llm_calls: int = 0                  # DECIDE calls; API calls are usage["calls"] (they differ)
     healed_steps: int = 0
     total_ms: float = 0.0
     traces: list = field(default_factory=list)
-    landed: bool = False                # evidence-bounded (see CLAUDE.md) — never read as truth
-    committed: bool = False
+    # THREE-STATE ON PURPOSE. None = "this run never reached the point where the question is
+    # answerable" (it raised inside the engine); True/False = the evidence bound was evaluated.
+    # A two-state field defaulting to False asserts "nothing committed" over a run that may well
+    # have committed and then died in extraction — and a two-state boolean answering a three-state
+    # question is the trap this register records shipping THREE separate times.
+    landed: Optional[bool] = None       # evidence-bounded (see CLAUDE.md) — never read as truth
+    committed: Optional[bool] = None
     auth_refreshed: bool = False
     failure_code: str = ""
     idempotency_keys: list = field(default_factory=list)
@@ -2088,6 +2094,44 @@ def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Op
     )
 
 
+def _absorb_usage(record, usage: dict) -> None:
+    """Add one attempt's usage dict into the record's running total.
+
+    Token counters and calls SUM. `cost_usd` sums too, but is STICKY-None: once any attempt could
+    not be priced, the run total is unknown, because a partial sum presented as the total is the
+    understated bill this accounting exists to prevent. Same rule for `unobserved_llm_path`.
+    """
+    dst = record.usage
+    if not dst:
+        record.usage = dict(usage)
+        return
+    for k in ("calls", "input_tokens", "output_tokens", "cache_read_tokens",
+              "cache_write_tokens", "cost_unpriced_calls"):
+        if k in usage or k in dst:
+            dst[k] = (dst.get(k) or 0) + (usage.get(k) or 0)
+    a, b = dst.get("cost_usd"), usage.get("cost_usd")
+    dst["cost_usd"] = None if (a is None or b is None) else round(a + b, 6)
+    if usage.get("unobserved_llm_path") or dst.get("unobserved_llm_path"):
+        dst["unobserved_llm_path"] = True
+    by = dict(dst.get("by_model") or {})
+    for m, n in (usage.get("by_model") or {}).items():
+        by[m] = by.get(m, 0) + n
+    if by:
+        dst["by_model"] = by
+
+
+def _mark_ok(record) -> None:
+    """A successful return must clear the failure a PREVIOUS attempt recorded.
+
+    `replay()` can return data from the relearn or the idempotency precheck after an earlier
+    attempt already stamped `ok=False` and a `failure_code`. Only the success exit inside
+    `_attempt_replay` cleared them, and those two paths never reach it — so a caller saw
+    `ok=False` on a call that handed back data.
+    """
+    if record is not None:
+        record.ok, record.failure_code = True, ""
+
+
 async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, cached_flow, mode="replay",
                           provider=None, params=None, record=None, on_step=None):
     """One replay attempt. Returns (ok, data, reason, kind).
@@ -2125,6 +2169,14 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, cached
     # A learned pin anchors the OLD final page; a repaired flow may end elsewhere, so only trust the
     # pin on a pure replay — let the LLM extractor re-read the live value when we re-plan the tail.
     pin = meta.read_pin if (spec.pin_read and mode == "replay") else None
+    if record is not None:
+        # M4: stamp BEFORE the engine runs. `run_cached` can raise from anywhere inside — a
+        # `finalize` extraction whose provider 500s does so AFTER the commit has POSTed — and the
+        # exception exits this function above the population block below. A pristine record then
+        # reads `committed=False` over a write that may have landed. Marking here means the worst
+        # case is "raised, unknown", never a confident denial.
+        record.attempts += 1
+        record.mode = "raised"
     report = await run_cached(
         url=spec.start_url, goal=spec.goal, provider=provider, cache=cache, mode=mode,
         max_steps=spec.max_steps, headless=spec.headless, scope=spec.scope,
@@ -2143,18 +2195,22 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, cached
         aux_routers=(router,) if router is not None else (),
     )
     if record is not None:
-        # Populated HERE, not at the success return: `_fail` has seven exits below this line and a
-        # record only filled on success would be empty in exactly the cases a caller most needs it.
-        record.mode = report.mode
-        record.usage = dict(report.extra.get("usage") or {})
-        record.llm_calls = report.llm_calls
-        record.healed_steps = report.healed_steps
-        record.total_ms = report.total_ms
-        record.traces = list(report.traces)
-        record.idempotency_keys = [
+        # Populated HERE, not at the success return: `_fail` has several exits below this line and
+        # a record only filled on success would be empty in exactly the cases a caller most needs
+        # it. ACCUMULATED, not assigned: `replay()` passes ONE record to up to three attempts, and
+        # three lines away it ORs its own landed/committed across them for the same reason. A run
+        # that auth-refreshed and retried spent BOTH attempts' money, and reporting only the second
+        # understates the bill silently — which is the whole failure class this slice exists to end.
+        record.mode = report.mode                       # last attempt wins: it is the outcome
+        _absorb_usage(record, report.extra.get("usage") or {})
+        record.llm_calls += report.llm_calls
+        record.healed_steps += report.healed_steps
+        record.total_ms += report.total_ms
+        record.traces.extend(report.traces)
+        record.idempotency_keys.extend(
             t.meta["idempotency_key"] for t in report.traces
             if isinstance(t.meta, dict) and t.meta.get("idempotency_key")
-        ]
+        )
     # ===== THE WRITE-LANDED EVIDENCE, read from `out` — NOT inferred from position =====
     #
     # `finalize` runs UNCONDITIONALLY (`flow.py` calls it outside the step loop), so the confirm's
@@ -2764,6 +2820,7 @@ async def replay(
 
     # Idempotency precheck (opt-in, one-shot writes): if the end-state already holds, skip the write.
     if await _precheck_done(spec):
+        _mark_ok(record)          # M3: a success return that never enters _attempt_replay
         _record_run(cache, key, ok=True)
         _log.info("flow %r: write already done (idempotency precheck) — skipped", spec.name)
         return {"status": "already-done", "data": None}
@@ -2844,6 +2901,7 @@ async def replay(
                     record.auth_refreshed = True     # G10: previously a log line and nothing else
                 if await _precheck_done(spec):  # the first attempt's write may have landed
                     _record_run(cache, key, ok=True)
+                    _mark_ok(record)      # M3: as above, on the post-auth-refresh precheck
                     return {"status": "already-done", "data": None}
                 ok, data, reason2, kind2, landed2, committed2 = await _attempt_replay(
                     spec, router, cache, key, meta, check_shape, cached_flow=cached_flow,
@@ -2890,8 +2948,16 @@ async def replay(
                 _log.info("flow %r: drift repaired by suffix-replan (prefix preserved)", spec.name)
                 return _ok(data)
             # Full re-author from scratch (also refreshes the sidecar metadata: shape, pin, approval).
+            _relearn_watch = UsageTotals.observe(provider, router)
             res = await learn(spec, provider=provider, router=router, cache=cache)
+            if record is not None:
+                # M2: a relearn re-authors the whole flow and is the single largest spend here. It
+                # sat entirely outside the record, so a run that drifted -> replanned -> relearned
+                # reported the replan's cents against dollars actually spent.
+                _absorb_usage(record, _relearn_watch.as_dict(settings.model))
+                record.mode = "relearn"
             if res.cached and res.found:
+                _mark_ok(record)      # M3: clears the failed attempts' ok=False + failure_code
                 return _ok(res.data)
             reason = f"replay drifted ({reason}); suffix-replan failed ({reason3}); re-learn failed ({res.note})"
         # DISCLOSE THE COMMIT before anything is recorded or raised, so the one string reaches every
