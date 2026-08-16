@@ -14,6 +14,7 @@ import time
 from typing import Optional, Protocol
 
 from .config import settings
+from .obs import UsageTotals
 from .types import Action
 
 
@@ -60,6 +61,12 @@ class AnthropicGrounding:
     def __init__(self, model: Optional[str] = None) -> None:
         self.model = model or settings.model
         self._client = None
+        # B1/G3: this class drives the SDK directly rather than through a `Router`, so its spend was
+        # invisible to every cost report — a vision-tier run read as free. Exposing `totals` (the
+        # same attribute a Router carries) is enough for `UsageTotals.observe` to pick it up, and
+        # it deliberately does NOT change how the client is constructed: that is R4.41's separate
+        # question, and answering it here would smuggle a behaviour change into an accounting fix.
+        self.totals = UsageTotals()
 
     def _sdk(self):
         if self._client is None:
@@ -92,6 +99,18 @@ class AnthropicGrounding:
                 if ttft is None:
                     ttft = (time.perf_counter() - t0) * 1000.0
             msg = await stream.get_final_message()
+        # Reuse the adapter's own mapping rather than re-reading `msg.usage` here: it already
+        # handles Anthropic's `cache_read_input_tokens` / `cache_creation_input_tokens` naming,
+        # and a second transcription of one mapping is how two copies drift apart.
+        try:
+            from .llm.anthropic import from_native
+
+            _r = from_native(msg)
+            self.totals.add(_r.usage, model=_r.model or self.model)
+        except Exception:  # noqa: BLE001 - accounting must never break the grounding call itself
+            # ...but it must not pretend the spend was zero either. The flag rides on `totals`,
+            # not on self, so the watch reads it without probing a foreign attribute.
+            self.totals.accounting_failed = True
         block = next((b for b in msg.content if b.type == "tool_use"), None)
         if block is None:
             return Action(action="give_up", intent="vision: no tool call"), ttft

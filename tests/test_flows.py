@@ -1004,3 +1004,84 @@ async def test_mutate_confirms_via_selector_and_url(tmp_path: Path) -> None:
         finally:
             httpd.shutdown()
             httpd.server_close()
+
+
+# --- B1: the run record ------------------------------------------------------------------------
+# `replay()` returns bare data (or a write envelope), so everything the engine computed about the
+# run — what it cost, which steps ran, whether a write landed — used to die inside `_attempt_replay`.
+# These pin that it now reaches the caller, and that it does so on the FAILURE path too, which is
+# where a caller needs it most and where a record filled only at the success return would be empty.
+
+async def test_run_record_is_populated_on_a_successful_replay(tmp_path: Path) -> None:
+    from ultracua.flows import RunRecord
+
+    _write_fixture(tmp_path)
+    httpd, base = _serve(tmp_path)
+    cache = FlowCache(root=tmp_path / "cache")
+    spec = FlowSpec(name="rec-ok", start_url=f"{base}/page1.html",
+                    goal="open the answer page", extract="the answer number", headless=True)
+    try:
+        await learn(spec, provider=_ClickFirstLink(), router=_extract_router(42), cache=cache)
+        rec = RunRecord()
+        data = await replay(spec, router=_extract_router(42), cache=cache, record=rec)
+        assert data == 42
+        assert rec.ok is True and rec.mode == "replay"
+        assert rec.traces, "the step traces were computed and must reach the caller"
+        assert rec.total_ms > 0
+        # The whole point of the accounting half: usage is present AND carries a cost claim.
+        assert "cost_usd" in rec.usage, f"usage did not reach the record: {rec.usage}"
+        assert rec.usage["calls"] >= 1, "the extraction call must be counted, not invisible"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_run_record_is_populated_on_a_FAILED_replay(tmp_path: Path) -> None:
+    """The case a success-only record would miss. `_attempt_replay` has several `_fail` exits, and a
+    caller diagnosing a failure is exactly who needs the traces and the cost.
+
+    Cannot pass vacuously: it asserts the record moved off its defaults on a run that RAISED, so a
+    record populated only at the success return leaves `mode` empty and fails here.
+    """
+    from ultracua.flows import RunRecord
+
+    _write_fixture(tmp_path)
+    httpd, base = _serve(tmp_path)
+    cache = FlowCache(root=tmp_path / "cache")
+    spec = FlowSpec(name="rec-fail", start_url=f"{base}/page1.html",
+                    goal="open the answer page", extract="the answer number", headless=True)
+    try:
+        await learn(spec, provider=_ClickFirstLink(), router=_extract_router(42), cache=cache)
+        # Point the flow at a page whose link is gone -> the cached step cannot re-bind.
+        (tmp_path / "page1.html").write_text("<html><body><h1>Home</h1></body></html>", encoding="utf-8")
+        rec = RunRecord()
+        with pytest.raises(FlowReplayError):
+            await replay(spec, router=_extract_router(42), cache=cache, record=rec)
+        assert rec.ok is False
+        assert rec.mode, "a failed run still has a mode, and the record must carry it"
+        assert rec.failure_code, "the typed failure code must reach the record, not only the message"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_replay_forwards_on_step_to_the_caller(tmp_path: Path) -> None:
+    """G9. A harness could not watch a run on the GATED path without bypassing every safety gate,
+    because `replay()` accepted no `on_step` even though `run_cached` has always taken one.
+
+    Cannot pass vacuously: it counts the callbacks and requires at least one, so a parameter that
+    is accepted and dropped fails.
+    """
+    _write_fixture(tmp_path)
+    httpd, base = _serve(tmp_path)
+    cache = FlowCache(root=tmp_path / "cache")
+    spec = FlowSpec(name="rec-steps", start_url=f"{base}/page1.html",
+                    goal="open the answer page", extract="the answer number", headless=True)
+    seen: list = []
+    try:
+        await learn(spec, provider=_ClickFirstLink(), router=_extract_router(42), cache=cache)
+        await replay(spec, router=_extract_router(42), cache=cache, on_step=seen.append)
+        assert len(seen) >= 1, "on_step was accepted but never called — a silently dropped parameter"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
