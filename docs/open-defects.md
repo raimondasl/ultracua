@@ -811,7 +811,7 @@ if and only if that branch is ever resumed.
 | R4.19 | open | `_reset_learn_baselines` clears shape/contracts but not `read_pin` |
 | R4.20 | fixed | seven durable renames, one retry — closed in 0.95.0 (S10) by one shared `fsio` helper |
 | R4.21 | open | `record()`'s refusal stays non-terminal — deliberate, but each retry re-fires the write |
-| R4.22 | open | Windows `ERR_NO_BUFFER_SPACE`, **8 occurrences**; socket churn refuted at 0.104.0, and occurrence 8 (local) argues local ≠ CI |
+| R4.22 | open | Windows `ERR_NO_BUFFER_SPACE`, **9 occurrences**; socket churn refuted at 0.104.0; occurrence 8 (local) argues local ≠ CI, and occurrence 9 landed on a DOCS-ONLY PR with a failing-run capture |
 | R4.23 | open | `test_flows_dry_run_holds_a_real_write_flow` failed once under load, undiagnosed |
 | R4.24 | open | a localhost round-trip stalled past the 5 s budget; ships unmitigated, 2 occurrences |
 | R4.25 | fixed | the load-dependent "cluster of three" was one defect + one bad test — assertion fixed in 0.88.0 |
@@ -2362,6 +2362,42 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   a page re-fires the write each time — but the harm profile differs from R3.13's: this is a human
   running a command and reading a refusal each time, not an unattended `mode="auto"` loop firing
   invisibly. Revisit only with a remedy that does not depend on `record()` itself.
+
+* **R4.22 — OCCURRENCE 9 (2026-08-17, CI Windows shard 1/2), ON A DOCS-ONLY PR. The cleanest attribution
+  the series has: no `src/` line changed, so no code cause is available.** `test_drift_bench.py::
+  test_every_absolute_invariant_holds` failed with `Page.goto: net::ERR_NO_BUFFER_SPACE at
+  http://127.0.0.1:55883/span` (1 failed, 563 passed, 526 deselected, 1 xfailed in 968 s). The other
+  three arms passed. **Tenth distinct test in nine occurrences** — the spread across tests is now itself
+  the strongest evidence that this is not a property of any test.
+
+  The PR (#167) touched `docs/open-defects.md` and `docs/reshape-plan.md` and nothing else. Every prior
+  occurrence landed on a run whose diff contained code, leaving "did the change do it?" formally open
+  each time; this one closes that question for the series.
+
+  **Sampler peaks at the failure (the instrument working as designed — a capture OF the failing run,
+  which occurrence 8 explicitly could not provide):**
+
+  | | occurrence 9 (CI, FAILING run) | occurrence 7 (CI) | developer host (healthy) |
+  |---|---|---|---|
+  | `time_wait` | max **414**, mean 194 | 25–359 | 50–388 |
+  | `handles` | max **47,802** | 47k → 56k | 177k → 186k |
+  | `processes` | max 140 | — | — |
+  | `chrome_procs` | max **7** | — | — |
+  | `nonpaged_pool_mb` | max **239** | 171 → 207 | 4573 → 4684 |
+  | `paged_pool_mb` | max 368 | — | — |
+  | `free_mb` | min **12,891** | 12,838 | 517 |
+
+  **Both standing hypotheses stay excluded, now from a failing-run capture rather than a baseline.**
+  414 TIME_WAIT against a 16,384-port ephemeral range is 2.5%; 12.9 GB free excludes memory pressure;
+  nonpaged pool at 239 MB is nowhere near the developer host's 4.6 GB. So the CI series remains
+  undiagnosed, and occurrence 8's reading — that the local failure (517 MB free) and the CI series are
+  probably different phenomena — is unchanged and now better supported.
+
+  **What is new and worth a hypothesis:** `chrome_procs` peaked at **7** on a shard that should be
+  running one session at a time. Not pursued here, and stated as an observation rather than a lead —
+  the register has spent two hypotheses on this finding already (drain aggravator, socket churn), both
+  refuted, and a third guess is not what it needs. What it needs is a reproduction, and this occurrence
+  does not provide one.
 
 * **R4.22 — OCCURRENCE 8 (0.105.0), THE FIRST ON A DEVELOPER HOST, and it argues the local and CI
   failures are NOT the same phenomenon.** `test_write_safety_invariants.py::…[fetch-first-plain-loud]`
