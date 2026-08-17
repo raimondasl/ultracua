@@ -202,24 +202,24 @@ briefed to refute them. **All ten came back CONFIRMED**, severities mostly corre
 None violates an inviolable. They are **not yet filed in the register** — filing them is step 0.2a
 below, as one family.
 
-They are labelled `B1-A1…B1-A10` here and **carry no register ids until they are filed**. An earlier
-draft of this document reserved R4.42–R4.51 for them; that was a mistake of exactly the kind this
-document is about — ids are assigned in filing order, and reserving a block for unfiled work goes stale
-the moment anything else is filed first, which is what happened (R4.42 and R4.43 are now the two
-findings §4 surfaced). Whoever files these gets the next ten free ids.
+**Filed 2026-08-17 as `R4.44`–`R4.53`**, in filing order, as one family. They were labelled
+`B1-A1…B1-A10` here while unfiled, and the mapping is in column 1 below. An earlier draft of this
+document reserved R4.42–R4.51 for them; that was a mistake of exactly the kind this document is about —
+reserving a block for unfiled work goes stale the moment anything else is filed first, which is what
+happened (R4.42 and R4.43 are the two findings §4 surfaced).
 
-| # | Finding | Where |
+| filed as | Finding | Where |
 |---|---|---|
-| B1-A1 | An attempt whose `run_cached` **raises** drops its own LLM spend, traces and minted keys, and leaves `ok`/`failure_code` stale from the previous attempt — F2's fix wrapped the relearn leg only | `flows.py:2191-2233` |
-| B1-A2 | `record.usage == {}` on the miss / escalate / precheck / pre-attempt-refusal / raise exits, against `RunRecord`'s own docstring ("always populated") | `flow.py:192`, `flow.py:1096-1099` |
-| B1-A3 | A usage-less later attempt flips a priced total to `None` with no reason flag (`_absorb_usage`'s sticky-`None` meets an absent key) | `flows.py:2097-2120` |
-| B1-A4 | `test_run_record_is_populated_on_a_FAILED_replay` asserts one default and two truthy values; population-only-at-success stays green | `tests/test_flows.py:1039-1065` |
-| B1-A5 | Eleven wiring mutations of the record plumbing are invisible to the whole suite | `flows.py:2843/2921/2924/2980/2987/2990` |
-| B1-A6 | `record.failure_code` speaks the internal `kind` vocabulary while the raise uses `_classify_replay_failure(kind).code`, and can name a different attempt than the exception | `flows.py:2182-2186` vs `:441` |
-| B1-A7 | `llm_calls` / `traces` / `healed_steps` / `total_ms` exclude the relearn while `usage` includes it | `flows.py:2971-2988` |
-| B1-A8 | The headline claim ("a 0-LLM replay now says observed zero") has no end-to-end pin: an engine reporting UNKNOWN on every replay passes every test | `flow.py:1085`, `:1240` |
-| B1-A9 | `BatchRowResult.landed` is a two-state bool that reads `False` on successful write rows and on crashed rows — the trap the same PR wrote a paragraph about | `flows.py:3562` |
-| B1-A10 | A key-less teacher (`ScriptedProvider`, `MockProvider`) is classified as an *unobserved spender* (cost UNKNOWN), contradicting `flow.py:915-916`; and `accounting_failed` is sticky across runs | `obs.py:235-241` |
+| **R4.44** (B1-A1) | An attempt whose `run_cached` **raises** drops its own LLM spend, traces and minted keys, and leaves `ok`/`failure_code` stale from the previous attempt — F2's fix wrapped the relearn leg only | `flows.py:2191-2233` |
+| **R4.45** (B1-A2) | `record.usage == {}` on the miss / escalate / precheck / pre-attempt-refusal / raise exits, against `RunRecord`'s own docstring ("always populated") | `flow.py:192`, `flow.py:1096-1099` |
+| **R4.46** (B1-A3) | A usage-less later attempt flips a priced total to `None` with no reason flag (`_absorb_usage`'s sticky-`None` meets an absent key) | `flows.py:2097-2120` |
+| **R4.47** (B1-A4) | `test_run_record_is_populated_on_a_FAILED_replay` asserts one default and two truthy values; population-only-at-success stays green | `tests/test_flows.py:1039-1065` |
+| **R4.48** (B1-A5) | Eleven wiring mutations of the record plumbing are invisible to the whole suite | `flows.py:2843/2921/2924/2980/2987/2990` |
+| **R4.49** (B1-A6) | `record.failure_code` speaks the internal `kind` vocabulary while the raise uses `_classify_replay_failure(kind).code`, and can name a different attempt than the exception | `flows.py:2182-2186` vs `:441` |
+| **R4.50** (B1-A7) | `llm_calls` / `traces` / `healed_steps` / `total_ms` exclude the relearn while `usage` includes it | `flows.py:2971-2988` |
+| **R4.51** (B1-A8) | The headline claim ("a 0-LLM replay now says observed zero") has no end-to-end pin: an engine reporting UNKNOWN on every replay passes every test | `flow.py:1085`, `:1240` |
+| **R4.52** (B1-A9) | `BatchRowResult.landed` is a two-state bool that reads `False` on successful write rows and on crashed rows — the trap the same PR wrote a paragraph about | `flows.py:3562` |
+| **R4.53** (B1-A10) | A key-less teacher (`ScriptedProvider`, `MockProvider`) is classified as an *unobserved spender* (cost UNKNOWN), contradicting `flow.py:915-916`; and `accounting_failed` is sticky across runs | `obs.py:235-241` |
 
 **The structural reading, which is the point.** The record is written at **10 sites in two functions** —
 `flows.py:2184-2185, 2197-2199, 2224-2233, 2387, 2843, 2921, 2924, 2980-2981, 2987-2988, 2990` — with
