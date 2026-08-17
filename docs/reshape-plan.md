@@ -400,9 +400,9 @@ carries ten confirmed defects.
   deletion-shaped ≤10-line wrapper fixes for reproduced operator holes (1.2 is the template), and
   **(critic)** reproduced inviolable-class findings, which carry the full RED-first + matrix-dimension +
   audit requirements. Without that last exemption a critical finding would have no sanctioned path.
-* **Comments.** As a function is touched, narrative defect history becomes `# pinned:
-  tests/x.py::test_y` plus a register id; a new "never/always" sentence must cite a test id or not be
-  written. No bulk edit.
+* **Comments.** As a function is touched, narrative defect history becomes a `# pinned:` line naming a
+  test id plus a register id; a new "never/always" sentence must cite a test id or not be written. No
+  bulk edit.
 
 ---
 
