@@ -11,8 +11,8 @@ by applying this file's own sibling rule while redesigning R3.2; it is recorded 
 CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch was **PARKED, not
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
-The round-4 series has since grown to R4.43 as later slices filed against it:
-**26 open**, 13 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+The round-4 series has since grown to R4.53 as later slices filed against it:
+**36 open**, 13 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **26 open**, 13 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **36 open**, 13 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -833,6 +833,16 @@ if and only if that branch is ever resumed.
 | R4.41 | open | the SDK choke-point pin allowlists `vision.py`, which does NOT route through `build_client` — so the inference the test states does not hold and `no_llm` would not intercept a vision call |
 | R4.42 | open | `flow release` returns "nothing to release" before `release()` runs, so the remedy `flow.py:207` names is dead through the CLI — and WIDENING the status check does not reach the cached-recipe shape (measured) |
 | R4.43 | open | `_SDK_CTORS` does not match `genai.Client()`, so gemini's construction is invisible and the anti-vacuity floor is met by exactly 3 — which also makes R4.41's own remedy misdiagnose itself |
+| R4.44 | open | B1: a raised attempt drops its own LLM spend, traces and minted keys, and leaves `ok`/`failure_code` stale from the previous attempt (F2 guarded the relearn leg only) |
+| R4.45 | open | B1: `record.usage == {}` on the miss / escalate / precheck / pre-attempt-refusal / raise exits, against `RunRecord`'s own "always populated" docstring |
+| R4.46 | open | B1: a usage-less later attempt flips a priced total to `None` with no reason flag — a missing key and an unpriceable one are treated alike |
+| R4.47 | open | B1: the FAILED-path cell asserts one default and two truthy values, so an engine populating the record only on success keeps it green |
+| R4.48 | open | B1: eleven wiring mutations of the record plumbing survive the entire suite — only two cells pass `record=` at all |
+| R4.49 | open | B1: `record.failure_code` speaks the internal `kind` vocabulary, not `FlowReplayError.code`, and can name a different attempt than the exception |
+| R4.50 | open | B1: `llm_calls` / `traces` / `healed_steps` / `total_ms` exclude the relearn while `usage` includes it, so two fields disagree about one run |
+| R4.51 | open | B1: the "a 0-LLM replay says observed zero" claim has no end-to-end pin — an engine reporting UNKNOWN on every replay passes every cell |
+| R4.52 | open | B1: `BatchRowResult.landed` is the two-state bool the same PR calls a trap, reading `False` on successful write rows and on crashed rows |
+| R4.53 | open | B1: a key-less teacher (`ScriptedProvider`/`MockProvider`) is classified as an unobserved SPENDER, contradicting `flow.py:915-916`; `accounting_failed` is sticky across runs |
 
 
 **Scope.** The uncommitted `feat/shared-causal-attribution` work (would-be 0.76.0): extracting the
@@ -4574,3 +4584,143 @@ S14 made when it replaced `_FACTORIES` with this scan, one level up.
 
 **Not pinned by a new test**, for R4.41's reason: the existing test passes and will keep passing. The
 pin belongs with the fix.
+
+
+# The B1 family (R4.44–R4.53) — ten findings in PR #165's own new code
+
+**Filed 2026-08-17 against 0.108.0.** Found by a four-lens adversarial pass over PR #165 (B1, "the run
+record") **after it merged**, run while writing `docs/reshape-plan.md`. Thirty-five raw candidates; the
+top ten by severity went to independent skeptics briefed to REFUTE them, and **all ten came back
+CONFIRMED**, most with the severity corrected downward. **None violates an inviolable.** Every `file:line`
+below was re-verified against `main` on the day of filing.
+
+**They are filed as a family because they are one defect wearing ten hats.** `RunRecord` is written at
+**10 sites in two functions** — `flows.py:2184-2185, 2197-2199, 2224-2233, 2387, 2843, 2921, 2924,
+2980-2981, 2987-2988, 2990` — with three helper mutators (`_absorb_usage` :2097,
+`_forget_negative_write_evidence` :2123, `_mark_ok` :2141) each covering a different subset of fields.
+Accounting exists at three layers with different lifetimes: a watch inside `flow.py` per `run_cached`
+(lost on a raise, because `FlowReport` is a return value), `_absorb_usage` per `replay()`, and an ad-hoc
+third watch for the relearn. **Eight of the ten are literally "a record site that was not written."**
+
+**Two facts that make the shape, not the instances, the thing to fix.** Exactly **two** tests in the
+whole suite pass `record=` to `replay()` (`tests/test_flows.py:1026`, `:1059`), so eight of those ten
+write sites have never been reached by a test. And B1's own in-slice fix F2 wrapped **one** of the four
+run-the-engine call sites in `try/except` and left the other three — the register's "guard on a sibling
+path" predictor firing inside the PR that cites it.
+
+**Do not fix these one at a time.** Ten patches would be ten more copies of the shape that produced them.
+`docs/reshape-plan.md` step 1.5 disposes of them with ONE deletion-heavy change (a single-exit
+`_RecordSink` whose `finish()` is total by construction, with `flow.py` untouched), gated behind step 0.3
+so the ten exist as strict-xfail cells in a browser-free exit-set matrix BEFORE the sink is written.
+R4.52 goes with step 1.4 and R4.53 with step 1.3.
+
+**One consequence reaches past the engine.** Every existing consumer un-makes B1's central guarantee:
+`benchmarks/variance.py:47`, `benchmarks/drift_bench.py:651` and `evals/run.py:240` all do
+`.get("cost_usd") or 0.0`, collapsing "unknown" back to zero one hop past the record.
+
+| id | what | where |
+|---|---|---|
+| R4.44 | a raised attempt drops its own LLM spend, traces and minted keys, and leaves `ok`/`failure_code` stale from the previous attempt | `flows.py:2191-2233` |
+| R4.45 | `record.usage == {}` on the miss / escalate / precheck / pre-attempt-refusal / raise exits | `flow.py:191-192`, `:1096-1099` |
+| R4.46 | a usage-less later attempt flips a priced total to `None` with no reason flag | `flows.py:2097-2120` |
+| R4.47 | the FAILED-path cell asserts one default and two truthy values, so population-only-at-success stays green | `tests/test_flows.py:1039-1065` |
+| R4.48 | eleven wiring mutations of the record plumbing survive the entire suite | `flows.py:2843/2921/2924/2980/2987/2990` |
+| R4.49 | `record.failure_code` speaks a different vocabulary from `FlowReplayError.code` and can name a different attempt | `flows.py:2182-2186` vs `:441` |
+| R4.50 | `llm_calls` / `traces` / `healed_steps` / `total_ms` exclude the relearn while `usage` includes it | `flows.py:2971-2988` |
+| R4.51 | the headline claim has no end-to-end pin: an engine reporting UNKNOWN on every replay passes every test | `flow.py:1085`, `:1240` |
+| R4.52 | `BatchRowResult.landed` is a two-state bool reading `False` on successful write rows and on crashed rows | `flows.py:3562` |
+| R4.53 | a key-less teacher is classified as an unobserved SPENDER, and `accounting_failed` is sticky across runs | `obs.py:235-241` |
+
+## R4.44 — a raised attempt drops its own spend, and leaves the previous attempt's verdict standing
+
+**MEDIUM.** `_attempt_replay` stamps `record.attempts += 1; record.mode = "raised"` **before** the engine
+runs (`flows.py:2191-2199`, deliberately — M4's fix, so the worst case is "raised, unknown" rather than a
+confident denial). But the population block that records usage, traces, `llm_calls` and the minted keys
+sits at `:2224-2233`, **after** `run_cached` returns. An exception between them exits above it, so that
+attempt's spend and evidence are lost, and `ok` / `failure_code` keep whatever the *previous* attempt
+left.
+
+B1's F2 fixed exactly this shape for the relearn leg (`flows.py:2971-2988`, wrapping `learn()` in
+`try/except` to absorb the watch before re-raising) and left the three `_attempt_replay` legs unguarded.
+**Disposition:** step 1.5 — the wrapper owns the watch and `finish(exc)`, so the raise path stops being
+a special case.
+
+## R4.45 — `usage` is absent, not zero, on five exits
+
+**MEDIUM.** `RunRecord`'s docstring says `usage` "is always populated and always carries `cost_usd`"
+(`flows.py:206-207`). It is `{}` after the miss exit (`flow.py:191-192` returns a `FlowReport` with no
+`extra`), the escalate exit (`:1096-1099`), both idempotency-precheck returns, a pre-attempt refusal, and
+any raise. **This is the exact shape B1 was written to remove** — the absent-vs-zero ambiguity that made a
+0-LLM replay's cost unfalsifiable — surviving on the paths its own tests did not visit.
+
+## R4.46 — one usage-less attempt makes the whole run unpriceable, silently
+
+**MEDIUM.** `_absorb_usage` (`flows.py:2097-2120`) is sticky-`None` on `cost_usd` by design: one
+unpriceable attempt makes the run unpriceable. Correct. But it treats a **missing** key the same as an
+unpriceable one, so an attempt that returned a usage-less report (R4.45) poisons a correctly-priced total
+to `None` **with no flag saying why** — indistinguishable from a genuine unpriced model.
+
+## R4.47 — the FAILED-path cell cannot fail for what it claims to test
+
+**MEDIUM, test-integrity.** `test_run_record_is_populated_on_a_FAILED_replay`
+(`tests/test_flows.py:1039-1065`) asserts `rec.ok is False`, `rec.mode` truthy and `rec.failure_code`
+truthy. `ok` defaults to `False` (`flows.py:211`), and the M4 pre-stamp sets `mode="raised"` before the
+engine runs — so an engine that populated the record **only on success** would keep this cell green. A
+patch (the M4 pre-stamp) landed on top of an existing test and silently removed its discriminating power
+without turning it red: the patch-on-patch shape, applied to a test.
+
+## R4.48 — eleven wiring mutations survive the whole suite
+
+**MEDIUM, test-integrity.** Measured on a scratch copy of `src/` on `PYTHONPATH`: eleven separate
+mutations of the record plumbing — disarming `_mark_ok` at each of its three call sites, the relearn
+absorb, the `auth_refreshed` stamp, the `record.mode` assignments — are invisible to all 1092 tests. The
+helpers are individually well covered; the WIRING is not, because only two cells pass `record=` at all.
+**Disposition:** step 0.3's matrix kills all eleven before the sink is written, and step 0.6's weekly
+sweep keeps them dead.
+
+## R4.49 — two vocabularies for one taxonomy, and they can name different attempts
+
+**LOW.** `_fail` writes the internal `kind` string into `record.failure_code` (`flows.py:2182-2186`) —
+`"miss"`, `"drift"`, `"shape"`, `"escalate"`, `"quarantine"`, `"write_unverified"`, `"write_unreadable"`
+— while the exception the caller catches carries `_classify_replay_failure(kind).code` (`:441`), a
+different vocabulary. They can also describe **different attempts**: `replay()` discards attempt 3's
+`_kind3` (`:2961`), so the record may hold attempt 1's kind beside attempt 3's exception.
+
+## R4.50 — the relearn's calls are counted in dollars but not in calls
+
+**LOW.** The relearn absorbs `usage` (`flows.py:2971-2988`) but not `llm_calls`, `traces`,
+`healed_steps` or `total_ms`, which are only accumulated in `_attempt_replay`'s population block. A run
+that drifted, replanned and relearned can report `llm_calls == 0` beside a `usage` showing dozens of
+calls — two fields from two sources disagreeing about one run.
+
+## R4.51 — the headline claim has no end-to-end pin
+
+**LOW, test-integrity.** B1's stated purpose is that a 0-LLM replay SAYS it spent zero rather than
+staying silent. Nothing asserts it end to end: an engine that reported `unobserved_llm_path` on **every**
+replay would pass every cell in the suite. The property is asserted at the primitive (`RouterWatch`) and
+never through `replay()`.
+
+## R4.52 — the two-state boolean the same PR calls a trap, one surface down
+
+**LOW.** B1 made `RunRecord.landed` three-state and wrote a paragraph explaining why ("a two-state
+boolean answering a three-state question is the trap this register records shipping three times"), then
+added `landed: bool = False` to `BatchRowResult` (`flows.py:3562`) in the same diff and populates it only
+on the `FlowReplayError` branch. A row whose replay returned `{"status": "confirmed"}` carries
+`landed=False`; a row that crashed after the POST carries `landed=False, code=""`; a resumed row carries
+`landed=False`. One field, three meanings — and on the ok row it contradicts `data["status"]` on the same
+object. **Disposition:** step 1.4, with its value on an ok-write row stated as a golden cell first.
+
+## R4.53 — a teacher that CANNOT spend is reported as a spender nobody watched
+
+**LOW.** `RouterWatch.__init__` treats any owner without a `UsageTotals` as an unobserved spender
+(`obs.py:235-241`), so `MockProvider`, every `ScriptedProvider` and every oracle teacher — the population
+the entire key-less suite and `drift_bench` are built from — report `cost_usd: None` +
+`unobserved_llm_path: True`. `flow.py:915-916` states the opposite in a comment: "a key-less learn
+(scripted teacher, no router) must SAY it spent nothing rather than stay silent about it." Measured:
+`UsageTotals.observe(ScriptedProvider([]))` reports cost UNKNOWN. Separately, `accounting_failed` rides
+on the `UsageTotals` object rather than the run, so one failed vision accounting poisons every later run
+that observes the same router.
+
+**Disposition:** step 1.3, and the fix must use the `totals = UsageTotals()` variant — **never** a new
+attribute probe on the owner, because that is commit `00888b4`, which tripped inviolable #1's
+`_Exploding` tripwire during B1 itself.
