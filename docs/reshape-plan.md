@@ -94,9 +94,14 @@ no syntax check anywhere in CI.
 ### 3. The net is regression-shaped, browser-only, and slow
 `class g ≈ 21 findings`
 
-887 of 1,091 tests drive Chromium from 61 files with 76 hand-rolled handler classes and no shared
-fixture. 414 measured tests take <0.5 s (9.6 s total — 0.8% of suite time) and **cannot be selected**:
-there is no `tests/conftest.py` and no markers. The local suite is 21–31 min and Windows-only, which
+The suite collects **1,091** tests and builds its fixtures by hand: **76** handler-class definitions
+across 34 files and **53** `_serve` helpers, with no shared fixture — there is no `tests/conftest.py`
+at all, only a 2-line root `conftest.py` that sets `sys.path`. Of the 836 tests `.test_durations`
+measures, **414 take ≤0.5 s and total 9.6 s** (0.8% of measured time) while the other 422 carry the
+rest — and the fast ones **cannot be selected**, because there are no markers. *(All verified here; the
+analysis additionally estimated ~887 browser-driving tests across ~61 files, which is consistent with
+this but is not re-derived here — most tests reach Chromium indirectly through `run_cached`, so a
+textual grep undercounts and only a runtime launch counter settles it. Step 0.1 builds that counter.)* The local suite is 21–31 min and Windows-only, which
 CLAUDE.md already records as weaker evidence than CI on two measured axes. The audit is the only
 instrument that finds *missing* guards (7 of 7) and its precision is ~10% (20/2, 26/2, 22/3
 candidates/confirmed), so refuters are mandatory and each round is expensive. The scheduled mutation
