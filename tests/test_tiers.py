@@ -29,12 +29,15 @@ def fast_tier():
     Flipping the flag exercises the SAME wrapper the real `--tier fast` installs (`pytest_configure`
     sets this identical field), so this is the mechanism, not a re-implementation of it.
     """
-    was = tier.STATE["fast"]
+    was, was_expected = tier.STATE["fast"], tier.STATE["expected"]
     tier.STATE["fast"] = True
+    # Declare the intent, so a refusal this cell provokes on purpose is not recorded as an offence and
+    # `scripts/derive_test_tiers.py` does not promote the arming cells out of the tier they validate.
+    tier.STATE["expected"] = True
     try:
         yield
     finally:
-        tier.STATE["fast"] = was
+        tier.STATE["fast"], tier.STATE["expected"] = was, was_expected
 
 
 async def test_fast_tier_refuses_async_playwright_start(fast_tier) -> None:
@@ -56,6 +59,21 @@ async def test_fast_tier_refuses_a_BrowserSession(fast_tier) -> None:
 
     with pytest.raises(tier.ChromiumInFastTier):
         await BrowserSession(headless=True).start()
+
+
+def test_the_tier_option_is_actually_wired_to_the_refusal(pytestconfig) -> None:
+    """The wiring nothing armed, which is how a tier can quietly stop being one.
+
+    Every cell that proves the refusal uses the `fast_tier` fixture, which sets `STATE["fast"]` BY HAND
+    — so all of them would keep passing if `conftest.py` stopped deriving it from `--tier`. Then
+    `--tier fast` would run the fast tests with no raiser installed, a browser test misclassified as
+    fast would quietly launch one, and the tier would report green while proving nothing. This is the
+    only cell that reads the OPTION and the STATE together, and it runs in both tiers.
+    """
+    assert tier.STATE["fast"] is (pytestconfig.getoption("--tier") == "fast"), (
+        "`--tier` and the refusal state disagree: conftest.py no longer derives one from the other, so "
+        "the fast tier is not actually refusing anything"
+    )
 
 
 def test_the_probe_is_installed_on_every_known_entry_point() -> None:
@@ -125,6 +143,82 @@ async def test_a_real_session_is_observed_launching_exactly_one_browser() -> Non
 # ---------------------------------------------------------------------------------------------------
 # 3. The manifest classifies the whole collection, and says so by construction.
 
+async def test_a_refused_launch_is_not_counted_as_a_launch(fast_tier) -> None:
+    """The defect an audit found in this instrument, armed.
+
+    The probe used to increment the launch counter BEFORE checking the fast flag, so a refusal was
+    charged as a launch. The victims were the only cells that arm the refusal — they were classified as
+    browser tests and deselected by the very tier they validate, which is why the fast tier shipped
+    proving nothing about its own refusal. Both the right and the wrong behaviour left all twelve cells
+    green, so this is the cell that can tell them apart.
+    """
+    before_n, before_refused = tier.STATE["n"], tier.STATE["refused"]
+    with pytest.raises(tier.ChromiumInFastTier):
+        await async_playwright().start()
+    assert tier.STATE["n"] == before_n, "a REFUSED launch was charged to the launch counter"
+    assert tier.STATE["refused"] == before_refused + 1, "the refusal was not counted as a refusal"
+
+
+async def test_an_expected_refusal_is_not_recorded_as_an_offence() -> None:
+    """The same defect one level down, in the PROMOTION path rather than the counter.
+
+    Fixing the counter made these cells derive as fast; the derivation then promoted them back, because
+    `FAST_OFFENDERS` could not tell a refusal a cell provoked ON PURPOSE from one a misclassified test
+    caused. Measured: the arming cells were promoted to the browser tier on the round where the 15
+    `test_drift_bench.py` cells failed — collateral of an unrelated failure.
+
+    Drives the REAL probe both ways rather than re-stating its rule, because a cell that re-implements
+    the mechanism it checks passes when the mechanism is deleted.
+    """
+    before = set(tier.FAST_OFFENDERS)
+    saved = (tier.STATE["fast"], tier.STATE["expected"], tier.CURRENT[0])
+    tier.CURRENT[0] = "tests/test_invented.py::deliberate"
+    try:
+        tier.STATE["fast"], tier.STATE["expected"] = True, True
+        with pytest.raises(tier.ChromiumInFastTier):
+            await async_playwright().start()
+        assert tier.FAST_OFFENDERS == before, "an EXPECTED refusal was recorded as an offence"
+
+        tier.STATE["expected"] = False           # the identical refusal, now unannounced
+        with pytest.raises(tier.ChromiumInFastTier):
+            await async_playwright().start()
+        assert tier.CURRENT[0] in tier.FAST_OFFENDERS, "an UNEXPECTED refusal went unrecorded"
+    finally:
+        tier.FAST_OFFENDERS.clear()
+        tier.FAST_OFFENDERS.update(before)
+        tier.STATE["fast"], tier.STATE["expected"], tier.CURRENT[0] = saved
+
+
+def test_the_refusal_cannot_be_swallowed_by_a_broad_except(fast_tier) -> None:
+    """`except Exception` must not be able to turn the refusal green.
+
+    Measured before the fix, when it derived from RuntimeError: a cell wrapping a launch in
+    `try/except Exception` PASSED under `--tier fast` and the run exited 0, with the violation recorded
+    only in a file nobody reads. `flows.py` alone has 20 broad catches; a refusal any of them can eat is
+    a refusal that reports green.
+    """
+    assert not issubclass(tier.ChromiumInFastTier, Exception), (
+        "ChromiumInFastTier derives from Exception again, so any broad `except Exception` on the path "
+        "turns the fast tier's loud refusal into a silent pass"
+    )
+    assert issubclass(tier.ChromiumInFastTier, BaseException)
+
+
+def test_a_partial_derivation_refuses_rather_than_deleting_the_manifest() -> None:
+    """Armed: regenerating from a SUBSET would silently discard everything it did not collect.
+
+    Measured before the guard: `pytest tests/test_tiers.py --store-browser-marks` rewrote the manifest
+    to 12 ids — deleting 1091 classifications from a committed artifact — and reported success. The next
+    run is loud, but the artifact is already gone and costs a 31-minute run to rebuild.
+    """
+    data = json.loads(tier.MANIFEST.read_text(encoding="utf-8"))
+    with pytest.raises(tier.PartialDerivation) as exc:
+        tier.guard_full_collection(12)
+    assert str(data["total"]) in str(exc.value), "the refusal must say how much would have been lost"
+    tier.guard_full_collection(data["total"])          # a full collection is allowed through
+    tier.guard_full_collection(data["total"] + 5)      # so is a grown one
+
+
 def test_the_manifest_exists_and_is_internally_consistent() -> None:
     data = json.loads(tier.MANIFEST.read_text(encoding="utf-8"))
     browser, fast = data["browser"], data["fast"]
@@ -172,7 +266,23 @@ def test_the_manifest_covers_everything_this_run_collected() -> None:
     collected = set(tier.COLLECTED)
     assert collected, "the collection hook recorded nothing — this cell would pass vacuously"
     data = json.loads(tier.MANIFEST.read_text(encoding="utf-8"))
-    missing = sorted(collected - (set(data["browser"]) | set(data["fast"])))
+    known = set(data["browser"]) | set(data["fast"])
+
+    # THE OTHER DIRECTION, which every guard in the repo was missing. Both this cell and `partition`
+    # only ever asked `collected ⊆ manifest`, so a test that stops COLLECTING — deleted, renamed, or
+    # silently dropped by a broken parametrize — is invisible: the fast job still exits 0 with the same
+    # pass count, and `check_shard_coverage` compares full-vs-shards so it is absent from both sides and
+    # the partition still reads clean. Only checked when this run collected the whole suite; a
+    # deliberate subset (`pytest tests/test_tiers.py`) legitimately collects fewer.
+    if len(collected) >= data["total"]:
+        vanished = sorted(known - collected)
+        assert not vanished, (
+            f"{len(vanished)} test(s) are in {tier.MANIFEST.name} but were NOT collected — they were "
+            f"deleted or renamed and nothing else in the repo can notice. Regenerate with "
+            f"`pytest -q --store-browser-marks`:\n  " + "\n  ".join(vanished[:20])
+        )
+
+    missing = sorted(collected - known)
     assert not missing, (
         f"{len(missing)} collected test(s) are not in {tier.MANIFEST.name}, so `--tier fast` would "
         f"refuse to run. Regenerate with `pytest --store-browser-marks`:\n  "

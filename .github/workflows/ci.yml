@@ -14,7 +14,7 @@ jobs:
   # THE FAST TIER — the first thing that can go red, in ~2 min instead of ~17.
   #
   # It installs NO browser: the tier's whole claim is that these tests never launch one, and the claim is
-  # enforced rather than trusted — `tests/conftest.py` wraps every Playwright entry point on the CLASS and
+  # enforced rather than trusted — the ROOT `conftest.py` wraps every Playwright entry point on the CLASS and
   # RAISES here, so a test that is unclassified and launches anyway fails loudly instead of quietly
   # running slowly. That also makes this job a check on the manifest itself: a collected test in neither
   # tier is a collection error naming it, which is `check_shard_coverage`'s property one instrument over.

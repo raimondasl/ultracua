@@ -53,11 +53,16 @@ def main() -> int:
         tail = proc.stdout.strip().splitlines()[-1:] or ["(no output)"]
         print(f"  {tail[0]}")
 
+        # GREEN IS THE FIXED POINT, checked BEFORE the offenders file. The old order asked about the
+        # file first, so a green round that had nonetheless written one — which a green run can do, since
+        # the cells that ARM the refusal trip the probe on purpose — would promote the tier's own test
+        # cells out of the tier they validate, one round at a time, and report it as progress.
+        if proc.returncode == 0:
+            print(f"\nFIXED POINT reached after {rnd - 1} promotion round(s); "
+                  f"{total_promoted} test(s) promoted in total.")
+            return 0
+
         if not _tiers.OFFENDERS_FILE.exists():
-            if proc.returncode == 0:
-                print(f"\nFIXED POINT reached after {rnd - 1} promotion round(s); "
-                      f"{total_promoted} test(s) promoted in total.")
-                return 0
             # Red, but nothing launched a browser: a genuine test failure, which this script must not
             # paper over by promoting anything.
             print("\nthe fast tier is RED but no test launched a browser — that is a real failure, "
