@@ -34,3 +34,6 @@ evals/results/
 
 # Workflow-tool worktrees (mutation runs, isolated agents) — never committed
 .claude/worktrees/
+
+# Tier derivation diagnostic (written only beside an already-red fast run)
+tests/.fast_offenders.json

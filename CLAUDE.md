@@ -102,10 +102,29 @@ Violating any of these is a blocking defect, not a trade-off:
   and the test failed with a meaningless "DID NOT RAISE". **Reveal fixture state synchronously, and pin
   the premise** (assert the recipe has the steps the test depends on) so a lost race fails LOUD instead
   of silently testing nothing.
-- The full suite is **key-less** — real headless Chromium against local fixtures, no API key, **~21 min**
-  and growing (15 → 18 → 21 over the last several releases). It must be green before a commit. Locally,
-  run it whole; **CI shards it across two runners per OS** because it had reached 21m53s against a
-  25-minute job timeout, which was a deterministic failure approaching.
+- The full suite is **key-less** — real headless Chromium against local fixtures, no API key, and
+  **31m35s measured on this host at 0.108.0** (15 → 18 → 21 → 31 over the last several releases; the
+  "~21 min" this line used to claim was stale). **CI shards it across two runners per OS** because it had
+  reached 21m53s against a 25-minute job timeout, which was a deterministic failure approaching.
+- **Tiers: `--tier fast` before a commit, the whole suite before a MERGE.** `pytest --tier fast` runs the
+  **600 of 1102** tests that provably never launch Chromium — **measured in 46.8 s** against the full
+  suite's 31 minutes (the other 502 are browser tests; both numbers are derived by a probe, not
+  estimated). It is not a skip-list: every
+  Playwright entry point is wrapped on the CLASS in `tests/conftest.py`, so under the fast tier a launch
+  **raises** — an unclassified test that launches fails loudly rather than quietly running slowly — and a
+  collected test in NEITHER tier is a collection error naming it (`check_shard_coverage`'s property, one
+  instrument over). Membership is **derived, never declared** — a `pytest.mark.browser` is refused by a
+  test, because a hand-written list is only as good as its worst entry. Regeneration is **two phases**,
+  and the second is not optional: `pytest -q --store-browser-marks` (full run) then
+  `python scripts/derive_test_tiers.py`. Attribution is order-dependent — when a module shares browser
+  work through a fixture, the sibling that triggers it first is charged and the rest look "fast" — so
+  the manifest is a FIXED POINT, not one run's output. Measured: all 15 non-launching tests in
+  `test_drift_bench.py` classified fast and every one launched once the tier deselected the sibling that
+  primed the bench. The CI `fast` job is what keeps it honest afterwards. The old rule ("green before a
+  commit") moves to **green before a merge, on CI, on both OSes** — a local green is measured to be
+  weaker evidence anyway (platform + keys), and its 31-minute cost is what pushed B1's author to targeted
+  subsets that missed 7 breakages. The conftest also **scrubs the provider keys** for every run, so the
+  `ANTHROPIC_API_KEY=` prefix is now the default rather than something to remember.
 - **A shard must never be a hole.** `pytest-split` partitions the real collection, so a new test file
   lands in a shard by construction — but the `shard-coverage` CI job asserts it (union == full, no
   duplicates), because a test in NO shard leaves every shard green and nothing in the suite can fail for
