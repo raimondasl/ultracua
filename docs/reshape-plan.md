@@ -150,7 +150,7 @@ starts from a partial read** — which the register itself names as its failure 
 `classes j, d ≈ 20 findings`
 
 `cli.py:951` still enumerates `status in ("failed", "invalid")` — the fifth instance of the
-R3.9/CLI-1 shape. And a reproduced example of the wrapper hole: `cli.py:652` returns
+R3.9/CLI-1 shape. And a reproduced example of the wrapper hole (now **R4.42**): `cli.py:652` returns
 *"is not quarantined (status: refused) — nothing to release"* **before** `release()` is called at
 `cli.py:655`, while `flow.py:207` tells the operator to clear a learn refusal with exactly that verb
 and `flows.release()` (`flows.py:1646`) already does it. The R3.13 remedy is dead through the
@@ -187,20 +187,26 @@ tests. `measured in analysis` from GitHub Actions job durations, not from the do
 Four lenses produced 35 raw findings; the top ten by severity were handed to independent skeptics
 briefed to refute them. **All ten came back CONFIRMED**, severities mostly corrected to medium/low.
 None violates an inviolable. They are **not yet filed in the register** — filing them is step 0.2a
-below, as proposed ids R4.42–R4.51.
+below, as one family.
 
-| Proposed id | Finding | Where |
+They are labelled `B1-A1…B1-A10` here and **carry no register ids until they are filed**. An earlier
+draft of this document reserved R4.42–R4.51 for them; that was a mistake of exactly the kind this
+document is about — ids are assigned in filing order, and reserving a block for unfiled work goes stale
+the moment anything else is filed first, which is what happened (R4.42 and R4.43 are now the two
+findings §4 surfaced). Whoever files these gets the next ten free ids.
+
+| # | Finding | Where |
 |---|---|---|
-| R4.42 | An attempt whose `run_cached` **raises** drops its own LLM spend, traces and minted keys, and leaves `ok`/`failure_code` stale from the previous attempt — F2's fix wrapped the relearn leg only | `flows.py:2191-2233` |
-| R4.43 | `record.usage == {}` on the miss / escalate / precheck / pre-attempt-refusal / raise exits, against `RunRecord`'s own docstring ("always populated") | `flow.py:192`, `flow.py:1096-1099` |
-| R4.44 | A usage-less later attempt flips a priced total to `None` with no reason flag (`_absorb_usage`'s sticky-`None` meets an absent key) | `flows.py:2097-2120` |
-| R4.45 | `test_run_record_is_populated_on_a_FAILED_replay` asserts one default and two truthy values; population-only-at-success stays green | `tests/test_flows.py:1039-1065` |
-| R4.46 | Eleven wiring mutations of the record plumbing are invisible to the whole suite | `flows.py:2843/2921/2924/2980/2987/2990` |
-| R4.47 | `record.failure_code` speaks the internal `kind` vocabulary while the raise uses `_classify_replay_failure(kind).code`, and can name a different attempt than the exception | `flows.py:2182-2186` vs `:441` |
-| R4.48 | `llm_calls` / `traces` / `healed_steps` / `total_ms` exclude the relearn while `usage` includes it | `flows.py:2971-2988` |
-| R4.49 | The headline claim ("a 0-LLM replay now says observed zero") has no end-to-end pin: an engine reporting UNKNOWN on every replay passes every test | `flow.py:1085`, `:1240` |
-| R4.50 | `BatchRowResult.landed` is a two-state bool that reads `False` on successful write rows and on crashed rows — the trap the same PR wrote a paragraph about | `flows.py:3562` |
-| R4.51 | A key-less teacher (`ScriptedProvider`, `MockProvider`) is classified as an *unobserved spender* (cost UNKNOWN), contradicting `flow.py:915-916`; and `accounting_failed` is sticky across runs | `obs.py:235-241` |
+| B1-A1 | An attempt whose `run_cached` **raises** drops its own LLM spend, traces and minted keys, and leaves `ok`/`failure_code` stale from the previous attempt — F2's fix wrapped the relearn leg only | `flows.py:2191-2233` |
+| B1-A2 | `record.usage == {}` on the miss / escalate / precheck / pre-attempt-refusal / raise exits, against `RunRecord`'s own docstring ("always populated") | `flow.py:192`, `flow.py:1096-1099` |
+| B1-A3 | A usage-less later attempt flips a priced total to `None` with no reason flag (`_absorb_usage`'s sticky-`None` meets an absent key) | `flows.py:2097-2120` |
+| B1-A4 | `test_run_record_is_populated_on_a_FAILED_replay` asserts one default and two truthy values; population-only-at-success stays green | `tests/test_flows.py:1039-1065` |
+| B1-A5 | Eleven wiring mutations of the record plumbing are invisible to the whole suite | `flows.py:2843/2921/2924/2980/2987/2990` |
+| B1-A6 | `record.failure_code` speaks the internal `kind` vocabulary while the raise uses `_classify_replay_failure(kind).code`, and can name a different attempt than the exception | `flows.py:2182-2186` vs `:441` |
+| B1-A7 | `llm_calls` / `traces` / `healed_steps` / `total_ms` exclude the relearn while `usage` includes it | `flows.py:2971-2988` |
+| B1-A8 | The headline claim ("a 0-LLM replay now says observed zero") has no end-to-end pin: an engine reporting UNKNOWN on every replay passes every test | `flow.py:1085`, `:1240` |
+| B1-A9 | `BatchRowResult.landed` is a two-state bool that reads `False` on successful write rows and on crashed rows — the trap the same PR wrote a paragraph about | `flows.py:3562` |
+| B1-A10 | A key-less teacher (`ScriptedProvider`, `MockProvider`) is classified as an *unobserved spender* (cost UNKNOWN), contradicting `flow.py:915-916`; and `accounting_failed` is sticky across runs | `obs.py:235-241` |
 
 **The structural reading, which is the point.** The record is written at **10 sites in two functions** —
 `flows.py:2184-2185, 2197-2199, 2224-2233, 2387, 2843, 2921, 2924, 2980-2981, 2987-2988, 2990` — with
@@ -246,8 +252,10 @@ rejected by the judges or the critic.
   ambient ledger while the SDK choke-point pin leaks: `tests/test_inviolable_properties.py:149-150`
   allowlists `src/ultracua/vision.py` (R4.41), and `_SDK_CTORS` at `:148` is
   `("AsyncAnthropic", "AsyncOpenAI", "OpenAI", "GenerativeModel")` while `llm/gemini.py:101` constructs
-  `genai.Client()` — **not matched at all**. Two of four constructions are outside the pin's inference.
-  **verified, and new: the `genai.Client()` hole is not R4.41 and is not filed.**
+  `genai.Client()` — **not matched at all**. Two of four constructions are outside the pin's inference,
+  and `found_in_leaves` is exactly 3 against a `>= 3` floor. Filed as **R4.43** (distinct from R4.41),
+  which also records the interaction: R4.41's own "cheap and wrong" remedy drops the count to 2, so the
+  anti-vacuity assert fires first and the run misdiagnoses itself.
 * **Do not hand-mark tests as browser/fast**, wrap `async_playwright` by name, or accept "any exception"
   as "refused".
 * **Do not build the Chromium pool as a speed fix** (2.9-min ceiling, loop-bound `Browser`), and **do not
@@ -285,7 +293,7 @@ change.
 | # | Step | Disposes | Pinned by | Size |
 |---|---|---|---|---|
 | 0.1 | **Fast tier.** New `tests/conftest.py`: a session plugin wrapping `BrowserType.launch` **and** `PlaywrightContextManager.__aenter__` *on the class* — **(critic)** `start()` is a one-line delegate to `__aenter__` and 21 test sites use `async with`, so wrapping `start` alone is half-inert. `--store-browser-marks` writes per-test launch counts; `--tier fast` deselects listed browser tests **and** installs a raiser, so an unlisted browser test fails loud. Key scrub. The 138 s + 40 s tests move to their own CI job; `.test_durations` regenerated | g, h; the 21–31 min loop | violation armed and seen red under `--tier fast` for both entry styles; a browser cell increments the counter by exactly 1; every collected id classified or collection fails naming ids | S · 1.5 d |
-| 0.2a | **File B1's ten in the prose register** as R4.42–R4.51 (~10 lines). **(critic)** `tests/test_register_count.py:167-180` fails any strict xfail whose reason names no open `R3.x`/`R4.x` id, and `_ID_IN_CODE` (`:195`) recognises only that shape — so this must land **before** 0.3, or 0.3 lands red | ordering hazard | the existing count guard | XS · 0.2 d |
+| 0.2a | **File B1's ten in the prose register** as one family, taking the next ten free ids (~10 lines). **(critic)** `tests/test_register_count.py:167-180` fails any strict xfail whose reason names no open `R3.x`/`R4.x` id, and `_ID_IN_CODE` (`:195`) recognises only that shape — so this must land **before** 0.3, or 0.3 lands red | ordering hazard | the existing count guard | XS · 0.2 d |
 | 0.2b | **Register as structured data.** `docs/register/<id>.yaml` (id, title, status, severity, inviolable, class letter, attempts, `blocked_by`, `next_attempt_requires`, pins, disposition); `scripts/render_register.py` generates the index/state blocks; the 4,401 narrative lines move **unchanged** to `docs/register/history/` (frozen, append-only). `D5` becomes a schema rule: open + ≥2 attempts ⇒ `blocked_by` + `next_attempt_requires` required. **(critic)** no line-count target for CLAUDE.md — its operational lessons are the one text every session reliably loads; pin only "no hand-typed counts outside the generated block" | l, k; the 170k-token read | schema (anti-vacuity ≥83 ids, ≥10 open); render byte-equality; rendered counts equal today's; every strict xfail names an open id; a PR that deletes an xfail or adds an id-naming test must flip that id's status in the same diff | S · 1.5 d |
 | 0.3 | **Exit-set matrix over a fake engine.** `tests/_fake_engine.py` installed by patching the bindings `flows.py` holds — `run_cached`, `_precheck_done`, `refresh_auth`, `learn`, and **(critic)** `_make_finalize`/`_make_pre_write` so the `out` dict is scripted explicitly; all six added to a module-bindings AST pin. Drives `replay()` through every exit **derived by AST** over its own `raise`/`return` nodes — **(critic)** not a hand list — including preflight refusal, `on_step` raising inside the auth-refresh retry, and record reuse across calls. Fidelity cells for read **and write** shapes against the real engine on existing fixtures. The ten B1 defects become strict-xfail cells RED against main; the vacuous cell gets specific values; the 11 wiring mutants registered and proved killed | g; RED-first for 1.5 | every derived exit hit ≥1 cell (printed); premise counts per cell; fidelity cells; `prove_red` 11/11; xfails machine-checked RED | M · 3–5 d |
 | 0.4 | **RED-in-CI + red-proof + ratchets.** Run each PR's *new* test ids against main's `src/` in a worktree; a src-touching PR whose new tests all pass against main fails. **(critic)** ImportError-against-main is *inconclusive*, not a label-shaped opt-out — a PR adding a src module ships a registered mutant instead; the job's self-test is a unit test of its verdict function. `assert_ratchet(name, derived_sites)` fails on growth **and** staleness | g, f | the job asserts it found ≥1 new test when the diff adds `def test_`; each ratchet asserts a minimum hit count first | S · 1.5 d |
@@ -298,10 +306,10 @@ change.
 | # | Step | Disposes | Pinned by | Size · WS |
 |---|---|---|---|---|
 | 1.1 | **Keyword-only engine chain.** `*` after the identity prefix in `_learn`/`_learn_n`/`_replay`/`_verify_by_replay`/`_replay_step`/`_author_steps`; internal call sites rewritten to keywords. `run_cached`'s public signature unchanged. **(critic)** the arity pin cannot see a *mis-keyed* placeholder (`flow.py:752` passes four `None`s whose swap is type-silent), so a forwarding-identity test comes with it: stub each inner coroutine, pass a unique sentinel per kwarg, assert every kwarg arrives under the same name with `is` identity, DELIBERATE_DROPS asserted both ways, shown RED against a mis-keyed scratch copy | i | AST positional-arity pin + the forwarding-identity cell; RED-in-CI; suite + 0.3 goldens byte-identical | S · 1.5 d + audit · no |
-| 1.2 | **`flow release` reaches `release()`.** **(critic)** *delete* the pre-check at `cli.py:652`, do not widen it: `health()` reports `refused` only when the flow is **not** cached (`flows.py:2068`), so a refusal recorded with a stale recipe still reads "nothing to release". `release()` returns what it cleared; the CLI prints that. ≤10 src lines | R3.13 remedy hole (d, j) | RED CLI cells for **both** shapes (learn-refused uncached; refused-with-stale-recipe) driven through argparse | S · 0.5 d · no |
-| 1.3 | **A "cannot-spend" third state in `obs.py`.** **(critic)** only the `totals = UsageTotals()` variant — never a new attribute probe on an owner, because a `spends: ClassVar` probe re-creates commit `00888b4`, which tripped inviolable #1's `_Exploding` tripwire one week ago. AST cell: `RouterWatch.__init__` reads only `router`/`totals`. `accounting_failed` becomes run-scoped. Fix the readers so `None` renders as *unknown* and never sums to 0.0 | R4.51; b, c, p | `observe(ScriptedProvider([]))` → observed, 0.0; the `_Spender` stub stays unobserved; `test_a_navigate_only_replay_never_reaches_a_provider[repair]` named as a pin; drift_bench baseline unchanged | S · 1 d + audit · no |
-| 1.4 | **Distinct codes + one `outcome_of` + tri-state on the siblings.** Codes for the ~10 base-class refusals; `outcome_of(exc) → Outcome(code, retryable, landed)` replaces the getattr triples that *construct* `BatchRowResult`/`ToolOutcome`/`DryRunReport`/`FleetRun`. **(critic)** the two ledger-arming reads (`flows.py:3771`, `mcpserver/server.py:444`) stay byte-identical — they are R3.3's consumers. Must land before B3 freezes its vocabulary | R4.47, R4.50; j, b | ratchet bare `raise FlowReplayError(` 24 → 0; a cell per subclass at its raise site asserting (code, retryable, landed); `test_landed_arms_the_ledger.py` + the write-safety matrix (both clauses) named as pins | M · 2 d + **2 audits** · **yes** |
-| 1.5 | **THE SINK — single-exit `RunRecord`.** Replace the 10 write sites and the three helpers with one `_RecordSink`: append-only `AttemptRecord`s + `finish(exc_or_None)` called exactly once, **total by construction** (an internal error becomes `record.note`, never an exception over the original). `replay()`'s body becomes `_replay_body`; the wrapper does `try … except BaseException as exc: sink.finish(exc); raise`. Per-attempt usage comes from a watch the *wrapper* owns, so the raise path is a non-event and **`flow.py` is untouched**. `failure_code` derives from `exc.code`. **(critic)** landed/committed rule: True if any attempt evidenced True; else **None** if any attempt is unknown (raised, precheck-skip, relearn-raise) or none completed; else False — and today's values for both precheck exits and the retry-raise→repair path are frozen in the 0.3 golden **before** the sink is written; `exc.landed` arming stays byte-identical. `LearnResult` gains a **required** `report=` keyword | R4.42–R4.49; a, b, i, n, p | the ten strict xfails **flip** (strict forces it); every other cell byte-identical or in an argued golden diff; AST: no `record.<field>` write outside the sink; ratchet 10 → 1; `prove_red` 11/11 still killed; cells for reuse-across-calls, usage equality while both watches coexist, relearn-with-no-report | M · 3 d + **2 audits** · **yes** |
+| 1.2 | **`flow release` reaches `release()`.** **(critic)** *delete* the pre-check at `cli.py:652`, do not widen it: `health()` reports `refused` only when the flow is **not** cached (`flows.py:2068`), so a refusal recorded with a stale recipe still reads "nothing to release". `release()` returns what it cleared; the CLI prints that. ≤10 src lines | **R4.42**; R3.13 remedy hole (d, j) | RED CLI cells for **both** shapes (learn-refused uncached; refused-with-stale-recipe) driven through argparse | S · 0.5 d · no |
+| 1.3 | **A "cannot-spend" third state in `obs.py`.** **(critic)** only the `totals = UsageTotals()` variant — never a new attribute probe on an owner, because a `spends: ClassVar` probe re-creates commit `00888b4`, which tripped inviolable #1's `_Exploding` tripwire one week ago. AST cell: `RouterWatch.__init__` reads only `router`/`totals`. `accounting_failed` becomes run-scoped. Fix the readers so `None` renders as *unknown* and never sums to 0.0 | B1-A10; b, c, p | `observe(ScriptedProvider([]))` → observed, 0.0; the `_Spender` stub stays unobserved; `test_a_navigate_only_replay_never_reaches_a_provider[repair]` named as a pin; drift_bench baseline unchanged | S · 1 d + audit · no |
+| 1.4 | **Distinct codes + one `outcome_of` + tri-state on the siblings.** Codes for the ~10 base-class refusals; `outcome_of(exc) → Outcome(code, retryable, landed)` replaces the getattr triples that *construct* `BatchRowResult`/`ToolOutcome`/`DryRunReport`/`FleetRun`. **(critic)** the two ledger-arming reads (`flows.py:3771`, `mcpserver/server.py:444`) stay byte-identical — they are R3.3's consumers. Must land before B3 freezes its vocabulary | B1-A6, B1-A9; j, b | ratchet bare `raise FlowReplayError(` 24 → 0; a cell per subclass at its raise site asserting (code, retryable, landed); `test_landed_arms_the_ledger.py` + the write-safety matrix (both clauses) named as pins | M · 2 d + **2 audits** · **yes** |
+| 1.5 | **THE SINK — single-exit `RunRecord`.** Replace the 10 write sites and the three helpers with one `_RecordSink`: append-only `AttemptRecord`s + `finish(exc_or_None)` called exactly once, **total by construction** (an internal error becomes `record.note`, never an exception over the original). `replay()`'s body becomes `_replay_body`; the wrapper does `try … except BaseException as exc: sink.finish(exc); raise`. Per-attempt usage comes from a watch the *wrapper* owns, so the raise path is a non-event and **`flow.py` is untouched**. `failure_code` derives from `exc.code`. **(critic)** landed/committed rule: True if any attempt evidenced True; else **None** if any attempt is unknown (raised, precheck-skip, relearn-raise) or none completed; else False — and today's values for both precheck exits and the retry-raise→repair path are frozen in the 0.3 golden **before** the sink is written; `exc.landed` arming stays byte-identical. `LearnResult` gains a **required** `report=` keyword | B1-A1…B1-A8; a, b, i, n, p | the ten strict xfails **flip** (strict forces it); every other cell byte-identical or in an argued golden diff; AST: no `record.<field>` write outside the sink; ratchet 10 → 1; `prove_red` 11/11 still killed; cells for reuse-across-calls, usage equality while both watches coexist, relearn-with-no-report | M · 3 d + **2 audits** · **yes** |
 | 1.6 | **`WriteClass` value object + `FlowSpec.key`.** The *named* questions the raw sites ask — `declares_write`, `is_write`, `needs_confirm`, and **(critic)** two separately named multiwrite questions (`declares_multiple_barriers` for `MutateSpec.is_multiwrite`, `recipe_has_multiple_writes` for `cached_writes`) because `_auth_retry_allowed` keeps them as separate arms with different messages; collapsing them is R3.5's own failure shape. Carries **no refusal**. `FlowSpec.key` replaces the 24 transcriptions | k, a, l, f | ratchets 33 → 0 and 24 → 0; a **printed per-site conversion table** so a mistranslated site is visible on sight; write-safety matrix (both clauses) and the exit-set matrix byte-identical | M · 2.5 d + **2 audits** · **yes** |
 | 1.7 | **Printed door `Policy` table** naming what each raw door permits *today* (CLI root, daemon, `run_many`, MCP, `replay`), including `auto_reauthor_writes=True` — so `flow.py:187-189` becomes a visible decision item rather than a refactor side effect. Daemon validates `mode`/`provider` against closed sets before the engine | d, m | a test prints the Policy per door and asserts equality with a committed table; a liveness corpus of read flows replays green through every door | S · 1 d · no |
 | 1.8 | **`RunOptions`/`RunHooks`** threaded through the engine instead of 20–23 scalars; `run_cached` keeps its public kwargs. Every existing asymmetry preserved as-is in a DELIBERATE_DROPS table (R4.12 included — *preserved, not fixed*). Separate PR from 1.1 | i, a, d | introspection: every field read in `run_cached` or reachable in every inner function it applies to, except DELIBERATE_DROPS — checked **both ways**; a hook-fire count table per (mode, hook) captured before and asserted after | M · 3 d + audit · no |
@@ -340,7 +348,7 @@ regenerated; `scripts/check_shard_coverage.py` extended. *Acceptance:* under `--
 counter by exactly 1; every collected id is classified or collection fails naming ids; the tier runs in
 <60 s with zero launches asserted.
 
-**PR 2a then 2b — register.** 2a files R4.42–R4.51 in the prose register (~10 lines) so PR 3's xfails
+**PR 2a then 2b — register.** 2a files B1's ten in the prose register (~10 lines) so PR 3's xfails
 name ids the existing guard recognises. 2b migrates to YAML + a renderer, freezes the narrative, and
 replaces the regex test. A human spot-checks the six `D5`-blocked entries by hand.
 
@@ -362,14 +370,14 @@ carries ten confirmed defects.
 
 | Finding | Disposed by | How |
 |---|---|---|
-| R4.45 (vacuous cell) | PR 3 | rewritten with specific values; a raise-path cell added |
-| R4.42, R4.43, R4.44 | 1.5 | the wrapper watch + `finish(exc)` around the one `_attempt_replay` call and the one `learn()` call; explicit zero on the miss exit; `UsageTotals` objects summed, never re-summed dicts |
-| R4.46 (11 mutants) | PR 3 now; 0.6 weekly | golden cells kill all 11 **before** the sink lands; the sweep keeps them dead |
-| R4.47 (vocabulary) | 1.5 + 1.4 | `failure_code = exc.code` at finish; distinct codes so B3 never buckets by message |
-| R4.48 (relearn excluded) | 1.5 | `LearnResult(report=…)` as a required keyword — a missed site is a `TypeError` |
-| R4.49 (no e2e pin) | PR 3, then B2 | the ok cell asserts usage == the fake router's delta with cost 0.0 and no unobserved flag; after B2, one e2e cell asserts `record.usage` == the harness ledger's delta on a real extracting replay |
-| R4.50 (`BatchRowResult.landed`) | 1.4 | tri-state, with its ok-write value stated as a golden cell first |
-| R4.51 (key-less teacher; sticky flag; readers) | 1.3 | as above |
+| B1-A4 (vacuous cell) | PR 3 | rewritten with specific values; a raise-path cell added |
+| B1-A1, B1-A2, B1-A3 | 1.5 | the wrapper watch + `finish(exc)` around the one `_attempt_replay` call and the one `learn()` call; explicit zero on the miss exit; `UsageTotals` objects summed, never re-summed dicts |
+| B1-A5 (11 mutants) | PR 3 now; 0.6 weekly | golden cells kill all 11 **before** the sink lands; the sweep keeps them dead |
+| B1-A6 (vocabulary) | 1.5 + 1.4 | `failure_code = exc.code` at finish; distinct codes so B3 never buckets by message |
+| B1-A7 (relearn excluded) | 1.5 | `LearnResult(report=…)` as a required keyword — a missed site is a `TypeError` |
+| B1-A8 (no e2e pin) | PR 3, then B2 | the ok cell asserts usage == the fake router's delta with cost 0.0 and no unobserved flag; after B2, one e2e cell asserts `record.usage` == the harness ledger's delta on a real extracting replay |
+| B1-A9 (`BatchRowResult.landed`) | 1.4 | tri-state, with its ok-write value stated as a golden cell first |
+| B1-A10 (key-less teacher; sticky flag; readers) | 1.3 | as above |
 
 ---
 
