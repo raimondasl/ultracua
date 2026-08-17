@@ -40,6 +40,13 @@ gets strengthened before it is relied on; a hole-widener never lands before its 
 ad hoc re-creates orderings the plan exists to prevent. `docs/correctness-survey.md` is the 58-item
 inventory it must dispose of.
 
+**And read `docs/reshape-plan.md` before proposing a refactor** — a PROPOSAL, not started, answering
+"why does every change break something". It measures the shapes that manufacture the recurring defect
+classes (a 27-param positional funnel, string-keyed dict channels, a record written at 10 sites, 33 raw
+`spec.mutate` predicates, 24 `flow_key` transcriptions, 24 bare `raise FlowReplayError`), argues for
+re-shaping rather than a rewrite or a `flows/` split, and records what NOT to re-propose. It changes the
+shape fixes land in; it does not re-sequence `correctness-plan.md` and closes none of its findings.
+
 **Audit the fix, not just the code it fixes.** The reverted 0.73.0 redesign (754 tests green,
 `drift_bench` clean, every regression test verified RED against pre-fix source), the parked 0.76.0
 branch (785 tests, same clean bench), and BOTH R3.7 attempts (0.100.0 and 0.103.0 — each with its own
