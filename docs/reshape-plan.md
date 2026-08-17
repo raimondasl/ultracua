@@ -98,10 +98,23 @@ The suite collects **1,091** tests and builds its fixtures by hand: **76** handl
 across 34 files and **53** `_serve` helpers, with no shared fixture — there is no `tests/conftest.py`
 at all, only a 2-line root `conftest.py` that sets `sys.path`. Of the 836 tests `.test_durations`
 measures, **414 take ≤0.5 s and total 9.6 s** (0.8% of measured time) while the other 422 carry the
-rest — and the fast ones **cannot be selected**, because there are no markers. *(All verified here; the
-analysis additionally estimated ~887 browser-driving tests across ~61 files, which is consistent with
-this but is not re-derived here — most tests reach Chromium indirectly through `run_cached`, so a
-textual grep undercounts and only a runtime launch counter settles it. Step 0.1 builds that counter.)* The local suite is 21–31 min and Windows-only, which
+rest — and the fast ones **cannot be selected**, because there are no markers. *(All verified here.)*
+
+**Since measured, and the estimate was wrong.** This paragraph originally carried an analysis estimate of
+"~887 browser-driving tests across ~61 files", hedged as not-re-derived because only a runtime launch
+counter could settle it. Step 0.1 built that counter, and it settles it: **502 browser tests and 600 fast
+ones of 1102**, with the fast tier measured at **46.8 s** against the full suite's 31 minutes. The
+estimate was 1.8x too high. Recorded rather than quietly corrected, because "a number this document could
+not reproduce" was the reason it was hedged, and the hedge earning its keep is the point.
+
+**And the counter found a flaw in itself, which is the more useful result.** Attribution is
+order-dependent: when a module shares browser work through a fixture, whichever test triggers it first is
+charged for the launch and its siblings are charged nothing — so they classify as fast while being unable
+to run without a browser at all. All 15 non-launching tests in `test_drift_bench.py` did exactly that, and
+every one launched the moment the tier deselected the sibling priming the bench. The refusal made it
+loud rather than slow, which is why it was found in the first run instead of by a confused reader later.
+The manifest is therefore a **fixed point** — promote what the fast tier catches until it catches nothing
+(`scripts/derive_test_tiers.py`, converged in one round) — and the CI fast job keeps it one. The local suite is 21–31 min and Windows-only, which
 CLAUDE.md already records as weaker evidence than CI on two measured axes. The audit is the only
 instrument that finds *missing* guards (7 of 7) and its precision is ~10% (20/2, 26/2, 22/3
 candidates/confirmed), so refuters are mandatory and each round is expensive. The scheduled mutation
