@@ -11,8 +11,8 @@ by applying this file's own sibling rule while redesigning R3.2; it is recorded 
 CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch was **PARKED, not
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
-The round-4 series has since grown to R4.41 as later slices filed against it:
-**24 open**, 13 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+The round-4 series has since grown to R4.43 as later slices filed against it:
+**26 open**, 13 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **24 open**, 13 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **26 open**, 13 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -811,7 +811,7 @@ if and only if that branch is ever resumed.
 | R4.19 | open | `_reset_learn_baselines` clears shape/contracts but not `read_pin` |
 | R4.20 | fixed | seven durable renames, one retry — closed in 0.95.0 (S10) by one shared `fsio` helper |
 | R4.21 | open | `record()`'s refusal stays non-terminal — deliberate, but each retry re-fires the write |
-| R4.22 | open | Windows `ERR_NO_BUFFER_SPACE`, **8 occurrences**; socket churn refuted at 0.104.0, and occurrence 8 (local) argues local ≠ CI |
+| R4.22 | open | Windows `ERR_NO_BUFFER_SPACE`, **9 occurrences**; socket churn refuted at 0.104.0; occurrence 8 (local) argues local ≠ CI, and occurrence 9 landed on a DOCS-ONLY PR with a failing-run capture |
 | R4.23 | open | `test_flows_dry_run_holds_a_real_write_flow` failed once under load, undiagnosed |
 | R4.24 | open | a localhost round-trip stalled past the 5 s budget; ships unmitigated, 2 occurrences |
 | R4.25 | fixed | the load-dependent "cluster of three" was one defect + one bad test — assertion fixed in 0.88.0 |
@@ -831,6 +831,8 @@ if and only if that branch is ever resumed.
 | R4.39 | open | the wire Idempotency-Key is whichever step was mid-act, so a deferred write's key moves with PAGE TIMING and a retry cannot dedupe; **HIGH**, inviolable #3 |
 | R4.40 | open | `_learn` snapshots straight after navigate with no settle floor, so a client-rendered page is authored against its unrendered skeleton — quiet, and one variant PERSISTS a refusal |
 | R4.41 | open | the SDK choke-point pin allowlists `vision.py`, which does NOT route through `build_client` — so the inference the test states does not hold and `no_llm` would not intercept a vision call |
+| R4.42 | open | `flow release` returns "nothing to release" before `release()` runs, so the remedy `flow.py:207` names is dead through the CLI — and WIDENING the status check does not reach the cached-recipe shape (measured) |
+| R4.43 | open | `_SDK_CTORS` does not match `genai.Client()`, so gemini's construction is invisible and the anti-vacuity floor is met by exactly 3 — which also makes R4.41's own remedy misdiagnose itself |
 
 
 **Scope.** The uncommitted `feat/shared-causal-attribution` work (would-be 0.76.0): extracting the
@@ -2360,6 +2362,42 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   a page re-fires the write each time — but the harm profile differs from R3.13's: this is a human
   running a command and reading a refusal each time, not an unattended `mode="auto"` loop firing
   invisibly. Revisit only with a remedy that does not depend on `record()` itself.
+
+* **R4.22 — OCCURRENCE 9 (2026-08-17, CI Windows shard 1/2), ON A DOCS-ONLY PR. The cleanest attribution
+  the series has: no `src/` line changed, so no code cause is available.** `test_drift_bench.py::
+  test_every_absolute_invariant_holds` failed with `Page.goto: net::ERR_NO_BUFFER_SPACE at
+  http://127.0.0.1:55883/span` (1 failed, 563 passed, 526 deselected, 1 xfailed in 968 s). The other
+  three arms passed. **Tenth distinct test in nine occurrences** — the spread across tests is now itself
+  the strongest evidence that this is not a property of any test.
+
+  The PR (#167) touched `docs/open-defects.md` and `docs/reshape-plan.md` and nothing else. Every prior
+  occurrence landed on a run whose diff contained code, leaving "did the change do it?" formally open
+  each time; this one closes that question for the series.
+
+  **Sampler peaks at the failure (the instrument working as designed — a capture OF the failing run,
+  which occurrence 8 explicitly could not provide):**
+
+  | | occurrence 9 (CI, FAILING run) | occurrence 7 (CI) | developer host (healthy) |
+  |---|---|---|---|
+  | `time_wait` | max **414**, mean 194 | 25–359 | 50–388 |
+  | `handles` | max **47,802** | 47k → 56k | 177k → 186k |
+  | `processes` | max 140 | — | — |
+  | `chrome_procs` | max **7** | — | — |
+  | `nonpaged_pool_mb` | max **239** | 171 → 207 | 4573 → 4684 |
+  | `paged_pool_mb` | max 368 | — | — |
+  | `free_mb` | min **12,891** | 12,838 | 517 |
+
+  **Both standing hypotheses stay excluded, now from a failing-run capture rather than a baseline.**
+  414 TIME_WAIT against a 16,384-port ephemeral range is 2.5%; 12.9 GB free excludes memory pressure;
+  nonpaged pool at 239 MB is nowhere near the developer host's 4.6 GB. So the CI series remains
+  undiagnosed, and occurrence 8's reading — that the local failure (517 MB free) and the CI series are
+  probably different phenomena — is unchanged and now better supported.
+
+  **What is new and worth a hypothesis:** `chrome_procs` peaked at **7** on a shard that should be
+  running one session at a time. Not pursued here, and stated as an observation rather than a lead —
+  the register has spent two hypotheses on this finding already (drain aggravator, socket churn), both
+  refuted, and a third guess is not what it needs. What it needs is a reproduction, and this occurrence
+  does not provide one.
 
 * **R4.22 — OCCURRENCE 8 (0.105.0), THE FIRST ON A DEVELOPER HOST, and it argues the local and CI
   failures are NOT the same phenomenon.** `test_write_safety_invariants.py::…[fetch-first-plain-loud]`
@@ -4399,3 +4437,140 @@ true.
 
 **Not pinned by a new test.** The existing test passes and will keep passing; the defect is in what it
 proves, not in whether it runs. A regression test belongs with whichever disposition is chosen.
+
+
+## R4.42 — `flow release` cannot clear a learn-time refusal, so R3.13's remedy is dead through the operator's only surface
+
+**Severity: MEDIUM** (availability + fail-loud integrity; no inviolable violated — the refusal holds,
+which is the safe direction). Filed because the engine prints an instruction that the CLI then refuses
+to carry out, and because the obvious one-word fix does **not** work — measured, not reasoned.
+
+**Found** while writing `docs/reshape-plan.md`, by following the operator's path from the refusal
+message rather than from the code that emits it.
+
+### The loop
+
+`flow.py:204-211` refuses to re-author a flow whose learn was refused, and tells the operator:
+
+> "Clear it with `flow release` once the cause is addressed"
+
+`flows.release()` (`flows.py:1646-1690`) does exactly that: R3.13's fix made it THE human act, and it
+clears both holds — the `FlowMeta` quarantine and the engine's refusal memory (`_clear_refusal`, which
+calls `FlowCache.forget_refusal`). The API is correct.
+
+`cli._flow_release` (`cli.py:646-655`) never reaches it:
+
+```python
+h = health(spec)
+rebaseline = getattr(args, "rebaseline", False)
+if h.status != "quarantined" and not rebaseline:
+    print(f"{spec.name!r} is not quarantined (status: {h.status}) — nothing to release")
+    return
+release(spec, rebaseline=rebaseline)     # cli.py:655 — unreachable for a refusal
+```
+
+A refusal is not a quarantine, so the guard returns first. The operator is told to run a verb that
+reports "nothing to release" and leaves the hold in place. `flow record` still works (the message says
+so), so the flow is not stuck — but the named remedy does nothing, and nothing says so.
+
+### Reproduced, both shapes, and the second one is the reason this entry exists
+
+Driven through `cli._flow_release` via `argparse.Namespace`, against a temp `ULTRACUA_HOME`:
+
+| shape | `health.status` | CLI printed | refusal after CLI | after `release()` |
+|---|---|---|---|---|
+| A — learn-refused, **not** cached | `refused` | "is not quarantined (status: refused) — nothing to release" | **still held** | cleared |
+| B — refused **with** a cached recipe | `never-run` | "is not quarantined (status: never-run) — nothing to release" | **still held** | cleared |
+
+Shape B is the one that matters. `health()` reports `refused` only when the flow is **not** cached
+(`flows.py:2068`, `if not cached and refused is not None`), so a refusal recorded against a flow that
+already has a recipe — the `mode="auto"` fall-through and `on_drift="relearn"` shapes, where
+`remember_refusal` does not delete the recipe — reports something else entirely.
+
+### The mitigation was reproduced too, and it fails
+
+The obvious fix is to widen the pre-check to `h.status not in ("quarantined", "refused")`. Measured
+against the table above: it reaches shape A and **does not reach shape B**, whose status is
+`never-run`. A status-based pre-check cannot cover a hold that `health()` does not always name.
+
+*(An earlier draft of this entry predicted shape B would report `failing` or `healthy`. It reports
+`never-run`. The conclusion held; the predicted value did not — which is the argument for reproducing
+the mitigation rather than reasoning about it, R3.12's lesson one surface over.)*
+
+### Fix shape — a hypothesis, per this file's standing caution
+
+**Delete the pre-check** rather than widen it, and let `release()` — which already knows about both
+holds and about neither being present — decide and report what it cleared. That makes the CLI a
+renderer of the API's answer instead of a second, partial copy of the API's knowledge, which is the
+wrapper-not-mechanism shape this register keeps paying for (A7, R4.10, R3.13's own design constraint).
+
+The `rebaseline` arm must keep working when nothing is held: `release()` already handles that
+(`flows.py:1674-1677`, the `meta.quarantine is None` branch resets history when asked).
+
+**RED test required for BOTH shapes**, driven through argparse rather than by calling `release()`
+directly — a test that calls the API cannot fail for this defect, which is precisely why the suite
+does not.
+
+---
+
+## R4.43 — the SDK choke-point scan does not match `genai.Client()`, so its anti-vacuity floor is met by exactly three constructions and gemini's is invisible
+
+**Severity: MEDIUM** (test-integrity; no inviolable violated today). Distinct from **R4.41** and worse
+in one specific way: R4.41 is an allowlist entry that voids the scan's *inference* for one module;
+this is a constructor the scan cannot *see at all*, anywhere in `src/`.
+
+**Found** while verifying R4.41's numbers for `docs/reshape-plan.md` — i.e. by counting what the scan
+actually matches rather than by reading what it says it matches.
+
+### What the scan misses
+
+`tests/test_inviolable_properties.py:148` enumerates the constructors:
+
+```python
+_SDK_CTORS = ("AsyncAnthropic", "AsyncOpenAI", "OpenAI", "GenerativeModel")
+```
+
+`src/ultracua/llm/gemini.py:99-101` constructs its client as:
+
+```python
+from google import genai
+...
+self._client = genai.Client()     # reads GEMINI_API_KEY / GOOGLE_API_KEY
+```
+
+`Client` is not in the tuple. `GenerativeModel` is the *old* `google-generativeai` entry point; the
+adapter uses the current `google-genai` one. So the scan's forbidden-name list does not cover the SDK
+this repo actually ships against for that backend.
+
+### Measured, by running the scan's own logic over the tree
+
+| allowed leaf | constructions the scan counts | client-ish calls actually present |
+|---|---|---|
+| `llm/anthropic.py` | `AsyncAnthropic` @108 | — |
+| `llm/openai.py` | `AsyncOpenAI` @114 | — |
+| `llm/gemini.py` | **none** | `Client` @101 |
+| `vision.py` | `AsyncAnthropic` @75 | — |
+
+`found_in_leaves = 3`, against `assert found_in_leaves >= 3`. Two consequences:
+
+1. **A `genai.Client()` anywhere in `src/` passes the scan.** Verified against a synthetic module: the
+   offender list comes back empty. The stated invariant — "every SDK client construction is reachable
+   from one patchable point" — is not enforced for that constructor, and a future backend or a helper
+   that builds a genai client outside the leaves would be invisible.
+2. **R4.41's own "cheap and wrong" disposition now fails for the wrong reason.** Deleting `vision.py`
+   from `_SDK_ALLOWED` drops `found_in_leaves` to 2, so the **anti-vacuity assert fires first** and the
+   run reports *"the scan is broken"* rather than *"vision.py constructs a client outside the leaves"*.
+   The two findings interact: R4.43 makes R4.41's remedy misdiagnose itself.
+
+### Fix shape — a hypothesis
+
+Adding `"Client"` to `_SDK_CTORS` is the instance fix, and it is nearly free — but `Client` is a
+generic name and would also match unrelated `X.Client()` calls, so it wants the import context or a
+qualified match (`genai.Client`). Whatever is chosen, the anti-vacuity floor must be **derived** rather
+than a constant: today's `>= 3` is a hand-typed number that happens to equal the count of constructions
+the list can see, so it cannot notice a fourth backend arriving unmatched. Deriving it (one construction
+per allowed leaf that declares itself a client owner) is the shape that closes the class — the same move
+S14 made when it replaced `_FACTORIES` with this scan, one level up.
+
+**Not pinned by a new test**, for R4.41's reason: the existing test passes and will keep passing. The
+pin belongs with the fix.
