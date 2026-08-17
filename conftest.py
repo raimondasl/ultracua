@@ -88,5 +88,9 @@ def pytest_sessionfinish(session, exitstatus) -> None:
         return
     if session.config.getoption("--tier") != "all":
         raise pytest.UsageError("--store-browser-marks needs a FULL run; drop --tier")
+    try:
+        _tiers.guard_full_collection(len(_tiers.COLLECTED))
+    except _tiers.PartialDerivation as exc:
+        raise pytest.UsageError(str(exc)) from exc
     browser, fast = _tiers.write_manifest()
     print(f"\nwrote {_tiers.MANIFEST.name}: {browser} browser, {fast} fast")

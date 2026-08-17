@@ -41,14 +41,36 @@ MANIFEST = Path(__file__).parent / ".browser_tests.json"
 # every contributor to type by hand. Doing it here makes a local run identical to CI's by default,
 # closing the divergence that let a `provider=None` test drive REAL API calls locally (S8/0.84.0) while
 # failing both CI arms. `tests/test_tiers.py` pins the "empty is enough" premise itself.
-PROVIDER_KEY_VARS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY")
+#
+# `ANTHROPIC_AUTH_TOKEN` is here because the Anthropic SDK resolves auth from it as well: leaving it set
+# defeats the very `Could not resolve authentication method` signal that made S8/0.84.0 visible on CI.
+# TWO STATED BOUNDS, because this list is the hand-written shape the rest of this module exists to
+# escape, and neither is closed here:
+#   * it is a LIST — deriving it from what the leaf adapters actually read (the move the `build_client`
+#     AST scan made) is what would close the class; Bedrock/Vertex vars are not covered.
+#   * it is IN-PROCESS. On win32 `os.environ[var] = ""` DELETES the variable from the real environment
+#     block, so a CHILD process sees it absent rather than empty and its own `load_dotenv()` would then
+#     populate it from `.env`. Today's exposure is nil — the only subprocess in the suite is a
+#     `python -c` lock probe in `tests/test_health_lock.py` that reaches no provider — but a future test
+#     that shells out inherits the S8 hazard, and the two pinning cells would stay green.
+PROVIDER_KEY_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "GEMINI_API_KEY",
+                     "GOOGLE_API_KEY")
 
 
-class ChromiumInFastTier(RuntimeError):
+class ChromiumInFastTier(BaseException):
     """A test not classified as a browser test tried to launch one under `--tier fast`.
 
     Loud on purpose. The alternative — letting it run — is how a tier silently becomes the whole suite
     again; the alternative to THAT (skipping it) is how a tier silently stops covering something.
+
+    **BaseException, not RuntimeError, and that is the whole point.** As a `RuntimeError` this was
+    swallowable by any broad `except Exception` on the path — and the suite has 20 of them in `flows.py`
+    alone, 18 in `flow.py`. Measured before the change: a cell wrapping a launch in `try/except
+    Exception` PASSED under `--tier fast`, the run exited 0, and the offenders file recorded a violation
+    nobody would ever read. A refusal a caller can catch is a refusal that reports green, which is this
+    register's own quiet-outcome failure one instrument over. `BaseException` puts it beside pytest's own
+    control-flow exceptions: `except Exception` cannot reach it, `pytest.raises` still can, and pytest
+    reports it as an ordinary FAILURE rather than a session interrupt (all three verified).
     """
 
 
@@ -58,8 +80,12 @@ class ChromiumInFastTier(RuntimeError):
 #   by_call — the same, split per entry point. Kept because "how many browsers did this open" is an
 #             invariant worth asserting, while "how many wrapped calls" depends on whether this loop's
 #             driver was already up (`_acquire_driver`, browser.py:59-72, caches it per event loop).
+#   refused — launches the fast tier turned away. Counted SEPARATELY from `n` because a refusal is not
+#             a launch: charging it to `n` classified the refusal cells themselves as browser tests.
 #   fast    — whether a launch must raise instead of proceeding.
-STATE: dict = {"n": 0, "by_call": {}, "fast": False}
+#   expected — a cell is deliberately provoking the refusal to prove it fires; the refusal still raises,
+#             but it is not recorded as an offence. Set ONLY by the `fast_tier` fixture.
+STATE: dict = {"n": 0, "by_call": {}, "refused": 0, "fast": False, "expected": False}
 
 # nodeid -> wrapped calls observed while that test ran.
 PER_TEST: dict[str, int] = {}
@@ -119,10 +145,20 @@ def install_probes() -> int:
 
         def _wrap(real=real, label=f"{cls_name}.{attr}"):
             async def probe(self, *a, **kw):
-                STATE["n"] += 1
-                STATE["by_call"][label] = STATE["by_call"].get(label, 0) + 1
+                # REFUSE FIRST, COUNT SECOND. The counter answers "did this test launch a browser", and
+                # a refused call launched nothing — it never reaches `real(...)`. Counting it charged the
+                # three cells that ARM the refusal as browser tests, so the tier deselected exactly the
+                # cells that prove it works, and shipped with its own refusal unarmed. Nothing raised and
+                # all twelve cells stayed green either way, which is what made it worth fixing at the
+                # source rather than by adjusting the manifest.
                 if STATE["fast"]:
-                    if CURRENT[0]:
+                    STATE["refused"] += 1
+                    # An EXPECTED refusal is not an offence. The cells that prove the refusal works
+                    # trigger it on purpose, and recording them exiled the tier's own arming cells to
+                    # the browser tier on any round where something ELSE failed — finding #1 surviving
+                    # one level down, in the promotion path rather than the counter. The fixture that
+                    # flips the flag declares the intent; nothing else may.
+                    if CURRENT[0] and not STATE["expected"]:
                         FAST_OFFENDERS.add(CURRENT[0])
                     raise ChromiumInFastTier(
                         f"{label} was called under `--tier fast`. Either this test is not in "
@@ -130,6 +166,8 @@ def install_probes() -> int:
                         f"--store-browser-marks`), or it newly launches a browser and belongs in the "
                         f"browser tier."
                     )
+                STATE["n"] += 1
+                STATE["by_call"][label] = STATE["by_call"].get(label, 0) + 1
                 return await real(self, *a, **kw)
 
             return probe
@@ -193,10 +231,14 @@ class UnclassifiedTests(Exception):
 def write_offenders() -> int:
     """Record the fast-tier tests caught launching, so the derivation loop needs no output parsing.
 
-    Written only when non-empty — and when it is non-empty the run has already failed, so this is a
-    diagnostic beside a red result, never a quiet artifact of a green one.
+    **Deletes a stale file when there is nothing to report.** It used to only ever WRITE, so a file from
+    an earlier round outlived the condition that produced it — observed: an otherwise-clean run left the
+    four arming cells named on disk, describing a defect that had already been fixed. A diagnostic that
+    outlives its cause is worse than none, because the next reader trusts it. The derivation loop
+    deletes it per round and was never at risk; a human reading the tree was.
     """
     if not FAST_OFFENDERS:
+        OFFENDERS_FILE.unlink(missing_ok=True)
         return 0
     OFFENDERS_FILE.write_text(json.dumps(sorted(FAST_OFFENDERS), indent=1) + "\n", encoding="utf-8")
     return len(FAST_OFFENDERS)
@@ -210,6 +252,32 @@ def promote(nodeids) -> "tuple[int, int]":
     browser = sorted(set(data["browser"]) | promoting)
     _write(browser, fast)
     return len(browser), len(fast)
+
+
+class PartialDerivation(Exception):
+    """`--store-browser-marks` was run over a SUBSET, which would silently discard the rest.
+
+    Measured before this guard existed: `pytest tests/test_tiers.py --store-browser-marks` rewrote the
+    manifest to 12 ids, deleting 1091 classifications from a committed artifact and reporting it as a
+    success ("wrote .browser_tests.json: 4 browser, 8 fast"). The NEXT run is loud — every unclassified
+    test refuses — but the artifact is already gone, and restoring it costs a 31-minute run. The
+    `--tier` guard beside this one covered the wrong axis: it stops a tiered regeneration and says
+    nothing about a narrowed one.
+    """
+
+
+def guard_full_collection(collected: int) -> None:
+    """Refuse to rewrite the manifest from a run that collected less than it already describes."""
+    if not MANIFEST.exists():
+        return  # first derivation: there is nothing to lose
+    known = load_manifest().get("total", 0)
+    if collected < known:
+        raise PartialDerivation(
+            f"--store-browser-marks collected {collected} test(s) but {MANIFEST.name} already "
+            f"classifies {known}. Writing now would DELETE {known - collected} classification(s). "
+            f"Run it over the whole suite (`pytest -q --store-browser-marks`), or delete the manifest "
+            f"first if you really mean to derive from scratch."
+        )
 
 
 def write_manifest() -> "tuple[int, int]":
