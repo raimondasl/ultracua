@@ -1,0 +1,2 @@
+{"browser": 485, "collected": 1150, "commit": "c3186db", "fast": 665, "phase": "marks", "seconds": 1917.8, "when": "2026-08-18T20:37:08+00:00"}
+{"collected": 1150, "commit": "c3186db", "phase": "fixed_point", "promoted": 15, "rounds": 1, "seconds": 122.2, "when": "2026-08-18T20:40:10+00:00"}
