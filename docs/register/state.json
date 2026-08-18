@@ -1,0 +1,304 @@
+{
+ "_comment": "The STATE of every round-4 finding. The narrative stays in docs/open-defects.md; this is what the index table is rendered FROM, so a count cannot drift from the rows. Optional fields (severity, inviolable, class, attempts, blocked_by, next_attempt_requires, pins, disposition) are OMITTED rather than guessed — fill one in when a slice touches that finding and knows the answer. An entry that HAS attempts must satisfy the D5 rule: open + >=2 attempts requires blocked_by and next_attempt_requires.",
+ "statuses": [
+  "open",
+  "fixed",
+  "parked"
+ ],
+ "findings": [
+  {
+   "id": "R4.1",
+   "status": "parked",
+   "summary": "telemetry beacons counted as causal writes (fixed ON the branch)"
+  },
+  {
+   "id": "R4.2",
+   "status": "parked",
+   "summary": "the causal set REPLACED the temporal set (fixed ON the branch)"
+  },
+  {
+   "id": "R4.3",
+   "status": "parked",
+   "summary": "cross-origin seq collision rebinds a gate — not attempted"
+  },
+  {
+   "id": "R4.4",
+   "status": "parked",
+   "summary": "a swallowed drain rebinds commits to the next step — not attempted"
+  },
+  {
+   "id": "R4.5",
+   "status": "open",
+   "summary": "a page-synthesised commit launders a deferred write; **HIGH**, inviolable #3; two fix attempts failed, D5 gate applies",
+   "severity": "high",
+   "inviolable": 3,
+   "attempts": [
+    {
+     "version": "0.90.0",
+     "shape": "require the commit's own isTrusted",
+     "outcome": "over-refused an APG role=button activated by ENTER — recordable by mouse, refused by keyboard"
+    },
+    {
+     "version": "0.93.0",
+     "shape": "require a trusted activation to have begun the turn",
+     "outcome": "forgeable: form.requestSubmit() and checkbox.click() yield TRUSTED events from a bare task"
+    }
+   ],
+   "blocked_by": "D5",
+   "next_attempt_requires": "a new SENSOR CLASS, not a better inference — isTrusted is ruled out entirely (it means the user agent fired the event, and a page can make the user agent fire events), as are navigator.userActivation and driver-side tagging. A human-verdict sensor is a verdict VERB plus a TRIGGER that puts the question in front of a human; specifying only the verb built half a sensor once already (0.92.0 provenance + 0.93.0 flow mark left R4.5 exactly where it was).",
+   "pins": [
+    "tests/test_write_safety_invariants.py"
+   ]
+  },
+  {
+   "id": "R4.6",
+   "status": "fixed",
+   "summary": "the matrix asserted only that SOME step is gated — closed by S1"
+  },
+  {
+   "id": "R4.7",
+   "status": "open",
+   "summary": "`recordWire` bypasses `pushRec`, so wire markers have no in-memory fallback"
+  },
+  {
+   "id": "R4.8",
+   "status": "open",
+   "summary": "nothing pinned the AUGMENT-NEVER-REFUSE rule (pinned only on the parked branch)"
+  },
+  {
+   "id": "R4.9",
+   "status": "open",
+   "summary": "`test_run_cached_refuses_it_too…` no longer exercises its stated property"
+  },
+  {
+   "id": "R4.10",
+   "status": "fixed",
+   "summary": "the H9 judge captured and judged write flows — closed in 0.82.0"
+  },
+  {
+   "id": "R4.11",
+   "status": "open",
+   "summary": "post-auth-refresh `write_unreadable` falls to the generic tail, recorded ok=False"
+  },
+  {
+   "id": "R4.12",
+   "status": "open",
+   "summary": "`_learn` takes no `pre_write`, so learn-time write verification is a bare presence check"
+  },
+  {
+   "id": "R4.13",
+   "status": "open",
+   "summary": "`release()`'s gating read has no provenance"
+  },
+  {
+   "id": "R4.14",
+   "status": "fixed",
+   "summary": "`audit_flows`' candidate loop had no per-flow guard — closed in 0.80.0 (S7a)"
+  },
+  {
+   "id": "R4.15",
+   "status": "fixed",
+   "summary": "`cli._flow_dispatch` lets `MetaUnreadableError` traceback on six verbs — closed in 0.95.0 (S10)"
+  },
+  {
+   "id": "R4.16",
+   "status": "open",
+   "summary": "a refusal pairs the NEW recipe with the PREVIOUS read_pin/shape/steps_hash"
+  },
+  {
+   "id": "R4.17",
+   "status": "fixed",
+   "summary": "a quarantine's value-free reason is replaced by a bare IO error — closed in 0.95.0 (S10)"
+  },
+  {
+   "id": "R4.18",
+   "status": "fixed",
+   "summary": "`_save_meta`'s failure surfaces as a bare OSError every handler misses — closed in 0.95.0 (S10)"
+  },
+  {
+   "id": "R4.19",
+   "status": "open",
+   "summary": "`_reset_learn_baselines` clears shape/contracts but not `read_pin`"
+  },
+  {
+   "id": "R4.20",
+   "status": "fixed",
+   "summary": "seven durable renames, one retry — closed in 0.95.0 (S10) by one shared `fsio` helper"
+  },
+  {
+   "id": "R4.21",
+   "status": "open",
+   "summary": "`record()`'s refusal stays non-terminal — deliberate, but each retry re-fires the write"
+  },
+  {
+   "id": "R4.22",
+   "status": "open",
+   "summary": "Windows `ERR_NO_BUFFER_SPACE`, **9 occurrences**; socket churn refuted at 0.104.0; occurrence 8 (local) argues local ≠ CI, and occurrence 9 landed on a DOCS-ONLY PR with a failing-run capture"
+  },
+  {
+   "id": "R4.23",
+   "status": "open",
+   "summary": "`test_flows_dry_run_holds_a_real_write_flow` failed once under load, undiagnosed"
+  },
+  {
+   "id": "R4.24",
+   "status": "open",
+   "summary": "a localhost round-trip stalled past the 5 s budget; ships unmitigated, 2 occurrences"
+  },
+  {
+   "id": "R4.25",
+   "status": "fixed",
+   "summary": "the load-dependent \"cluster of three\" was one defect + one bad test — assertion fixed in 0.88.0"
+  },
+  {
+   "id": "R4.26",
+   "status": "fixed",
+   "summary": "the recorder credited a DEFERRED write to the next click — closed in 0.88.0"
+  },
+  {
+   "id": "R4.27",
+   "status": "open",
+   "summary": "the wire promotion marks ordinary GraphQL-style READS as writes (12/12 measured)"
+  },
+  {
+   "id": "R4.28",
+   "status": "open",
+   "summary": "`_write_owner` turns confident when a neighbour's grace tail expires — observation, harmful direction not reproduced"
+  },
+  {
+   "id": "R4.29",
+   "status": "fixed",
+   "summary": "a deferred write ESCAPED the learn watcher (removed with no drain) — closed in 0.96.0 by draining the remaining act window"
+  },
+  {
+   "id": "R4.30",
+   "status": "open",
+   "summary": "a commit deferred beyond `write_window_ms` is still unobserved — the residual R4.29 does not close; needs an over-refusal measurement first"
+  },
+  {
+   "id": "R4.31",
+   "status": "fixed",
+   "summary": "an unrecognised `mode` fell through to LEARN — re-authored the flow and RE-FIRED its write; closed in 0.98.0"
+  },
+  {
+   "id": "R4.32",
+   "status": "fixed",
+   "summary": "every failed replay returned an EMPTY `note` while the cause sat in the traces; closed in 0.98.0"
+  },
+  {
+   "id": "R4.33",
+   "status": "fixed",
+   "summary": "the corpus row added to adjudicate R3.7 could not fail for it — closed in 0.101.0 by the `row-nested-icon` scenario"
+  },
+  {
+   "id": "R4.34",
+   "status": "open",
+   "summary": "a shared `aria-label` on a nested per-row container turns the row guard OFF → silent wrong-row bind; **HIGH**, inviolable #3"
+  },
+  {
+   "id": "R4.35",
+   "status": "open",
+   "summary": "a heal on a ROW-GUARD refusal re-grounds to a byte-identical recipe and reports a repair that repairs nothing"
+  },
+  {
+   "id": "R4.36",
+   "status": "open",
+   "summary": "a write leaving in a LATER dispatch was credited to the last commit — NARROWED in 0.105.0 (direct-`fetch` shape closed), see R4.38"
+  },
+  {
+   "id": "R4.37",
+   "status": "open",
+   "summary": "a control whose nested wrapper owns no identity captures no `anchor_id`, so the row guard silently does not run; **HIGH**, inviolable #3"
+  },
+  {
+   "id": "R4.38",
+   "status": "open",
+   "summary": "`ACTIVATION_CAUSED` matches an event's TYPE NAME with no provenance, so a write laundered through a synthetic `submit`/`reset` re-enters attribution; **HIGH**, inviolable #3"
+  },
+  {
+   "id": "R4.39",
+   "status": "open",
+   "summary": "the wire Idempotency-Key is whichever step was mid-act, so a deferred write's key moves with PAGE TIMING and a retry cannot dedupe; **HIGH**, inviolable #3"
+  },
+  {
+   "id": "R4.40",
+   "status": "open",
+   "summary": "`_learn` snapshots straight after navigate with no settle floor, so a client-rendered page is authored against its unrendered skeleton — quiet, and one variant PERSISTS a refusal"
+  },
+  {
+   "id": "R4.41",
+   "status": "open",
+   "summary": "the SDK choke-point pin allowlists `vision.py`, which does NOT route through `build_client` — so the inference the test states does not hold and `no_llm` would not intercept a vision call"
+  },
+  {
+   "id": "R4.42",
+   "status": "open",
+   "summary": "`flow release` returns \"nothing to release\" before `release()` runs, so the remedy `flow.py:207` names is dead through the CLI — and WIDENING the status check does not reach the cached-recipe shape (measured)"
+  },
+  {
+   "id": "R4.43",
+   "status": "open",
+   "summary": "`_SDK_CTORS` does not match `genai.Client()`, so gemini's construction is invisible and the anti-vacuity floor is met by exactly 3 — which also makes R4.41's own remedy misdiagnose itself"
+  },
+  {
+   "id": "R4.44",
+   "status": "open",
+   "summary": "B1: a raised attempt drops its own LLM spend, traces and minted keys, and leaves `ok`/`failure_code` stale from the previous attempt (F2 guarded the relearn leg only)"
+  },
+  {
+   "id": "R4.45",
+   "status": "open",
+   "summary": "B1: `record.usage == {}` on the miss / escalate / precheck / pre-attempt-refusal / raise exits, against `RunRecord`'s own \"always populated\" docstring"
+  },
+  {
+   "id": "R4.46",
+   "status": "open",
+   "summary": "B1: a usage-less later attempt flips a priced total to `None` with no reason flag — a missing key and an unpriceable one are treated alike"
+  },
+  {
+   "id": "R4.47",
+   "status": "open",
+   "summary": "B1: the FAILED-path cell asserts one default and two truthy values, so an engine populating the record only on success keeps it green"
+  },
+  {
+   "id": "R4.48",
+   "status": "open",
+   "summary": "B1: eleven wiring mutations of the record plumbing survive the entire suite — only two cells pass `record=` at all"
+  },
+  {
+   "id": "R4.49",
+   "status": "open",
+   "summary": "B1: `record.failure_code` speaks the internal `kind` vocabulary, not `FlowReplayError.code`, and can name a different attempt than the exception"
+  },
+  {
+   "id": "R4.50",
+   "status": "open",
+   "summary": "B1: `llm_calls` / `traces` / `healed_steps` / `total_ms` exclude the relearn while `usage` includes it, so two fields disagree about one run"
+  },
+  {
+   "id": "R4.51",
+   "status": "open",
+   "summary": "B1: the \"a 0-LLM replay says observed zero\" claim has no end-to-end pin — an engine reporting UNKNOWN on every replay passes every cell"
+  },
+  {
+   "id": "R4.52",
+   "status": "open",
+   "summary": "B1: `BatchRowResult.landed` is the two-state bool the same PR calls a trap, reading `False` on successful write rows and on crashed rows"
+  },
+  {
+   "id": "R4.53",
+   "status": "open",
+   "summary": "B1: a key-less teacher (`ScriptedProvider`/`MockProvider`) is classified as an unobserved SPENDER, contradicting `flow.py:915-916`; `accounting_failed` is sticky across runs"
+  },
+  {
+   "id": "R4.54",
+   "status": "open",
+   "summary": "the key scrub's completeness rests on a hand-written variable list (Bedrock/Vertex uncovered) — the shape S14 replaced with a derivation"
+  },
+  {
+   "id": "R4.55",
+   "status": "open",
+   "summary": "the key scrub is in-process only: on win32 an empty value is an ABSENT one, so a child process would re-read `.env` while both pinning cells stay green"
+  }
+ ]
+}

@@ -788,6 +788,7 @@ the rows. File a new round-4 finding in any style you like; the suite will deman
 `src/ultracua/attribution.py` is not on `main` at all — so it is neither live nor fixed, and it returns
 if and only if that branch is ever resumed.
 
+<!-- generated:r4-index — edit docs/register/state.json, then `python scripts/render_register.py --write` -->
 | id | status | what |
 |---|---|---|
 | R4.1 | parked | telemetry beacons counted as causal writes (fixed ON the branch) |
@@ -845,6 +846,7 @@ if and only if that branch is ever resumed.
 | R4.53 | open | B1: a key-less teacher (`ScriptedProvider`/`MockProvider`) is classified as an unobserved SPENDER, contradicting `flow.py:915-916`; `accounting_failed` is sticky across runs |
 | R4.54 | open | the key scrub's completeness rests on a hand-written variable list (Bedrock/Vertex uncovered) — the shape S14 replaced with a derivation |
 | R4.55 | open | the key scrub is in-process only: on win32 an empty value is an ABSENT one, so a child process would re-read `.env` while both pinning cells stay green |
+<!-- /generated:r4-index -->
 
 
 **Scope.** The uncommitted `feat/shared-causal-attribution` work (would-be 0.76.0): extracting the
