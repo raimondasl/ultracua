@@ -43,6 +43,27 @@ jobs:
           enable-cache: true
       - run: uv run --group bench --group providers --group mcp pytest -q --tier fast
 
+  # RED-PROOF. The matrix's whole claim is a NUMBER — eleven mutations of the record plumbing that
+  # survived the entire 1100-test suite (R4.48) are now killed — and a claim nobody re-measures is how a
+  # green instrument stays green while covering less. This applies each mutation to a SCRATCH COPY of
+  # src/ and fails if any survives unregistered, or if a mutation has gone STALE (its find-text no longer
+  # matches), because a stale mutation silently reports the suite as stronger than it is.
+  #
+  # No browser: the killer suite is the browser-free exit-set matrix, so this costs ~2 min.
+  red-proof:
+    name: the wiring mutants stay dead
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+      - run: uv run --group bench --group providers --group mcp python scripts/prove_red.py tests/mutations/b1_wiring.py
+
   # Sharding trades one silent failure for another if left unchecked: a test in NO shard leaves every
   # shard GREEN, and nothing in the suite can fail for it — the coverage is gone and the signal that
   # would have told you is the signal that was removed. Collection only, so it costs seconds and launches

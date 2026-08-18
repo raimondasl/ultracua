@@ -1,0 +1,82 @@
+"""The eleven record-plumbing mutations R4.48 measured as surviving the ENTIRE suite.
+
+Each entry is a source transformation applied to a SCRATCH COPY of `src/ultracua/` — never the tree
+under test — plus the reason it is a real defect if it survives. `scripts/prove_red.py` applies them one
+at a time and reports which are killed.
+
+This is the number that decides whether `tests/test_replay_exit_matrix.py` is worth having: before it,
+all eleven survived 1100+ tests, because only two cells in the whole suite passed `record=` to `replay()`
+and eight of the ten write sites were never reached.
+
+A mutation that no cell kills is not a bug in the mutation — it is a hole in the matrix, and it must be
+listed in KNOWN_SURVIVORS with a reason and a register id, so the gap is named rather than absent.
+"""
+
+from __future__ import annotations
+
+# (id, file, find, replace, why-it-matters)
+MUTANTS = [
+    ("mark_ok_precheck", "flows.py",
+     '        _mark_ok(record)          # M3: a success return that never enters _attempt_replay',
+     '        pass  # MUTANT: _mark_ok removed from the first precheck exit',
+     "the idempotency-precheck success would report ok=False with a stale failure_code (B1's M3)"),
+
+    ("mark_ok_post_refresh", "flows.py",
+     '                    _mark_ok(record)      # M3: as above, on the post-auth-refresh precheck',
+     '                    pass  # MUTANT: _mark_ok removed from the post-refresh precheck',
+     "a write already done, discovered after re-login, would report as a failure"),
+
+    ("mark_ok_relearn", "flows.py",
+     '                _mark_ok(record)      # M3: clears the failed attempts\' ok=False + failure_code',
+     '                pass  # MUTANT: _mark_ok removed from the relearn success',
+     "a relearn that produced the answer would still report the earlier attempts' failure"),
+
+    ("absorb_relearn_success", "flows.py",
+     '                _absorb_usage(record, _relearn_watch.as_dict(settings.model))\n'
+     '                record.mode = "relearn"',
+     '                record.mode = "relearn"  # MUTANT: the relearn spend is not absorbed',
+     "the largest spend in the run (a full re-author) would be missing from the bill (B1's M2)"),
+
+    ("absorb_relearn_raise", "flows.py",
+     '                    _absorb_usage(record, _relearn_watch.as_dict(settings.model))\n'
+     '                    record.mode = "raised"',
+     '                    record.mode = "raised"  # MUTANT: spend lost when learn() raises',
+     "a provider 500 mid-authoring would report the earlier attempts' cents against real dollars (F2)"),
+
+    ("auth_refreshed_flag", "flows.py",
+     '                    record.auth_refreshed = True     # G10: previously a log line and nothing else',
+     '                    pass  # MUTANT: the refresh is not recorded',
+     "a caller cannot tell a clean run from one that had to re-authenticate"),
+
+    ("pre_stamp_mode_raised", "flows.py",
+     '        record.attempts += 1\n        record.mode = "raised"',
+     '        record.attempts += 1  # MUTANT: the pre-stamp no longer marks the run unknown',
+     "a raise mid-attempt would leave a CONFIDENT DENIAL about a write that may have committed (M4)"),
+
+    ("pre_stamp_attempts", "flows.py",
+     '        record.attempts += 1\n        record.mode = "raised"\n'
+     '        _forget_negative_write_evidence(record)',
+     '        record.mode = "raised"\n        _forget_negative_write_evidence(record)'
+     '  # MUTANT: attempts not counted',
+     "a multi-attempt run would look like a single attempt, understating what it did"),
+
+    ("forget_negative_evidence", "flows.py",
+     '        record.ok, record.failure_code = True, ""\n        _forget_negative_write_evidence(record)',
+     '        record.ok, record.failure_code = True, ""'
+     '  # MUTANT: _mark_ok no longer clears negative write evidence',
+     "a `False` meaning 'that attempt did not confirm' would be read as 'no write happened' (F3/F4)"),
+
+    ("mode_last_attempt", "flows.py",
+     '        record.mode = report.mode                       # last attempt wins: it is the outcome',
+     '        pass  # MUTANT: the record never learns which path produced the outcome',
+     "the record would keep the pre-stamp's 'raised' for a run that completed normally"),
+
+    ("llm_calls_accumulate", "flows.py",
+     '        record.llm_calls += report.llm_calls',
+     '        pass  # MUTANT: llm_calls never accumulates',
+     "a healed or replanned run would report 0 LLM calls beside a usage showing spend"),
+]
+
+# Mutants no cell kills yet. Each needs a reason and, where it is a real gap, a register id — an empty
+# list is the goal, and a silent absence is what this file exists to prevent.
+KNOWN_SURVIVORS: dict = {}
