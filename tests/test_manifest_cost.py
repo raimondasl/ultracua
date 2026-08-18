@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -149,6 +150,14 @@ def test_only_the_marks_phase_argues_that_the_tax_is_real() -> None:
 # 4. The deltas really come from git.
 
 def test_the_delta_table_is_derived_from_git_and_finds_the_known_history() -> None:
+    shallow = subprocess.run(["git", "rev-parse", "--is-shallow-repository"], cwd=ROOT,
+                             capture_output=True, text=True).stdout.strip()
+    assert shallow == "false", (
+        "this clone is SHALLOW, so `git log --follow` sees one manifest revision and the whole delta "
+        "half of the report is silently empty. Reproduced against a real depth-1 clone: 1 revision "
+        "instead of 4. CI needs `fetch-depth: 0` on its checkout; locally, `git fetch --unshallow`. "
+        "Loud rather than skipped, because a skip here reads as 'the history is clean'."
+    )
     deltas = manifest_cost.deltas_from_git()
     assert len(deltas) >= 4, "git should know at least the four manifest revisions to date"
     assert all(d.total > 0 for d in deltas)
@@ -284,3 +293,27 @@ def test_the_report_runs_end_to_end() -> None:
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "VERDICT:" in proc.stdout
     assert "UNMEASURED:" in proc.stdout, "the report must say how much of the history it cannot price"
+
+
+def test_every_ci_job_that_runs_pytest_fetches_the_history_it_needs() -> None:
+    """Derived from the workflow, not remembered: any job running pytest must have full history.
+
+    The cell above fails loudly on a shallow clone; this one stops that failure from ever reaching CI,
+    and stops a job ADDED tomorrow from reintroducing it.
+    """
+    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    jobs, current = {}, None
+    for line in text.splitlines():
+        m = re.match(r"^  ([a-z][a-z0-9-]*):\s*$", line)
+        if m:
+            current = m.group(1)
+            jobs[current] = []
+        elif current:
+            jobs[current].append(line)
+    runners = {name: body for name, body in jobs.items() if any("pytest" in ln for ln in body)}
+    assert runners, "no CI job runs pytest — this cell would pass vacuously"
+    for name, body in runners.items():
+        assert any("fetch-depth: 0" in ln for ln in body), (
+            f"CI job {name!r} runs pytest without `fetch-depth: 0`, so `git log --follow` sees one "
+            f"manifest revision and tests/test_manifest_cost.py's delta half goes red there"
+        )
