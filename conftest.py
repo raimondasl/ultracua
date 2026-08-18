@@ -19,6 +19,7 @@ Two reasons this lives at the ROOT rather than in `tests/`, and the second was m
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent / "tests"))
 
 import _tiers  # noqa: E402 - needs the path above
+
+# Wall-clock of the marks phase, so the manifest's re-derivation cost is MEASURED rather than
+# complained about. See `scripts/manifest_cost.py` for what the number is for.
+_STARTED = [0.0]
 
 
 def pytest_addoption(parser) -> None:
@@ -40,6 +45,7 @@ def pytest_addoption(parser) -> None:
 
 
 def pytest_configure(config) -> None:
+    _STARTED[0] = time.monotonic()
     _tiers.scrub_provider_keys()
     _tiers.STATE["fast"] = config.getoption("--tier") == "fast"
     if not _tiers.install_probes():  # pragma: no cover - Playwright missing entirely
@@ -94,3 +100,27 @@ def pytest_sessionfinish(session, exitstatus) -> None:
         raise pytest.UsageError(str(exc)) from exc
     browser, fast = _tiers.write_manifest()
     print(f"\nwrote {_tiers.MANIFEST.name}: {browser} browser, {fast} fast")
+
+    # RECORD WHAT IT COST. A full marks run is the expensive half of a re-derivation, and the cheaper
+    # design that keeps suggesting itself (merge new ids in, never rewrite) trades away DE-CLASSIFICATION
+    # detection for it. That trade is settled by data in `scripts/manifest_cost.py`, so the data is
+    # collected here rather than remembered. Never allowed to redden a run that has already done its
+    # work: a ledger is not worth failing a 32-minute suite for.
+    try:
+        from datetime import datetime, timezone
+
+        sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+        import manifest_cost
+
+        manifest_cost.append({
+            "phase": "marks",
+            "seconds": round(time.monotonic() - _STARTED[0], 1),
+            "collected": len(_tiers.COLLECTED),
+            "browser": browser,
+            "fast": fast,
+            "commit": manifest_cost.head_sha(),
+            "when": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        })
+        print(f"recorded the re-derivation cost in {manifest_cost.LEDGER.name}")
+    except Exception as exc:  # pragma: no cover - diagnostics never redden a run
+        print(f"(manifest cost not recorded: {exc})")

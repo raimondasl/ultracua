@@ -147,6 +147,20 @@ Violating any of these is a blocking defect, not a trade-off:
   whose find-text no longer matches is reported as an ERROR, not a survivor, because a stale mutation
   silently reports the suite as stronger than it is. A survivor is a hole in the matrix, not a bug in the
   mutation: add a cell, or register it with a reason and a finding id.
+- **Re-deriving the tier manifest is TAXED, and the tax is now metered, not remembered.** Measured at
+  0.109.0: **31m58s** for the marks phase plus **2m03s** for the fixed-point loop (1 round, 15 tests
+  promoted back — all of `test_drift_bench.py`, the known order-dependent population). A full
+  `--store-browser-marks` run appends what it cost to `tests/.manifest_cost.jsonl`, and
+  `python scripts/manifest_cost.py report` joins those timings with the manifest's git history and
+  prints a verdict. The obvious cheaper design — merge new ids in rather than rewrite — is a ONE-WAY
+  trade: it does NOT weaken deletion detection (`test_the_manifest_covers_everything_this_run_collected`
+  checks `known - collected` in seconds, and `tests/test_manifest_cost.py` arms that guard), but it
+  DOES lose **de-classification** — a test that stops launching keeps its browser mark forever, still
+  collects, and is silently deselected from the fast tier for good. Measured: of the three manifest
+  deltas so far, ONE de-classified three tests, and they were the tier's own arming cells. So the
+  verdict today is DO NOT switch. Also measured and refused: gating on a collection fingerprint would
+  have saved zero runs (all three deltas added ids). Run the report before proposing either.
+
 - **A shard must never be a hole.** `pytest-split` partitions the real collection, so a new test file
   lands in a shard by construction — but the `shard-coverage` CI job asserts it (union == full, no
   duplicates), because a test in NO shard leaves every shard green and nothing in the suite can fail for

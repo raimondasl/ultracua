@@ -21,8 +21,10 @@ that job red and names the tests, rather than quietly skipping them.
 
 from __future__ import annotations
 
+import datetime
 import json
 import subprocess
+import time
 import sys
 from pathlib import Path
 
@@ -31,7 +33,28 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 import _tiers  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import manifest_cost  # noqa: E402 - a sibling in scripts/
+
 MAX_ROUNDS = 10
+
+
+def _record(started: float, rounds: int, promoted: int) -> None:
+    """Append what the fixed-point loop cost. A ledger never breaks the pipeline it measures."""
+    try:
+        manifest_cost.append({
+            "phase": "fixed_point",
+            "seconds": round(time.monotonic() - started, 1),
+            "rounds": rounds,
+            "promoted": promoted,
+            "collected": _tiers.load_manifest().get("total", 0),
+            "commit": manifest_cost.head_sha(),
+            "when": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        })
+        print(f"recorded the loop cost in {manifest_cost.LEDGER.name}")
+    except Exception as exc:  # pragma: no cover - diagnostics never redden a run
+        print(f"(cost not recorded: {exc})")
+
 
 
 def main() -> int:
@@ -39,6 +62,7 @@ def main() -> int:
         print(f"{_tiers.MANIFEST} is missing — run `pytest -q --store-browser-marks` first.")
         return 2
 
+    started = time.monotonic()
     total_promoted = 0
     for rnd in range(1, MAX_ROUNDS + 1):
         if _tiers.OFFENDERS_FILE.exists():
@@ -60,6 +84,7 @@ def main() -> int:
         if proc.returncode == 0:
             print(f"\nFIXED POINT reached after {rnd - 1} promotion round(s); "
                   f"{total_promoted} test(s) promoted in total.")
+            _record(started, rnd - 1, total_promoted)
             return 0
 
         if not _tiers.OFFENDERS_FILE.exists():

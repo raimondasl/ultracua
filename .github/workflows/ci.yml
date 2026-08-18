@@ -37,6 +37,11 @@ jobs:
       UV_PYTHON: "3.12"
     steps:
       - uses: actions/checkout@v5
+        with:
+          # FULL history. `tests/test_manifest_cost.py` derives the tier manifest's re-derivation
+          # deltas from `git log --follow` over it, and a depth-1 clone shows ONE revision —
+          # reproduced against a real shallow clone before it could go red here.
+          fetch-depth: 0
       - name: Install uv
         uses: astral-sh/setup-uv@v8.2.0
         with:
@@ -58,6 +63,11 @@ jobs:
       UV_PYTHON: "3.12"
     steps:
       - uses: actions/checkout@v5
+        with:
+          # FULL history. `tests/test_manifest_cost.py` derives the tier manifest's re-derivation
+          # deltas from `git log --follow` over it, and a depth-1 clone shows ONE revision —
+          # reproduced against a real shallow clone before it could go red here.
+          fetch-depth: 0
       - name: Install uv
         uses: astral-sh/setup-uv@v8.2.0
         with:
@@ -76,6 +86,11 @@ jobs:
       UV_PYTHON: "3.12"
     steps:
       - uses: actions/checkout@v5
+        with:
+          # FULL history. `tests/test_manifest_cost.py` derives the tier manifest's re-derivation
+          # deltas from `git log --follow` over it, and a depth-1 clone shows ONE revision —
+          # reproduced against a real shallow clone before it could go red here.
+          fetch-depth: 0
       - name: Install uv
         uses: astral-sh/setup-uv@v8.2.0
         with:
@@ -105,6 +120,11 @@ jobs:
       UV_PYTHON: "3.12"                        # match the dev interpreter (project requires >=3.12)
     steps:
       - uses: actions/checkout@v5
+        with:
+          # FULL history. `tests/test_manifest_cost.py` derives the tier manifest's re-derivation
+          # deltas from `git log --follow` over it, and a depth-1 clone shows ONE revision —
+          # reproduced against a real shallow clone before it could go red here.
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v8.2.0   # no moving `v8` tag is published; pin the full release
