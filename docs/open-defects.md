@@ -11,8 +11,8 @@ by applying this file's own sibling rule while redesigning R3.2; it is recorded 
 CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch was **PARKED, not
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
-The round-4 series has since grown to R4.53 as later slices filed against it:
-**36 open**, 13 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+The round-4 series has since grown to R4.55 as later slices filed against it:
+**38 open**, 13 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **36 open**, 13 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **38 open**, 13 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -844,6 +844,8 @@ if and only if that branch is ever resumed.
 | R4.51 | open | B1: the "a 0-LLM replay says observed zero" claim has no end-to-end pin — an engine reporting UNKNOWN on every replay passes every cell |
 | R4.52 | open | B1: `BatchRowResult.landed` is the two-state bool the same PR calls a trap, reading `False` on successful write rows and on crashed rows |
 | R4.53 | open | B1: a key-less teacher (`ScriptedProvider`/`MockProvider`) is classified as an unobserved SPENDER, contradicting `flow.py:915-916`; `accounting_failed` is sticky across runs |
+| R4.54 | open | the key scrub's completeness rests on a hand-written variable list (Bedrock/Vertex uncovered) — the shape S14 replaced with a derivation |
+| R4.55 | open | the key scrub is in-process only: on win32 an empty value is an ABSENT one, so a child process would re-read `.env` while both pinning cells stay green |
 <!-- /generated:r4-index -->
 
 
@@ -4726,3 +4728,72 @@ that observes the same router.
 **Disposition:** step 1.3, and the fix must use the `totals = UsageTotals()` variant — **never** a new
 attribute probe on the owner, because that is commit `00888b4`, which tripped inviolable #1's
 `_Exploding` tripwire during B1 itself.
+
+
+## R4.54 — the key scrub's completeness rests on a hand-written list, which is the shape it was built to escape
+
+**Severity: LOW** (test-integrity; no live exposure measured). Filed because the guard is a list, and
+this register's most-repeated finding is that a list is only as good as its worst entry.
+
+**Found** by the adversarial audit of the fast tier (PR #170), while checking claim 6 ("provider keys are
+scrubbed for every run").
+
+`tests/_tiers.PROVIDER_KEY_VARS` enumerates the variables to blank. It now covers
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY` —
+`ANTHROPIC_AUTH_TOKEN` was added by that audit, because the Anthropic SDK resolves auth from it too, so
+leaving it set defeats the very `Could not resolve authentication method` signal that made S8/0.84.0
+visible on CI in the first place.
+
+**What is still open is the CLASS.** Bedrock (`AWS_*`) and Vertex (`GOOGLE_APPLICATION_CREDENTIALS`,
+`ANTHROPIC_VERTEX_PROJECT_ID`) are not covered, and neither is whatever the next backend reads. The
+scrub's completeness is therefore a claim about a list nobody re-derives.
+
+**Fix shape — a hypothesis, and it is the move this repo has already made once.** S14 replaced a
+hand-written `_FACTORIES` list with an AST scan proving `build_client` IS the choke point. The analogous
+move here is to derive the variable set from what the leaf adapters actually read (`llm/anthropic.py`,
+`llm/openai.py`, `llm/gemini.py`, `vision.py`) rather than to keep extending the literal — which also
+makes a new backend's variable a compile-time fact rather than something the next audit notices.
+
+**Not pinned.** A pinning test would assert the derived set equals the literal, which is the fix rather
+than a pin. Recorded here as a bound, per exit criterion 2, and it should be closed by the derivation
+rather than by lengthening the list again.
+
+---
+
+## R4.55 — the key scrub is in-process only, and on win32 an empty value is an ABSENT one
+
+**Severity: LOW** (no live exposure: the only subprocess in the suite reaches no provider). Filed because
+the mechanism inverts across a process boundary on the primary development platform, and both cells that
+pin it stay green while it does.
+
+**Found** by the same audit, measured rather than reasoned.
+
+`tests/_tiers.scrub_provider_keys` does `os.environ[var] = ""`. In-process that is exactly right, and it
+is what makes CLAUDE.md's `ANTHROPIC_API_KEY= uv run pytest` recipe sufficient: `load_dotenv()` does not
+override a variable that is already SET, so an empty value is enough.
+
+**Across a process boundary on Windows it is not.** Assigning `""` to an environment variable removes it
+from the real process environment block, so a CHILD process sees the variable as **absent**, not empty —
+and `ultracua.config`'s own `load_dotenv()` in that child would then populate it from `.env`. The parent's
+`os.environ` mapping still reports `''`, so `test_no_provider_key_is_visible_to_the_suite` and
+`test_importing_ultracua_config_does_not_repopulate_a_scrubbed_key` both stay green either way.
+
+**Exposure today is nil, and that is the reason this is LOW rather than closed.** The only `subprocess`
+call in the whole suite is a `python -c` lock probe in `tests/test_health_lock.py` that reaches no
+provider. `scripts/derive_test_tiers.py` and `scripts/check_shard_coverage.py` shell out to pytest, but
+they are tools, not collected tests, and the child re-runs the scrub on its own `pytest_configure`.
+
+**Why it is filed anyway.** A future test that shells out — a CLI end-to-end cell, an MCP server driven
+as a process, a benchmark invoked from a test — inherits the S8 hazard silently, on the platform this
+project develops on, with the existing pins green. That is the shape this register exists to catch
+before it costs a release.
+
+**Fix shape — a hypothesis.** Either pass a scrubbed environment explicitly to every child
+(`env=` on the subprocess call, which is a per-caller discipline and therefore the wrapper-not-mechanism
+shape), or set a sentinel the SDKs treat as present-but-invalid so the variable survives the boundary,
+or assert at the boundary that no child inherits a provider key. Measure which before building: the
+register's rule is that a fix shape written before the code is read has been wrong 4 of 7 times here.
+
+**Pinned by demonstration, not yet by a test.** The behaviour was reproduced during the audit (a parent
+setting `""` and spawning a child that observes the variable absent); a cell asserting it would be
+cheap and belongs with whichever fix is chosen.

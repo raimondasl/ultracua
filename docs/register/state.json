@@ -289,6 +289,16 @@
    "id": "R4.53",
    "status": "open",
    "summary": "B1: a key-less teacher (`ScriptedProvider`/`MockProvider`) is classified as an unobserved SPENDER, contradicting `flow.py:915-916`; `accounting_failed` is sticky across runs"
+  },
+  {
+   "id": "R4.54",
+   "status": "open",
+   "summary": "the key scrub's completeness rests on a hand-written variable list (Bedrock/Vertex uncovered) — the shape S14 replaced with a derivation"
+  },
+  {
+   "id": "R4.55",
+   "status": "open",
+   "summary": "the key scrub is in-process only: on win32 an empty value is an ABSENT one, so a child process would re-read `.env` while both pinning cells stay green"
   }
  ]
 }
