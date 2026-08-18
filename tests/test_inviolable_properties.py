@@ -145,7 +145,14 @@ async def test_the_no_llm_fixture_actually_intercepts_every_binding(no_llm) -> N
 # The SDK constructors that actually open a client. Patching factory NAMES can only ever be as good as
 # the list of names; this closes the class instead — if every direct SDK construction lives in a known
 # leaf module, then `build_client` provably IS the choke point and patching it is sufficient.
-_SDK_CTORS = ("AsyncAnthropic", "AsyncOpenAI", "OpenAI", "GenerativeModel")
+# `Client` added at 0.4a (reshape-plan 0.5, taken early), and it closes a LIVE hole rather than a
+# hypothetical one. `GenerativeModel` names the OLD google-generativeai entry point and matches nothing
+# in src/ today; the adapter migrated to `genai.Client()` (llm/gemini.py:101), so gemini construction
+# was outside this pin's coverage entirely — the hand-written-list failure mode this test's own
+# docstring indicts, one SDK over. Verified before widening: that call is the only `Client(` in src/ and
+# it sits in an allowed leaf, so the pin tightens without moving the allowlist. `GenerativeModel` stays,
+# dead, so a return to the old API is still covered.
+_SDK_CTORS = ("AsyncAnthropic", "AsyncOpenAI", "OpenAI", "GenerativeModel", "Client")
 _SDK_ALLOWED = ("src/ultracua/llm/anthropic.py", "src/ultracua/llm/openai.py",
                 "src/ultracua/llm/gemini.py", "src/ultracua/vision.py")
 
@@ -187,8 +194,9 @@ async def test_llm_client_construction_has_a_single_choke_point() -> None:
             nm = getattr(fn, "id", "") or getattr(fn, "attr", "")
             if isinstance(node, ast.Call) and nm in _SDK_CTORS:
                 found_in_leaves += 1
-    assert found_in_leaves >= 3, (
-        f"only {found_in_leaves} SDK construction(s) found in the allowed leaves — the scan is broken, "
+    assert found_in_leaves >= 4, (
+        f"only {found_in_leaves} SDK construction(s) found in the allowed leaves (>=4 since `Client` "
+        f"joined _SDK_CTORS at 0.4a) — the scan is broken, "
         f"so the assertion below would pass vacuously")
     print(f"  {found_in_leaves} SDK constructions, all inside {len(_SDK_ALLOWED)} allowed leaf modules")
     assert not offenders, (

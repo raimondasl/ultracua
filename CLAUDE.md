@@ -113,10 +113,15 @@ Violating any of these is a blocking defect, not a trade-off:
   "~21 min" this line used to claim was stale). **CI shards it across two runners per OS** because it had
   reached 21m53s against a 25-minute job timeout, which was a deterministic failure approaching.
 - **Tiers: `--tier fast` before a commit, the whole suite before a MERGE.** `pytest --tier fast` runs the
-  **600 of 1102** tests that provably never launch Chromium — **measured in 46.8 s** against the full
-  suite's 31 minutes (the other 502 are browser tests; both numbers are derived by a probe, not
-  estimated). It is not a skip-list: every
-  Playwright entry point is wrapped on the CLASS in `tests/conftest.py`, so under the fast tier a launch
+  **665 of 1165** tests that provably never launch Chromium — **~71 s at 0.4a**, against the full
+  suite's 32 minutes (the other 500 are browser tests; both numbers are derived by a probe, not
+  estimated). **The tier is getting slower and the trend is worth watching**: 46.8 s -> 58 s -> 71 s over
+  three slices, so it no longer meets the plan's "<60 s" acceptance. Roughly 8 s of the latest rise is
+  `test_ratchets.py`, which re-derives six AST ratchets over a scratch copy of `src/`; the obvious next
+  saving is a single-pass visitor instead of six `ast.walk`s per module, and it was NOT taken because
+  this host's own variance on the same tier measured 49-64 s in one afternoon, which is larger than the
+  saving. Re-measure on CI before optimising. It is not a skip-list: every
+  Playwright entry point is wrapped on the CLASS in the ROOT `conftest.py`, so under the fast tier a launch
   **raises** — an unclassified test that launches fails loudly rather than quietly running slowly — and a
   collected test in NEITHER tier is a collection error naming it (`check_shard_coverage`'s property, one
   instrument over). Membership is **derived, never declared** — a `pytest.mark.browser` is refused by a
@@ -141,6 +146,17 @@ Violating any of these is a blocking defect, not a trade-off:
   the `out` contract from the engine's own source and runs the REAL `_make_finalize` against a REAL
   session. **What it cannot see is anything page-side** — `drift_bench` and the browser write-safety
   matrix stay the adjudicators there.
+- **Six shapes may only ever SHRINK — the ratchets.** `python scripts/ratchets.py` counts them by AST
+  (`--print` for every site, `--update` to re-seed) and `test_every_ratchet_holds` runs it in the fast
+  tier. Today: `spec_mutate_raw` 27, `flow_key_transcriptions` 25, `bare_flow_replay_error` 24,
+  `cli_system_exit` 34, `run_record_write_sites` 16, `engine_positional_params` 98 — each tagged with the
+  Phase-1 step that removes it. **A shrink FAILS too**, asking for `--update`: a ratchet that tolerates
+  progress silently stops ratcheting, and the next regression is measured against the old, looser
+  number. A derivation that matches NOTHING fails with its own message, the rule `prove_red` already
+  applies to a stale mutation. **Do not quote `reshape-plan.md`'s counts** — they were greps, and two of
+  five were wrong (grep counts the shape inside COMMENTS: `spec.mutate is not None` appears in three
+  findings' prose, inflating 27 to 33). Derive, then cite.
+
 - **The wiring mutants must stay dead.** `scripts/prove_red.py tests/mutations/b1_wiring.py` applies each
   of R4.48's eleven record-plumbing mutations to a scratch copy of `src/` and reports which are killed:
   **0 of 11 before the matrix, 11 of 11 after**, and the `red-proof` CI job keeps it that way. A mutation
