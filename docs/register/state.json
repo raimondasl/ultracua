@@ -318,6 +318,14 @@
    "pins": [
     "tests/test_replay_exit_matrix.py::test_R4_57_a_successful_retry_clears_the_failed_attempts_code"
    ]
+  },
+  {
+   "id": "R4.58",
+   "status": "open",
+   "severity": "medium",
+   "class": "g",
+   "summary": "the R4.22 resource sampler measures the wrong quantity: a Windows shard failed TWICE on two DIFFERENT browser tests, both latency-shaped (a 5s Locator.wait_for timeout; a write confirm missing inside its budget), while the same run's PASSING Windows shard was the MORE loaded of the two on 4 of 7 sampled metrics — the first same-run healthy baseline, and it refutes resource exhaustion for this symptom class. Neither CPU nor disk I/O is sampled, which is what a latency failure is about",
+   "disposition": "add CPU and disk-queue sampling before the next occurrence is diagnosed; do NOT re-derive the socket/handle hypotheses, which this measurement rules out for timeouts"
   }
  ]
 }

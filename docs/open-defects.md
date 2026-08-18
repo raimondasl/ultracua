@@ -12,7 +12,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**40 open**, 13 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**41 open**, 13 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **40 open**, 13 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **41 open**, 13 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -848,6 +848,7 @@ if and only if that branch is ever resumed.
 | R4.55 | open | the key scrub is in-process only: on win32 an empty value is an ABSENT one, so a child process would re-read `.env` while both pinning cells stay green |
 | R4.56 | open | a fixture sub-resource silently fails to load and surfaces as a JS `ReferenceError`; the HTTP/1.0 socket-churn cause is REFUTED by measurement (8 vs 6 connections per load) and a sweep would risk 8 hangs — disposition is the shared fixture server |
 | R4.57 | open | a SUCCESSFUL run reports the failed attempt's `failure_code` — `_attempt_replay`'s success exit sets `ok` but never clears it, and `_mark_ok` (which does) is only called on the precheck and relearn exits; found by the exit-set matrix on its first run |
+| R4.58 | open | the R4.22 resource sampler measures the wrong quantity: a Windows shard failed TWICE on two DIFFERENT browser tests, both latency-shaped (a 5s Locator.wait_for timeout; a write confirm missing inside its budget), while the same run's PASSING Windows shard was the MORE loaded of the two on 4 of 7 sampled metrics — the first same-run healthy baseline, and it refutes resource exhaustion for this symptom class. Neither CPU nor disk I/O is sampled, which is what a latency failure is about |
 <!-- /generated:r4-index -->
 
 
@@ -4931,3 +4932,77 @@ sites must each remember. **Disposition: step 1.5**, with the strict-xfail cell 
 
 **Pinned** by `test_R4_57_a_successful_retry_clears_the_failed_attempts_code`, strict-xfail against
 shipped behaviour.
+
+---
+
+## R4.58 — the resource sampler measures the wrong quantity, and the first healthy baseline says so
+
+**Severity: MEDIUM** (diagnostic capability, not product behaviour — but it is the instrument every
+future Windows CI failure will be diagnosed with, and it has now been shown blind to the symptom class
+it faced). Observed on PR #177's CI, 2026-08-18, run `32187328059`.
+
+**What happened.** The Windows shard-2 job failed, was re-run with `--failed`, and failed again — on a
+**different test each time**:
+
+| attempt | test | symptom |
+|---|---|---|
+| 1 | `tests/test_writable_slots.py::test_writable_slots_end_to_end` | `DriftError: write not confirmed (no completion signal on the page)` |
+| 2 | `tests/test_run_batch.py::test_dry_run_key_preview_matches_wire_key` | `TimeoutError: Locator.wait_for: Timeout 5000ms exceeded` |
+
+Two different tests, same runner, both **latency-shaped**: something the page was expected to do inside a
+budget did not happen inside that budget. This is R4.22's "a resource error in whichever test happened to
+be running" shape with a **different symptom** — R4.22 is specifically `ERR_NO_BUFFER_SPACE`, and neither
+of these is.
+
+**What was ruled out first, so nobody re-derives it.**
+
+* *Not this slice.* PR #177 changes zero `src/` lines and nothing page-side.
+* *Not a fixture async-reveal race.* `tests/test_writable_slots.py`'s fixture has no `fetch(...)`, no
+  `setTimeout` and no JS at all — a real form POST, a 303, and a static `/done` page carrying the confirm
+  text. The synchronous-reveal discipline was already satisfied.
+* *Not shard re-balancing.* `test_writable_slots.py` sat entirely in group 2 **before** this branch too
+  (checked by collecting at `c3186db` in a worktree). Shard 2 gained 9 tests and got **48 s FASTER**
+  (1003 s → 955 s), so it did not become the heavier half.
+* *Not local.* Both tests pass here, and the whole file passes in 27.8 s.
+
+**The measurement that matters, and it is the one R4.22 has been waiting for.** The sampler runs on both
+Windows jobs and its summary step runs on success too, so this run finally provides a healthy baseline
+taken *in the same run, on the same OS, minutes apart*:
+
+| metric | shard 2 — **FAILED** | shard 1 — **passed** |
+|---|---|---|
+| `time_wait` max / mean | 382 / 142.3 | 336 / **171.3** |
+| `handles` max | 53 423 | **53 736** |
+| `processes` max | 153 | **158** |
+| `chrome_procs` max | 8 | **16** |
+| `nonpaged_pool_mb` max | 234.0 | 231.4 |
+| `paged_pool_mb` max | 350.6 | 344.2 |
+| `free_mb` min | 12 739 | 12 740 |
+
+Every metric is within ~2 %, free memory is identical to within 1 MB of 16 379, and on **four of seven**
+the *passing* job was the more loaded one — twice as many concurrent Chromium processes, more handles,
+more processes, a higher mean TIME_WAIT. **Resource exhaustion does not distinguish the failing run from
+the passing one.** That is a refutation, not an absence of evidence: the instrument was built precisely
+to answer this question and it has now answered it in the negative for this symptom class.
+
+**The gap.** `scripts/sample_resources.ps1` samples sockets, handles, processes, pool memory and free
+memory. It samples **no CPU utilisation and no disk queue**. A five-second locator timeout and a confirm
+that misses its budget are *latency* failures, and on a 2-vCPU hosted runner latency is about CPU
+contention and I/O — neither of which appears in any column above. The instrument is measuring the
+resource the *previous* symptom was about (R4.22's `WSAENOBUFS`) and is blind to the one this symptom is
+about. CLAUDE.md's own line — *"Every hypothesis so far has been about something else"* — now applies to
+the instrument that was added to end that.
+
+**Disposition.** Add CPU and disk-queue sampling before the next occurrence is diagnosed; the columns are
+one line each in the existing sampler and cost nothing at 5-second intervals. Do **not** re-derive the
+socket / handle / memory hypotheses for a timeout-shaped failure — this measurement rules them out. And
+do not reach for the browser pool as a reaction: R4.22 already records the occurrence that did not
+justify it, and pooling reduces launch churn, which is exactly the quantity shown here not to
+discriminate.
+
+**What this does not say.** It does not identify the cause. One same-run A/B is two data points, taken
+under GitHub-hosted-runner conditions nobody controls, and "the failing job was not more loaded" is
+consistent with several causes (CPU steal, a slow disk, an unlucky neighbour) that the current sampler
+cannot separate. It also does not say the two failing tests are sound — only that nothing about them or
+about the slice explains a failure that lands on a different test each attempt. The next occurrence is
+worth waiting for **with a better instrument**, which is the whole disposition.
