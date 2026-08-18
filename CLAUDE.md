@@ -125,6 +125,22 @@ Violating any of these is a blocking defect, not a trade-off:
   weaker evidence anyway (platform + keys), and its 31-minute cost is what pushed B1's author to targeted
   subsets that missed 7 breakages. The conftest also **scrubs the provider keys** for every run, so the
   `ANTHROPIC_API_KEY=` prefix is now the default rather than something to remember.
+- **`flows.replay()` has a browser-free exit-set matrix — use it, and keep it whole.**
+  `tests/test_replay_exit_matrix.py` drives every exit of `replay()` in ~1.3 s through
+  `tests/_fake_engine.py`, which scripts the engine at the SIX module bindings `flows.py` already holds
+  (no `engine=` parameter was added to `src/` — patching the binding reaches every call, and a def-time
+  default would make the 27 existing `monkeypatch.setattr(flows_mod, ...)` sites inert). The exit set is
+  DERIVED by AST (16 today) and ratcheted, so an exit added tomorrow fails the ratchet instead of
+  slipping in uncovered. Its fidelity is not self-asserted: `tests/test_fake_engine_fidelity.py` derives
+  the `out` contract from the engine's own source and runs the REAL `_make_finalize` against a REAL
+  session. **What it cannot see is anything page-side** — `drift_bench` and the browser write-safety
+  matrix stay the adjudicators there.
+- **The wiring mutants must stay dead.** `scripts/prove_red.py tests/mutations/b1_wiring.py` applies each
+  of R4.48's eleven record-plumbing mutations to a scratch copy of `src/` and reports which are killed:
+  **0 of 11 before the matrix, 11 of 11 after**, and the `red-proof` CI job keeps it that way. A mutation
+  whose find-text no longer matches is reported as an ERROR, not a survivor, because a stale mutation
+  silently reports the suite as stronger than it is. A survivor is a hole in the matrix, not a bug in the
+  mutation: add a cell, or register it with a reason and a finding id.
 - **A shard must never be a hole.** `pytest-split` partitions the real collection, so a new test file
   lands in a shard by construction — but the `shard-coverage` CI job asserts it (union == full, no
   duplicates), because a test in NO shard leaves every shard green and nothing in the suite can fail for
