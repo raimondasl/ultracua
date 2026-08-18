@@ -11,8 +11,8 @@ by applying this file's own sibling rule while redesigning R3.2; it is recorded 
 CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch was **PARKED, not
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
-The round-4 series has since grown to R4.55 as later slices filed against it:
-**38 open**, 13 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+The round-4 series has since grown to R4.56 as later slices filed against it:
+**39 open**, 13 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **38 open**, 13 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **39 open**, 13 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -846,6 +846,7 @@ if and only if that branch is ever resumed.
 | R4.53 | open | B1: a key-less teacher (`ScriptedProvider`/`MockProvider`) is classified as an unobserved SPENDER, contradicting `flow.py:915-916`; `accounting_failed` is sticky across runs |
 | R4.54 | open | the key scrub's completeness rests on a hand-written variable list (Bedrock/Vertex uncovered) — the shape S14 replaced with a derivation |
 | R4.55 | open | the key scrub is in-process only: on win32 an empty value is an ABSENT one, so a child process would re-read `.env` while both pinning cells stay green |
+| R4.56 | open | a fixture sub-resource silently fails to load and surfaces as a JS `ReferenceError`; the HTTP/1.0 socket-churn cause is REFUTED by measurement (8 vs 6 connections per load) and a sweep would risk 8 hangs — disposition is the shared fixture server |
 <!-- /generated:r4-index -->
 
 
@@ -4797,3 +4798,76 @@ register's rule is that a fix shape written before the code is read has been wro
 **Pinned by demonstration, not yet by a test.** The behaviour was reproduced during the audit (a parent
 setting `""` and spawning a child that observes the variable absent); a cell asserting it would be
 cheap and belongs with whichever fix is chosen.
+
+
+## R4.56 — a fixture sub-resource silently fails to load, and the obvious cause is REFUTED by measurement
+
+**Severity: LOW** (suite reliability; no product code involved, no inviolable at stake). Filed for the
+occurrence and, more usefully, for the two measurements that rule out the fix everyone would reach for.
+
+**The occurrence.** `tests/test_recorder_ceiling.py::test_recorder_cracks_the_garbled_label_ceiling_0llm`
+failed one full local run (1102 passed, 10 xfailed, 1 failed) with:
+
+```
+playwright._impl._errors.Error: Page.evaluate: ReferenceError: d3 is not defined
+    at genProblem (http://127.0.0.1:51364/miniwob/click-option.html:37:13)
+    at core.startEpisodeReal (http://127.0.0.1:51364/core/core.js:88:3)
+```
+
+It passes in isolation. `d3.v3.min.js` is a **local** 151 KB asset served by the suite's own
+`ThreadingHTTPServer` — no network is involved — so one of the page's script tags silently did not load
+and the failure surfaced as a JavaScript `ReferenceError` **inside the page** rather than as a connection
+error. That is why it reads as a broken test rather than as a resource problem, and it is the reason this
+entry exists even though the cause is unknown.
+
+**The obvious hypothesis, and its refutation.** `benchmarks/miniwob_env.py`'s `_QuietHandler` does not set
+`protocol_version`, so it serves **HTTP/1.0** and closes the connection after every response, while that
+page pulls five sub-resources. `benchmarks/drift_fixtures.py` already carries the HTTP/1.1 fix with a
+comment about HTTP/1.0 "burning its own socket" per request, and this register records that **28 of the
+suite's 32 fixture servers never got it** — so "socket churn dropped the request" looks like a
+one-line fix waiting to happen.
+
+**Measured on the real fixture, five page loads each:**
+
+| protocol | TCP connections | per page load |
+|---|---:|---:|
+| HTTP/1.0 (today) | 40 | **8.0** |
+| HTTP/1.1 | 30 | **6.0** |
+
+**A 25% reduction, not a collapse** — Chromium opens up to six parallel connections per host regardless,
+so keep-alive saves two. The protocol version is therefore not the lever the hypothesis needs, which is
+consistent with this register's own refutation of socket churn as R4.22's cause at 0.104.0 (1.08
+connections/s, 0.8% of the ephemeral range). **The cause of the dropped sub-resource is NOT established.**
+
+**And the sweep would be worse than the disease.** HTTP/1.1 requires a framed body: a handler that writes
+a body with neither `Content-Length` nor chunked encoding leaves an HTTP/1.1 client waiting for a close
+that never comes — a hang, not a failure. Measured across the suite:
+
+| fixture handlers | count |
+|---|---:|
+| files defining one | 38 |
+| already frame their bodies | 30 |
+| **write a body with NO `Content-Length`** | **8** |
+
+The eight are `drift_sandbox.py`, `write_flow_bench.py`, `test_canary.py`, `test_flows.py`,
+`test_multiwrite.py`, `test_record_caption.py`, `test_recorder_fidelity.py`, `test_select_locator.py`.
+Flipping `protocol_version` across the suite would trade a 25% socket reduction for eight hang
+candidates.
+
+**Disposition — the shared fixture server (`docs/reshape-plan.md` step 0.7), NOT a sweep and NOT
+tolerance.**
+
+* **Not a sweep.** Refused on the measurement above: it buys little and risks eight hangs. A 22-site
+  edit justified by one unreproduced failure is the shape this register exists to prevent.
+* **Not tolerance.** Retries or waits would suppress a signal whose cause is unknown, which is how R4.26
+  spent three releases mislabelled as a flake. There is also nothing to "handle": Chromium speaks
+  HTTP/1.0 correctly, and the protocol version is not causing a protocol problem.
+* **The class closes at the seam.** One `serve()` helper owns the protocol version, the `Content-Length`
+  framing and the synchronous-reveal discipline, so every future fixture is correct by construction and
+  the 38 hand-rolled handlers migrate as they are touched rather than in one risky sweep. This occurrence
+  is evidence FOR that step; it is not an argument for editing 22 files today.
+
+**Not pinned, deliberately.** A pinning test would have to reproduce an intermittent sub-resource drop,
+which is the "fish for the mechanism" approach R4.26 showed to be a waste — that finding reproduced 1 run
+in 40 under load and **zero in 150** once instrumented. If this recurs, the thing to build is a
+deterministic harness that drops one sub-resource on purpose, not a longer wait.
