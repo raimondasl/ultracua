@@ -11,8 +11,8 @@ by applying this file's own sibling rule while redesigning R3.2; it is recorded 
 CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch was **PARKED, not
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
-The round-4 series has since grown to R4.56 as later slices filed against it:
-**39 open**, 13 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+The round-4 series has since grown to R4.57 as later slices filed against it:
+**40 open**, 13 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **39 open**, 13 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **40 open**, 13 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -847,6 +847,7 @@ if and only if that branch is ever resumed.
 | R4.54 | open | the key scrub's completeness rests on a hand-written variable list (Bedrock/Vertex uncovered) — the shape S14 replaced with a derivation |
 | R4.55 | open | the key scrub is in-process only: on win32 an empty value is an ABSENT one, so a child process would re-read `.env` while both pinning cells stay green |
 | R4.56 | open | a fixture sub-resource silently fails to load and surfaces as a JS `ReferenceError`; the HTTP/1.0 socket-churn cause is REFUTED by measurement (8 vs 6 connections per load) and a sweep would risk 8 hangs — disposition is the shared fixture server |
+| R4.57 | open | a SUCCESSFUL run reports the failed attempt's `failure_code` — `_attempt_replay`'s success exit sets `ok` but never clears it, and `_mark_ok` (which does) is only called on the precheck and relearn exits; found by the exit-set matrix on its first run |
 <!-- /generated:r4-index -->
 
 
@@ -4871,3 +4872,62 @@ tolerance.**
 which is the "fish for the mechanism" approach R4.26 showed to be a waste — that finding reproduced 1 run
 in 40 under load and **zero in 150** once instrumented. If this recurs, the thing to build is a
 deterministic harness that drops one sub-resource on purpose, not a longer wait.
+
+
+## R4.57 — a SUCCESSFUL run reports the failed attempt's failure_code
+
+**Severity: LOW** (report truthfulness; no inviolable at stake, no write mis-handled). Filed because a
+caller that branches on `record.failure_code` sees a failure on a run that returned data, and because of
+where it was found.
+
+**Found by the exit-set matrix on its first run** — the instrument built in the same slice, driving
+`replay()` through the auth-refresh retry, a path that had no browser-free cell and therefore no cell at
+all. B1's own audits looked at this surface twice.
+
+### The mechanism
+
+`_mark_ok` (`flows.py:2141-2151`) exists precisely to clear a previous attempt's verdict, and its
+docstring says so:
+
+> "A successful return must clear the failure a PREVIOUS attempt recorded … Only the success exit inside
+> `_attempt_replay` cleared them, and those two paths never reach it."
+
+It is called on the two idempotency-precheck exits and the relearn success. But the success exit *inside*
+`_attempt_replay` (`flows.py:2384-2387`) sets only:
+
+```python
+record.ok, record.landed, record.committed = True, landed, committed
+```
+
+— and never clears `failure_code`. So the post-auth-refresh success, which DOES go through that exit,
+returns data with `ok=True` and `failure_code="drift"` from the attempt that failed. Measured with the
+fake engine (attempt 1 drifts, re-login, attempt 2 succeeds):
+
+```
+returned data; rec.ok=True  rec.attempts=2  rec.auth_refreshed=True  rec.failure_code='drift'
+```
+
+**The same shape as B1's M3, on the one success exit M3 did not cover.** M3 found `_mark_ok` missing from
+three success returns and added it to those three; the fourth success return — the one that already sets
+`ok` and so looked handled — sets an incomplete subset. A guard applied to the paths that were broken and
+not to the sibling that was merely incomplete.
+
+### Why it is LOW and not lower
+
+Nothing acts on `failure_code` today inside `src/` — it is a field on the record a caller receives, and
+`run_batch`/MCP read `exc.code` from the exception instead. The harm is a benchmark or an operator
+dashboard bucketing a successful run as a drift, which is exactly what `docs/realistic-benchmark-plan.md`
+B3 intends to do with those codes (`refused` sub-buckets derived from real codes, never message labels).
+So it is cheap now and wrong later.
+
+### Fix shape — a hypothesis, and it should not be a fourth call site
+
+Adding `_mark_ok(record)` to `_attempt_replay`'s success exit would work and would be the fourth
+transcription of "a success clears the previous verdict". `docs/reshape-plan.md` step 1.5 replaces all ten
+record write sites with ONE sink whose `finish()` derives the record from the attempt list, at which point
+"a successful run carries no failure code" is a property of the sink rather than something four call
+sites must each remember. **Disposition: step 1.5**, with the strict-xfail cell in
+`tests/test_replay_exit_matrix.py` flipping when it lands.
+
+**Pinned** by `test_R4_57_a_successful_retry_clears_the_failed_attempts_code`, strict-xfail against
+shipped behaviour.

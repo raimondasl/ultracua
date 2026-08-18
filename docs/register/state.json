@@ -307,6 +307,17 @@
    "severity": "low",
    "class": "g",
    "disposition": "reshape-plan step 0.7 (shared fixture server) — explicitly NOT a protocol sweep"
+  },
+  {
+   "id": "R4.57",
+   "status": "open",
+   "summary": "a SUCCESSFUL run reports the failed attempt's `failure_code` — `_attempt_replay`'s success exit sets `ok` but never clears it, and `_mark_ok` (which does) is only called on the precheck and relearn exits; found by the exit-set matrix on its first run",
+   "severity": "low",
+   "class": "a",
+   "disposition": "reshape-plan step 1.5 (the single-exit RunRecord sink) — not a fourth _mark_ok call site",
+   "pins": [
+    "tests/test_replay_exit_matrix.py::test_R4_57_a_successful_retry_clears_the_failed_attempts_code"
+   ]
   }
  ]
 }
