@@ -130,6 +130,16 @@ Violating any of these is a blocking defect, not a trade-off:
   duplicates), because a test in NO shard leaves every shard green and nothing in the suite can fail for
   it. Regenerate balance with `pytest -q --store-durations` when the suite's shape changes a lot;
   a stale `.test_durations` costs WALL-CLOCK balance only, never coverage.
+- **The register's STATE is data; its NARRATIVE is prose.** `docs/register/state.json` holds every
+  round-4 finding's id/status/summary and the R4 STATUS INDEX table is RENDERED from it
+  (`python scripts/render_register.py --write`; `--check` is what the suite runs). File a finding by
+  adding an entry and re-rendering — the counts cannot drift from the rows because nobody types them.
+  The 3900 lines of evidence stay exactly where they are: narrative does not drift, it accretes, and
+  moving it would be churn for nothing. Optional fields (severity, attempts, `blocked_by`, pins) are
+  OMITTED rather than guessed — only 5 of 53 summaries state even a severity, so back-filling the rest
+  would be 50 hand-typed facts, which is the transcription class the move exists to end. Fill one in
+  when a slice touches that finding; `D5`'s two-strikes gate becomes a SCHEMA RULE the moment an entry
+  records its `attempts`.
 - **The browser pool is deferred, now with a number.** 356.7 ms per session with its own Chromium vs
   84.7 ms sharing one — a 2.9 min ceiling over ~650 sessions — and it cannot reach the suite without
   moving all tests onto a session-scoped event loop, because a Playwright `Browser` is loop-bound. See
