@@ -299,6 +299,14 @@
    "id": "R4.55",
    "status": "open",
    "summary": "the key scrub is in-process only: on win32 an empty value is an ABSENT one, so a child process would re-read `.env` while both pinning cells stay green"
+  },
+  {
+   "id": "R4.56",
+   "status": "open",
+   "summary": "a fixture sub-resource silently fails to load and surfaces as a JS `ReferenceError`; the HTTP/1.0 socket-churn cause is REFUTED by measurement (8 vs 6 connections per load) and a sweep would risk 8 hangs — disposition is the shared fixture server",
+   "severity": "low",
+   "class": "g",
+   "disposition": "reshape-plan step 0.7 (shared fixture server) — explicitly NOT a protocol sweep"
   }
  ]
 }

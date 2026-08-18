@@ -269,6 +269,14 @@ rejected by the judges or the critic.
   and `found_in_leaves` is exactly 3 against a `>= 3` floor. Filed as **R4.43** (distinct from R4.41),
   which also records the interaction: R4.41's own "cheap and wrong" remedy drops the count to 2, so the
   anti-vacuity assert fires first and the run misdiagnoses itself.
+* **Do not sweep the fixture servers to HTTP/1.1** to chase an intermittent sub-resource drop
+  (R4.56), and do not make the tests TOLERANT of it either. Measured: HTTP/1.1 buys 8 → 6
+  connections per page load (25%, because Chromium opens ~6 in parallel regardless), and **8 of
+  the 38 handler-defining files write a body with no `Content-Length`** — under HTTP/1.1 their
+  clients wait for a close that never comes, so the sweep trades eight hang candidates for a
+  quarter of the sockets, justified by one unreproduced failure. Tolerance is worse: the cause is
+  unknown, and suppressing an unexplained signal is how R4.26 spent three releases mislabelled as
+  a flake. The seam (step 0.7) is where this closes.
 * **Do not hand-mark tests as browser/fast**, wrap `async_playwright` by name, or accept "any exception"
   as "refused".
 * **Do not build the Chromium pool as a speed fix** (2.9-min ceiling, loop-bound `Browser`), and **do not
@@ -312,7 +320,7 @@ change.
 | 0.4 | **RED-in-CI + red-proof + ratchets.** Run each PR's *new* test ids against main's `src/` in a worktree; a src-touching PR whose new tests all pass against main fails. **(critic)** ImportError-against-main is *inconclusive*, not a label-shaped opt-out — a PR adding a src module ships a registered mutant instead; the job's self-test is a unit test of its verdict function. `assert_ratchet(name, derived_sites)` fails on growth **and** staleness | g, f | the job asserts it found ≥1 new test when the diff adds `def test_`; each ratchet asserts a minimum hit count first | S · 1.5 d |
 | 0.5 | **Contract tests for every "must agree" pair**; `node --check` over every assembled `*_JS` payload; add `Client` to `_SDK_CTORS` and raise the anti-vacuity threshold (test-only) | l, f | each pair asserts a minimum match count before equality; delta sets frozen | S · 1 d |
 | 0.6 | **Scheduled mutation sweep (S16).** The nine known mutants + the 11 B1 wiring mutants + generic operators on a frozen hot-file list, one at a time on a scratch copy; weekly; a survivor not in `known_survivors` fails | g, a | `known_survivors` only shrinks; the nine known mutants must be killed every run | M · 2 d |
-| 0.7 | **Shared fixture server** (`serve()`, a `Site` recorder with a `saves` count, `reveal_sync`, common stubs); migrate ~8 files as proof. Off the critical path | g, n | ratchet on files defining their own handler class; collection count unchanged | M · 3 d |
+| 0.7 | **Shared fixture server** — `serve()` owning the protocol version, the `Content-Length` framing and the synchronous-reveal discipline, plus a `Site` recorder with a `saves` count and the common stubs; migrate ~8 files as proof. **Now evidence-backed (R4.56):** 38 files define a fixture handler, **8 of them write a body with no `Content-Length`**, and a sub-resource that silently fails to load surfaces as a JS `ReferenceError` inside the page rather than as a connection error. That is why the one-line sweep is REFUSED — measured, `HTTP/1.1` buys 8→6 connections per page load (25%) and would leave those 8 files hanging on an unframed body. The seam is the fix: correct by construction for every future fixture, and the 38 migrate as they are touched | g, n | ratchet on files defining their own handler class (only shrinks); collection count unchanged; the `serve()` self-test asserts framing + HTTP/1.1 + a `reveal_sync` page's state present on the FIRST snapshot | M · 3 d |
 
 ### Phase 1 — bounded `src/` changes (~20–30 days incl. audits)
 
