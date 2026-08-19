@@ -12,7 +12,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**30 open**, 25 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**31 open**, 26 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **30 open**, 25 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **31 open**, 26 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -850,6 +850,8 @@ if and only if that branch is ever resumed.
 | R4.57 | fixed | a SUCCESSFUL run reports the failed attempt's `failure_code` — `_attempt_replay`'s success exit sets `ok` but never clears it, and `_mark_ok` (which does) is only called on the precheck and relearn exits; found by the exit-set matrix on its first run — FIXED at 0.110.0 by THE SINK (reshape-plan 1.5): `ok` and `failure_code` are decided once, from whether `replay()` raised, so a successful run cannot inherit the code of an attempt that failed on the way |
 | R4.58 | open | the R4.22 resource sampler measures the wrong quantity: a Windows shard failed TWICE on two DIFFERENT browser tests, both latency-shaped (a 5s Locator.wait_for timeout; a write confirm missing inside its budget), while the same run's PASSING Windows shard was the MORE loaded of the two on 4 of 7 sampled metrics — the first same-run healthy baseline, and it refutes resource exhaustion for this symptom class. Neither CPU nor disk I/O is sampled, which is what a latency failure is about |
 | R4.59 | fixed | a strict xfail added by 0.3 ASSERTED the counterexample — it demanded that `replay()` overwrite an UNKNOWN cost with a confident zero, the understated bill B1 exists to prevent, and `strict=True` made it a standing demand that 1.5 implement it. R4.51 was a coverage gap, not a behaviour defect: the two cases already differ. FIXED by rewriting the cell as the distinguishability property it was named for; src untouched |
+| R4.60 | fixed | `scripts/prove_red.py` scores a PERFECT run when its killer suite collects nothing: a mutant is judged killed by a non-zero pytest exit, so a `--tests` path that does not collect makes every mutant 'killed'. An audit hit it and read 17/17 where the honest number was 16/17. The same failure shape the script already guards on the other side (a stale find-text is an ERROR, not a survivor), one step over — an instrument reporting the suite as stronger than it is. FIXED at 0.110.0: the killer suite must collect and pass on the UNMUTATED tree before any mutation is applied |
+| R4.61 | open | `write_unverified` records `committed=False` while its own message says the commit ACTUATED — `_fail` appends `outcome="failed"`, which is not in `_UNKNOWN_OUTCOMES`, so the fold answers the write question 'no' for the one kind whose whole meaning is 'it fired and cannot be confirmed'. NOT a regression (the pre-sink code did the same), but the sink's stated rule was supposed to close this class and does not, because unanswerability is keyed on the outcome STRING and every failure exit shares one. The human channel is covered (the exception text says to check the target system); the record is not |
 <!-- /generated:r4-index -->
 
 
@@ -5213,3 +5215,106 @@ lands makes `_auth_retry_allowed` refuse the retry, correctly, because a second 
 "Attempt 1 landed, attempt 2 got nowhere" has no page state behind it. Scripting one anyway would be a
 cell asserting a fiction, so the rule is tested as arithmetic over the fold. That is a real bound on the
 evidence, not a stylistic choice.
+
+### What two adversarial audits found in the sink's FIRST draft — and what the suite did not
+
+The draft above was green: 1171 tests passing, `prove_red` 16/16, six ratchets holding, the exit-set
+matrix and its fidelity anchor clean, three goldens frozen in advance and their movement argued. Two
+independent adversarial passes, run in isolated worktrees against the committed branch before the PR
+merged, found **twelve defects in it**, one of them HIGH and in the unsafe direction.
+
+That is five slices running where an adversarial pass caught what the net did not, and it is the single
+strongest datum in this register for why the pass is not optional.
+
+**The HIGH one: a relearn SUCCESS folded as answerable-and-no.** `_UNKNOWN_OUTCOMES` had
+`relearn_raised` and not `relearn`, so a completed relearn licensed a confident `landed=False`. A
+relearn is a live LLM authoring run against a page that has demonstrably drifted, and discovery can
+actuate a write — `LearnResult.performed_write` exists for precisely that. Before the sink the
+guarantee came from `_mark_ok` -> `_forget_negative_write_evidence`, two of the three helpers the sink
+deleted as "existing only to UNDO another": **deleting the helper deleted the property**. Measured A/B,
+same harness, same input — `None/None` on main, `False/False` on the draft.
+
+It slipped for a reason worth naming: `test_relearn_full_success_absorbs_the_learn_spend` asserts `ok`,
+`mode`, `usage`, `llm_calls` and `total_ms`, and never `landed`. A fourth golden moved, in the opposite
+direction to the one the slice argued at length, and no cell was looking.
+
+**The other eleven**, each now fixed with a cell and a registered mutant:
+
+| # | what | why the suite missed it |
+|---|---|---|
+| 2 | a raise between `run_cached` returning and the fact-append erased the whole attempt — `attempts=0`, no Idempotency-Keys, over a run whose write step had POSTed | the `try` wrapped only the engine call; the cell for this property covered the `_fail` return one line over |
+| 3 | the usage cross-check compared each attempt against the WHOLE-RUN total, so N half-blind attempts reported a confident, understated bill | the pinning cell used ONE attempt, i.e. the only shape where max == sum |
+| 4 | `finish()`'s own failure left `usage == {}` — R4.45's exact shape, re-opened | the totality cell asserted the note and the caller's exception, not the usage |
+| 5 | `note` was the one field `_write` never wrote, so a stale failure note survived onto a healthy record — "a site that has to remember to clear", one field over from the sixteen removed | nothing wrote it twice |
+| 6 | `finish()`'s once-only latch — the slice's headline claim — had no cell, and the mutation removing it SURVIVED | the claim was in the docstring, not in a test |
+| 7 | the containment pin matched the variable NAME `record`, so `sink._record.landed = …`, an aliased local, and `setattr` all slipped past | it was written to replace a ratchet that failed for exactly this reason, and repeated it |
+| 8 | `FakeRouter.spend` credited the full token dict once per call, so the watch saw `calls x` what the report claimed | invisible only because the matrix's `USAGE` constant is all-zero tokens |
+| 9 | the Idempotency-Key mutant was dropped in the registry rewrite — the one field of five with write-safety significance, in the same commit whose regression also lost it | nothing checks a rewritten registry against its predecessor |
+| 10 | `prove_red` scores a perfect run when its killer suite collects nothing (filed as **R4.60**) | the script guards staleness on the mutation side and not on the suite side |
+| 11 | `write_unverified` records `committed=False` while its message says the commit actuated (filed as **R4.61**, disposed to 1.4) | not a regression; the sink's rule was supposed to close the class and keys on an outcome string every failure shares |
+| 12 | reuse-across-calls silently changed accumulate -> overwrite, with no cell — and `docs/reshape-plan.md` lists that cell in 1.5's own acceptance column | the acceptance column was not checked off item by item |
+
+**Two claims the audits were asked to attack and could not.** The concurrent CI failure is not this
+change: one audit AST-extracted and hashed `_auth_retry_allowed`, `_preflight_row`, `_precheck_done`,
+`_make_finalize`, `_make_pre_write`, `_classify_replay_failure`, `_record_run` and `_already_committed`
+and found all eight byte-identical between `main` and the branch, with the failing cell calling
+`run_cached` — `flow.py`, which the diff never touches. And "attempt 1 landed, attempt 2 got nowhere is
+unreachable" holds, and is stronger than claimed: the `committed=True, landed=False` shape needs two or
+more mutating recipe steps, and the recipe-count arm declines that retry too.
+
+**The lesson this register should carry forward.** Every one of the twelve is a property that EXISTED
+before the slice and was carried by something the slice deleted, or a guard whose matcher was one
+degree too narrow. Neither is a category a per-scenario test finds, and neither is a category mutation
+testing finds unless the mutation happens to be written — five of the twelve were found by mutants the
+AUDITORS wrote, not by the seventeen already in the registry.
+
+**Finding 12, reuse-across-calls, and the decision that was REVERSED by its own audit.** The slice
+changed accumulate -> overwrite by side effect, and `docs/reshape-plan.md` lists a cell for it in
+1.5's acceptance column that was never written. The first decision taken was that reuse should REFUSE:
+a `RunRecord` describes one run, so a second write is caller error. A third audit was commissioned on
+that decision alone, and refuted it on the ground that matters here — the failure DIRECTION.
+
+Measured, call #1 confirms a write and call #2 raises:
+
+| after call #2 | `ok` | `landed` | `committed` |
+|---|---|---|---|
+| overwrite | False | **None** | **None** |
+| refuse (preserves call #1) | True | **True** | **True** |
+| accumulate (pre-1.5) | True | **True** | **True** |
+
+Refuse reproduces accumulate's FALSE ARM exactly: a record whose latest run raised reports a landed
+write, so a resume skips a row it cannot know was paid — the direction CLAUDE.md says nothing catches.
+Only replacement reaches `None`. Three further points settled it: a refusal that RAISES is unavailable
+at either `finish()` site (on the success path `run_batch`'s broad `except` would book it as a failed
+row WITHOUT the ledger arming and hard-stop the batch — inviolable #3 triggered by an observability
+parameter); a note-only refusal is a provable no-op, since `note` has zero readers outside the sink's
+own cell, and overloading it would be `anchor_id=None` in miniature; and B3 consumes the record only
+as a cross-check against an independently metered ledger, so a refusal would manufacture false
+`record_disagrees` rows and point the next audit at the engine for a harness bug.
+
+Shipped instead: replacement, DOCUMENTED on `RunRecord`; a `replay_calls` counter so reuse is
+detectable without coupling detection to control flow; and `_write` made ATOMIC — it computes every
+value before assigning any, because `finish()` was total but not atomic, and a fold that failed partway
+left a record half this run and half the last. On a fresh record that is harmless; on a reused one it
+is the same false arm by another route. Two mutants now cover reuse, which previously had none.
+
+The population this protects is currently empty: there is not one `record=` argument to `replay()`
+anywhere in `src/`, `benchmarks/`, `evals/`, `clients/` or `examples/`. That is an argument for
+documenting the semantics rather than enforcing them — a refusal would let an observability
+out-parameter prevent a write from running, which is the D0 over-refusal shape wearing a reporting hat.
+
+**A THIRD structural guard was disarmed by the same move, and this one is write-safety adjacent.**
+Splitting `_attempt_replay` into a guard and a body (finding 2's fix) silently disarmed
+`test_every_failure_return_in_attempt_replay_goes_through_the_arming_helper` — R3.3's own structural
+scan, which requires every `return` in `_attempt_replay` to be either `_fail(...)` or the success
+tuple, so that a failure exit added below the confirm-transition point cannot ship unarmed. It named
+ONE function; the returns moved to another.
+
+That is three in one slice: the exit-set ratchet read "2 exits", `test_boundary_truth`'s health-view
+scan read "0 `_record_run` sites", and this one flagged the delegating return. All three fired, which
+is the system working — but the shape is now unmistakable and belongs here as a standing rule:
+
+**A structural scan that names ONE function is asserting a negative about a body that can walk away
+from it.** Name every half, and fail if a named half is MISSING rather than scanning whatever is
+found. All three now do. The operational version: when you split a function, the scans that name it
+are a fourth thing to check beside the ratchets, the mutants and the goldens.

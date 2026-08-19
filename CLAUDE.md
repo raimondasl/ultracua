@@ -146,6 +146,14 @@ Violating any of these is a blocking defect, not a trade-off:
   the `out` contract from the engine's own source and runs the REAL `_make_finalize` against a REAL
   session. **What it cannot see is anything page-side** — `drift_bench` and the browser write-safety
   matrix stay the adjudicators there.
+- **A structural scan that names ONE function asserts a negative about a body that can walk away.**
+  Measured at 1.5, where splitting `replay()` and `_attempt_replay` into wrapper+body silently
+  disarmed THREE scans at once: the exit-set ratchet read "2 exits", `test_boundary_truth`'s
+  health-view guard read "0 `_record_run` sites", and R3.3's arming scan flagged the delegating
+  return. All three fired, which is the net working — but when you split a function, the scans that
+  NAME it are a fourth thing to check beside the ratchets, the mutants and the goldens. Name every
+  half, and fail if a named half is MISSING rather than scanning whatever is found.
+
 - **The RunRecord has ONE writer — `_RecordSink` (1.5, 0.110.0).** `replay()` is a wrapper whose only
   job is calling `finish()` exactly once; `_replay_body` appends frozen `_AttemptFacts` and cannot
   write the record at all. Usage comes from ONE run-scoped watch, so a raised attempt, an exit whose

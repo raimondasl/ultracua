@@ -114,8 +114,24 @@ class FakeRouter:
         self.totals = UsageTotals()
 
     def spend(self, usage: Optional[dict], model: str = "") -> None:
-        for _ in range(int((usage or {}).get("calls") or 0)):
-            self.totals.add(_Spend(usage or {}), model)
+        """Credit ONE attempt's usage: `calls` responses whose tokens SUM to the dict's totals.
+
+        The first draft added the full token dict once per call, so the watch saw `calls x` what the
+        report claimed. It was invisible only because the matrix's `USAGE` constant is all-zero
+        tokens and every cell asserted `calls` — the first cell to assert a token or a cost would have
+        frozen a fiction. The real engine's guarantee is that `report.extra["usage"]` EQUALS the
+        router delta for that attempt, and `tests/test_fake_engine_fidelity.py` now pins it.
+        """
+        u = usage or {}
+        n = int(u.get("calls") or 0)
+        if n <= 0:
+            return
+        keys = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
+        for i in range(n):
+            # Integer split, remainder on the first response, so the SUM is exact for any n.
+            part = {k: (int(u.get(k) or 0) // n) + (int(u.get(k) or 0) % n if i == 0 else 0)
+                    for k in keys}
+            self.totals.add(_Spend(part), model)
 
 
 class FakeEngine:

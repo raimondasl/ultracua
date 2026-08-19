@@ -33,6 +33,38 @@ def _load(path: Path):
     return mod
 
 
+_BASELINE_CHECKED: dict = {}
+
+
+def _require_a_live_killer_suite(tests: str) -> None:
+    """Fail loudly if the killer suite does not collect and pass on the UNMUTATED tree.
+
+    THE HOLE THIS CLOSES. A mutant is judged "killed" by a NON-ZERO pytest exit code, so a `--tests`
+    path that does not collect — a typo, or two paths crammed into one argv element — makes pytest exit
+    non-zero for every mutant and this script report a PERFECT score. An audit hit exactly that and
+    read 17/17 where the honest number was 16/17.
+
+    It is the same failure shape the file already guards on the other side ("a stale find-text is an
+    ERROR, not a survivor"): an instrument reporting the suite as stronger than it is. Checked once per
+    process, against the real tree with no mutation applied, so it costs one suite run.
+    """
+    if _BASELINE_CHECKED.get(tests):
+        return
+    env = dict(os.environ)
+    for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        env[k] = ""
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", tests, "-q", "--tb=no", "-p", "no:cacheprovider"],
+        cwd=ROOT, capture_output=True, text=True, env=env)
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"the killer suite {tests!r} does not pass on the UNMUTATED tree (exit "
+            f"{proc.returncode}), so every mutant below would be scored 'killed' by a suite that is "
+            f"broken or collects nothing. Fix the suite or the --tests path first.\n"
+            + (proc.stdout or "")[-2000:] + (proc.stderr or "")[-2000:])
+    _BASELINE_CHECKED[tests] = True
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("registry", type=Path)
@@ -43,6 +75,10 @@ def main() -> int:
     mod = _load(args.registry)
     mutants, known = mod.MUTANTS, dict(getattr(mod, "KNOWN_SURVIVORS", {}))
     print(f"{len(mutants)} mutant(s) from {args.registry.name}; killer suite: {args.tests}\n")
+
+    # BEFORE any mutation, against the UNMUTATED tree. A `--tests` path that does not collect makes
+    # pytest exit non-zero for every mutant and this script report a perfect score.
+    _require_a_live_killer_suite(args.tests)
 
     killed, survived, broken = [], [], []
     for mid, rel, find, repl, why in mutants:

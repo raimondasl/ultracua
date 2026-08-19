@@ -827,21 +827,31 @@ def test_every_failure_return_in_attempt_replay_goes_through_the_arming_helper()
     # re-indentation games.
     path = pathlib.Path(__file__).parents[1] / "src" / "ultracua" / "flows.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    fn = next((n for n in ast.walk(tree)
-               if isinstance(n, ast.AsyncFunctionDef) and n.name == "_attempt_replay"), None)
-    assert fn is not None, (
-        f"could not find `_attempt_replay` in {path} — this scan is asserting a NEGATIVE, so a rename "
-        f"would make it pass while checking nothing")
+    # BOTH HALVES since 1.5 split them. `_attempt_replay` is now a guard whose only job is to append a
+    # `raised` fact if anything inside throws; every failure return lives in `_attempt_replay_body`.
+    #
+    # This guard CAUGHT that split, which is the point worth recording: it is the THIRD structural
+    # scan in this repo to be silently disarmed by a function body moving (the exit-set ratchet and
+    # `test_boundary_truth`'s `_record_run` count were the other two, in the same slice). A scan that
+    # names ONE function asserts a negative about a body that can walk away from it. Requiring both
+    # names, and failing if either is missing, is what makes the rename loud instead of quiet.
+    wanted = ("_attempt_replay", "_attempt_replay_body")
+    fns = [n for n in ast.walk(tree)
+           if isinstance(n, ast.AsyncFunctionDef) and n.name in wanted]
+    assert {f.name for f in fns} == set(wanted), (
+        f"expected {list(wanted)} in {path}, found {sorted(f.name for f in fns)} — this scan asserts a "
+        f"NEGATIVE, so a rename or a split would make it pass while checking nothing")
 
     # `_fail`'s OWN return is the arming mechanism, not a bypass of it — so exclude every return that
     # belongs to a nested function rather than to `_attempt_replay` itself.
     nested_returns = {id(r)
+                      for fn in fns
                       for inner in ast.walk(fn)
-                      if isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef)) and inner is not fn
+                      if isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef)) and inner not in fns
                       for r in ast.walk(inner) if isinstance(r, ast.Return)}
 
     offenders = []
-    for node in ast.walk(fn):
+    for node in [n for fn in fns for n in ast.walk(fn)]:
         if not isinstance(node, ast.Return) or node.value is None or id(node) in nested_returns:
             continue
         # The one legitimate non-_fail return is the success tuple, which must still carry `landed`.
@@ -852,6 +862,11 @@ def test_every_failure_return_in_attempt_replay_goes_through_the_arming_helper()
                 offenders.append(f"line {node.lineno}: raw tuple return, not `_fail(...)`")
             continue
         if isinstance(node.value, ast.Call) and getattr(node.value.func, "id", None) == "_fail":
+            continue
+        # The guard's ONE return: it delegates to the body and re-raises on the way out. It carries no
+        # evidence of its own because it carries the body's, unchanged.
+        if (isinstance(node.value, ast.Await) and isinstance(node.value.value, ast.Call)
+                and getattr(node.value.value.func, "id", None) == "_attempt_replay_body"):
             continue
         offenders.append(f"line {node.lineno}: return is neither `_fail(...)` nor the success tuple")
 

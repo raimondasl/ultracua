@@ -60,8 +60,8 @@ MUTANTS = [
      'G10: a caller cannot tell a clean run from one that had to re-authenticate'),
 
     ('failure_code_from_the_internal_kind', "flows.py",
-     '        record.failure_code = "" if exc is None else (getattr(exc, "code", "") or "raised")',
-     '        record.failure_code = "" if exc is None else "replay_error"  # MUTANT: one flat code',
+     '        failure_code = "" if exc is None else (getattr(exc, "code", "") or "raised")',
+     '        failure_code = "" if exc is None else "replay_error"  # MUTANT: one flat code',
      'R4.49: the record and the exception would describe one run in two vocabularies again'),
 
     ('ok_not_derived_from_the_exit', "flows.py",
@@ -70,9 +70,41 @@ MUTANTS = [
      "R4.57's shape: ok would follow the last ATTEMPT rather than the run, so a precheck skip or a relearn success would report the failed attempt's verdict"),
 
     ('finish_is_not_total', "flows.py",
-     '        except BaseException as inner:  # noqa: BLE001 - a record must never replace the real outcome\n            record.note = f"the run record could not be completed: {type(inner).__name__}: {inner}"',
-     '        except BaseException:\n            raise  # MUTANT: the diagnostic replaces the outcome',
+     '        except BaseException as inner:  # noqa: BLE001 - a record must never replace the real outcome',
+     '        except BaseException:\n            raise  # MUTANT: the diagnostic replaces the outcome\n        except BaseException as inner:',
      "finish() runs in replay()'s except arm, so its own failure would REPLACE the exception the caller is being told about"),
+
+    # ---- the four guarantees the two adversarial audits of 1.5 added. Each has a cell; each mutant
+    # ---- is what proves the cell is the thing keeping it.
+    ('relearn_success_is_answerable', "flows.py",
+     '_UNKNOWN_OUTCOMES = frozenset({"raised", "precheck", "relearn", "relearn_raised"})',
+     '_UNKNOWN_OUTCOMES = frozenset({"raised", "precheck", "relearn_raised"})  # MUTANT',
+     "a relearn is a live authoring run that CAN actuate a write (LearnResult.performed_write exists "
+     "for it), so folding a completed relearn as answerable-and-no is a confident denial — the HIGH "
+     "regression the first draft of the sink shipped"),
+
+    ('cross_check_is_max_not_sum', "flows.py",
+     '        blind = any(sum((r.get(k) or 0) for r in self._reported_usage) > (usage.get(k) or 0)\n'
+     '                    for k in ("calls", "input_tokens", "output_tokens"))',
+     '        blind = any((r.get(k) or 0) > (usage.get(k) or 0)  # MUTANT: per-attempt, not summed\n'
+     '                    for r in self._reported_usage\n'
+     '                    for k in ("calls", "input_tokens", "output_tokens"))',
+     "with two attempts spending comparably neither exceeds the run total alone, so a half-blind run "
+     "reports a CONFIDENT, UNDERSTATED bill — the failure this accounting exists to prevent, missed by "
+     "the check written to prevent it"),
+
+    ('note_is_not_cleared', "flows.py",
+     '        record.note = ""',
+     '        pass  # MUTANT: a stale note survives onto a healthy record',
+     "`note` is the one field nothing else writes, so a record reused after a broken fold would carry "
+     "the old failure onto a healthy run — a site that has to remember to clear"),
+
+    ('broken_fold_leaves_usage_empty', "flows.py",
+     '                if not record.usage:\n'
+     '                    record.usage = {"cost_usd": None, "unobserved_llm_path": True}',
+     '                pass  # MUTANT: a half-written record keeps the empty-dict default',
+     "R4.45's own shape: a record whose cost was never computed would carry `{}`, against RunRecord's "
+     "promise that usage is always populated and always carries cost_usd"),
 
     ('no_watch_cross_check', "flows.py",
      '        if blind or any(r.get("unobserved_llm_path") for r in self._reported_usage):',
@@ -99,9 +131,34 @@ MUTANTS = [
      '        healed_steps=0,  # MUTANT',
      'a run that healed would look like a clean 0-LLM replay in the record'),
 
+    # RESTORED. `main` registered a mutant for this field; the 1.5 rewrite dropped it — and it is the
+    # one field of the five with write-safety significance, dropped in the same commit whose raise-path
+    # regression also lost it. Found by an audit reading the registry against its predecessor.
+    ('carried_no_idempotency_keys', "flows.py",
+     '        idempotency_keys=tuple(\n            tr.meta["idempotency_key"] for tr in report.traces',
+     '        idempotency_keys=(),  # MUTANT\n        _mutant_dropped=tuple(\n            tr.meta["idempotency_key"] for tr in report.traces',
+     "the keys a resume must re-use would be lost on the failing run that most needs them"),
+
+    # REUSE. No mutation touched it before the audit round — a change to the reuse behaviour survived
+    # the whole registry, which is how the accumulate -> overwrite change went unnoticed in the first
+    # place. Two mutants: the counter that makes reuse DETECTABLE, and the fold order that makes a
+    # partial write leave an earlier call's data behind.
+    ('replay_calls_never_increments', "flows.py",
+     '        replay_calls = (record.replay_calls or 0) + 1',
+     '        replay_calls = 1  # MUTANT: reuse becomes undetectable',
+     "a caller that reused one record by accident reads only the last call's facts with nothing saying "
+     "so, and B3's record_disagrees bucket loses the field it keys on"),
+
+    ('write_is_not_atomic', "flows.py",
+     '        usage = self._usage()\n',
+     '        usage = self._usage()\n'
+     '        record.usage = usage  # MUTANT: assigned before the fold completes\n',
+     "a fold that fails partway would leave a record half this run and half the last — on a REUSED "
+     "record that is an earlier call's landed=True beside this call's verdict, i.e. a false arm"),
+
     ('attempts_counts_everything', "flows.py",
-     '        record.attempts = sum(1 for f in self._facts if f.outcome in _ENGINE_OUTCOMES)',
-     '        record.attempts = len(self._facts)  # MUTANT',
+     '        attempts = sum(1 for f in self._facts if f.outcome in _ENGINE_OUTCOMES)',
+     '        attempts = len(self._facts)  # MUTANT',
      'attempts has always meant ENGINE attempts; a precheck skip counting as one would make a run that never touched the engine report that it did'),
 
 ]

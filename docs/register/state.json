@@ -381,6 +381,26 @@
     "tests/mutations/b1_wiring.py::cost_passthrough_coercion"
    ],
    "disposition": "closed at 1.5's first step; the two coercion mutants are registered so red-proof keeps them dead"
+  },
+  {
+   "id": "R4.60",
+   "status": "fixed",
+   "severity": "medium",
+   "class": "g",
+   "summary": "`scripts/prove_red.py` scores a PERFECT run when its killer suite collects nothing: a mutant is judged killed by a non-zero pytest exit, so a `--tests` path that does not collect makes every mutant 'killed'. An audit hit it and read 17/17 where the honest number was 16/17. The same failure shape the script already guards on the other side (a stale find-text is an ERROR, not a survivor), one step over — an instrument reporting the suite as stronger than it is. FIXED at 0.110.0: the killer suite must collect and pass on the UNMUTATED tree before any mutation is applied",
+   "pins": [
+    "scripts/prove_red.py::_require_a_live_killer_suite"
+   ],
+   "disposition": "closed at 1.5's audit round; armed by pointing --tests at a path that does not exist"
+  },
+  {
+   "id": "R4.61",
+   "status": "open",
+   "severity": "low",
+   "class": "b",
+   "summary": "`write_unverified` records `committed=False` while its own message says the commit ACTUATED — `_fail` appends `outcome=\"failed\"`, which is not in `_UNKNOWN_OUTCOMES`, so the fold answers the write question 'no' for the one kind whose whole meaning is 'it fired and cannot be confirmed'. NOT a regression (the pre-sink code did the same), but the sink's stated rule was supposed to close this class and does not, because unanswerability is keyed on the outcome STRING and every failure exit shares one. The human channel is covered (the exception text says to check the target system); the record is not",
+   "disposition": "reshape-plan step 1.4 — it needs a per-kind vocabulary to name an unanswerable failure, which is exactly what 1.4's distinct codes provide. Deliberately NOT taken in 1.5: it is a behaviour change beyond the sink's scope and the two are better argued apart",
+   "blocked_by": "reshape-plan 1.4 (distinct codes)"
   }
  ]
 }

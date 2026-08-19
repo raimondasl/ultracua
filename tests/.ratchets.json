@@ -32,11 +32,9 @@
    "disposition": "reshape-plan 1.6 — FlowSpec.key"
   },
   "run_record_write_sites": {
-   "total": 14,
-   "by_file": {
-    "src/ultracua/flows.py": 14
-   },
-   "disposition": "reshape-plan 1.5 — THE SINK"
+   "total": 0,
+   "by_file": {},
+   "disposition": "reshape-plan 1.5 — THE SINK (landed; the invariant is now CONTAINMENT, so the only acceptable value is 0)"
   },
   "spec_mutate_raw": {
    "total": 27,

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import types
 import time
 
 import pytest
@@ -735,39 +736,328 @@ def test_every_record_write_is_inside_the_sink() -> None:
 
     The ratchet in `scripts/ratchets.py` counts `record.<field> =` statements and can only shrink; it
     went 16 -> 14, which understates the change, because the number was never the problem. The problem
-    was that the sixteen were spread across `replay()` and `_attempt_replay`, on paths that had to each
+    was that the sixteen were spread across `replay()` and `_attempt_replay`, on paths that each had to
     remember to write, to clear what an earlier path wrote, and to not write a denial they had no
     evidence for. Every one of B1's ten findings is a consequence of that spread.
 
-    So the guard is not "how many" but "where": every write lives in `_RecordSink`. A new one anywhere
-    else re-creates the shape, and this fails naming it.
+    MATCHED BY FIELD NAME, NOT BY THE VARIABLE'S NAME. The first draft matched only targets whose base
+    was literally `record`, which an audit showed is the SAME failure mode as the ratchet it replaces —
+    the ratchet read ZERO because a local had been renamed `rec`. Measured then: `record.landed = True`
+    was caught while `sink._record.landed = True`, `rec = sink._record; rec.landed = True` and
+    `setattr(sink._record, 'landed', True)` all slipped through. It now keys on `RunRecord`'s own field
+    set, whatever the base expression is, and flags `setattr` on anything that is not `self`.
     """
+    fields = set(RunRecord.__dataclass_fields__)
+    assert len(fields) >= 10, "RunRecord lost its fields — this guard would pass vacuously"
+
     tree = ast.parse(pathlib.Path("src/ultracua/flows.py").read_text(encoding="utf-8"))
     sink = next((n for n in ast.walk(tree)
                  if isinstance(n, ast.ClassDef) and n.name == "_RecordSink"), None)
     assert sink is not None, "the sink is gone — this guard would pass vacuously"
     inside = {id(n) for n in ast.walk(sink)}
 
-    outside = []
+    # EXCEPTION VARIABLES ARE NOT RECORDS, and `landed` is a field on BOTH `RunRecord` and
+    # `FlowReplayError`. `exc.landed = True` at the ledger-arming site (R3.3's consumer, which the plan
+    # requires to stay byte-identical) is a write to the EXCEPTION. Derived from the tree — every name
+    # bound by an `except ... as <name>` — rather than allowlisted, so a handler renamed tomorrow is
+    # still understood.
+    exception_names = {h.name for h in ast.walk(tree)
+                       if isinstance(h, ast.ExceptHandler) and h.name}
+
+    outside, n_inside = [], 0
     for node in ast.walk(tree):
         targets = []
         if isinstance(node, ast.Assign):
             targets = node.targets
         elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
             targets = [node.target]
-        flat = [e for t in targets for e in (t.elts if isinstance(t, ast.Tuple) else [t])]
-        for t in flat:
-            if (isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
-                    and t.value.id == "record" and id(node) not in inside):
-                outside.append(f"flows.py:{node.lineno} writes record.{t.attr}")
+        flat = [e for t_ in targets for e in (t_.elts if isinstance(t_, ast.Tuple) else [t_])]
+        for t_ in flat:
+            if isinstance(t_, ast.Attribute) and t_.attr in fields:
+                if isinstance(t_.value, ast.Name) and t_.value.id in exception_names:
+                    continue
+                if id(node) in inside:
+                    n_inside += 1
+                else:
+                    outside.append(f"flows.py:{node.lineno} writes .{t_.attr} on "
+                                   f"{ast.unparse(t_.value)}")
+        # `setattr(x, 'landed', ...)` is the same write wearing a string. Allowed only on `self`,
+        # which is how a dataclass or a helper legitimately configures itself.
+        if (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "setattr"
+                and len(node.args) >= 2 and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value in fields
+                and not (isinstance(node.args[0], ast.Name)
+                         and node.args[0].id in {"self"} | exception_names)
+                and id(node) not in inside):
+            outside.append(f"flows.py:{node.lineno} setattr(..., {node.args[1].value!r}, ...)")
 
     assert not outside, (
         "a RunRecord field is written outside `_RecordSink`, which re-creates the spread 1.5 removed:\n"
         + "\n  ".join(outside))
-    n_inside = sum(1 for n in ast.walk(sink)
-                   if isinstance(n, ast.Assign)
-                   for t in n.targets
-                   if isinstance(t, ast.Attribute) and getattr(t.value, "id", "") == "record")
     assert n_inside >= 10, (
         f"only {n_inside} record writes found inside the sink — the walk is broken, so the assertion "
         f"above would pass however the code changed")
+
+
+# ===================================================================================================
+# WHAT THE TWO ADVERSARIAL AUDITS OF 1.5 FOUND. Every cell below exists because a green suite, a green
+# `prove_red 16/16` and six green ratchets did NOT catch the defect it pins. They are grouped here
+# rather than filed beside their neighbours so the next reader can see the shape of what an audit
+# catches that a matrix does not.
+
+async def test_AUDIT_a_relearn_success_leaves_the_write_question_UNANSWERABLE(
+    tmp_path, monkeypatch
+) -> None:
+    """THE HIGH ONE. A relearn that SUCCEEDS used to fold as answerable-and-no.
+
+    A relearn is a live LLM authoring run against a page that has demonstrably drifted, and discovery
+    can actuate a write — `LearnResult.performed_write` exists for exactly that, and `_learn` refuses
+    to cache a flow whose write it could not attribute. So a completed relearn licenses no denial.
+
+    Before the sink this came from `_mark_ok` -> `_forget_negative_write_evidence`. Deleting those
+    helpers deleted the property, and `test_relearn_full_success_absorbs_the_learn_spend` asserts
+    `ok`, `mode`, `usage`, `llm_calls` and `total_ms` but NEVER `landed` — so a fourth golden moved,
+    in the opposite direction to the one the slice argued, and nothing noticed. Measured against main:
+    `None/None` there, `False/False` here.
+    """
+    spec, cache = _seed(tmp_path, monkeypatch, name="auditrelearn", approved=False)
+    lr = LearnResult(spec=spec, cached=True, steps=[], data={"n": 1}, found=True, note="",
+                     performed_write=True,          # discovery ACTUATED a write on the drifted page
+                     report=fe.report(mode="learn", usage=dict(USAGE)))
+    eng = fe.FakeEngine(
+        fe.Attempt(report=fe.report(success=False, note="drift", usage=USAGE)),
+        fe.Attempt(report=fe.report(success=False, note="replan failed", usage=USAGE)),
+        learn=lr,
+    ).install(monkeypatch)
+    rec = RunRecord()
+
+    data = await replay(spec, cache=cache, on_drift="relearn", provider=eng.provider,
+                        router=eng.router, record=rec)
+
+    assert data == {"n": 1} and eng.learn_calls == 1, "premise: the relearn ran and succeeded"
+    assert (rec.landed, rec.committed) == (None, None), (
+        "a relearn that may have actuated a write during discovery reported a confident denial — the "
+        "one error direction nothing downstream catches")
+
+
+async def test_AUDIT_a_raise_after_the_engine_returns_still_records_the_attempt(
+    tmp_path, monkeypatch
+) -> None:
+    """The attempt's facts must survive a raise ANYWHERE in the attempt, not just in `run_cached`.
+
+    The first draft wrapped only the engine call, so the ~130 lines after it — the write-evidence
+    block, the shape gate, the H9 contract checks, `_capture_audit` — could raise with no fact
+    appended. The record then said a run that fully executed one engine attempt made ZERO attempts,
+    with its traces and its Idempotency-Keys gone: R4.45's own family, one window over.
+
+    Driven by making the shape gate raise, which is inside that window and after the engine returned.
+    """
+    spec, cache = _seed(tmp_path, monkeypatch, name="auditraise", extract={"n": "a number"})
+    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    _update_meta(cache, key, lambda m: setattr(m, "shape", {"n": "int"}), on_unreadable="raise")
+    traces = [fe.trace(0, ms=9.0, idempotency_key="idem-CRITICAL")]
+    eng = fe.FakeEngine(fe.Attempt(report=fe.report(usage=USAGE, llm_calls=4, traces=traces),
+                                   out={"found": True, "data": {"n": 1}})).install(monkeypatch)
+
+    def _boom(*a, **kw):
+        raise ZeroDivisionError("something in the gate window")
+
+    monkeypatch.setattr(flows_mod, "_shape_matches", _boom)
+    rec = RunRecord()
+
+    with pytest.raises(ZeroDivisionError):
+        await replay(spec, cache=cache, record=rec, router=eng.router)
+
+    assert len(eng.calls) == 1, "premise: the engine ran and returned before the raise"
+    assert rec.attempts == 1, (
+        f"the record says {rec.attempts} attempt(s) for a run that fully executed one — the operator "
+        f"reads 'nothing ran' over a run whose write step may have POSTed")
+    assert rec.idempotency_keys == ["idem-CRITICAL"], (
+        "the key a resume must re-use was dropped on the raise path, which is the path that most "
+        "needs it")
+    assert rec.llm_calls == 4 and rec.traces, "the attempt's spend and traces went with it"
+    assert (rec.landed, rec.committed) == (None, None), "and the write question stays unanswerable"
+
+
+def test_AUDIT_the_cross_check_sums_the_attempts_rather_than_comparing_each(tmp_path) -> None:
+    """N half-blind attempts must not report a confident, understated bill.
+
+    Each report is ONE attempt's router delta and the watch spans the whole run, so blindness is
+    `sum(reported) > watch`. The first draft compared each attempt INDIVIDUALLY against the run total,
+    which detects only the single-attempt case — with two attempts spending comparably neither exceeds
+    the total alone. Both audits reproduced the miss; the cell that was supposed to pin it used one
+    attempt, i.e. exactly the shape where max == sum.
+    """
+    from ultracua.flows import RunRecord as _RR
+    from ultracua.flows import _AttemptFacts, _RecordSink
+
+    class _R:
+        def __init__(self):
+            from ultracua.obs import UsageTotals
+            self.totals = UsageTotals()
+
+    router = _R()
+    rec = _RR()
+    sink = _RecordSink(rec)
+    sink.arm(None, router, "mock-1")
+    # The watch sees three calls; the two attempts between them report six. Neither report exceeds
+    # three on its own, so a per-attempt comparison sees nothing wrong.
+    for _ in range(3):
+        router.totals.add(types.SimpleNamespace(input_tokens=1, output_tokens=1,
+                                                cache_read_tokens=0, cache_write_tokens=0), "mock-1")
+    sink.attempt(_AttemptFacts(outcome="failed"))
+    sink.cross_check_usage({"calls": 3})
+    sink.attempt(_AttemptFacts(outcome="ok"))
+    sink.cross_check_usage({"calls": 3})
+    sink.finish(None)
+
+    assert rec.usage["cost_usd"] is None, (
+        f"six reported calls against a watch that saw three was priced at "
+        f"{rec.usage['cost_usd']!r} — a confident number for half the run's spend")
+    assert rec.usage.get("watch_missed_a_router") is True
+
+
+def test_AUDIT_a_broken_fold_leaves_usage_UNKNOWN_not_empty() -> None:
+    """`finish()`'s own failure must not re-open R4.45.
+
+    `usage` was assigned LAST, so any earlier failure left the dataclass default `{}` — the exact
+    shape R4.45 was filed for, against `RunRecord`'s promise that usage is always populated and always
+    carries `cost_usd`. The existing totality cell asserts the note and the caller's exception, so a
+    half-written record passed it.
+    """
+    from ultracua.flows import RunRecord as _RR
+    from ultracua.flows import _AttemptFacts, _RecordSink
+
+    # ARM 1 — the usage computation ITSELF fails, so nothing ever computed a cost. This is the R4.45
+    # shape: without the guard the record keeps the dataclass default `{}`.
+    rec = _RR()
+    sink = _RecordSink(rec)
+    sink.attempt(_AttemptFacts(outcome="ok"))
+    sink._usage = lambda: (_ for _ in ()).throw(ZeroDivisionError("boom in _usage"))
+    sink.finish(None)
+
+    assert "ZeroDivisionError" in rec.note, "premise: the fold really did break"
+    assert rec.usage.get("cost_usd") is None and rec.usage.get("unobserved_llm_path") is True, (
+        f"a record whose cost was never computed must say UNKNOWN, not carry an empty dict that "
+        f"reads as 'no usage'; usage={rec.usage!r}")
+
+    # ARM 2 — a LATER step fails, after usage was computed successfully. The genuine number must
+    # survive: forcing unknown here would throw away a measurement the run really made.
+    rec2 = _RR()
+    sink2 = _RecordSink(rec2)
+    sink2.attempt(_AttemptFacts(outcome="ok"))
+    sink2._evidence = lambda *_: (_ for _ in ()).throw(ZeroDivisionError("boom after usage"))
+    sink2.finish(None)
+
+    assert "ZeroDivisionError" in rec2.note
+    # ATOMIC, since the audit round:  computes every value BEFORE assigning any, so a failure
+    # anywhere in the fold leaves the record wholly untouched rather than half this run and half the
+    # last one. On a fresh record that means defaults; on a REUSED one it is what stops an earlier
+    # call's landed=True sitting beside this call's verdict, which is a false arm.
+    assert rec2.usage.get("cost_usd") is None and rec2.usage.get("unobserved_llm_path") is True
+    assert (rec2.attempts, rec2.mode, rec2.replay_calls) == (0, "", 0), (
+        f"the fold was not atomic — some fields landed before it failed: attempts={rec2.attempts}, "
+        f"mode={rec2.mode!r}, replay_calls={rec2.replay_calls}")
+
+
+def test_AUDIT_a_stale_note_does_not_survive_onto_a_healthy_record() -> None:
+    """`note` was the one field `_write` never wrote, so it had to be remembered — the shape the sink
+    exists to remove, one field over from the sixteen it removed."""
+    from ultracua.flows import RunRecord as _RR
+    from ultracua.flows import _AttemptFacts, _RecordSink
+
+    rec = _RR()
+    rec.note = "the run record could not be completed: from an earlier, broken fold"
+    sink = _RecordSink(rec)
+    sink.attempt(_AttemptFacts(outcome="ok", mode="replay"))
+    sink.finish(None)
+
+    assert rec.ok is True and rec.note == "", (
+        f"a healthy run carries a stale failure note: {rec.note!r}")
+
+
+def test_AUDIT_finish_runs_exactly_once() -> None:
+    """The slice's headline claim — "a wrapper whose only job is calling `finish()` exactly once" — had
+    no cell, and the mutation removing the `_finished` latch SURVIVED both test files.
+
+    Defensive today (the wrapper cannot re-enter), which is precisely why it needs a cell: nothing
+    else would notice the guarantee disappearing.
+    """
+    from ultracua.flows import DriftError
+    from ultracua.flows import RunRecord as _RR
+    from ultracua.flows import _AttemptFacts, _RecordSink
+
+    rec = _RR()
+    sink = _RecordSink(rec)
+    sink.attempt(_AttemptFacts(outcome="ok", mode="replay"))
+    sink.finish(None)
+    assert rec.ok is True and rec.failure_code == ""
+
+    sink.finish(DriftError("a second verdict, from a second call"))
+    assert rec.ok is True and rec.failure_code == "", (
+        "a second `finish()` overwrote the first with a different exception's verdict")
+
+
+async def test_AUDIT_reuse_replaces_and_says_how_many_calls_wrote_the_record(
+    tmp_path, monkeypatch
+) -> None:
+    """The cell `docs/reshape-plan.md` lists in 1.5's acceptance column and the slice did not deliver.
+
+    ONE RECORD DESCRIBES ONE CALL. The pre-1.5 code accumulated across calls as a side effect of
+    `_absorb_usage`, whose own comment scopes accumulation to the up-to-three ATTEMPTS inside one call;
+    cross-call summing was a leak of that mechanism, never a contract.
+
+    Replacement is chosen over accumulation and over a refusal for the failure DIRECTION, not for
+    tidiness — see the fold-level cell below, which drives the shape that decides it. Here: the record
+    describes the LAST call, and `replay_calls` says how many wrote it, which is the detection that
+    makes a refusal unnecessary and is what B3's `record_disagrees` bucket keys on.
+    """
+    spec, cache = _seed(tmp_path, monkeypatch, name="reuse1")
+    fe.FakeEngine(fe.Attempt(report=fe.report(usage=USAGE, llm_calls=5))).install(monkeypatch)
+    rec = RunRecord()
+    await replay(spec, cache=cache, record=rec)
+    assert (rec.ok, rec.llm_calls, rec.replay_calls) == (True, 5, 1), "premise: call #1 succeeded"
+
+    spec2, cache2 = _seed(tmp_path, monkeypatch, name="reuse2")
+    fe.FakeEngine(fe.Attempt(raises=RuntimeError("the second run blew up"))).install(monkeypatch)
+    with pytest.raises(RuntimeError):
+        await replay(spec2, cache=cache2, record=rec)
+
+    assert rec.ok is False and rec.failure_code == "raised", "the record must describe the LAST call"
+    assert rec.llm_calls == 0 and rec.attempts == 1, (
+        f"the counters are summed across calls ({rec.llm_calls} decides, {rec.attempts} attempts) — "
+        f"accumulation was an attempt-scoped mechanism leaking across calls")
+    assert rec.replay_calls == 2, (
+        f"the record does not say it was written twice ({rec.replay_calls}), so a caller reading only "
+        f"the last call's facts has no way to notice")
+
+
+def test_AUDIT_a_reused_record_never_keeps_an_earlier_calls_landed_TRUE() -> None:
+    """THE shape that decided replacement over both alternatives, driven at the fold.
+
+    It cannot be driven through `replay()`: reaching a record-level `landed=True` needs the recipe's
+    mutating steps to be evidenced as run-ok, which the fake does not model — `WriteReadbackError`'s
+    `landed=True` is a CLASS default, not this run's evidence. So the arithmetic is tested as
+    arithmetic, as with the sticky-evidence rule.
+
+    Call #1 evidenced a landed write. Call #2 raises. Accumulating — and equally a "refuse" that leaves
+    call #1's facts in place — reports `landed=True` for a run that raised: a FALSE ARM, where a resume
+    skips a row it cannot know was paid, and CLAUDE.md is explicit that nothing downstream catches it.
+    Replacement reaches `landed=None`, which is the direction this codebase survives.
+    """
+    from ultracua.flows import _AttemptFacts, _RecordSink
+
+    rec = RunRecord()
+    first = _RecordSink(rec)
+    first.attempt(_AttemptFacts(outcome="failed", landed=True, committed=True))
+    first.finish(None)
+    assert rec.landed is True and rec.replay_calls == 1, "premise: call #1 evidenced a landed write"
+
+    second = _RecordSink(rec)
+    second.attempt(_AttemptFacts(outcome="raised", mode="raised"))
+    second.finish(RuntimeError("boom"))
+
+    assert rec.landed is None and rec.committed is None, (
+        f"an earlier call's landed={True} survived onto a run that RAISED — the false arm that makes "
+        f"a resume skip a row it cannot know was paid. Got landed={rec.landed!r}")
+    assert rec.replay_calls == 2
