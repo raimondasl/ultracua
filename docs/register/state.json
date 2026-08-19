@@ -264,8 +264,12 @@
   },
   {
    "id": "R4.47",
-   "status": "open",
-   "summary": "B1: the FAILED-path cell asserts one default and two truthy values, so an engine populating the record only on success keeps it green"
+   "status": "fixed",
+   "summary": "B1: the FAILED-path cell asserts one default and two truthy values, so an engine populating the record only on success keeps it green — FIXED at 1.5's first step: the cell now asserts the population block (attempts, a real duration, traces, usage) and the CLASS is closed browser-free by a matrix cell plus four registered mutants that all survived until it was written",
+   "pins": [
+    "tests/test_replay_exit_matrix.py::test_the_population_block_reaches_the_record_on_a_FAILED_run",
+    "tests/test_flows.py::test_run_record_is_populated_on_a_FAILED_replay"
+   ]
   },
   {
    "id": "R4.48",

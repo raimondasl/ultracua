@@ -12,7 +12,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**38 open**, 17 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**37 open**, 18 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **38 open**, 17 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **37 open**, 18 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -837,7 +837,7 @@ if and only if that branch is ever resumed.
 | R4.44 | open | B1: a raised attempt drops its own LLM spend, traces and minted keys, and leaves `ok`/`failure_code` stale from the previous attempt (F2 guarded the relearn leg only) |
 | R4.45 | open | B1: `record.usage == {}` on the miss / escalate / precheck / pre-attempt-refusal / raise exits, against `RunRecord`'s own "always populated" docstring |
 | R4.46 | open | B1: a usage-less later attempt flips a priced total to `None` with no reason flag — a missing key and an unpriceable one are treated alike |
-| R4.47 | open | B1: the FAILED-path cell asserts one default and two truthy values, so an engine populating the record only on success keeps it green |
+| R4.47 | fixed | B1: the FAILED-path cell asserts one default and two truthy values, so an engine populating the record only on success keeps it green — FIXED at 1.5's first step: the cell now asserts the population block (attempts, a real duration, traces, usage) and the CLASS is closed browser-free by a matrix cell plus four registered mutants that all survived until it was written |
 | R4.48 | open | B1: eleven wiring mutations of the record plumbing survive the entire suite — only two cells pass `record=` at all |
 | R4.49 | open | B1: `record.failure_code` speaks the internal `kind` vocabulary, not `FlowReplayError.code`, and can name a different attempt than the exception |
 | R4.50 | open | B1: `llm_calls` / `traces` / `healed_steps` / `total_ms` exclude the relearn while `usage` includes it, so two fields disagree about one run |

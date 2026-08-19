@@ -159,7 +159,7 @@ Violating any of these is a blocking defect, not a trade-off:
 
 - **The wiring mutants must stay dead.** `scripts/prove_red.py tests/mutations/b1_wiring.py` applies each
   of R4.48's eleven record-plumbing mutations to a scratch copy of `src/` and reports which are killed:
-  **0 of 11 before the matrix, 11 of 11 after**, and the `red-proof` CI job keeps it that way. A mutation
+  **0 of 11 before the matrix, 11 of 11 after**, and the registry has since grown to **17** (two at R4.59, four at 1.5's first step), and the `red-proof` CI job keeps it that way. A mutation
   whose find-text no longer matches is reported as an ERROR, not a survivor, because a stale mutation
   silently reports the suite as stronger than it is. A survivor is a hole in the matrix, not a bug in the
   mutation: add a cell, or register it with a reason and a finding id.
