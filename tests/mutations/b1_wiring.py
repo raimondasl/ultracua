@@ -1,4 +1,4 @@
-"""The eleven record-plumbing mutations R4.48 measured as surviving the ENTIRE suite.
+"""The eleven record-plumbing mutations R4.48 measured as surviving the ENTIRE suite, plus two.
 
 Each entry is a source transformation applied to a SCRATCH COPY of `src/ultracua/` — never the tree
 under test — plus the reason it is a real defect if it survives. `scripts/prove_red.py` applies them one
@@ -75,6 +75,20 @@ MUTANTS = [
      '        record.llm_calls += report.llm_calls',
      '        pass  # MUTANT: llm_calls never accumulates',
      "a healed or replanned run would report 0 LLM calls beside a usage showing spend"),
+
+    # R4.59, added at 1.5's first step. These two are not record-PLUMBING like the eleven above; they
+    # are the confident-zero coercion itself, registered because the cell that was supposed to forbid
+    # it (R4.51's) had been asserting the OPPOSITE, strictly, as a standing demand that someone
+    # implement it. Both were armed by hand and both now die.
+    ("cost_sticky_none_merge", "flows.py",
+     '    dst["cost_usd"] = None if (a is None or b is None) else round(a + b, 6)',
+     '    dst["cost_usd"] = round((a or 0) + (b or 0), 6)  # MUTANT: an unknown attempt sums as free',
+     "a priced attempt merged with an unobserved one would report a confident partial sum as the total"),
+
+    ("cost_passthrough_coercion", "flows.py",
+     '        record.usage = dict(usage)\n        return',
+     '        record.usage = dict(usage, cost_usd=usage.get("cost_usd") or 0.0)  # MUTANT\n        return',
+     "a single-attempt run whose engine reported UNKNOWN would claim a priced zero"),
 ]
 
 # Mutants no cell kills yet. Each needs a reason and, where it is a real gap, a register id — an empty

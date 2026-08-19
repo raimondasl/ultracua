@@ -362,16 +362,62 @@ async def test_R4_49_failure_code_matches_the_exception_code(tmp_path, monkeypat
     assert rec.failure_code == exc.value.code
 
 
-@pytest.mark.xfail(strict=True, reason="R4.51: nothing pins the headline end to end — an engine "
-                                       "reporting UNKNOWN on every replay passes every cell")
 async def test_R4_51_an_unobserved_replay_is_distinguishable(tmp_path, monkeypatch) -> None:
+    """R4.51's end-to-end pin: a priced zero and an unobserved run must not look the same to a caller.
+
+    THIS CELL USED TO ASSERT THE COUNTEREXAMPLE (R4.59). It was a strict xfail demanding
+    `cost_usd == 0.0` from a run whose engine reported `cost_usd=None, unobserved_llm_path=True` — i.e.
+    it specified that `replay()` should overwrite an UNKNOWN with a confident zero, which is the exact
+    failure B1 exists to prevent, and `strict=True` made it a standing demand that someone implement it.
+
+    R4.51's actual complaint is a COVERAGE gap, not a behaviour defect: "an engine reporting
+    unobserved on every replay would pass every cell". The property that closes it is
+    DISTINGUISHABILITY — which is what the cell was always named for — so both arms run here, through
+    the same path, differing only in what the engine reported. Measured before this rewrite: the two
+    already differ, so the cell is green rather than xfail, and nothing in `src/` changes.
+    """
     spec, cache = _seed(tmp_path, monkeypatch, name="r451")
     unobserved = dict(USAGE, cost_usd=None, unobserved_llm_path=True)
     fe.FakeEngine(fe.Attempt(report=fe.report(usage=unobserved))).install(monkeypatch)
     rec = RunRecord()
     await replay(spec, cache=cache, record=rec)
-    assert rec.usage.get("cost_usd") == 0.0, (
-        "the engine reported UNKNOWN and replay() passed it through; nothing in the suite objects")
+    assert rec.usage.get("cost_usd") is None, (
+        "an unobserved run was priced at a confident zero — the understated bill B1 exists to prevent")
+    assert rec.usage.get("unobserved_llm_path") is True, (
+        "the cost is unknown and the record does not say WHY, so a caller cannot tell it from a "
+        "genuinely free run")
+
+    spec2, cache2 = _seed(tmp_path, monkeypatch, name="r451b")
+    fe.FakeEngine(fe.Attempt(report=fe.report(usage=dict(USAGE)))).install(monkeypatch)
+    rec2 = RunRecord()
+    await replay(spec2, cache=cache2, record=rec2)
+    assert rec2.usage.get("cost_usd") == 0.0, "a fully observed 0-LLM replay must CLAIM zero"
+    assert not rec2.usage.get("unobserved_llm_path")
+
+    # THE PROPERTY, stated over the pair rather than either arm: an engine that reported UNKNOWN on
+    # every replay — the thing R4.51 says nothing would catch — now fails here, because these two
+    # records would be equal.
+    assert rec.usage.get("cost_usd") != rec2.usage.get("cost_usd"), (
+        "a priced zero and an unobserved run are indistinguishable on the record")
+
+    # AND THE MERGE PATH, which the two arms above do NOT reach. `_absorb_usage` early-returns on the
+    # first attempt (`if not dst: record.usage = dict(usage)`), so a one-attempt cell only proves
+    # pass-through. Measured while arming this rewrite: a mutation that summed None as 0 in the merge
+    # left both arms above green. A priced attempt followed by an unobserved one is where sticky-None
+    # actually lives, and it is the shape a real auth-refresh retry produces.
+    spec3, cache3 = _seed(tmp_path, monkeypatch, name="r451c")
+    _with_login(spec3)
+    fe.FakeEngine(
+        fe.Attempt(report=fe.report(success=False, note="session expired",
+                                    usage=dict(USAGE, cost_usd=0.25))),
+        fe.Attempt(report=fe.report(usage=unobserved)),
+    ).install(monkeypatch)
+    rec3 = RunRecord()
+    await replay(spec3, cache=cache3, record=rec3)
+    assert rec3.usage.get("cost_usd") is None, (
+        f"a priced attempt merged with an UNOBSERVED one reported {rec3.usage.get('cost_usd')!r} — a "
+        f"partial sum presented as the total is the understated bill")
+    assert rec3.usage.get("unobserved_llm_path") is True
 
 
 @pytest.mark.xfail(strict=True, reason="R4.57: a SUCCESSFUL auth-refresh retry leaves the failed "
