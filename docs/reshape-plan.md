@@ -328,14 +328,14 @@ change.
 
 | # | Order | Step | Disposes | Pinned by | Size · WS |
 |---|---|---|---|---|---|
-| 1.1 | 5 | **Keyword-only engine chain.** `*` after the identity prefix in `_learn`/`_learn_n`/`_replay`/`_verify_by_replay`/`_replay_step`/`_author_steps`; internal call sites rewritten to keywords. `run_cached`'s public signature unchanged. **(critic)** the arity pin cannot see a *mis-keyed* placeholder (`flow.py:752` passes four `None`s whose swap is type-silent), so a forwarding-identity test comes with it: stub each inner coroutine, pass a unique sentinel per kwarg, assert every kwarg arrives under the same name with `is` identity, DELIBERATE_DROPS asserted both ways, shown RED against a mis-keyed scratch copy | i | AST positional-arity pin + the forwarding-identity cell; RED-in-CI; suite + 0.3 goldens byte-identical | S · 1.5 d + audit · no |
+| 1.1 | 6 · §13 | **Keyword-only engine chain.** `*` after the identity prefix in `_learn`/`_learn_n`/`_replay`/`_verify_by_replay`/`_replay_step`/`_author_steps`; internal call sites rewritten to keywords. `run_cached`'s public signature unchanged. **(critic)** the arity pin cannot see a *mis-keyed* placeholder (`flow.py:752` passes four `None`s whose swap is type-silent), so a forwarding-identity test comes with it: stub each inner coroutine, pass a unique sentinel per kwarg, assert every kwarg arrives under the same name with `is` identity, DELIBERATE_DROPS asserted both ways, shown RED against a mis-keyed scratch copy | i | AST positional-arity pin + the forwarding-identity cell; RED-in-CI; suite + 0.3 goldens byte-identical | S · 1.5 d + audit · no |
 | 1.2 | 1 · DONE 0.109.0 | **`flow release` reaches `release()`.** **(critic)** *delete* the pre-check at `cli.py:652`, do not widen it: `health()` reports `refused` only when the flow is **not** cached (`flows.py:2068`), so a refusal recorded with a stale recipe still reads "nothing to release". `release()` returns what it cleared; the CLI prints that. ≤10 src lines | **R4.42**; R3.13 remedy hole (d, j) | RED CLI cells for **both** shapes (learn-refused uncached; refused-with-stale-recipe) driven through argparse | S · 0.5 d · no |
-| 1.3 | 4 | **A "cannot-spend" third state in `obs.py`.** **(critic)** only the `totals = UsageTotals()` variant — never a new attribute probe on an owner, because a `spends: ClassVar` probe re-creates commit `00888b4`, which tripped inviolable #1's `_Exploding` tripwire one week ago. AST cell: `RouterWatch.__init__` reads only `router`/`totals`. `accounting_failed` becomes run-scoped. Fix the readers so `None` renders as *unknown* and never sums to 0.0 | B1-A10; b, c, p | `observe(ScriptedProvider([]))` → observed, 0.0; the `_Spender` stub stays unobserved; `test_a_navigate_only_replay_never_reaches_a_provider[repair]` named as a pin; drift_bench baseline unchanged | S · 1 d + audit · no |
-| 1.4 | 3 | **Distinct codes + one `outcome_of` + tri-state on the siblings.** Codes for the ~10 base-class refusals; `outcome_of(exc) → Outcome(code, retryable, landed)` replaces the getattr triples that *construct* `BatchRowResult`/`ToolOutcome`/`DryRunReport`/`FleetRun`. **(critic)** the two ledger-arming reads (`flows.py:3771`, `mcpserver/server.py:444`) stay byte-identical — they are R3.3's consumers. Must land before B3 freezes its vocabulary | B1-A6, B1-A9; j, b | ratchet bare `raise FlowReplayError(` 24 → 0; a cell per subclass at its raise site asserting (code, retryable, landed); `test_landed_arms_the_ledger.py` + the write-safety matrix (both clauses) named as pins | M · 2 d + **2 audits** · **yes** |
+| 1.3 | 5 · §13 | **A "cannot-spend" third state in `obs.py`.** **(critic)** only the `totals = UsageTotals()` variant — never a new attribute probe on an owner, because a `spends: ClassVar` probe re-creates commit `00888b4`, which tripped inviolable #1's `_Exploding` tripwire one week ago. AST cell: `RouterWatch.__init__` reads only `router`/`totals`. `accounting_failed` becomes run-scoped. Fix the readers so `None` renders as *unknown* and never sums to 0.0 | B1-A10; b, c, p | `observe(ScriptedProvider([]))` → observed, 0.0; the `_Spender` stub stays unobserved; `test_a_navigate_only_replay_never_reaches_a_provider[repair]` named as a pin; drift_bench baseline unchanged | S · 1 d + audit · no |
+| 1.4 | **3** · §13 | **Distinct codes + one `outcome_of` + tri-state on the siblings.** Codes for the ~10 base-class refusals; `outcome_of(exc) → Outcome(code, retryable, landed)` replaces the getattr triples that *construct* `BatchRowResult`/`ToolOutcome`/`DryRunReport`/`FleetRun`. **(critic)** the two ledger-arming reads (`flows.py:3771`, `mcpserver/server.py:444`) stay byte-identical — they are R3.3's consumers. Must land before B3 freezes its vocabulary | B1-A6, B1-A9; j, b | ratchet bare `raise FlowReplayError(` 24 → 0; a cell per subclass at its raise site asserting (code, retryable, landed); `test_landed_arms_the_ledger.py` + the write-safety matrix (both clauses) named as pins | M · 2 d + **2 audits** · **yes** |
 | 1.5 | 2 · DONE 0.110.0 | **THE SINK — single-exit `RunRecord`.** Replace the 10 write sites and the three helpers with one `_RecordSink`: append-only `AttemptRecord`s + `finish(exc_or_None)` called exactly once, **total by construction** (an internal error becomes `record.note`, never an exception over the original). `replay()`'s body becomes `_replay_body`; the wrapper does `try … except BaseException as exc: sink.finish(exc); raise`. Per-attempt usage comes from a watch the *wrapper* owns, so the raise path is a non-event and **`flow.py` is untouched**. `failure_code` derives from `exc.code`. **(critic)** landed/committed rule: True if any attempt evidenced True; else **None** if any attempt is unknown (raised, precheck-skip, relearn-raise) or none completed; else False — and today's values for both precheck exits and the retry-raise→repair path are frozen in the 0.3 golden **before** the sink is written; `exc.landed` arming stays byte-identical. `LearnResult` gains a **required** `report=` keyword | B1-A1…B1-A8; a, b, i, n, p | the ten strict xfails **flip** (strict forces it); every other cell byte-identical or in an argued golden diff; AST: no `record.<field>` write outside the sink; ratchet 10 → 1; `prove_red` 11/11 still killed; cells for reuse-across-calls, usage equality while both watches coexist, relearn-with-no-report | M · 3 d + **2 audits** · **yes** |
-| 1.6 | 6 | **`WriteClass` value object + `FlowSpec.key`.** The *named* questions the raw sites ask — `declares_write`, `is_write`, `needs_confirm`, and **(critic)** two separately named multiwrite questions (`declares_multiple_barriers` for `MutateSpec.is_multiwrite`, `recipe_has_multiple_writes` for `cached_writes`) because `_auth_retry_allowed` keeps them as separate arms with different messages; collapsing them is R3.5's own failure shape. Carries **no refusal**. `FlowSpec.key` replaces the 24 transcriptions | k, a, l, f | ratchets 33 → 0 and 24 → 0; a **printed per-site conversion table** so a mistranslated site is visible on sight; write-safety matrix (both clauses) and the exit-set matrix byte-identical | M · 2.5 d + **2 audits** · **yes** |
-| 1.7 | 7 | **Printed door `Policy` table** naming what each raw door permits *today* (CLI root, daemon, `run_many`, MCP, `replay`), including `auto_reauthor_writes=True` — so `flow.py:187-189` becomes a visible decision item rather than a refactor side effect. Daemon validates `mode`/`provider` against closed sets before the engine | d, m | a test prints the Policy per door and asserts equality with a committed table; a liveness corpus of read flows replays green through every door | S · 1 d · no |
-| 1.8 | 8 | **`RunOptions`/`RunHooks`** threaded through the engine instead of 20–23 scalars; `run_cached` keeps its public kwargs. Every existing asymmetry preserved as-is in a DELIBERATE_DROPS table (R4.12 included — *preserved, not fixed*). Separate PR from 1.1 | i, a, d | introspection: every field read in `run_cached` or reachable in every inner function it applies to, except DELIBERATE_DROPS — checked **both ways**; a hook-fire count table per (mode, hook) captured before and asserted after | M · 3 d + audit · no |
+| 1.6 | 7 · §13 | **`WriteClass` value object + `FlowSpec.key`.** The *named* questions the raw sites ask — `declares_write`, `is_write`, `needs_confirm`, and **(critic)** two separately named multiwrite questions (`declares_multiple_barriers` for `MutateSpec.is_multiwrite`, `recipe_has_multiple_writes` for `cached_writes`) because `_auth_retry_allowed` keeps them as separate arms with different messages; collapsing them is R3.5's own failure shape. Carries **no refusal**. `FlowSpec.key` replaces the 24 transcriptions | k, a, l, f | ratchets 33 → 0 and 24 → 0; a **printed per-site conversion table** so a mistranslated site is visible on sight; write-safety matrix (both clauses) and the exit-set matrix byte-identical | M · 2.5 d + **2 audits** · **yes** |
+| 1.7 | 8 · §13 | **Printed door `Policy` table** naming what each raw door permits *today* (CLI root, daemon, `run_many`, MCP, `replay`), including `auto_reauthor_writes=True` — so `flow.py:187-189` becomes a visible decision item rather than a refactor side effect. Daemon validates `mode`/`provider` against closed sets before the engine | d, m | a test prints the Policy per door and asserts equality with a committed table; a liveness corpus of read flows replays green through every door | S · 1 d · no |
+| 1.8 | 9 · §13 | **`RunOptions`/`RunHooks`** threaded through the engine instead of 20–23 scalars; `run_cached` keeps its public kwargs. Every existing asymmetry preserved as-is in a DELIBERATE_DROPS table (R4.12 included — *preserved, not fixed*). Separate PR from 1.1 | i, a, d | introspection: every field read in `run_cached` or reachable in every inner function it applies to, except DELIBERATE_DROPS — checked **both ways**; a hook-fire count table per (mode, hook) captured before and asserted after | M · 3 d + audit · no |
 
 ### Phase 2 — the benchmark, harness-side, from day 1 (~14 days, parallel)
 
@@ -584,3 +584,118 @@ move is to declare the sink's green suite sufficient.
 * The claim "no Phase-1 step names 0.5/0.6/0.7" is only as good as the *Pinned by* cells, which were
   written on 2026-08-16 by the same pass that wrote the steps. A step whose pins are under-specified will
   look independent when it is not.
+
+---
+
+## 13 · The re-price, fired by §12's own trigger (2026-08-19, after 1.5)
+
+§12 said: *"If 1.5's audit finds more than ~3 findings, §6's re-price checkpoint fires and this order is
+re-derived, not continued."* **Two adversarial audits of 1.5 returned twelve**, plus a third on one
+decision that reversed it. The trigger fired at 4x its threshold, so this section re-derives the order
+from measurement rather than continuing it. Three of the re-deriver's own going-in assumptions were
+refuted by the numbers below; those are marked.
+
+### What the programme has actually cost
+
+Derived from git over the fourteen merged commits, `src/` vs `tests/`+`scripts/` vs docs, added lines:
+
+| | `src/+` | `tests/`+`scripts/+` | docs+ |
+|---|---|---|---|
+| Phase 0 (0.1, 0.2b, 0.3, 0.4a) | **0** | 3 651 | 384 |
+| 1.2 | 54 | 210 | 49 |
+| 1.5 (goldens + sink + audit round) | 390 | 1 356 | 284 |
+| register filings (R4.56/57/59, R4.22) | 0 | 65 | 124 |
+| **total** | **444** | **5 282** | **841** |
+
+**11.9 lines of instrument per line of `src/`.** That is the instrument-first bet, priced. It is not a
+complaint: 444 lines of `src/` closed ten register findings and the suite grew from 1 103 to 1 191
+tests, but anyone re-reading §5's day estimates should know the ratio they implied.
+
+**The audit yield, which is the number that matters for pricing what is left.** 1.5 changed 273 `src/`
+lines and its audits returned twelve findings — **one finding per ~23 `src/` lines** — of which one was
+HIGH and in the unsafe direction, and one reversed a design decision that had already been taken. The
+fix round then cost a further 117 `src/` and 547 test lines: **the audit round is ~40% of the slice
+again.** Any remaining step of comparable size should be priced at 1.4x its build cost, not 1x.
+
+### THE FINDING: the manifest tax crossed its own threshold while nobody was looking
+
+`scripts/manifest_cost.py` was built at 0.109.0 with an executable rule: switch away from the
+full-rewrite derivation only when (a) cumulative measured marks-phase cost exceeds 4 h **and** (b) the
+last ten deltas contain no de-classification. As of this re-price:
+
+```
+marks phase:  8 measured, 5.00 h total
+PASS (a) measured marks-phase cost 5.00 h > 4.0 h threshold
+FAIL (b) 3 de-classification(s) in the last 10 delta(s)
+```
+
+**Clause (a) has flipped.** Five hours of wall-clock have gone into re-deriving the tier manifest, and
+five Phase-1 steps remain, each needing one or two full runs. Clause (b) still refuses **merge-mode** —
+correctly, and permanently as far as the data goes. But the rule's own docstring names a third option
+that costs neither: **derive the marks from CI's existing full run**, which is ~0 marginal minutes on
+both OSes with de-classification intact. It was filed as a CANDIDATE with "the rule below is what says
+when it is worth building". The rule now says it.
+
+So a new step, **0.8 — CI-derived marks**, enters the plan, and it goes FIRST: its payback period
+(~35 min per slice x 5 remaining slices) is shorter than the work remaining, which is the only
+condition under which building a tool mid-programme is not a detour.
+
+### Three assumptions this re-derivation refuted
+
+1. **"Fold a scan inventory into 0.4b, because three structural scans were disarmed at once."**
+   REFUTED. An AST inventory finds **35 named `src/` functions across 8 test files**, and **7 of the 8
+   already fail loudly when a named function is absent** — which is why all three disarmed scans in 1.5
+   went red rather than quiet. The rule belongs in CLAUDE.md (it is there); a step does not.
+
+2. **"Take 1.3 before 1.4, because it is smaller and would measure whether audit cost scales down."**
+   REFUTED on the critical path. §5's Phase-2 table makes **2.2 (B3) depend on 1.4 and on nothing
+   else**; 1.3, 1.6, 1.7 and 1.8 are on no benchmark dependency. Taking 1.3 first buys information
+   about audit cost and delays the only Phase-1 step the benchmark waits on. Information is worth less
+   than the thing being waited for.
+
+3. **"1.4 is unchanged in scope."** REFUTED, in its favour. 1.4's *Disposes* cell names B1-A6 and
+   B1-A9; **B1-A6 is R4.49, which the sink already closed**. 1.4's remaining content is R4.52
+   (`BatchRowResult.landed` as a two-state bool), R4.61 (`write_unverified` reporting `committed=False`,
+   filed at 1.5's audit round and disposed here), the `bare_flow_replay_error` ratchet 24 -> 0, and
+   `outcome_of`. Smaller than the plan priced it.
+
+### The thing this re-derivation found that nobody had asked about
+
+**Phase 2 has never started, and 2.1 (B2) has been unblocked since day one.** Its dependency cell reads
+`nothing in src/`. Every one of the fourteen merged commits has been Phase 0 or Phase 1. The plan's own
+§5 says Phase 2 is *"the benchmark, harness-side, from day 1 (~14 days, parallel)"* — the parallelism
+was priced in and has not happened.
+
+That matters because the benchmark is the stated reason the reshape exists. B2 needs no `src/` change,
+so it carries **no audit burden at all** — the cost driver this re-price just measured at 1.4x. It is
+the only remaining work with that property.
+
+### The re-derived order
+
+| # | step | why here | audits |
+|---|---|---|---|
+| 1 | **0.8 — CI-derived marks** | the rule it was filed under now says to build it: 5.00 h spent, clause (a) passed, five slices left. Zero `src/` | none |
+| 2 | **2.1 — B2**, in parallel from here on | unblocked since day one and never started; zero `src/`, therefore zero audit burden; it is the goal | none |
+| 3 | **1.4 — distinct codes** | the ONE Phase-1 step B3 waits on. Scope shrank: R4.49 is already closed | 2 |
+| 4 | **2.2 — B3** | unblocked by 1.4 | 1 |
+| 5 | **1.3 — cannot-spend** | completes the accounting story B3 consumes; small, one audit | 1 |
+| 6 | **0.4b + 1.1** | 1.1's own pin is RED-in-CI | 1 |
+| 7 | **1.6 -> 1.7 -> 1.8** | unchanged; 1.6 is the largest ratchet consumer, 1.8 moves every call site and stays last | 2 / 0 / 1 |
+
+**What changed from §12:** 0.8 inserted at the front on measured evidence; 2.1 promoted from "parallel
+someday" to explicitly next, because it is the goal and carries no audit cost; 1.3 moves after B3
+rather than before it. The tail is unchanged, and its reasons are unchanged.
+
+**What did not change and should not be re-litigated:** 1.4 before B3 (the one hard edge in Phase 2);
+0.5 with 1.1, 0.6 after 1.5, 0.7 with 2.3 (§12's triggers, none of which have fired); 1.8 last.
+
+### What would make THIS order wrong
+
+* If 1.4's audits return more than ~4 findings, the 1.4x audit multiplier measured here is an
+  underestimate and Phase 1's remaining estimate needs re-deriving again — not the order, the *price*.
+* If B2 turns out to need a `src/` change after all — the boundary ledger derives module-level bindings
+  from the live import graph, which §5 asserts is possible without one — then 2.1 acquires an audit
+  burden and its promotion above 1.4 loses its justification.
+* The 11.9:1 instrument ratio is measured over a programme whose whole point was building instruments.
+  It should FALL through Phase 1 and Phase 2. If it does not, the ratio is not a phase-0 artifact but
+  the cost of working in this codebase, and that is a different conversation about the plan's premise.
