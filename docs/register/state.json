@@ -133,7 +133,7 @@
   {
    "id": "R4.22",
    "status": "open",
-   "summary": "Windows `ERR_NO_BUFFER_SPACE`, **9 occurrences**; socket churn refuted at 0.104.0; occurrence 8 (local) argues local ≠ CI, and occurrence 9 landed on a DOCS-ONLY PR with a failing-run capture"
+   "summary": "Windows `ERR_NO_BUFFER_SPACE`, **10 occurrences**; socket churn refuted at 0.104.0; occurrence 8 (local) argues local ≠ CI, and occurrence 9 landed on a DOCS-ONLY PR, and occurrence 10's same-run A/B shows the PASSING shard MORE loaded on peak TIME_WAIT, handles, processes and non-paged pool — the countable axis is refuted for both symptom classes; see R4.58"
   },
   {
    "id": "R4.23",

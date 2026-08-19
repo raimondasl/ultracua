@@ -812,7 +812,7 @@ if and only if that branch is ever resumed.
 | R4.19 | open | `_reset_learn_baselines` clears shape/contracts but not `read_pin` |
 | R4.20 | fixed | seven durable renames, one retry — closed in 0.95.0 (S10) by one shared `fsio` helper |
 | R4.21 | open | `record()`'s refusal stays non-terminal — deliberate, but each retry re-fires the write |
-| R4.22 | open | Windows `ERR_NO_BUFFER_SPACE`, **9 occurrences**; socket churn refuted at 0.104.0; occurrence 8 (local) argues local ≠ CI, and occurrence 9 landed on a DOCS-ONLY PR with a failing-run capture |
+| R4.22 | open | Windows `ERR_NO_BUFFER_SPACE`, **10 occurrences**; socket churn refuted at 0.104.0; occurrence 8 (local) argues local ≠ CI, and occurrence 9 landed on a DOCS-ONLY PR, and occurrence 10's same-run A/B shows the PASSING shard MORE loaded on peak TIME_WAIT, handles, processes and non-paged pool — the countable axis is refuted for both symptom classes; see R4.58 |
 | R4.23 | open | `test_flows_dry_run_holds_a_real_write_flow` failed once under load, undiagnosed |
 | R4.24 | open | a localhost round-trip stalled past the 5 s budget; ships unmitigated, 2 occurrences |
 | R4.25 | fixed | the load-dependent "cluster of three" was one defect + one bad test — assertion fixed in 0.88.0 |
@@ -2379,6 +2379,50 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   a page re-fires the write each time — but the harm profile differs from R3.13's: this is a human
   running a command and reading a refusal each time, not an unattended `mode="auto"` loop firing
   invisibly. Revisit only with a remedy that does not depend on `record()` itself.
+
+* **R4.22 — OCCURRENCE 10 (0.109.0, PR #180, run 32203952775, windows 1/2), and the same-run
+  A/B refutes resource exhaustion for THIS symptom too.**
+
+  Windows shard 1 failed with `net::ERR_NO_BUFFER_SPACE` on `Page.goto` in **two** tests
+  (`test_drift_bench.py::test_every_absolute_invariant_holds`, then
+  `test_driver_reuse.py::test_run_batch_starts_one_driver_for_the_whole_batch`); ubuntu both shards and
+  Windows shard 2 were green. The PR changes `release()` and the `flow release` CLI path and touches
+  neither test's surface.
+
+  **The measurement.** R4.58 established the same-run baseline technique on a *timeout*-shaped failure and
+  found the failing job no more loaded than the passing one. This is the first time the technique has been
+  applied to `WSAENOBUFS` itself — the symptom the sampler was built for — in run `32203952775`:
+
+  | peak | **shard 1 — FAILED** | shard 2 — passed |
+  |---|---|---|
+  | `time_wait` | 343 (mean 178.5) | **370** (mean 136.4) |
+  | `handles` | 54 777 | **54 902** |
+  | `processes` | 159 | **161** |
+  | `chrome_procs` | 8 | 8 |
+  | `nonpaged_pool_mb` | 230.5 | **239.1** |
+  | `paged_pool_mb` | **354.6** | 335.6 |
+  | `free_mb` (min) | 12 741 | 12 715 |
+
+  The **passing** shard carries the higher peak on TIME_WAIT, handles, processes and — the one that
+  matters — **non-paged pool**, which CLAUDE.md records as "the resource WSAENOBUFS is actually about".
+  The failing shard leads on exactly two numbers: mean TIME_WAIT and paged pool, the latter by 5%.
+
+  So the hypothesis this register has carried across nine occurrences — that the runner is running out of
+  *something* countable — is now measured as non-discriminating for both symptom classes, in two
+  independent same-run A/Bs.
+
+  **The gap this exposes, distinct from R4.58's.** R4.58 says the sampler measures no CPU and no disk
+  queue. This occurrence adds a second blind spot of a different kind: every column above is a
+  **system-wide total**. `Get-Process | Measure-Object HandleCount -Sum` cannot show one process
+  approaching a per-process limit while the machine-wide sum stays flat, and `WSAENOBUFS` is raised
+  per-socket-call by a process, not by the machine. A per-process series for the pytest and Chromium trees
+  would separate "the box is out" from "this process is out" — and every hypothesis so far has assumed the
+  first without ever testing the second.
+
+  **Disposition (with R4.58).** Before occurrence 11 is diagnosed, the sampler should carry CPU, disk queue
+  **and** per-process handle/socket counts for the pytest and browser trees. Until then, do not add another
+  system-wide-total hypothesis to this entry: two A/Bs now say that axis does not separate a failing run
+  from a passing one.
 
 * **R4.22 — OCCURRENCE 9 (2026-08-17, CI Windows shard 1/2), ON A DOCS-ONLY PR. The cleanest attribution
   the series has: no `src/` line changed, so no code cause is available.** `test_drift_bench.py::
