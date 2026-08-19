@@ -1,0 +1,51 @@
+{
+ "_comment": "DERIVED by scripts/ratchets.py, never hand-edited. Each entry counts a SHAPE that Phase 1 removes; the number may only shrink, and a shrink must be locked in with `--update` in the same diff that earned it. Regenerate with `python scripts/ratchets.py --update`.",
+ "ratchets": {
+  "bare_flow_replay_error": {
+   "total": 24,
+   "by_file": {
+    "src/ultracua/flows.py": 24
+   },
+   "disposition": "reshape-plan 1.4 — distinct codes"
+  },
+  "cli_system_exit": {
+   "total": 34,
+   "by_file": {
+    "src/ultracua/cli.py": 34
+   },
+   "disposition": "reshape-plan Phase 3 — one SystemExit funnel"
+  },
+  "engine_positional_params": {
+   "total": 98,
+   "by_file": {
+    "src/ultracua/flow.py": 98
+   },
+   "disposition": "reshape-plan 1.1 — keyword-only chain"
+  },
+  "flow_key_transcriptions": {
+   "total": 25,
+   "by_file": {
+    "src/ultracua/cli.py": 8,
+    "src/ultracua/flows.py": 15,
+    "src/ultracua/mcpserver/server.py": 2
+   },
+   "disposition": "reshape-plan 1.6 — FlowSpec.key"
+  },
+  "run_record_write_sites": {
+   "total": 16,
+   "by_file": {
+    "src/ultracua/flows.py": 16
+   },
+   "disposition": "reshape-plan 1.5 — THE SINK"
+  },
+  "spec_mutate_raw": {
+   "total": 27,
+   "by_file": {
+    "src/ultracua/cli.py": 3,
+    "src/ultracua/flows.py": 20,
+    "src/ultracua/mcpserver/server.py": 4
+   },
+   "disposition": "reshape-plan 1.6 — WriteClass named questions"
+  }
+ }
+}
