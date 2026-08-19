@@ -284,8 +284,11 @@
   },
   {
    "id": "R4.51",
-   "status": "open",
-   "summary": "B1: the \"a 0-LLM replay says observed zero\" claim has no end-to-end pin — an engine reporting UNKNOWN on every replay passes every cell"
+   "status": "fixed",
+   "summary": "B1: the \"a 0-LLM replay says observed zero\" claim has no end-to-end pin — an engine reporting UNKNOWN on every replay passes every cell — FIXED at 1.5's first step: the end-to-end pin exists as a distinguishability cell (see R4.59 for why its first draft was wrong)",
+   "pins": [
+    "tests/test_replay_exit_matrix.py::test_R4_51_an_unobserved_replay_is_distinguishable"
+   ]
   },
   {
    "id": "R4.52",
@@ -333,6 +336,19 @@
    "class": "g",
    "summary": "the R4.22 resource sampler measures the wrong quantity: a Windows shard failed TWICE on two DIFFERENT browser tests, both latency-shaped (a 5s Locator.wait_for timeout; a write confirm missing inside its budget), while the same run's PASSING Windows shard was the MORE loaded of the two on 4 of 7 sampled metrics — the first same-run healthy baseline, and it refutes resource exhaustion for this symptom class. Neither CPU nor disk I/O is sampled, which is what a latency failure is about",
    "disposition": "add CPU and disk-queue sampling before the next occurrence is diagnosed; do NOT re-derive the socket/handle hypotheses, which this measurement rules out for timeouts"
+  },
+  {
+   "id": "R4.59",
+   "status": "fixed",
+   "severity": "medium",
+   "class": "g",
+   "summary": "a strict xfail added by 0.3 ASSERTED the counterexample — it demanded that `replay()` overwrite an UNKNOWN cost with a confident zero, the understated bill B1 exists to prevent, and `strict=True` made it a standing demand that 1.5 implement it. R4.51 was a coverage gap, not a behaviour defect: the two cases already differ. FIXED by rewriting the cell as the distinguishability property it was named for; src untouched",
+   "pins": [
+    "tests/test_replay_exit_matrix.py::test_R4_51_an_unobserved_replay_is_distinguishable",
+    "tests/mutations/b1_wiring.py::cost_sticky_none_merge",
+    "tests/mutations/b1_wiring.py::cost_passthrough_coercion"
+   ],
+   "disposition": "closed at 1.5's first step; the two coercion mutants are registered so red-proof keeps them dead"
   }
  ]
 }

@@ -12,7 +12,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**39 open**, 15 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**38 open**, 17 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **39 open**, 15 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **38 open**, 17 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -841,7 +841,7 @@ if and only if that branch is ever resumed.
 | R4.48 | open | B1: eleven wiring mutations of the record plumbing survive the entire suite — only two cells pass `record=` at all |
 | R4.49 | open | B1: `record.failure_code` speaks the internal `kind` vocabulary, not `FlowReplayError.code`, and can name a different attempt than the exception |
 | R4.50 | open | B1: `llm_calls` / `traces` / `healed_steps` / `total_ms` exclude the relearn while `usage` includes it, so two fields disagree about one run |
-| R4.51 | open | B1: the "a 0-LLM replay says observed zero" claim has no end-to-end pin — an engine reporting UNKNOWN on every replay passes every cell |
+| R4.51 | fixed | B1: the "a 0-LLM replay says observed zero" claim has no end-to-end pin — an engine reporting UNKNOWN on every replay passes every cell — FIXED at 1.5's first step: the end-to-end pin exists as a distinguishability cell (see R4.59 for why its first draft was wrong) |
 | R4.52 | open | B1: `BatchRowResult.landed` is the two-state bool the same PR calls a trap, reading `False` on successful write rows and on crashed rows |
 | R4.53 | open | B1: a key-less teacher (`ScriptedProvider`/`MockProvider`) is classified as an unobserved SPENDER, contradicting `flow.py:915-916`; `accounting_failed` is sticky across runs |
 | R4.54 | open | the key scrub's completeness rests on a hand-written variable list (Bedrock/Vertex uncovered) — the shape S14 replaced with a derivation |
@@ -849,6 +849,7 @@ if and only if that branch is ever resumed.
 | R4.56 | open | a fixture sub-resource silently fails to load and surfaces as a JS `ReferenceError`; the HTTP/1.0 socket-churn cause is REFUTED by measurement (8 vs 6 connections per load) and a sweep would risk 8 hangs — disposition is the shared fixture server |
 | R4.57 | open | a SUCCESSFUL run reports the failed attempt's `failure_code` — `_attempt_replay`'s success exit sets `ok` but never clears it, and `_mark_ok` (which does) is only called on the precheck and relearn exits; found by the exit-set matrix on its first run |
 | R4.58 | open | the R4.22 resource sampler measures the wrong quantity: a Windows shard failed TWICE on two DIFFERENT browser tests, both latency-shaped (a 5s Locator.wait_for timeout; a write confirm missing inside its budget), while the same run's PASSING Windows shard was the MORE loaded of the two on 4 of 7 sampled metrics — the first same-run healthy baseline, and it refutes resource exhaustion for this symptom class. Neither CPU nor disk I/O is sampled, which is what a latency failure is about |
+| R4.59 | fixed | a strict xfail added by 0.3 ASSERTED the counterexample — it demanded that `replay()` overwrite an UNKNOWN cost with a confident zero, the understated bill B1 exists to prevent, and `strict=True` made it a standing demand that 1.5 implement it. R4.51 was a coverage gap, not a behaviour defect: the two cases already differ. FIXED by rewriting the cell as the distinguishability property it was named for; src untouched |
 <!-- /generated:r4-index -->
 
 
@@ -5083,3 +5084,59 @@ consistent with several causes (CPU steal, a slow disk, an unlucky neighbour) th
 cannot separate. It also does not say the two failing tests are sound — only that nothing about them or
 about the slice explains a failure that lands on a different test each attempt. The next occurrence is
 worth waiting for **with a better instrument**, which is the whole disposition.
+
+---
+
+## R4.59 — a strict xfail in 0.3's matrix ASSERTED the counterexample, and it was the spec for 1.5
+
+**Severity: MEDIUM** (test-integrity, one step from a real regression). Found at the first step of
+reshape-plan **1.5**, while reading the goldens the sink is specified against — i.e. by the one
+instrument CLAUDE.md says has caught every previous fix-code defect: an adversarial pass aimed squarely
+at the new code.
+
+**What it said.** `test_R4_51_an_unobserved_replay_is_distinguishable` (added by PR #175) scripted an
+engine reporting `cost_usd=None, unobserved_llm_path=True` and asserted:
+
+```python
+assert rec.usage.get("cost_usd") == 0.0, (
+    "the engine reported UNKNOWN and replay() passed it through; nothing in the suite objects")
+```
+
+marked `@pytest.mark.xfail(strict=True)`. So the cell specified that `replay()` should overwrite an
+UNKNOWN cost with a confident **zero** — the understated-bill failure B1 exists to prevent — and
+`strict=True` turned that into a STANDING DEMAND that someone make it pass. Step 1.5's own acceptance
+criterion is "the strict xfails flip", so the next slice to touch this code was contractually pointed at
+implementing it.
+
+This is CLAUDE.md's own trap, verbatim: *"A test that ASSERTS the counterexample is worse than no
+test."* R3.12's first fix draft did it with a tuning constant; this one did it with a strict xfail,
+which is worse, because a strict xfail is a request.
+
+**The finding it was filed under was never a behaviour defect.** R4.51 says the headline claim has no
+END-TO-END pin — a coverage gap. Measured: the two cases already differ through `replay()`.
+
+| engine reported | record holds |
+|---|---|
+| `cost_usd=None, unobserved_llm_path=True` | `cost_usd=None, unobserved_llm_path=True` |
+| `cost_usd=0.0` | `cost_usd=0.0`, no flag |
+
+So the property that actually closes R4.51 is **distinguishability**, which is what the cell was named
+for all along. Its name and its assertion disagreed, and the name was right.
+
+**Fixed at 0.109.0+**, `src/` untouched: the cell now runs both arms through the same path and asserts
+they differ, and it is green rather than xfail.
+
+**And arming it exposed a second, smaller thing.** The first mutation chosen to arm the rewrite — summing
+`None` as `0` in `_absorb_usage`'s merge — left the cell GREEN, because `_absorb_usage` early-returns on
+the first attempt (`if not dst: record.usage = dict(usage)`), so a one-attempt cell only ever proves
+pass-through. A third arm was added for the merge (a priced attempt followed by an unobserved one, which
+is the shape a real auth-refresh retry produces). Both coercions now kill it, and both are registered in
+`tests/mutations/b1_wiring.py` — **13 mutants, 13 killed** — so the `red-proof` job keeps them dead
+rather than leaving this to the next reader's judgement.
+
+**The general lesson, which is the reason this is filed rather than quietly fixed.** A strict xfail is
+not a note about a defect: it is an executable specification with a deadline. Writing one requires the
+same standard as writing the fix — *what would make this pass, and is that thing correct?* Three of
+0.3's six xfails were re-read after this; the other five state a property whose satisfaction is
+unambiguous (a key present, two codes equal, a spend retained). Only this one specified a VALUE, and
+specifying a value is where the counterexample got in.
