@@ -46,6 +46,15 @@ mechanism: merging cannot tell the two apart either, and it resolves both by nev
 nothing: all three deltas so far added new ids (5, 5, 26), so a collection fingerprint would have gated
 zero runs while costing a 4-second collect on every PR.
 
+**What this ledger CANNOT see: host load.** It records wall-clock and nothing about what else the
+machine was doing. Measured at 0.109.0, the same suite recorded 39m30s where the three previous runs
+recorded ~32m, and the fast tier read 84 s in the same window against 68.0 s and 67.2 s on two clean
+re-runs minutes later — so roughly a fifth of that entry is load, not work. The rule below reads a
+CUMULATIVE total against a 4-hour threshold, which is the direction that matters (an inflated entry
+brings the trade forward, never delays it), but do not quote a single row as the cost of a re-derivation.
+This repo's standing rule applies to its own instruments: a timing taken under unknown load is not
+evidence.
+
 **The alternative that costs neither.** CI already runs the full suite on every PR, sharded two ways on
 two OSes. Marks written per shard and merged in a following job would give a full derivation at ZERO
 marginal minutes, on both platforms, with de-classification intact. It is a CANDIDATE, deliberately

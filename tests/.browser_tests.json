@@ -1,6 +1,6 @@
 {
  "_comment": "DERIVED, never hand-edited. A test is a browser test iff it was OBSERVED launching one, OR the fast tier later caught it launching (attribution is order-dependent when a module shares browser work through a fixture). Regenerate with `pytest -q --store-browser-marks` then `python scripts/derive_test_tiers.py`, which iterates to the fixed point. An unclassified test makes a tiered run fail loudly rather than skip it.",
- "total": 1165,
+ "total": 1173,
  "browser": [
   "tests/test_annotation_disposition.py::test_the_r427_population_arrives_non_demotable_so_the_verb_cannot_dispose_of_it",
   "tests/test_audit.py::test_advisory_mode_reports_but_never_quarantines",
@@ -735,6 +735,14 @@
   "tests/test_flow_home.py::test_the_two_roots_can_never_diverge",
   "tests/test_flow_home.py::test_the_unapprove_verb_the_docs_prescribe_actually_exists",
   "tests/test_flow_home.py::test_walk_up_finds_the_project_store_from_a_subdirectory",
+  "tests/test_flow_release.py::test_a_flow_with_nothing_held_reports_nothing_cleared",
+  "tests/test_flow_release.py::test_release_clears_a_learn_time_refusal_on_an_UNCACHED_flow",
+  "tests/test_flow_release.py::test_release_clears_a_refusal_recorded_against_a_flow_that_still_has_a_RECIPE",
+  "tests/test_flow_release.py::test_release_reports_a_quarantine_and_a_rebaseline_separately",
+  "tests/test_flow_release.py::test_release_reports_what_it_actually_cleared",
+  "tests/test_flow_release.py::test_release_still_clears_BOTH_holds_in_one_verb",
+  "tests/test_flow_release.py::test_releasing_a_quarantine_through_the_cli_still_clears_it",
+  "tests/test_flow_release.py::test_the_partial_release_ordering_still_holds",
   "tests/test_flows.py::test_approve_without_learned_flow_raises",
   "tests/test_flows.py::test_extract_empty_page_is_not_found",
   "tests/test_flows.py::test_extract_flags_truncation",

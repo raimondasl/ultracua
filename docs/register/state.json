@@ -232,13 +232,20 @@
   },
   {
    "id": "R4.42",
-   "status": "open",
-   "summary": "`flow release` returns \"nothing to release\" before `release()` runs, so the remedy `flow.py:207` names is dead through the CLI — and WIDENING the status check does not reach the cached-recipe shape (measured)"
+   "status": "fixed",
+   "summary": "`flow release` returns \"nothing to release\" before `release()` runs, so the remedy `flow.py:207` names is dead through the CLI — and WIDENING the status check does not reach the cached-recipe shape (measured) — FIXED at 0.109.0 by DELETING the pre-check (reshape-plan 1.2); `release()` now returns a ReleaseResult and the CLI reports what it cleared",
+   "pins": [
+    "tests/test_flow_release.py"
+   ],
+   "disposition": "reshape-plan step 1.2, landed"
   },
   {
    "id": "R4.43",
-   "status": "open",
-   "summary": "`_SDK_CTORS` does not match `genai.Client()`, so gemini's construction is invisible and the anti-vacuity floor is met by exactly 3 — which also makes R4.41's own remedy misdiagnose itself"
+   "status": "fixed",
+   "summary": "`_SDK_CTORS` does not match `genai.Client()`, so gemini's construction is invisible and the anti-vacuity floor is met by exactly 3 — which also makes R4.41's own remedy misdiagnose itself — FIXED at 0.4a (PR #179): `Client` added to `_SDK_CTORS`, anti-vacuity floor raised 3 -> 4 measured, `GenerativeModel` kept so the old API stays covered",
+   "pins": [
+    "tests/test_inviolable_properties.py::test_llm_client_construction_has_a_single_choke_point"
+   ]
   },
   {
    "id": "R4.44",
