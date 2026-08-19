@@ -1643,7 +1643,33 @@ def mark_step(spec: FlowSpec, index: int, *, writes: bool,
     return True
 
 
-def release(spec: FlowSpec, *, cache: Optional[FlowCache] = None, rebaseline: bool = False) -> None:
+@dataclass(frozen=True)
+class ReleaseResult:
+    """What `release()` ACTUALLY cleared, so a caller reports the act instead of guessing at it.
+
+    R4.42: the CLI used to ask `health()` first and print from the status, which is a verdict standing in
+    for evidence — and it got it wrong in three different states (a refusal on an uncached flow, a
+    refusal beside a cached recipe, a quarantine whose recipe is gone). Named fields rather than a set of
+    strings, so a mis-set one is a type error and not a silent typo.
+
+    `baseline` reports that the magnitude reset was PERFORMED (i.e. `rebaseline=True`), not that a
+    baseline existed — `_reset_history` unlinks with `missing_ok`, so nothing here can tell the
+    difference, and claiming otherwise would be the same guess this class removes.
+    """
+    quarantine: bool = False
+    refusal: bool = False
+    baseline: bool = False
+
+    @property
+    def cleared(self) -> tuple:
+        """The names of what was cleared, in report order. Empty means nothing was holding this flow."""
+        return tuple(name for name, done in
+                     (("quarantine", self.quarantine), ("refusal", self.refusal),
+                      ("baseline", self.baseline)) if done)
+
+
+def release(spec: FlowSpec, *, cache: Optional[FlowCache] = None,
+            rebaseline: bool = False) -> ReleaseResult:
     """Clear a flow's H9 quarantine after a human has investigated the wrong value. Re-arms under the SAME
     contracts — if the value is still wrong the next run re-quarantines (no silent habituation; a sticky
     release means fixing the upstream value, relaxing the contract via `spec.contracts` + re-approve, or
@@ -1664,18 +1690,22 @@ def release(spec: FlowSpec, *, cache: Optional[FlowCache] = None, rebaseline: bo
     # `_update_meta(..., on_unreadable="raise")` that can raise, left a partial release on the error path
     # — the refusal gone (so a re-learn may fire the write again) while the quarantine a human was told
     # to investigate is still on disk. Each clear now happens only where nothing after it can fail.
-    def _clear_refusal() -> None:
-        if cache.forget_refusal(key):
+    def _clear_refusal() -> bool:
+        cleared = cache.forget_refusal(key)
+        if cleared:
             _log.info("flow %r: cleared the learn-time refusal — the next learn will re-author it",
                       spec.name)
+        return cleared
+
+    def _maybe_rebaseline() -> bool:
+        if rebaseline:
+            _reset_history(cache, key)   # allow a pre-emptive re-baseline even when not currently quarantined
+        return rebaseline
 
     meta = _load_meta(cache, key)
     if meta.quarantine is None:
         # The learn-refused flow: no quarantine to clear, and this is the only thing holding it.
-        _clear_refusal()
-        if rebaseline:
-            _reset_history(cache, key)   # allow a pre-emptive re-baseline even when not currently quarantined
-        return
+        return ReleaseResult(refusal=_clear_refusal(), baseline=_maybe_rebaseline())
     _log.info("flow %r: releasing quarantine (was: %s)%s", spec.name, meta.quarantine.get("reason"),
               " + rebaseline" if rebaseline else "")
 
@@ -1685,9 +1715,8 @@ def release(spec: FlowSpec, *, cache: Optional[FlowCache] = None, rebaseline: bo
         m.audit_due = True   # H9: the first run after a human clears a quarantine is high-risk -> audit it
 
     _update_meta(cache, key, _apply, on_unreadable="raise")
-    _clear_refusal()                     # only now — the quarantine really did clear
-    if rebaseline:
-        _reset_history(cache, key)
+    refusal = _clear_refusal()           # only now — the quarantine really did clear
+    return ReleaseResult(quarantine=True, refusal=refusal, baseline=_maybe_rebaseline())
 
 
 def _quarantine(cache: FlowCache, key: str, *, reason: str) -> None:

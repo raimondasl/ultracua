@@ -12,7 +12,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**41 open**, 13 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**39 open**, 15 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **41 open**, 13 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **39 open**, 15 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -812,7 +812,7 @@ if and only if that branch is ever resumed.
 | R4.19 | open | `_reset_learn_baselines` clears shape/contracts but not `read_pin` |
 | R4.20 | fixed | seven durable renames, one retry — closed in 0.95.0 (S10) by one shared `fsio` helper |
 | R4.21 | open | `record()`'s refusal stays non-terminal — deliberate, but each retry re-fires the write |
-| R4.22 | open | Windows `ERR_NO_BUFFER_SPACE`, **9 occurrences**; socket churn refuted at 0.104.0; occurrence 8 (local) argues local ≠ CI, and occurrence 9 landed on a DOCS-ONLY PR with a failing-run capture |
+| R4.22 | open | Windows `ERR_NO_BUFFER_SPACE`, **10 occurrences**; socket churn refuted at 0.104.0; occurrence 8 (local) argues local ≠ CI, and occurrence 9 landed on a DOCS-ONLY PR, and occurrence 10's same-run A/B shows the PASSING shard MORE loaded on peak TIME_WAIT, handles, processes and non-paged pool — the countable axis is refuted for both symptom classes; see R4.58 |
 | R4.23 | open | `test_flows_dry_run_holds_a_real_write_flow` failed once under load, undiagnosed |
 | R4.24 | open | a localhost round-trip stalled past the 5 s budget; ships unmitigated, 2 occurrences |
 | R4.25 | fixed | the load-dependent "cluster of three" was one defect + one bad test — assertion fixed in 0.88.0 |
@@ -832,8 +832,8 @@ if and only if that branch is ever resumed.
 | R4.39 | open | the wire Idempotency-Key is whichever step was mid-act, so a deferred write's key moves with PAGE TIMING and a retry cannot dedupe; **HIGH**, inviolable #3 |
 | R4.40 | open | `_learn` snapshots straight after navigate with no settle floor, so a client-rendered page is authored against its unrendered skeleton — quiet, and one variant PERSISTS a refusal |
 | R4.41 | open | the SDK choke-point pin allowlists `vision.py`, which does NOT route through `build_client` — so the inference the test states does not hold and `no_llm` would not intercept a vision call |
-| R4.42 | open | `flow release` returns "nothing to release" before `release()` runs, so the remedy `flow.py:207` names is dead through the CLI — and WIDENING the status check does not reach the cached-recipe shape (measured) |
-| R4.43 | open | `_SDK_CTORS` does not match `genai.Client()`, so gemini's construction is invisible and the anti-vacuity floor is met by exactly 3 — which also makes R4.41's own remedy misdiagnose itself |
+| R4.42 | fixed | `flow release` returns "nothing to release" before `release()` runs, so the remedy `flow.py:207` names is dead through the CLI — and WIDENING the status check does not reach the cached-recipe shape (measured) — FIXED at 0.109.0 by DELETING the pre-check (reshape-plan 1.2); `release()` now returns a ReleaseResult and the CLI reports what it cleared |
+| R4.43 | fixed | `_SDK_CTORS` does not match `genai.Client()`, so gemini's construction is invisible and the anti-vacuity floor is met by exactly 3 — which also makes R4.41's own remedy misdiagnose itself — FIXED at 0.4a (PR #179): `Client` added to `_SDK_CTORS`, anti-vacuity floor raised 3 -> 4 measured, `GenerativeModel` kept so the old API stays covered |
 | R4.44 | open | B1: a raised attempt drops its own LLM spend, traces and minted keys, and leaves `ok`/`failure_code` stale from the previous attempt (F2 guarded the relearn leg only) |
 | R4.45 | open | B1: `record.usage == {}` on the miss / escalate / precheck / pre-attempt-refusal / raise exits, against `RunRecord`'s own "always populated" docstring |
 | R4.46 | open | B1: a usage-less later attempt flips a priced total to `None` with no reason flag — a missing key and an unpriceable one are treated alike |
@@ -2379,6 +2379,50 @@ the rest remain. R4.10's precondition is now satisfied — see the plan.)*
   a page re-fires the write each time — but the harm profile differs from R3.13's: this is a human
   running a command and reading a refusal each time, not an unattended `mode="auto"` loop firing
   invisibly. Revisit only with a remedy that does not depend on `record()` itself.
+
+* **R4.22 — OCCURRENCE 10 (0.109.0, PR #180, run 32203952775, windows 1/2), and the same-run
+  A/B refutes resource exhaustion for THIS symptom too.**
+
+  Windows shard 1 failed with `net::ERR_NO_BUFFER_SPACE` on `Page.goto` in **two** tests
+  (`test_drift_bench.py::test_every_absolute_invariant_holds`, then
+  `test_driver_reuse.py::test_run_batch_starts_one_driver_for_the_whole_batch`); ubuntu both shards and
+  Windows shard 2 were green. The PR changes `release()` and the `flow release` CLI path and touches
+  neither test's surface.
+
+  **The measurement.** R4.58 established the same-run baseline technique on a *timeout*-shaped failure and
+  found the failing job no more loaded than the passing one. This is the first time the technique has been
+  applied to `WSAENOBUFS` itself — the symptom the sampler was built for — in run `32203952775`:
+
+  | peak | **shard 1 — FAILED** | shard 2 — passed |
+  |---|---|---|
+  | `time_wait` | 343 (mean 178.5) | **370** (mean 136.4) |
+  | `handles` | 54 777 | **54 902** |
+  | `processes` | 159 | **161** |
+  | `chrome_procs` | 8 | 8 |
+  | `nonpaged_pool_mb` | 230.5 | **239.1** |
+  | `paged_pool_mb` | **354.6** | 335.6 |
+  | `free_mb` (min) | 12 741 | 12 715 |
+
+  The **passing** shard carries the higher peak on TIME_WAIT, handles, processes and — the one that
+  matters — **non-paged pool**, which CLAUDE.md records as "the resource WSAENOBUFS is actually about".
+  The failing shard leads on exactly two numbers: mean TIME_WAIT and paged pool, the latter by 5%.
+
+  So the hypothesis this register has carried across nine occurrences — that the runner is running out of
+  *something* countable — is now measured as non-discriminating for both symptom classes, in two
+  independent same-run A/Bs.
+
+  **The gap this exposes, distinct from R4.58's.** R4.58 says the sampler measures no CPU and no disk
+  queue. This occurrence adds a second blind spot of a different kind: every column above is a
+  **system-wide total**. `Get-Process | Measure-Object HandleCount -Sum` cannot show one process
+  approaching a per-process limit while the machine-wide sum stays flat, and `WSAENOBUFS` is raised
+  per-socket-call by a process, not by the machine. A per-process series for the pytest and Chromium trees
+  would separate "the box is out" from "this process is out" — and every hypothesis so far has assumed the
+  first without ever testing the second.
+
+  **Disposition (with R4.58).** Before occurrence 11 is diagnosed, the sampler should carry CPU, disk queue
+  **and** per-process handle/socket counts for the pytest and browser trees. Until then, do not add another
+  system-wide-total hypothesis to this entry: two A/Bs now say that axis does not separate a failing run
+  from a passing one.
 
 * **R4.22 — OCCURRENCE 9 (2026-08-17, CI Windows shard 1/2), ON A DOCS-ONLY PR. The cleanest attribution
   the series has: no `src/` line changed, so no code cause is available.** `test_drift_bench.py::
@@ -4530,6 +4574,30 @@ does not.
 
 ---
 
+### FIXED at 0.109.0 — reshape-plan step 1.2
+
+The pre-check at `cli.py:652` is **deleted**, not widened, and `release()` now returns a
+`ReleaseResult` naming what it actually cleared (`quarantine` / `refusal` / `baseline`). The CLI reports
+that instead of inferring it from a status.
+
+**Widening was refused with a third reason, found while writing the RED cells.** The finding already
+recorded that `health()` reports `"refused"` only for an UNCACHED flow, so a refusal beside a cached
+recipe escapes a widened check. Reproducing it turned up one more: the status ladder tests `not cached`
+**before** `meta.quarantine is not None`, so a genuinely quarantined flow whose recipe has been deleted
+reads `"not-learned"` and the ORIGINAL check misses it too. Three states, one pre-check, and no
+membership test over statuses reaches all three — which is what makes deletion the fix rather than a
+better predicate.
+
+**Pinned** by `tests/test_flow_release.py`, eight cells, six of them verified RED against 0.108.0 before
+the fix. Two are green both sides on purpose: the quarantine path through the CLI (the behaviour that
+already worked, and the thing deleting a guard is most likely to lose) and the partial-release ordering
+— `release()`'s own comment says clearing the refusal above a meta write that can raise leaves the
+refusal gone while the quarantine stays, so that cell drives the raising path and requires the refusal
+to have SURVIVED.
+
+The quiet direction is pinned as hard as the loud one: a release that clears nothing must SAY so.
+Without that cell the fix could have been "always print released", which passes every other cell here.
+
 ## R4.43 — the SDK choke-point scan does not match `genai.Client()`, so its anti-vacuity floor is met by exactly three constructions and gemini's is invisible
 
 **Severity: MEDIUM** (test-integrity; no inviolable violated today). Distinct from **R4.41** and worse
@@ -4637,6 +4705,15 @@ R4.52 goes with step 1.4 and R4.53 with step 1.3.
 | R4.51 | the headline claim has no end-to-end pin: an engine reporting UNKNOWN on every replay passes every test | `flow.py:1085`, `:1240` |
 | R4.52 | `BatchRowResult.landed` is a two-state bool reading `False` on successful write rows and on crashed rows | `flows.py:3562` |
 | R4.53 | a key-less teacher is classified as an unobserved SPENDER, and `accounting_failed` is sticky across runs | `obs.py:235-241` |
+
+
+### FIXED at 0.4a (PR #179) — reshape-plan 0.5's one line, taken early
+
+`Client` joins `_SDK_CTORS`; the anti-vacuity floor rises 3 -> **4**, which is the MEASURED number of
+SDK constructions in the allowed leaves (anthropic, openai, gemini, vision) rather than a round one.
+`GenerativeModel` stays in the tuple, dead, so a return to the old `google-generativeai` API is still
+covered. Armed by constructing `genai.Client()` in `cache.py` — a non-leaf module — and watching the
+scan go red.
 
 ## R4.44 — a raised attempt drops its own spend, and leaves the previous attempt's verdict standing
 

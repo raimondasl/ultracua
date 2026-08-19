@@ -644,22 +644,27 @@ def _flow_status(args: argparse.Namespace) -> None:
 
 
 def _flow_release(args: argparse.Namespace) -> None:
-    from .flows import health, load_spec, release
+    from .flows import load_spec, release
 
     spec = load_spec(args.name)
-    h = health(spec)
     rebaseline = getattr(args, "rebaseline", False)
-    if h.status != "quarantined" and not rebaseline:
-        print(f"{spec.name!r} is not quarantined (status: {h.status}) — nothing to release")
+    # NO PRE-CHECK (R4.42). This used to ask `health()` and return early unless the status was exactly
+    # "quarantined", which killed the remedy `flow.py:206` names — and WIDENING it to accept "refused"
+    # reaches only one of the three states that reads wrong, because `health()`'s ladder tests `not
+    # cached` before both the refusal and the quarantine. `release()` is already idempotent and already
+    # knows what it cleared, so ask IT, and report that instead of a status that stood in for it.
+    res = release(spec, rebaseline=rebaseline)
+    if not res.cleared:
+        print(f"{spec.name!r}: nothing to release — no quarantine and no learn-time refusal on record")
         return
-    release(spec, rebaseline=rebaseline)
+    print(f"released {spec.name!r}: cleared {', '.join(res.cleared)}")
     if rebaseline:
-        print(f"released {spec.name!r} + cleared the magnitude baseline — the field RE-WARMS at the new normal "
-              f"(advisory until it re-accrues). Use this only for a genuine, permanent level shift.")
+        print(f"  the magnitude baseline is gone — the field RE-WARMS at the new normal (advisory until it "
+              f"re-accrues). Use this only for a genuine, permanent level shift.")
     else:
-        print(f"released {spec.name!r} — the next run RE-ARMS the same contracts (it re-quarantines if the value "
-              f"is still wrong). Fix the upstream value, relax via `flow contracts --set`, or, for a real "
-              f"permanent level shift, `flow release --rebaseline`.")
+        print(f"  the next run RE-ARMS the same contracts (it re-quarantines if the value is still wrong). "
+              f"Fix the upstream value, relax via `flow contracts --set`, or, for a real permanent level "
+              f"shift, `flow release --rebaseline`.")
 
 
 def _coerce_contract_value(v: str):
