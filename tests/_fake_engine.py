@@ -28,6 +28,7 @@ from typing import Any, Optional
 
 from ultracua import flows as flows_mod
 from ultracua.flow import FlowReport
+from ultracua.timing import StepTrace
 
 # Every key the real `_make_finalize` / `_make_pre_write` can put in `out`, derived from the source
 # rather than remembered. `_attempt_replay` reads the first eight; `pin`/`pinned` are consumed
@@ -53,12 +54,33 @@ class Attempt:
             raise ValueError(f"`out` keys the real engine never writes: {sorted(bad)}")
 
 
+def trace(index: int = 0, ms: float = 12.5, **meta) -> StepTrace:
+    """One StepTrace with a real duration, so a cell can script `report.total_ms`.
+
+    `FlowReport.total_ms` is a DERIVED property (`sum(t.total_ms for t in self.traces)`) and
+    `StepTrace.total_ms` derives from its spans — neither is settable. That is why the hole existed:
+    with no cell scripting a span, `report.total_ms` was 0.0 everywhere, and dropping
+    `record.total_ms += report.total_ms` was invisible to the whole matrix.
+    """
+    st = StepTrace(index=index, meta=dict(meta))
+    st.add("act", ms)
+    return st
+
+
 def report(mode: str = "replay", success: bool = True, *, usage: Optional[dict] = None,
-           llm_calls: int = 0, note: str = "", traces: Optional[list] = None) -> FlowReport:
-    """A FlowReport shaped like the engine's. `usage=None` reproduces the exits that omit it (R4.45)."""
+           llm_calls: int = 0, note: str = "", traces: Optional[list] = None,
+           healed_steps: int = 0) -> FlowReport:
+    """A FlowReport shaped like the engine's. `usage=None` reproduces the exits that omit it (R4.45).
+
+    `healed_steps` is scriptable, and durations come from `trace()` above, because the population block
+    reads both and NOTHING covered them: measured at 1.5's first step, mutations dropping
+    `record.total_ms +=` and `record.traces.extend(...)` both SURVIVED the whole exit matrix while the
+    usage absorb beside them was killed. A helper that cannot express a field is a hole in every cell
+    that would have used it.
+    """
     extra: dict = {} if usage is None else {"usage": usage}
     return FlowReport(mode=mode, success=success, traces=list(traces or []), llm_calls=llm_calls,
-                      note=note, extra=extra)
+                      note=note, extra=extra, healed_steps=healed_steps)
 
 
 class FakeEngine:

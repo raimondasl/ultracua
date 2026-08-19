@@ -37,6 +37,10 @@ from ultracua.locators import LocatorSpec
 # revisited rather than silently covering less. Derived by AST, never counted by hand.
 EXIT_COUNT = 16
 
+# The ways a record may explain an UNKNOWN cost. A closed set on purpose: 1.5 picks which one it
+# sets, but "None with no reason" is not among the options (R4.46).
+COST_UNKNOWN_REASONS = ("unobserved_llm_path", "attempts_without_usage")
+
 USAGE = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0,
          "cache_write_tokens": 0, "cost_usd": 0.0}
 
@@ -436,3 +440,188 @@ async def test_R4_57_a_successful_retry_clears_the_failed_attempts_code(tmp_path
     assert rec.ok is True
     assert rec.failure_code == "", (
         f"a successful run reports failure_code={rec.failure_code!r} from the attempt that failed")
+
+
+# ===================================================================================================
+# THE GOLDENS FOR STEP 1.5. Frozen BEFORE the sink is written, because the plan's own rule is that the
+# sink's landed/committed decision must be argued against what ships today rather than against what
+# whoever writes it remembers. Each cell asserts TODAY's values and names, in its docstring, which of
+# them 1.5 is EXPECTED to move and which must not move at all.
+#
+# A golden that goes red under the sink is not a regression by itself — it is the prompt for an argued
+# diff in that PR. A golden that goes red for a field marked MUST NOT MOVE is a regression.
+
+async def test_GOLDEN_the_first_precheck_exit(tmp_path, monkeypatch) -> None:
+    """The idempotency precheck says the write was already done, before any attempt runs.
+
+    EXPECTED TO MOVE under 1.5: `usage` (today `{}` — RunRecord's docstring says usage is "always
+    populated and always carries cost_usd", and this exit contradicts it) and `mode` (today `""`,
+    which is not one of the documented modes).
+
+    MUST NOT MOVE: `ok` True, `attempts` 0 (no attempt ran), and landed/committed staying None —
+    the precheck is evidence that SOMETHING committed on an earlier run, never evidence about this one.
+    """
+    spec, cache = _seed(tmp_path, monkeypatch, name="goldpc1", mutating=True,
+                        mutate=MutateSpec(confirm_text_contains="done",
+                                          precheck_text_contains="already"))
+    eng = fe.FakeEngine(precheck=True).install(monkeypatch)
+    rec = RunRecord()
+
+    out = await replay(spec, cache=cache, record=rec)
+
+    assert out == {"status": "already-done", "data": None}
+    assert eng.precheck_calls == 1 and len(eng.calls) == 0, "premise: no attempt ran"
+    # MUST NOT MOVE
+    assert rec.ok is True
+    assert rec.attempts == 0
+    assert (rec.landed, rec.committed) == (None, None)
+    # EXPECTED TO MOVE (frozen as shipped)
+    assert rec.mode == ""
+    assert rec.usage == {}
+
+
+async def test_GOLDEN_the_post_refresh_precheck_exit(tmp_path, monkeypatch) -> None:
+    """One attempt failed, auth was refreshed, and the precheck then says the write is done.
+
+    MUST NOT MOVE: landed/committed None. The first attempt's write MAY have landed — this exit's own
+    comment says so — so a False here would be the confident denial M4 forbids, and
+    `_forget_negative_write_evidence` exists to stop exactly that.
+
+    EXPECTED TO MOVE under 1.5: nothing required. `mode` is the first attempt's, which is defensible;
+    if the sink changes it, the diff must say why.
+    """
+    spec, cache = _seed(tmp_path, monkeypatch, name="goldpc2")
+    _with_login(spec)
+    eng = fe.FakeEngine(
+        fe.Attempt(report=fe.report(success=False, note="session expired", usage=USAGE)),
+        precheck=[False, True],
+    ).install(monkeypatch)
+    rec = RunRecord()
+
+    out = await replay(spec, cache=cache, record=rec)
+
+    assert out == {"status": "already-done", "data": None}
+    assert eng.refresh_calls == 1 and eng.precheck_calls == 2, "premise: the refresh + 2nd precheck ran"
+    # MUST NOT MOVE
+    assert (rec.landed, rec.committed) == (None, None), (
+        "a post-refresh precheck must not deny a write the first attempt may have landed")
+    assert rec.ok is True and rec.failure_code == ""
+    assert rec.auth_refreshed is True
+    # frozen as shipped
+    assert rec.attempts == 1
+    assert rec.mode == "replay"
+    assert rec.usage.get("cost_usd") == 0.0
+
+
+async def test_GOLDEN_the_retry_raise_then_repair_path(tmp_path, monkeypatch) -> None:
+    """Attempt 1 drifts; the auth-refresh retry RAISES; the suffix-replan then succeeds.
+
+    This is the path the plan singles out, and it is the one whose golden 1.5 is expected to CHANGE.
+
+    Today: `landed=False, committed=False` on a run in which an attempt raised at an unknown point.
+    The critic's rule for the sink is "True if any attempt evidenced True; else None if any attempt is
+    unknown (raised, precheck-skip, relearn-raise); else False" — under which this becomes None. That
+    change is a strict improvement (a raised attempt cannot support a denial) and it is written down
+    HERE, before the sink, so it lands as an argued diff rather than as an unnoticed side effect.
+
+    Also visible and NOT frozen as correct: `ok=True` beside `failure_code='drift'`, which is R4.57 on
+    a third path. Its xfail cell is the one that must flip; this cell records that the same shape
+    reaches here too.
+
+    MUST NOT MOVE: ok True, attempts 3, and the returned data.
+    """
+    spec, cache = _seed(tmp_path, monkeypatch, name="goldretry", extract="value", approved=False)
+    _with_login(spec)
+    eng = fe.FakeEngine(
+        fe.Attempt(report=fe.report(success=False, note="drifted", usage=USAGE)),
+        fe.Attempt(raises=RuntimeError("the retry attempt blew up")),
+        fe.Attempt(report=fe.report(mode="replay+replan", usage=USAGE, llm_calls=2),
+                   out={"found": True, "data": {"v": 1}}),
+    ).install(monkeypatch)
+    rec = RunRecord()
+
+    data = await replay(spec, cache=cache, record=rec, on_drift="relearn",
+                        provider=object(), router=object())
+
+    assert data == {"v": 1}
+    assert len(eng.calls) == 3 and eng.refresh_calls == 1, "premise: three attempts, one refresh"
+    # MUST NOT MOVE
+    assert rec.ok is True
+    assert rec.attempts == 3
+    assert rec.llm_calls == 2
+    # EXPECTED TO MOVE (see the docstring): the sink turns these two into None.
+    assert (rec.landed, rec.committed) == (False, False)
+    # R4.57's shape, reached here too. Frozen as SHIPPED, not as correct.
+    assert rec.failure_code == "drift"
+
+
+@pytest.mark.xfail(strict=True, reason="R4.46: an attempt whose report carries no usage poisons a "
+                                       "priced total to None with NO reason recorded, so it is "
+                                       "indistinguishable from a genuinely unpriced model")
+async def test_R4_46_an_unknown_cost_always_records_why(tmp_path, monkeypatch) -> None:
+    """A priced attempt followed by one that reported no usage at all.
+
+    Measured today: `cost_usd` goes from 0.25 to None and NOTHING on the record says why — no
+    `unobserved_llm_path`, no counter, nothing. The `$0.25` is erased and the caller is left unable to
+    tell "we could not price this run" from "this model has no prices".
+
+    Sticky-None itself is correct and is not what this cell objects to: one unpriceable attempt does
+    make the run unpriceable, and a partial sum presented as the total is the understated bill. The
+    defect is the SILENCE. So the assertion is on the reason, not on the value.
+
+    The reason key is deliberately not dictated — any of the names below satisfies it — because the
+    sink may already have a better home for it than a new key.
+    """
+    spec, cache = _seed(tmp_path, monkeypatch, name="r446")
+    _with_login(spec)
+    fe.FakeEngine(
+        fe.Attempt(report=fe.report(success=False, note="session expired",
+                                    usage=dict(USAGE, cost_usd=0.25))),
+        fe.Attempt(report=fe.report(usage=None)),      # no `extra` at all — R4.45's shape
+    ).install(monkeypatch)
+    rec = RunRecord()
+
+    await replay(spec, cache=cache, record=rec)
+
+    assert rec.usage.get("cost_usd") is None, (
+        "premise: this is the shape where sticky-None fires; if it no longer does, this cell is "
+        "testing something else")
+    reasons = {k: rec.usage.get(k) for k in COST_UNKNOWN_REASONS}
+    assert any(reasons.values()), (
+        f"the run is unpriceable and the record does not say why: {reasons}. A caller cannot "
+        f"distinguish it from a genuinely unpriced model, and the 0.25 from the priced attempt is "
+        f"erased with no trace")
+
+
+async def test_the_population_block_reaches_the_record_on_a_FAILED_run(tmp_path, monkeypatch) -> None:
+    """R4.47's class, closed browser-free rather than by strengthening one browser cell.
+
+    `tests/test_flows.py`'s FAILED-path cell asserts `ok is False` (the default), a truthy `mode` (the
+    M4 pre-stamp writes one before the engine runs) and a truthy `failure_code` — so an engine that
+    populated only the SUCCESS return would keep it green while dropping everything B1 exists to
+    deliver. Measured at 1.5's first step: mutations removing `record.total_ms +=` and
+    `record.traces.extend(...)` SURVIVED the entire exit matrix.
+
+    So this asserts the whole population block on a run that FAILS, with values that can only come
+    from the report: a duration, the traces, an idempotency key lifted out of trace meta, and the
+    heal count.
+    """
+    spec, cache = _seed(tmp_path, monkeypatch, name="popfail")
+    traces = [fe.trace(0, ms=11.0, idempotency_key="idem-1"), fe.trace(1, ms=7.5)]
+    fe.FakeEngine(fe.Attempt(report=fe.report(success=False, note="drifted", usage=USAGE,
+                                              llm_calls=4, healed_steps=2, traces=traces))
+                  ).install(monkeypatch)
+    rec = RunRecord()
+
+    with pytest.raises(FlowReplayError):
+        await replay(spec, cache=cache, record=rec)
+
+    assert rec.ok is False and rec.failure_code, "premise: this run failed"
+    assert rec.total_ms == pytest.approx(18.5), (
+        f"the report's duration did not reach the record on a failure (got {rec.total_ms})")
+    assert len(rec.traces) == 2, "a caller diagnosing a failure is exactly who needs the traces"
+    assert rec.llm_calls == 4
+    assert rec.healed_steps == 2
+    assert rec.idempotency_keys == ["idem-1"], (
+        "the key that would be re-used on a resume must be recorded on the failing run too")
+    assert rec.usage.get("cost_usd") == 0.0

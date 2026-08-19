@@ -1040,8 +1040,17 @@ async def test_run_record_is_populated_on_a_FAILED_replay(tmp_path: Path) -> Non
     """The case a success-only record would miss. `_attempt_replay` has several `_fail` exits, and a
     caller diagnosing a failure is exactly who needs the traces and the cost.
 
-    Cannot pass vacuously: it asserts the record moved off its defaults on a run that RAISED, so a
-    record populated only at the success return leaves `mode` empty and fails here.
+    R4.47: THE FIRST THREE ASSERTIONS THIS CELL MADE COULD NOT FAIL FOR THAT. `ok` defaults to False;
+    the M4 pre-stamp writes `mode="raised"` BEFORE the engine runs; so an engine that populated only
+    the success return kept two of the three green. The one discriminating assertion (`failure_code`)
+    was written by `_fail`, not by the population block B1 added — so the fields B1 exists to deliver
+    (usage, traces, duration, heals, idempotency keys) were asserted nowhere on a failing run.
+
+    It now asserts the population block itself, with values that can only come from a real engine run.
+    The CLASS is closed browser-free by
+    `tests/test_replay_exit_matrix.py::test_the_population_block_reaches_the_record_on_a_FAILED_run`
+    plus four registered mutants; this cell is the end-to-end confirmation against a real browser, and
+    it is deliberately not the only guard, because a browser cell is the expensive place to learn this.
     """
     from ultracua.flows import RunRecord
 
@@ -1058,8 +1067,16 @@ async def test_run_record_is_populated_on_a_FAILED_replay(tmp_path: Path) -> Non
         with pytest.raises(FlowReplayError):
             await replay(spec, router=_extract_router(42), cache=cache, record=rec)
         assert rec.ok is False
-        assert rec.mode, "a failed run still has a mode, and the record must carry it"
         assert rec.failure_code, "the typed failure code must reach the record, not only the message"
+        # THE DISCRIMINATING PART. Each of these can only be non-default if the population block ran
+        # on a FAILING attempt — none of them has a default that happens to satisfy the assertion.
+        assert rec.attempts == 1, f"the attempt was not counted (attempts={rec.attempts})"
+        assert rec.mode != "raised", (
+            f"mode is still the M4 pre-stamp {rec.mode!r}, so the engine's own outcome never landed")
+        assert rec.total_ms > 0, "a real replay took time and the record says it was free"
+        assert rec.traces, "the traces a caller needs to diagnose this failure never reached the record"
+        assert "cost_usd" in rec.usage, (
+            f"usage was not absorbed on the failing attempt: {rec.usage!r}")
     finally:
         httpd.shutdown()
         httpd.server_close()

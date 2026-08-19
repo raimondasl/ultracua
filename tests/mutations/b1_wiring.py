@@ -1,4 +1,5 @@
-"""The eleven record-plumbing mutations R4.48 measured as surviving the ENTIRE suite, plus two.
+"""The eleven record-plumbing mutations R4.48 measured as surviving the ENTIRE suite, plus six
+added since — two at R4.59 and four at 1.5's first step.
 
 Each entry is a source transformation applied to a SCRATCH COPY of `src/ultracua/` — never the tree
 under test — plus the reason it is a real defect if it survives. `scripts/prove_red.py` applies them one
@@ -89,6 +90,31 @@ MUTANTS = [
      '        record.usage = dict(usage)\n        return',
      '        record.usage = dict(usage, cost_usd=usage.get("cost_usd") or 0.0)  # MUTANT\n        return',
      "a single-attempt run whose engine reported UNKNOWN would claim a priced zero"),
+
+    # R4.47's class, added at 1.5's first step. The population block writes six fields on EVERY
+    # attempt, failed or not, and only the usage absorb was covered: these four survived the whole
+    # matrix until `test_the_population_block_reaches_the_record_on_a_FAILED_run` was written. The
+    # helper could not even express a duration — `FlowReport.total_ms` derives from its traces and
+    # `StepTrace.total_ms` from its spans, so with no cell scripting a span every report measured 0.0.
+    ("population_no_total_ms", "flows.py",
+     "        record.total_ms += report.total_ms",
+     "        pass  # MUTANT: the run's duration never reaches the record",
+     "a failed run would report 0 ms, and a caller timing the fleet would see free failures"),
+
+    ("population_no_traces", "flows.py",
+     "        record.traces.extend(report.traces)",
+     "        pass  # MUTANT: the traces never reach the record",
+     "a caller diagnosing a FAILURE is exactly who needs the traces, and would get none"),
+
+    ("population_no_healed_steps", "flows.py",
+     "        record.healed_steps += report.healed_steps",
+     "        pass  # MUTANT: heals are not counted",
+     "a run that healed would look like a clean 0-LLM replay in the record"),
+
+    ("population_no_idempotency_keys", "flows.py",
+     "        record.idempotency_keys.extend(",
+     "        _mutant_ignored = (",
+     "the keys a resume must re-use would be lost on the failing run that most needs them"),
 ]
 
 # Mutants no cell kills yet. Each needs a reason and, where it is a real gap, a register id — an empty
