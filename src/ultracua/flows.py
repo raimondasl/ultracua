@@ -203,6 +203,19 @@ class RunRecord:
     read and a status envelope for a write, and every caller and test in the tree depends on that
     shape. Pass `record=RunRecord()` to opt in; pass nothing and behaviour is byte-identical.
 
+    ONE RECORD DESCRIBES ONE `replay()` CALL. Passing the same instance twice REPLACES the first
+    call's facts; for totals across calls, use one record per call and sum them. `replay_calls` counts how many
+    calls have written this instance, so a caller that reuses one by accident can detect it — it is the
+    only field that survives a second call, and it exists so the detection does not need a refusal.
+
+    Why replacement rather than accumulation, which is what the pre-1.5 code did by side effect: the
+    fields divide into counters and VERDICTS, and `mode`, `ok`, `failure_code`, `landed` and
+    `committed` cannot be summed. Measured on the shape that decides it — call #1 confirms a write,
+    call #2 raises — accumulating (or preserving call #1, which a "refuse" would do) leaves
+    `landed=True` on a record whose latest run raised. That is a FALSE ARM: a resume skips a row that
+    was never paid, and nothing downstream catches it. Replacement reaches `landed=None`, which is the
+    error direction this codebase can survive.
+
     `usage` is always populated and always carries `cost_usd` — which is `None`, never 0.0, when a
     run could not observe every router it might have spent through (see `obs.RouterWatch`).
     """
@@ -225,6 +238,17 @@ class RunRecord:
     auth_refreshed: bool = False
     failure_code: str = ""
     idempotency_keys: list = field(default_factory=list)
+    # How many `replay()` calls have written this instance. 1 on a normal run. Named for the call
+    # rather than `runs`, which `FlowMeta` already uses for run HISTORY — one name, two meanings
+    # is the overload this register keeps re-learning to avoid. Greater than 1 means a
+    # caller reused it and is reading only the LAST call's facts — the detection channel that lets the
+    # semantics above be a documented replacement instead of a refusal. B3 keys its `record_disagrees`
+    # bucket on this, per `docs/reshape-plan.md` §5/2.2.
+    replay_calls: int = 0
+    # Empty on every normal run. `_RecordSink.finish()` is called from `replay()`'s `except` arm, so
+    # an exception of its own would REPLACE the failure the caller is being told about. It cannot
+    # raise; if it cannot complete the record it says so here instead.
+    note: str = ""
 
 
 @dataclass
@@ -232,6 +256,11 @@ class LearnResult:
     spec: FlowSpec
     cached: bool       # did a replayable flow get cached?
     steps: list        # the learned steps, for the developer to inspect
+    # REQUIRED, keyword-only. A relearn is the largest spend in a replay, and its calls, traces, heals
+    # and duration used to be dropped while its dollars were kept (R4.50) — because the only channel
+    # for them was whatever the relearn site remembered to copy. Making it required means an exit of
+    # `learn()` that forgets it fails at the call, not silently in someone's bill six months later.
+    report: Any = field(kw_only=True)
     data: Any = None   # extracted data
     found: bool = False
     approved: bool = False
@@ -1348,7 +1377,7 @@ async def _learn_once(
                          "flow under the same key — it may carry the same mis-placed gate", spec.name)
         return LearnResult(
             spec=spec, cached=False, steps=list(stale.steps) if stale else [], data=out.get("data"),
-            found=False, performed_write=True,
+            found=False, performed_write=True, report=report,
             note="a write fired on the wire during discovery but no step could be attributed to it — "
                  "refusing to cache it, because the write would replay with no mutation gate, no "
                  "precondition and no Idempotency-Key, or with those attached to a step that never "
@@ -1371,7 +1400,7 @@ async def _learn_once(
         cache.delete(key)
         return LearnResult(
             spec=spec, cached=False, steps=list(cached.steps), data=out.get("data"), found=False,
-            performed_write=True,
+            performed_write=True, report=report,
             note="a write fired on the wire during discovery but no step could be attributed to it — "
                  "refusing to cache a write flow with zero gated steps (it would replay with no mutation "
                  "gate, no precondition and no Idempotency-Key). Author it with `flow record`, which "
@@ -1386,14 +1415,16 @@ async def _learn_once(
             # per-write barrier is fine — a missed lone write fails the count check.)
             cache.delete(key)
             return LearnResult(spec=spec, cached=False, steps=list(cached.steps), data=out.get("data"),
-                               found=False, note="a multi-write flow's per-write barriers must be recorded "
+                               found=False, report=report,
+                               note="a multi-write flow's per-write barriers must be recorded "
                                                  "via `flow record` (the LLM-learn path can't reliably attribute "
                                                  "each write); learn the reads, record the writes.")
         attached, reason = _attach_step_confirms(cached, spec.mutate.step_confirms)
         if attached is None:
             cache.delete(key)
             return LearnResult(spec=spec, cached=False, steps=list(cached.steps), data=out.get("data"),
-                               found=False, note=f"per-write confirm checks could not be attached: {reason}")
+                               found=False, report=report,
+                               note=f"per-write confirm checks could not be attached: {reason}")
         cache.put(attached)
         cached = attached
     data, found = out.get("data"), bool(out.get("found"))
@@ -1443,7 +1474,7 @@ async def _learn_once(
         spec=spec, cached=cached is not None, steps=list(cached.steps) if cached else [],
         data=data, found=found, approved=approved, shape=_shape_of(data),
         pinned=pinned, performed_write=bool(report.extra.get("performed_write")),
-        note=report.note or report.mode,
+        note=report.note or report.mode, report=report,
     )
 
 
@@ -2123,65 +2154,241 @@ def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Op
     )
 
 
-def _absorb_usage(record, usage: dict) -> None:
-    """Add one attempt's usage dict into the record's running total.
+@dataclass(frozen=True)
+class _AttemptFacts:
+    """What ONE pass observed. Appended to the sink once and never revised.
 
-    Token counters and calls SUM. `cost_usd` sums too, but is STICKY-None: once any attempt could
-    not be priced, the run total is unknown, because a partial sum presented as the total is the
-    understated bill this accounting exists to prevent. Same rule for `unobserved_llm_path`.
+    Frozen deliberately. The record used to be MUTATED at sixteen sites across two functions, and
+    eleven mutations of that wiring survived the entire suite (R4.48) because "was this field written
+    on this path?" is a question no per-scenario test asks. An append-only fact list turns every such
+    question into arithmetic performed in one place.
     """
-    dst = record.usage
-    if not dst:
-        record.usage = dict(usage)
-        return
-    for k in ("calls", "input_tokens", "output_tokens", "cache_read_tokens",
-              "cache_write_tokens", "cost_unpriced_calls"):
-        if k in usage or k in dst:
-            dst[k] = (dst.get(k) or 0) + (usage.get(k) or 0)
-    a, b = dst.get("cost_usd"), usage.get("cost_usd")
-    dst["cost_usd"] = None if (a is None or b is None) else round(a + b, 6)
-    if usage.get("unobserved_llm_path") or dst.get("unobserved_llm_path"):
-        dst["unobserved_llm_path"] = True
-    by = dict(dst.get("by_model") or {})
-    for m, n in (usage.get("by_model") or {}).items():
-        by[m] = by.get(m, 0) + n
-    if by:
-        dst["by_model"] = by
+
+    outcome: str                        # ok | failed | raised | precheck | relearn | relearn_raised
+    mode: str = ""
+    landed: Optional[bool] = None
+    committed: Optional[bool] = None
+    llm_calls: int = 0
+    healed_steps: int = 0
+    total_ms: float = 0.0
+    traces: tuple = ()
+    idempotency_keys: tuple = ()
 
 
-def _forget_negative_write_evidence(record) -> None:
-    """Downgrade a `False` landed/committed to None, keeping any `True`.
+# The outcomes that mean "an engine attempt ran". `precheck` and the relearn rows are real events with
+# real spend, but they are not attempts, and `RunRecord.attempts` has always counted attempts.
+_ENGINE_OUTCOMES = frozenset({"ok", "failed", "raised"})
 
-    A `False` means "THAT attempt did not confirm a write" — never "no write happened in this run".
-    Two places used to let one survive into a claim it does not support: a post-auth-refresh
-    precheck that succeeds (whose own comment says the first attempt's write may have landed), and
-    a later attempt that RAISES (where the answer is unknown, not the previous attempt's answer).
-    Both are the confident-denial M4 forbids, so both go through here. True is never touched: a
-    write that was once evidenced as landed stays landed.
+# The outcomes after which the write question is UNANSWERABLE rather than answered "no". A raise can
+# happen after the commit POSTed; a precheck skip is evidence about an EARLIER run, never this one.
+#
+# `relearn` IS IN THIS SET, and leaving it out was a regression the first draft shipped: a relearn is a
+# live LLM authoring run against a page that has demonstrably drifted, and discovery can actuate a
+# write — `LearnResult.performed_write` exists for exactly that, and `_learn` refuses to CACHE a flow
+# whose write it could not attribute. So a completed relearn licenses no denial. Before the sink, the
+# same guarantee came from `_mark_ok` -> `_forget_negative_write_evidence`, one of the three helpers
+# the sink deleted as "existing only to UNDO another"; deleting the helper deleted the property with
+# it, and the relearn cell asserted `ok`/`mode`/`usage` but never `landed`, so nothing noticed.
+_UNKNOWN_OUTCOMES = frozenset({"raised", "precheck", "relearn", "relearn_raised"})
+
+
+class _RecordSink:
+    """The ONE place a `RunRecord` is written, and the only place that decides what it says.
+
+    THE SHAPE THIS REPLACES. Sixteen `record.<field> =` statements across `replay()` and
+    `_attempt_replay`, plus three helpers whose job was to UNDO what an earlier site had written
+    (`_mark_ok` cleared a failure a previous attempt stamped; `_forget_negative_write_evidence`
+    downgraded a `False` that a previous attempt should never have claimed). Every one of B1's ten
+    findings is "a site that was not written" or "a site that was written wrongly on one path" — a
+    class that exists only because there were sites at all.
+
+    Here an attempt APPENDS what it saw, `finish()` folds the facts once, and no path can forget to
+    clear anything, because nothing is ever written early enough to need clearing.
+
+    TOTAL BY CONSTRUCTION. `finish()` never raises. It is called from `replay()`'s `except` arm, where
+    an exception of its own would REPLACE the failure the caller is being told about — a diagnostic
+    destroying the thing it reports on. An internal error becomes `record.note` instead.
     """
-    if record is None:
-        return
-    if record.landed is False:
-        record.landed = None
-    if record.committed is False:
-        record.committed = None
 
+    def __init__(self, record: "Optional[RunRecord]") -> None:
+        self._record = record
+        self._facts: list = []
+        self._reported_usage: list = []
+        self._watch = None
+        self._model = ""
+        self._auth_refreshed = False
+        self._finished = False
 
-def _mark_ok(record) -> None:
-    """A successful return must clear the failure a PREVIOUS attempt recorded.
+    @property
+    def wanted(self) -> bool:
+        """No record was passed, so nothing here does anything — the opt-in promise, in one place."""
+        return self._record is not None
 
-    `replay()` can return data from the relearn or the idempotency precheck after an earlier
-    attempt already stamped `ok=False` and a `failure_code`. Only the success exit inside
-    `_attempt_replay` cleared them, and those two paths never reach it — so a caller saw
-    `ok=False` on a call that handed back data.
-    """
-    if record is not None:
-        record.ok, record.failure_code = True, ""
-        _forget_negative_write_evidence(record)
+    def arm(self, provider, router, model: str = "") -> None:
+        """Start watching every router this run can spend through.
+
+        ONE watch for the WHOLE call, which is what makes the raise path a non-event: the spend of an
+        attempt whose `run_cached` raised is in the delta whether or not that attempt ever returned a
+        report (R4.44), and so is a relearn's (F2/M2), and so is the spend of an exit whose report
+        carries no `usage` key at all (R4.45/R4.46). None of those needs a site of its own any more.
+        """
+        if not self.wanted:
+            return
+        self._watch = UsageTotals.observe(provider, router)
+        self._model = model
+
+    def attempt(self, facts: _AttemptFacts) -> None:
+        if self.wanted:
+            self._facts.append(facts)
+
+    def cross_check_usage(self, usage: Optional[dict]) -> None:
+        """Keep an attempt's SELF-REPORTED usage, as a check on the watch — never as the source."""
+        if self.wanted and usage:
+            self._reported_usage.append(dict(usage))
+
+    def auth_refreshed(self) -> None:
+        if self.wanted:
+            self._auth_refreshed = True
+
+    def finish(self, exc: "Optional[BaseException]") -> None:
+        """Write the record, exactly once, from the facts. Never raises."""
+        if self._finished or not self.wanted:
+            return
+        self._finished = True
+        record = self._record
+        try:
+            self._write(record, exc)
+        except BaseException as inner:  # noqa: BLE001 - a record must never replace the real outcome
+            # BEST EFFORT, AND ITSELF GUARDED. Reporting the breakage must not become the breakage:
+            # this arm runs inside `replay()`'s `except`, so an AttributeError here would replace the
+            # caller's real failure with an accounting one. And a half-written record must not claim a
+            # priced zero it never computed, so usage is forced to UNKNOWN rather than left at the
+            # dataclass default `{}` — which is the exact shape R4.45 was filed for.
+            try:
+                record.note = f"the run record could not be completed: {type(inner).__name__}: {inner}"
+                if not record.usage:
+                    record.usage = {"cost_usd": None, "unobserved_llm_path": True}
+            except BaseException:  # noqa: BLE001 - nothing here is worth the caller's exception
+                pass
+
+    # -- the folding ---------------------------------------------------------------------------------
+    def _write(self, record: "RunRecord", exc: "Optional[BaseException]") -> None:
+        # COMPUTE FIRST, ASSIGN LAST — `finish()` is total, and this makes it ATOMIC too. Fourteen
+        # assignments in sequence meant a failure partway left a record that is half this run and half
+        # whatever was there before: harmless on a fresh record (the rest are defaults) and a FALSE ARM
+        # on a reused one, where `landed=True` from an earlier call would sit beside this run's
+        # verdict. Nothing below the divider can raise, so the record ends up either wholly this run or
+        # wholly untouched.
+        usage = self._usage()
+        attempts = sum(1 for f in self._facts if f.outcome in _ENGINE_OUTCOMES)
+        # ONE vocabulary (R4.49). The caller catches a `FlowReplayError` and reads `.code`; the record
+        # said the engine's internal `kind`, which is a different set of strings and could describe a
+        # DIFFERENT attempt. A non-typed exception is `raised`, which no `code` uses.
+        failure_code = "" if exc is None else (getattr(exc, "code", "") or "raised")
+        mode = self._facts[-1].mode if self._facts else ""
+        landed = self._evidence("landed")
+        committed = self._evidence("committed")
+        llm_calls = sum(f.llm_calls for f in self._facts)
+        healed_steps = sum(f.healed_steps for f in self._facts)
+        total_ms = sum(f.total_ms for f in self._facts)
+        traces = [t for f in self._facts for t in f.traces]
+        keys = [k for f in self._facts for k in f.idempotency_keys]
+        replay_calls = (record.replay_calls or 0) + 1
+
+        # ---- nothing above has been written; nothing below can fail --------------------------------
+        record.usage = usage
+        record.note = ""        # the one field nothing else writes: a stale one must not survive
+        record.attempts = attempts
+        record.ok = exc is None
+        record.failure_code = failure_code
+        record.mode = mode
+        record.auth_refreshed = self._auth_refreshed
+        record.landed = landed
+        record.committed = committed
+        record.llm_calls = llm_calls
+        record.healed_steps = healed_steps
+        record.total_ms = total_ms
+        record.traces = traces
+        record.idempotency_keys = keys
+        record.replay_calls = replay_calls
+
+    def _evidence(self, field_name: str) -> Optional[bool]:
+        """True if ANY attempt evidenced it; None if any attempt left it unanswerable; else False.
+
+        The order matters and is the whole rule. `True` wins outright — a write that was once
+        evidenced as landed cannot be un-landed by a later attempt failing earlier. `None` beats
+        `False` — a run in which something RAISED, or which skipped on an idempotency precheck, has
+        no basis for a denial, and a confident `False` over a write that may have committed is the
+        one error direction nothing downstream catches.
+        """
+        if any(getattr(f, field_name) is True for f in self._facts):
+            return True
+        if not self._facts or any(f.outcome in _UNKNOWN_OUTCOMES for f in self._facts):
+            return None
+        return False
+
+    def _usage(self) -> dict:
+        if self._watch is None:
+            # The run left before the routers were even resolved — an idempotency precheck that said
+            # the write was already done. Nothing COULD have been spent, and `RunRecord` promises a
+            # populated usage carrying `cost_usd`, so the honest answer is a priced zero rather than
+            # the empty dict this exit used to return (R4.45's family, on the one exit that never
+            # reaches an engine attempt at all).
+            return UsageTotals().as_dict(self._model)
+        usage = self._watch.as_dict(self._model)
+        # THE CROSS-CHECK, and it only ever makes the answer LESS confident. The watch is built over
+        # the owners `replay()` resolved; if the engine reached a router behind neither of them, the
+        # watch would report a CONFIDENT ZERO over real spend, which is the single failure this
+        # accounting exists to prevent. So every attempt that reported its own usage is compared, and
+        # an attempt that saw MORE than the whole-run watch means the watch is blind somewhere.
+        # SUMMED, not compared one at a time. Each report is ONE attempt's router delta and the watch
+        # spans the whole run, so the property that implies blindness is `sum(reported) > watch`. The
+        # first draft compared each attempt individually against the run total, which only detects the
+        # single-attempt case: with two attempts spending comparably, neither exceeds the total on its
+        # own and a half-blind run reported a CONFIDENT, UNDERSTATED bill — the one failure this
+        # accounting exists to prevent, missed by the check written to prevent it.
+        blind = any(sum((r.get(k) or 0) for r in self._reported_usage) > (usage.get(k) or 0)
+                    for k in ("calls", "input_tokens", "output_tokens"))
+        if blind or any(r.get("unobserved_llm_path") for r in self._reported_usage):
+            usage["cost_usd"] = None
+            usage["unobserved_llm_path"] = True
+            if blind:
+                usage["watch_missed_a_router"] = True
+        return usage
 
 
 async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, cached_flow, mode="replay",
-                          provider=None, params=None, record=None, on_step=None):
+                          provider=None, params=None, sink=None, on_step=None):
+    """THE GUARD around one attempt. Any raise, from anywhere inside, still appends the attempt's facts.
+
+    The first draft of the sink wrapped only the `run_cached` call, leaving the ~130 lines after it —
+    the write-evidence block, the shape gate, the H9 contract checks, `_capture_audit` — able to raise
+    with no fact appended at all. The record then reported `attempts=0` and no Idempotency-Keys over a
+    run whose write step had already POSTed. `landed`/`committed` stayed `None` (an empty fact list is
+    unknown, so write safety held), but everything an operator would read was gone.
+
+    M4's old pre-stamp guaranteed the same thing from the other side, by writing BEFORE the engine ran
+    and making every later site clear it. This is that guarantee without the clearing.
+    """
+    carried: dict = {}
+
+    def _append(**kw) -> None:
+        if sink is not None:
+            sink.attempt(_AttemptFacts(**{**carried, **kw}))
+
+    try:
+        return await _attempt_replay_body(
+            spec, router, cache, key, meta, check_shape, cached_flow=cached_flow, mode=mode,
+            provider=provider, params=params, sink=sink, on_step=on_step,
+            carried=carried, append=_append)
+    except BaseException:
+        _append(outcome="raised", mode="raised")
+        raise
+
+
+async def _attempt_replay_body(spec, router, cache, key, meta, check_shape, *, cached_flow,
+                               mode="replay", provider=None, params=None, sink=None, on_step=None,
+                               carried=None, append=None):
     """One replay attempt. Returns (ok, data, reason, kind).
 
     `kind` classifies a failure for the typed taxonomy: "" (ok) | "miss" | "escalate" | "shape" |
@@ -2208,24 +2415,29 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, cached
     landed = False        # may a resume SKIP this whole row (every recipe write ran ok)
     committed = False     # did ANYTHING commit (the first recipe write ran ok) — the disclosure gate
 
+    # What this attempt observed, filled once the report is in hand. `_append` (owned by the guard
+    # above) merges it with the outcome, so every exit records the SAME set of facts — including the
+    # exit that is a raise, which is why the guard rather than this function owns both.
+    _append = append
+
     def _fail(reason: str, kind: str):
-        if record is not None:
-            record.ok, record.landed, record.committed = False, landed, committed
-            record.failure_code = kind
+        # The FACTS of this attempt, appended once. What the RUN then says about ok/landed/committed
+        # is `_RecordSink.finish`'s decision, made over every attempt at the single exit — which is
+        # what stops a later success from inheriting this attempt's failure code (R4.57) and stops
+        # this attempt's `False` from being read as the run's answer.
+        _append(outcome="failed", landed=landed, committed=committed)
         return False, None, reason, kind, landed, committed
 
     # A learned pin anchors the OLD final page; a repaired flow may end elsewhere, so only trust the
     # pin on a pure replay — let the LLM extractor re-read the live value when we re-plan the tail.
     pin = meta.read_pin if (spec.pin_read and mode == "replay") else None
-    if record is not None:
-        # M4: stamp BEFORE the engine runs. `run_cached` can raise from anywhere inside — a
-        # `finalize` extraction whose provider 500s does so AFTER the commit has POSTed — and the
-        # exception exits this function above the population block below. A pristine record then
-        # reads `committed=False` over a write that may have landed. Marking here means the worst
-        # case is "raised, unknown", never a confident denial.
-        record.attempts += 1
-        record.mode = "raised"
-        _forget_negative_write_evidence(record)
+    # M4, kept but inverted. The old shape STAMPED the record before the engine ran, because
+    # `run_cached` can raise from anywhere inside — a `finalize` extraction whose provider 500s does so
+    # AFTER the commit has POSTed — and a pristine record would then read `committed=False` over a
+    # write that may have landed. Pre-stamping meant every later site had to UNDO it. Appending the
+    # fact on the exception path instead reaches the same guarantee from the other side: a raised
+    # attempt makes the run's answer UNKNOWN, and nothing has to be cleared because nothing was
+    # claimed. The attempt's SPEND is not lost either — the sink's watch spans the raise (R4.44).
     report = await run_cached(
         url=spec.start_url, goal=spec.goal, provider=provider, cache=cache, mode=mode,
         max_steps=spec.max_steps, headless=spec.headless, scope=spec.scope,
@@ -2243,23 +2455,24 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, cached
         # read, where zero is the truth.
         aux_routers=(router,) if router is not None else (),
     )
-    if record is not None:
-        # Populated HERE, not at the success return: `_fail` has several exits below this line and
-        # a record only filled on success would be empty in exactly the cases a caller most needs
-        # it. ACCUMULATED, not assigned: `replay()` passes ONE record to up to three attempts, and
-        # three lines away it ORs its own landed/committed across them for the same reason. A run
-        # that auth-refreshed and retried spent BOTH attempts' money, and reporting only the second
-        # understates the bill silently — which is the whole failure class this slice exists to end.
-        record.mode = report.mode                       # last attempt wins: it is the outcome
-        _absorb_usage(record, report.extra.get("usage") or {})
-        record.llm_calls += report.llm_calls
-        record.healed_steps += report.healed_steps
-        record.total_ms += report.total_ms
-        record.traces.extend(report.traces)
-        record.idempotency_keys.extend(
-            t.meta["idempotency_key"] for t in report.traces
-            if isinstance(t.meta, dict) and t.meta.get("idempotency_key")
-        )
+    # CARRIED HERE, not written at the success return: `_fail` has several exits below this line, and
+    # a record filled only on success would be empty in exactly the cases a caller most needs it.
+    # Every exit below appends these same facts; the SUM across attempts is the sink's job, so a run
+    # that auth-refreshed and retried can no longer report only the second attempt's bill.
+    carried.update(
+        mode=report.mode,
+        llm_calls=report.llm_calls,
+        healed_steps=report.healed_steps,
+        total_ms=report.total_ms,
+        traces=tuple(report.traces),
+        idempotency_keys=tuple(
+            tr.meta["idempotency_key"] for tr in report.traces
+            if isinstance(tr.meta, dict) and tr.meta.get("idempotency_key")
+        ),
+    )
+    if sink is not None:
+        # The engine's own number, kept as a CHECK on the run-scoped watch and never as the source.
+        sink.cross_check_usage(report.extra.get("usage") or {})
     # ===== THE WRITE-LANDED EVIDENCE, read from `out` — NOT inferred from position =====
     #
     # `finalize` runs UNCONDITIONALLY (`flow.py` calls it outside the step loop), so the confirm's
@@ -2410,10 +2623,7 @@ async def _attempt_replay(spec, router, cache, key, meta, check_shape, *, cached
         if mode == "replay" and spec.audit:
             _capture_audit(cache, key, spec, meta, report, data, eff=eff,
                            truncated=bool(out.get("truncated")), cached_flow=cached_flow)
-    if record is not None:
-        # G6: computed on the success path and previously dropped here. `landed` on an OK run is
-        # what tells a caller a write actually committed, and `_ok()` never saw it.
-        record.ok, record.landed, record.committed = True, landed, committed
+    _append(outcome="ok", landed=landed, committed=committed)
     return True, data, "", "", landed, committed
 
 
@@ -2847,6 +3057,34 @@ async def replay(
     values never enter identity). Read flows only in this slice — parameterizing a WRITE flow is
     refused (write templates + row-keyed idempotency are the next slice).
     """
+    # THE SINGLE EXIT. `replay()` has sixteen of them and any one can be the last thing that happens
+    # to a run, so "did every path write the record?" used to be sixteen questions — and B1 got eight
+    # of them wrong. The body can no longer answer them at all: it APPENDS facts, and this wrapper
+    # folds them exactly once on the way out, whichever way that is.
+    #
+    # `except BaseException` on purpose. A KeyboardInterrupt or a CancelledError mid-write is exactly
+    # when a caller needs to be told the write question is unanswerable rather than "no", and
+    # `finish()` is total, so it cannot turn a Ctrl-C into a traceback about accounting.
+    sink = _RecordSink(record)
+    try:
+        data = await _replay_body(
+            spec, require_approved=require_approved, on_drift=on_drift, check_shape=check_shape,
+            auth_refresh=auth_refresh, provider_name=provider_name, provider=provider, router=router,
+            cache=cache, params=params, on_step=on_step, sink=sink,
+        )
+    except BaseException as exc:
+        sink.finish(exc)
+        raise
+    sink.finish(None)
+    return data
+
+
+async def _replay_body(
+    spec: FlowSpec, *, require_approved: bool, on_drift: str, check_shape: bool, auth_refresh: bool,
+    provider_name: Optional[str], provider, router, cache: Optional[FlowCache],
+    params: Optional[dict], on_step, sink: "_RecordSink",
+) -> Any:
+    """`replay()`'s body. Returns data or raises; it never writes the record — see `_RecordSink`."""
     cache = cache or _default_cache()
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     meta = _load_meta(cache, key)
@@ -2869,7 +3107,9 @@ async def replay(
 
     # Idempotency precheck (opt-in, one-shot writes): if the end-state already holds, skip the write.
     if await _precheck_done(spec):
-        _mark_ok(record)          # M3: a success return that never enters _attempt_replay
+        # A skip is evidence about an EARLIER run, never about this one, so it makes the write
+        # question unanswerable rather than answering it "no" (see `_UNKNOWN_OUTCOMES`).
+        sink.attempt(_AttemptFacts(outcome="precheck", mode="precheck"))
         _record_run(cache, key, ok=True)
         _log.info("flow %r: write already done (idempotency precheck) — skipped", spec.name)
         return {"status": "already-done", "data": None}
@@ -2886,6 +3126,11 @@ async def replay(
         # confirm check is selector/url/text based, or a PINNED read) never call the LLM on replay
         # -> no router needed, and no API key required to run.
         router = build_router(provider_name or settings.provider)
+
+    # ONE watch for the whole call, armed the moment the owners are known. Everything spent from here
+    # on — every attempt, a relearn, an exit whose report carries no usage key, an attempt that
+    # RAISES — lands in its delta, which is what lets the sink stop asking each site to report its own.
+    sink.arm(provider, router, settings.model)
 
     def _ok(data):
         _record_run(cache, key, ok=True)
@@ -2911,7 +3156,7 @@ async def replay(
     try:
         ok, data, reason, kind, landed, committed = await _attempt_replay(
             spec, router, cache, key, meta, check_shape, cached_flow=cached_flow, params=params,
-            record=record, on_step=on_step)
+            sink=sink, on_step=on_step)
         landed_any = landed_any or landed
         committed_any = committed_any or committed
         if ok:
@@ -2946,15 +3191,14 @@ async def replay(
         if retry_ok:
             try:
                 await refresh_auth(spec, headless=spec.headless)
-                if record is not None:
-                    record.auth_refreshed = True     # G10: previously a log line and nothing else
+                sink.auth_refreshed()                # G10: once a log line and nothing else
                 if await _precheck_done(spec):  # the first attempt's write may have landed
                     _record_run(cache, key, ok=True)
-                    _mark_ok(record)      # M3: as above, on the post-auth-refresh precheck
+                    sink.attempt(_AttemptFacts(outcome="precheck", mode="precheck"))
                     return {"status": "already-done", "data": None}
                 ok, data, reason2, kind2, landed2, committed2 = await _attempt_replay(
                     spec, router, cache, key, meta, check_shape, cached_flow=cached_flow,
-                    params=params, record=record, on_step=on_step)
+                    params=params, sink=sink, on_step=on_step)
                 landed_any = landed_any or landed2
                 committed_any = committed_any or committed2
                 if ok:
@@ -2989,7 +3233,7 @@ async def replay(
             # flow. It can't fix data-SHAPE drift (the steps still replay) — that falls to a full relearn.
             ok, data, reason3, _kind3, landed3, committed3 = await _attempt_replay(
                 spec, router, cache, key, meta, check_shape, cached_flow=cached_flow,
-                mode="repair", provider=provider, params=params, record=record, on_step=on_step
+                mode="repair", provider=provider, params=params, sink=sink, on_step=on_step
             )
             landed_any = landed_any or landed3
             committed_any = committed_any or committed3
@@ -2997,26 +3241,31 @@ async def replay(
                 _log.info("flow %r: drift repaired by suffix-replan (prefix preserved)", spec.name)
                 return _ok(data)
             # Full re-author from scratch (also refreshes the sidecar metadata: shape, pin, approval).
-            _relearn_watch = UsageTotals.observe(provider, router)
+            #
+            # NO WATCH OF ITS OWN any more. M2 and F2 were both "the relearn's spend is missing", fixed
+            # by a second watch plus an absorb on each of two paths — a site per path, which is the
+            # shape that keeps losing one. The sink's run-scoped watch already spans this call, so the
+            # money is accounted for whether `learn()` returns or raises, with nothing to remember.
             try:
                 res = await learn(spec, provider=provider, router=router, cache=cache)
             except BaseException:
-                # F2: a relearn authors the whole flow and is the largest spend here. `learn()` has
-                # no internal try/except, so a provider 500 mid-authoring propagated straight past
-                # a sequential absorb and the record reported the earlier attempts' cents against
-                # dollars actually spent — M2's own failure class, one leg over.
-                if record is not None:
-                    _absorb_usage(record, _relearn_watch.as_dict(settings.model))
-                    record.mode = "raised"
+                sink.attempt(_AttemptFacts(outcome="relearn_raised", mode="raised"))
                 raise
-            if record is not None:
-                # M2: a relearn re-authors the whole flow and is the single largest spend here. It
-                # sat entirely outside the record, so a run that drifted -> replanned -> relearned
-                # reported the replan's cents against dollars actually spent.
-                _absorb_usage(record, _relearn_watch.as_dict(settings.model))
-                record.mode = "relearn"
+            # R4.50: the relearn's CALLS, traces, heals and duration used to be dropped while its
+            # dollars were kept, so a run could report `llm_calls == 0` beside a usage showing dozens.
+            # `LearnResult.report` is a REQUIRED keyword for exactly this reason — a `learn()` exit
+            # that forgets it is a TypeError, not a silently thinner record.
+            rep = res.report
+            sink.attempt(_AttemptFacts(
+                outcome="relearn", mode="relearn",
+                llm_calls=rep.llm_calls, healed_steps=rep.healed_steps, total_ms=rep.total_ms,
+                traces=tuple(rep.traces),
+                idempotency_keys=tuple(
+                    tr.meta["idempotency_key"] for tr in rep.traces
+                    if isinstance(tr.meta, dict) and tr.meta.get("idempotency_key")
+                ),
+            ))
             if res.cached and res.found:
-                _mark_ok(record)      # M3: clears the failed attempts' ok=False + failure_code
                 return _ok(res.data)
             reason = f"replay drifted ({reason}); suffix-replan failed ({reason3}); re-learn failed ({res.note})"
         # DISCLOSE THE COMMIT before anything is recorded or raised, so the one string reaches every

@@ -146,6 +146,25 @@ Violating any of these is a blocking defect, not a trade-off:
   the `out` contract from the engine's own source and runs the REAL `_make_finalize` against a REAL
   session. **What it cannot see is anything page-side** — `drift_bench` and the browser write-safety
   matrix stay the adjudicators there.
+- **A structural scan that names ONE function asserts a negative about a body that can walk away.**
+  Measured at 1.5, where splitting `replay()` and `_attempt_replay` into wrapper+body silently
+  disarmed THREE scans at once: the exit-set ratchet read "2 exits", `test_boundary_truth`'s
+  health-view guard read "0 `_record_run` sites", and R3.3's arming scan flagged the delegating
+  return. All three fired, which is the net working — but when you split a function, the scans that
+  NAME it are a fourth thing to check beside the ratchets, the mutants and the goldens. Name every
+  half, and fail if a named half is MISSING rather than scanning whatever is found.
+
+- **The RunRecord has ONE writer — `_RecordSink` (1.5, 0.110.0).** `replay()` is a wrapper whose only
+  job is calling `finish()` exactly once; `_replay_body` appends frozen `_AttemptFacts` and cannot
+  write the record at all. Usage comes from ONE run-scoped watch, so a raised attempt, an exit whose
+  report omits `usage`, and the relearn all stopped needing sites of their own — that is what closed
+  seven B1 findings at once. **Do not add a `record.<field>` write anywhere else**: an AST pin
+  (`test_every_record_write_is_inside_the_sink`) fails naming it, because the count was never the
+  invariant — the SPREAD was. `finish()` is TOTAL (it runs in the `except` arm; its own failure goes
+  to `record.note`, never over the caller's exception), and the landed/committed rule is: True if any
+  attempt evidenced it, else None if any attempt is unknown (raised / precheck-skip / relearn-raise),
+  else False.
+
 - **Six shapes may only ever SHRINK — the ratchets.** `python scripts/ratchets.py` counts them by AST
   (`--print` for every site, `--update` to re-seed) and `test_every_ratchet_holds` runs it in the fast
   tier. Today: `spec_mutate_raw` 27, `flow_key_transcriptions` 25, `bare_flow_replay_error` 24,
@@ -159,7 +178,7 @@ Violating any of these is a blocking defect, not a trade-off:
 
 - **The wiring mutants must stay dead.** `scripts/prove_red.py tests/mutations/b1_wiring.py` applies each
   of R4.48's eleven record-plumbing mutations to a scratch copy of `src/` and reports which are killed:
-  **0 of 11 before the matrix, 11 of 11 after**, and the registry has since grown to **17** (two at R4.59, four at 1.5's first step), and the `red-proof` CI job keeps it that way. A mutation
+  **0 of 11 before the matrix, 11 of 11 after**. At 1.5 all seventeen went STALE at once — the sites they named ceased to exist — and were reported as ERRORS, not survivors; re-expressed against the sink they are **16 killed, 0 survived**, and two of the rewrites SURVIVED first, naming two properties no cell drove, and the `red-proof` CI job keeps it that way. A mutation
   whose find-text no longer matches is reported as an ERROR, not a survivor, because a stale mutation
   silently reports the suite as stronger than it is. A survivor is a hole in the matrix, not a bug in the
   mutation: add a cell, or register it with a reason and a finding id.

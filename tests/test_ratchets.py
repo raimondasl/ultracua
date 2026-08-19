@@ -16,6 +16,7 @@ conclusion pre-written.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -103,9 +104,40 @@ def test_every_ratchet_holds() -> None:
 
 
 def test_every_derivation_matches_something() -> None:
-    """A derivation that matches nothing is inert, and would report the shape as already removed."""
+    """A derivation that matches nothing is inert, and would report the shape as already removed.
+
+    `MAY_BE_ZERO` is the earned exemption: a ratchet whose END STATE is zero — today only
+    `run_record_write_sites`, which counts `record.<field> =` writes OUTSIDE `_RecordSink` and whose
+    correct value after 1.5 is none at all. It is not exempt from being live: its derivation asserts
+    that the same pattern still finds the writes INSIDE the sink before returning the ones outside, so
+    a broken pattern still fails loudly rather than reading as a clean codebase. The cell below arms
+    that.
+    """
     for name, hits in sorted(ratchets.derive_all().items()):
+        if name in ratchets.MAY_BE_ZERO:
+            continue
         assert hits, f"{name} matched NOTHING — the pattern is broken, not the codebase clean"
+
+
+def test_a_zero_ratchet_still_proves_its_pattern_is_live(scratch_src) -> None:
+    """The exemption above must not become a way to hide a dead pattern.
+
+    `derive_run_record_write_sites` returns zero by design, so the usual "it matched something" check
+    cannot speak for it. Its liveness comes from the sink's own writes: delete them and the derivation
+    must FAIL rather than quietly report a clean tree.
+    """
+    path = scratch_src.root / "flows.py"
+    text = path.read_text(encoding="utf-8")
+    # EVERY write, not a couple: leaving one behind leaves `inside` non-empty and the cell asserts
+    # nothing. `\brecord\.` on a word boundary so `self._record.` — a READ of the sink's own attribute
+    # — is untouched.
+    gutted, n = re.subn(r"\brecord\.", "_gone.", text)
+    assert n >= 10, f"only {n} record writes found to remove — this cell would be vacuous"
+    scratch_src.append("flows.py", "")          # register the file for restore
+    path.write_text(gutted, encoding="utf-8")
+
+    with pytest.raises(AssertionError, match="matches NOTHING inside"):
+        ratchets.derive_run_record_write_sites()
 
 
 def test_the_baseline_is_internally_consistent_and_covers_exactly_the_derivations() -> None:

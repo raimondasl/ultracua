@@ -10,6 +10,8 @@ is exactly the state `extra["usage"]` was in: ABSENT on the 0-LLM path rather th
 
 from __future__ import annotations
 
+import types
+
 import pytest
 
 from ultracua.llm.base import Router, Tier
@@ -224,48 +226,98 @@ def _rec():
     return RunRecord()
 
 
-def test_usage_accumulates_across_attempts_rather_than_overwriting() -> None:
+# ===================================================================================================
+# THE SINK owns these properties since 1.5. They used to be unit tests of `_absorb_usage`, `_mark_ok`
+# and `_forget_negative_write_evidence` — three helpers whose whole job was to UNDO what an earlier
+# write site had claimed. The helpers are gone; the properties are not, so they are re-expressed
+# against `_RecordSink`, which is now the only thing that can answer any of these questions.
+
+
+class _SpendingRouter:
+    """A router a `RouterWatch` can observe, so a cell can make a run actually spend."""
+
+    def __init__(self) -> None:
+        self.totals = UsageTotals()
+
+    def spend(self, calls: int = 1, tokens_in: int = 10, model: str = "mock-1") -> None:
+        for _ in range(calls):
+            self.totals.add(types.SimpleNamespace(
+                input_tokens=tokens_in, output_tokens=5, cache_read_tokens=0,
+                cache_write_tokens=0), model)
+
+
+def _sink(router=None, model: str = "mock-1"):
+    from ultracua.flows import RunRecord, _RecordSink
+
+    rec = RunRecord()
+    sink = _RecordSink(rec)
+    if router is not None:
+        sink.arm(None, router, model)
+    return rec, sink
+
+
+def _facts(**kw):
+    from ultracua.flows import _AttemptFacts
+
+    return _AttemptFacts(**kw)
+
+
+def test_usage_spans_every_attempt_rather_than_the_last_one() -> None:
     """M2. A run that auth-refreshed and retried spent BOTH attempts' money.
 
-    Cannot pass vacuously: the two attempts have different costs, so an implementation that
-    assigns reports 0.02 and one that sums reports 0.03 — the assertion distinguishes them.
+    The mechanism changed and the property did not. There is no per-attempt merge any more: ONE
+    run-scoped watch spans the whole call, so "accumulation" stopped being something a site has to
+    remember. Cannot pass vacuously — the two attempts spend different amounts, so an implementation
+    that took only the last would report 2 calls, not 3.
     """
-    from ultracua.flows import _absorb_usage
+    router = _SpendingRouter()
+    rec, sink = _sink(router)
 
-    r = _rec()
-    _absorb_usage(r, {"calls": 1, "input_tokens": 10, "output_tokens": 5,
-                      "cache_read_tokens": 0, "cache_write_tokens": 0, "cost_usd": 0.01})
-    _absorb_usage(r, {"calls": 2, "input_tokens": 20, "output_tokens": 5,
-                      "cache_read_tokens": 0, "cache_write_tokens": 0, "cost_usd": 0.02})
-    assert r.usage["calls"] == 3
-    assert r.usage["input_tokens"] == 30
-    assert r.usage["cost_usd"] == pytest.approx(0.03)
+    router.spend(calls=1, tokens_in=10)          # attempt 1
+    sink.attempt(_facts(outcome="failed"))
+    router.spend(calls=2, tokens_in=20)          # attempt 2, after the auth refresh
+    sink.attempt(_facts(outcome="ok"))
+    sink.finish(None)
+
+    assert rec.usage["calls"] == 3
+    assert rec.usage["input_tokens"] == 50
 
 
-def test_one_unpriceable_attempt_makes_the_whole_run_unpriceable() -> None:
-    """Sticky-None. A partial sum presented as the total is exactly the understated bill this
-    accounting exists to prevent, so once any attempt is unknown the run total is unknown.
+def test_an_attempt_that_saw_more_than_the_watch_makes_the_run_unpriceable() -> None:
+    """Sticky-unknown, re-expressed. A partial sum presented as the total is the understated bill.
 
-    Cannot pass vacuously: the priced attempt alone would give 0.01, and this asserts None.
+    Where the old code got this from merging each attempt's dict, the sink gets it from a CROSS-CHECK:
+    the watch is the source, and an attempt reporting more than the whole-run watch saw means the
+    watch is blind to some router — so the cost becomes unknown rather than a confident smaller
+    number. Cannot pass vacuously: the watch alone would price this run at zero.
     """
-    from ultracua.flows import _absorb_usage
+    router = _SpendingRouter()
+    rec, sink = _sink(router)
 
-    r = _rec()
-    _absorb_usage(r, {"calls": 1, "cost_usd": 0.01})
-    _absorb_usage(r, {"calls": 1, "cost_usd": None, "cost_unpriced_calls": 1})
-    assert r.usage["cost_usd"] is None
-    assert r.usage["calls"] == 2
+    router.spend(calls=1)
+    sink.attempt(_facts(outcome="ok"))
+    sink.cross_check_usage({"calls": 9, "cost_usd": 0.5})   # the engine saw far more than we did
+    sink.finish(None)
+
+    assert rec.usage["cost_usd"] is None, "a blind watch must not report a confident price"
+    assert rec.usage["unobserved_llm_path"] is True
+    assert rec.usage["watch_missed_a_router"] is True, "the record must say WHY it is unknown"
 
 
 def test_unobserved_is_sticky_across_attempts() -> None:
     """One blind attempt makes the run's total untrustworthy, so the flag must survive a later
     fully-observed attempt rather than being overwritten by it."""
-    from ultracua.flows import _absorb_usage
+    router = _SpendingRouter()
+    rec, sink = _sink(router)
 
-    r = _rec()
-    _absorb_usage(r, {"calls": 1, "cost_usd": None, "unobserved_llm_path": True})
-    _absorb_usage(r, {"calls": 1, "cost_usd": 0.01})
-    assert r.usage["unobserved_llm_path"] is True
+    sink.cross_check_usage({"calls": 1, "cost_usd": None, "unobserved_llm_path": True})
+    router.spend(calls=1)
+    sink.cross_check_usage({"calls": 1, "cost_usd": 0.01})
+    sink.attempt(_facts(outcome="ok"))
+    sink.finish(None)
+
+    assert rec.usage["unobserved_llm_path"] is True
+    assert rec.usage["cost_usd"] is None
 
 
 def test_landed_and_committed_default_to_unknown_not_to_false() -> None:
@@ -281,19 +333,40 @@ def test_landed_and_committed_default_to_unknown_not_to_false() -> None:
         "the trap this register records shipping three separate times")
 
 
-def test_mark_ok_clears_a_previous_attempts_failure() -> None:
-    """M3. `replay()` can return data from the relearn or the precheck after an earlier attempt
-    stamped ok=False and a failure_code, and only `_attempt_replay`'s success exit cleared them —
-    which neither of those paths reaches. A caller saw ok=False on a call that returned data.
+def test_a_successful_run_never_carries_a_failed_attempts_verdict() -> None:
+    """M3, and R4.57 one level down. `replay()` can return data from the relearn or the precheck after
+    an earlier attempt failed, and only `_attempt_replay`'s success exit cleared the verdict — which
+    neither of those paths reaches, so a caller saw `ok=False` on a call that returned data.
 
-    Cannot pass vacuously: it sets the failed state first and asserts BOTH fields moved.
+    `_mark_ok` was the patch for it: a helper that UNDID an earlier write. The sink removes the need
+    by never writing early — `ok` and `failure_code` are decided once, at the single exit, from
+    whether `replay()` raised. Cannot pass vacuously: a failed attempt is appended first.
     """
-    from ultracua.flows import _mark_ok
+    rec, sink = _sink()
+    sink.attempt(_facts(outcome="failed", mode="replay"))
+    sink.attempt(_facts(outcome="relearn", mode="relearn"))
+    sink.finish(None)
 
-    r = _rec()
-    r.ok, r.failure_code = False, "drift"
-    _mark_ok(r)
-    assert r.ok is True and r.failure_code == ""
+    assert rec.ok is True and rec.failure_code == ""
+
+
+def test_the_failed_run_names_itself_with_the_exceptions_code() -> None:
+    """R4.49's other half: ONE vocabulary. The record used to carry the engine's internal `kind` while
+    the caller read `FlowReplayError.code`, and the two could describe different attempts."""
+    from ultracua.flows import DriftError
+
+    rec, sink = _sink()
+    sink.attempt(_facts(outcome="failed", mode="replay"))
+    sink.finish(DriftError("drifted"))
+
+    assert rec.ok is False
+    assert rec.failure_code == DriftError("x").code
+
+    rec2, sink2 = _sink()
+    sink2.attempt(_facts(outcome="raised", mode="raised"))
+    sink2.finish(RuntimeError("boom"))
+    assert rec2.failure_code == "raised", (
+        "an untyped crash must still name itself, and must not borrow a refusal's vocabulary")
 
 
 def test_accounting_failure_DURING_the_run_is_reported() -> None:
@@ -326,27 +399,31 @@ class _Grounder:
 
 
 def test_a_previous_attempts_False_never_survives_as_a_confident_denial() -> None:
-    """F3/F4, one defect in two places. A `False` means "THAT attempt did not confirm a write",
-    never "no write happened in this run".
+    """F3/F4, one defect in two places, now answered by one rule.
 
+    A `False` means "THAT attempt did not confirm a write", never "no write happened in this run".
     Two paths let one survive into a claim it cannot support: a post-auth-refresh precheck that
-    succeeds — whose own inline comment says the first attempt's write may have landed — and a
-    later attempt that raises, where the honest answer is unknown rather than the earlier
-    attempt's answer. Both are the confident denial M4 exists to forbid.
+    succeeds — whose own comment says the first attempt's write may have landed — and a later attempt
+    that raises, where the honest answer is unknown. `_forget_negative_write_evidence` was the patch
+    for it: a helper that downgraded a `False` some other site had already written.
 
-    Cannot pass vacuously: it sets False explicitly and asserts None, which a no-op cannot satisfy.
+    The sink writes nothing early, so there is nothing to downgrade. `_evidence` decides once, over
+    every fact, and unknown beats False by construction.
+
+    Cannot pass vacuously: each case sets a False explicitly and asserts None.
     """
-    from ultracua.flows import _forget_negative_write_evidence, _mark_ok
-
-    r = _rec()
-    r.landed, r.committed = False, False
-    _mark_ok(r)
-    assert r.landed is None and r.committed is None, (
-        "ok=True over landed=False asserts that nothing committed, on a path that holds no such "
-        "evidence")
+    for unknown in ("precheck", "raised", "relearn_raised"):
+        rec, sink = _sink()
+        sink.attempt(_facts(outcome="failed", landed=False, committed=False))
+        sink.attempt(_facts(outcome=unknown))
+        sink.finish(None)
+        assert (rec.landed, rec.committed) == (None, None), (
+            f"a {unknown} outcome left the record denying a write it has no evidence about")
 
     # ...and a True is never downgraded: evidenced spend stays evidenced.
-    r2 = _rec()
-    r2.landed, r2.committed = True, True
-    _forget_negative_write_evidence(r2)
-    assert r2.landed is True and r2.committed is True
+    rec, sink = _sink()
+    sink.attempt(_facts(outcome="failed", landed=True, committed=True))
+    sink.attempt(_facts(outcome="raised"))
+    sink.finish(None)
+    assert (rec.landed, rec.committed) == (True, True), (
+        "a write once evidenced as landed cannot be un-landed by a later attempt failing earlier")

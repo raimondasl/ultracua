@@ -176,12 +176,54 @@ def derive_cli_system_exit() -> list:
 
 
 def derive_run_record_write_sites() -> list:
-    """Assignment STATEMENTS whose target is `record.<field>`, in `flows.py` only.
+    """Assignment statements writing `record.<field>` in `flows.py` from OUTSIDE `_RecordSink`.
 
-    Scoped to `flows.py` deliberately: `obs.py`'s `record.run_id` writes a LOGGING record, and a
-    derivation that conflates the two would report step 1.5's progress against a site 1.5 never touches.
-    A tuple assignment is ONE site with several targets — the sink replaces statements, not names.
+    REDEFINED AT 1.5's AUDIT ROUND, and the reason matters more than the number. This counted every
+    such statement in the file, which was the right measure while the record was written at sixteen
+    sites across two functions. Once they were collapsed into one class the count stopped measuring
+    anything: two of the audit's own fixes — clearing a stale `note`, and forcing usage to UNKNOWN when
+    the fold breaks — ADD a write inside the sink, and the ratchet failed for them. Re-seeding upward
+    on growth is how a ratchet becomes theatre, so the derivation moved to the invariant that actually
+    holds: **writes outside the sink**, whose only acceptable value is zero.
+
+    Its non-vacuity is not taken on trust — `_writes_in_flows` must still find the writes INSIDE the
+    sink, and `assert_pattern_is_live` below fails if it does not, so a broken pattern cannot read as a
+    clean codebase. `tests/test_replay_exit_matrix.py::test_every_record_write_is_inside_the_sink` is
+    the sharper guard: it keys on `RunRecord`'s field set rather than on a variable's name.
     """
+    inside, outside = _writes_in_flows()
+    assert inside, (
+        "the `record.<field> =` pattern matches NOTHING inside `_RecordSink` — the derivation is "
+        "broken, not the codebase clean. That is the stale-derivation failure this file refuses.")
+    return outside
+
+
+def _writes_in_flows():
+    """(inside the sink, outside it) — the same walk, split by containment."""
+    inside, outside = [], []
+    for path, tree in _modules(only="flows.py"):
+        sink = next((n for n in ast.walk(tree)
+                     if isinstance(n, ast.ClassDef) and n.name == "_RecordSink"), None)
+        in_sink = {id(n) for n in ast.walk(sink)} if sink is not None else set()
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Assign):
+                targets = n.targets
+            elif isinstance(n, (ast.AugAssign, ast.AnnAssign)):
+                targets = [n.target]
+            else:
+                continue
+            flat = []
+            for t_ in targets:
+                flat.extend(t_.elts if isinstance(t_, ast.Tuple) else [t_])
+            names = [_dotted(t_) for t_ in flat if isinstance(t_, ast.Attribute)]
+            hit = [nm for nm in names if nm.startswith("record.")]
+            if hit:
+                site = Site(_rel(path), n.lineno, ", ".join(hit))
+                (inside if id(n) in in_sink else outside).append(site)
+    return inside, outside
+
+
+def _unused_legacy_record_walk() -> list:
     out = []
     for path, tree in _modules(only="flows.py"):
         for n in ast.walk(tree):
@@ -220,12 +262,21 @@ def derive_engine_positional_params() -> list:
     return out
 
 
+# A ratchet whose END STATE is zero. Normally a derivation matching nothing is the stale-pattern
+# failure this file refuses, so an exemption has to be earned: `derive_run_record_write_sites` proves
+# its own pattern is live by asserting it still finds the writes INSIDE `_RecordSink` before returning
+# the ones outside. Nothing else may join this set without the same proof.
+MAY_BE_ZERO = frozenset({"run_record_write_sites"})
+
+
 RATCHETS = {
     "spec_mutate_raw": (derive_spec_mutate_raw, "reshape-plan 1.6 — WriteClass named questions"),
     "flow_key_transcriptions": (derive_flow_key_transcriptions, "reshape-plan 1.6 — FlowSpec.key"),
     "bare_flow_replay_error": (derive_bare_flow_replay_error, "reshape-plan 1.4 — distinct codes"),
     "cli_system_exit": (derive_cli_system_exit, "reshape-plan Phase 3 — one SystemExit funnel"),
-    "run_record_write_sites": (derive_run_record_write_sites, "reshape-plan 1.5 — THE SINK"),
+    "run_record_write_sites": (derive_run_record_write_sites,
+                               "reshape-plan 1.5 — THE SINK (landed; the invariant is now CONTAINMENT, "
+                               "so the only acceptable value is 0)"),
     "engine_positional_params": (derive_engine_positional_params, "reshape-plan 1.1 — keyword-only chain"),
 }
 

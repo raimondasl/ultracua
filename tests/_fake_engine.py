@@ -23,11 +23,13 @@ produces, rather than by trusting this docstring.
 
 from __future__ import annotations
 
+import types
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from ultracua import flows as flows_mod
 from ultracua.flow import FlowReport
+from ultracua.obs import UsageTotals
 from ultracua.timing import StepTrace
 
 # Every key the real `_make_finalize` / `_make_pre_write` can put in `out`, derived from the source
@@ -83,20 +85,77 @@ def report(mode: str = "replay", success: bool = True, *, usage: Optional[dict] 
                       note=note, extra=extra, healed_steps=healed_steps)
 
 
+class _Spend:
+    """One response's token counts, in the duck-typed shape `UsageTotals.add` reads."""
+
+    def __init__(self, usage: dict):
+        self.input_tokens = usage.get("input_tokens") or 0
+        self.output_tokens = usage.get("output_tokens") or 0
+        self.cache_read_tokens = usage.get("cache_read_tokens") or 0
+        self.cache_write_tokens = usage.get("cache_write_tokens") or 0
+
+
+class FakeRouter:
+    """A router whose `totals` a `RouterWatch` can actually observe.
+
+    WHY THIS HAD TO EXIST. Since 1.5 the record's usage comes from ONE run-scoped watch rather than
+    from each attempt's self-reported dict, which is what makes an attempt that RAISES a non-event
+    (R4.44) and an exit with no `usage` key a non-event (R4.45). A fake that fabricates `usage` in a
+    report while spending through no router at all therefore describes a run that could not happen —
+    and the sink's cross-check says so out loud, flagging the watch as blind.
+
+    So the fake SPENDS: `run_cached` credits these totals with whatever the scripted report claims,
+    and a cell that cares about accounting passes `router=eng.router` into `replay()`. The watch and
+    the reports then agree, which is the state the real engine is in, and a cell asserting a call
+    count is asserting something that actually happened.
+    """
+
+    def __init__(self) -> None:
+        self.totals = UsageTotals()
+
+    def spend(self, usage: Optional[dict], model: str = "") -> None:
+        """Credit ONE attempt's usage: `calls` responses whose tokens SUM to the dict's totals.
+
+        The first draft added the full token dict once per call, so the watch saw `calls x` what the
+        report claimed. It was invisible only because the matrix's `USAGE` constant is all-zero
+        tokens and every cell asserted `calls` — the first cell to assert a token or a cost would have
+        frozen a fiction. The real engine's guarantee is that `report.extra["usage"]` EQUALS the
+        router delta for that attempt, and `tests/test_fake_engine_fidelity.py` now pins it.
+        """
+        u = usage or {}
+        n = int(u.get("calls") or 0)
+        if n <= 0:
+            return
+        keys = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
+        for i in range(n):
+            # Integer split, remainder on the first response, so the SUM is exact for any n.
+            part = {k: (int(u.get(k) or 0) // n) + (int(u.get(k) or 0) % n if i == 0 else 0)
+                    for k in keys}
+            self.totals.add(_Spend(part), model)
+
+
 class FakeEngine:
     """Scripts a sequence of attempts and installs itself over the bindings `flows.py` holds."""
 
     def __init__(self, *attempts: Attempt, precheck: Any = False,
-                 refresh: Any = None, learn: Any = None) -> None:
+                 refresh: Any = None, learn: Any = None, learn_usage: Optional[dict] = None) -> None:
         self.attempts = list(attempts)
         self.calls: list[dict] = []          # one entry per run_cached call, for premise counting
         self._i = -1
         self._precheck = precheck            # bool, list[bool], or an exception to raise
         self._refresh = refresh              # None (ok) or an exception to raise
         self._learn = learn                  # a LearnResult, or an exception to raise
+        self._learn_usage = learn_usage      # what the re-author burns BEFORE it returns or raises
         self.precheck_calls = 0
         self.refresh_calls = 0
         self.learn_calls = 0
+        self.router = FakeRouter()           # pass it as `replay(router=eng.router)` to be watched
+        # A provider whose `.router` is the SAME object, because `RouterWatch` dedupes by the identity
+        # of the totals: a cell that needs a provider (the relearn paths do) can pass this without
+        # double-counting. Passing a bare `object()` instead marks the run UNOBSERVED — correctly, since
+        # an owner that exposes no totals could be spending unwatched — which is not what those cells
+        # are about.
+        self.provider = types.SimpleNamespace(router=self.router)
 
     # -- the attempt the engine is currently serving ------------------------------------------------
     @property
@@ -124,6 +183,10 @@ class FakeEngine:
         fin = kw.get("finalize")
         if fin is not None:
             await fin(None)                  # populate `out` exactly where the real engine does
+        # SPEND BEFORE RETURNING OR RAISING, like the engine: a raise after the tokens were burned is
+        # the case R4.44 is about, and a fake that only spends on the way out could not reproduce it.
+        att_usage = (att.report.extra.get("usage") if att.report is not None else None) or {}
+        self.router.spend(att_usage)
         if att.raises is not None:
             raise att.raises
         return att.report
@@ -154,6 +217,10 @@ class FakeEngine:
 
     async def _learn_fn(self, spec, **kw):
         self.learn_calls += 1
+        # SPEND FIRST. A re-author is the largest spend in a replay, and F2 is about the leg where a
+        # provider 500 arrives AFTER the tokens are burned — a fake that only spends on success cannot
+        # reproduce it, and the cell asserting that leg would be measuring nothing.
+        self.router.spend(self._learn_usage)
         if isinstance(self._learn, BaseException):
             raise self._learn
         if self._learn is None:

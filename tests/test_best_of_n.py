@@ -16,6 +16,7 @@ from pathlib import Path
 import ultracua.flows as flows_mod
 from ultracua.cache import FlowCache, flow_key
 from ultracua.flow import run_cached
+from ultracua.flow import FlowReport
 from ultracua.flows import FlowSpec, LearnResult, MutateSpec, learn
 from ultracua.providers.scripted import ScriptedProvider
 from ultracua.types import Action
@@ -176,7 +177,10 @@ async def test_flow_api_never_multisamples_a_declared_write(tmp_path: Path, monk
 
     async def _counting(spec, *, provider, router, cache, verify_replay=True):
         calls["n"] += 1
-        return LearnResult(spec=spec, cached=False, steps=[], found=False)
+        # `report=` is required since 1.5 (R4.50): a relearn carries its calls, traces and
+        # duration on it, so an exit that omits it is a TypeError rather than a thin record.
+        return LearnResult(spec=spec, cached=False, steps=[], found=False,
+                           report=FlowReport(mode="learn", success=False))
 
     monkeypatch.setattr(flows_mod, "_learn_once", _counting)
     monkeypatch.setattr(flows_mod, "_router", _stub_router)
@@ -191,7 +195,8 @@ async def test_flow_api_stops_resampling_after_an_undeclared_write(tmp_path: Pat
 
     async def _wrote(spec, *, provider, router, cache, verify_replay=True):
         calls["n"] += 1
-        return LearnResult(spec=spec, cached=False, steps=[], found=False, performed_write=True)
+        return LearnResult(spec=spec, cached=False, steps=[], found=False, performed_write=True,
+                           report=FlowReport(mode="learn", success=False))
 
     monkeypatch.setattr(flows_mod, "_learn_once", _wrote)
     monkeypatch.setattr(flows_mod, "_router", _stub_router)

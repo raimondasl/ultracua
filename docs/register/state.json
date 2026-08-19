@@ -249,18 +249,32 @@
   },
   {
    "id": "R4.44",
-   "status": "open",
-   "summary": "B1: a raised attempt drops its own LLM spend, traces and minted keys, and leaves `ok`/`failure_code` stale from the previous attempt (F2 guarded the relearn leg only)"
+   "status": "fixed",
+   "summary": "B1: a raised attempt drops its own LLM spend, traces and minted keys, and leaves `ok`/`failure_code` stale from the previous attempt (F2 guarded the relearn leg only) — FIXED at 0.110.0 by THE SINK (reshape-plan 1.5): the run-scoped watch spans the raise, and `_attempt_replay` appends a `raised` FACT before re-raising, so the attempt's spend and its unknown write-state both survive",
+   "pins": [
+    "tests/test_replay_exit_matrix.py::test_R4_44_a_raised_attempt_keeps_its_spend"
+   ],
+   "disposition": "reshape-plan step 1.5, landed"
   },
   {
    "id": "R4.45",
-   "status": "open",
-   "summary": "B1: `record.usage == {}` on the miss / escalate / precheck / pre-attempt-refusal / raise exits, against `RunRecord`'s own \"always populated\" docstring"
+   "status": "fixed",
+   "summary": "B1: `record.usage == {}` on the miss / escalate / precheck / pre-attempt-refusal / raise exits, against `RunRecord`'s own \"always populated\" docstring — FIXED at 0.110.0 by THE SINK (reshape-plan 1.5): usage no longer comes from each attempt's self-reported dict, so an exit whose report carries no `extra` is a non-event; the pre-attempt precheck exit, which never reaches the engine at all, reports a priced zero rather than `{}`",
+   "pins": [
+    "tests/test_replay_exit_matrix.py::test_R4_45_miss_exit_populates_usage",
+    "tests/test_replay_exit_matrix.py::test_GOLDEN_the_first_precheck_exit"
+   ],
+   "disposition": "reshape-plan step 1.5, landed"
   },
   {
    "id": "R4.46",
-   "status": "open",
-   "summary": "B1: a usage-less later attempt flips a priced total to `None` with no reason flag — a missing key and an unpriceable one are treated alike"
+   "status": "fixed",
+   "summary": "B1: a usage-less later attempt flips a priced total to `None` with no reason flag — a missing key and an unpriceable one are treated alike — FIXED at 0.110.0 by THE SINK (reshape-plan 1.5): there is no per-attempt merge left to poison: the watch is the source, and a report claiming more than the watch saw makes the cost unknown WITH a stated reason (`watch_missed_a_router`) rather than silently",
+   "pins": [
+    "tests/test_replay_exit_matrix.py::test_R4_46_a_usage_less_attempt_erases_nothing",
+    "tests/test_run_record.py::test_an_attempt_that_saw_more_than_the_watch_makes_the_run_unpriceable"
+   ],
+   "disposition": "reshape-plan step 1.5, landed"
   },
   {
    "id": "R4.47",
@@ -273,18 +287,31 @@
   },
   {
    "id": "R4.48",
-   "status": "open",
-   "summary": "B1: eleven wiring mutations of the record plumbing survive the entire suite — only two cells pass `record=` at all"
+   "status": "fixed",
+   "summary": "B1: eleven wiring mutations of the record plumbing survive the entire suite — only two cells pass `record=` at all — FIXED at 0.110.0 by THE SINK (reshape-plan 1.5): all eleven were killed by 0.3's matrix, then went STALE at 1.5 when the sites they named ceased to exist — reported as ERRORS, not survivors. Re-expressed against the sink as sixteen mutations of the fold and the fact-appends: 16 killed, 0 survived",
+   "pins": [
+    "tests/mutations/b1_wiring.py"
+   ],
+   "disposition": "reshape-plan step 1.5, landed"
   },
   {
    "id": "R4.49",
-   "status": "open",
-   "summary": "B1: `record.failure_code` speaks the internal `kind` vocabulary, not `FlowReplayError.code`, and can name a different attempt than the exception"
+   "status": "fixed",
+   "summary": "B1: `record.failure_code` speaks the internal `kind` vocabulary, not `FlowReplayError.code`, and can name a different attempt than the exception — FIXED at 0.110.0 by THE SINK (reshape-plan 1.5): `failure_code` derives from the exception's `.code` at the single exit, so the record and the caller speak one vocabulary and cannot describe different attempts",
+   "pins": [
+    "tests/test_replay_exit_matrix.py::test_R4_49_failure_code_matches_the_exception_code",
+    "tests/test_run_record.py::test_the_failed_run_names_itself_with_the_exceptions_code"
+   ],
+   "disposition": "reshape-plan step 1.5, landed"
   },
   {
    "id": "R4.50",
-   "status": "open",
-   "summary": "B1: `llm_calls` / `traces` / `healed_steps` / `total_ms` exclude the relearn while `usage` includes it, so two fields disagree about one run"
+   "status": "fixed",
+   "summary": "B1: `llm_calls` / `traces` / `healed_steps` / `total_ms` exclude the relearn while `usage` includes it, so two fields disagree about one run — FIXED at 0.110.0 by THE SINK (reshape-plan 1.5): `LearnResult.report` is a REQUIRED keyword, and the relearn appends a fact carrying its calls, traces, heals and duration — so the dollars and the calls come from one source",
+   "pins": [
+    "tests/test_replay_exit_matrix.py::test_relearn_full_success_absorbs_the_learn_spend"
+   ],
+   "disposition": "reshape-plan step 1.5, landed"
   },
   {
    "id": "R4.51",
@@ -324,13 +351,14 @@
   },
   {
    "id": "R4.57",
-   "status": "open",
-   "summary": "a SUCCESSFUL run reports the failed attempt's `failure_code` — `_attempt_replay`'s success exit sets `ok` but never clears it, and `_mark_ok` (which does) is only called on the precheck and relearn exits; found by the exit-set matrix on its first run",
+   "status": "fixed",
+   "summary": "a SUCCESSFUL run reports the failed attempt's `failure_code` — `_attempt_replay`'s success exit sets `ok` but never clears it, and `_mark_ok` (which does) is only called on the precheck and relearn exits; found by the exit-set matrix on its first run — FIXED at 0.110.0 by THE SINK (reshape-plan 1.5): `ok` and `failure_code` are decided once, from whether `replay()` raised, so a successful run cannot inherit the code of an attempt that failed on the way",
    "severity": "low",
    "class": "a",
-   "disposition": "reshape-plan step 1.5 (the single-exit RunRecord sink) — not a fourth _mark_ok call site",
+   "disposition": "reshape-plan step 1.5, landed",
    "pins": [
-    "tests/test_replay_exit_matrix.py::test_R4_57_a_successful_retry_clears_the_failed_attempts_code"
+    "tests/test_replay_exit_matrix.py::test_R4_57_a_successful_retry_clears_the_failed_attempts_code",
+    "tests/test_run_record.py::test_a_successful_run_never_carries_a_failed_attempts_verdict"
    ]
   },
   {
@@ -353,6 +381,26 @@
     "tests/mutations/b1_wiring.py::cost_passthrough_coercion"
    ],
    "disposition": "closed at 1.5's first step; the two coercion mutants are registered so red-proof keeps them dead"
+  },
+  {
+   "id": "R4.60",
+   "status": "fixed",
+   "severity": "medium",
+   "class": "g",
+   "summary": "`scripts/prove_red.py` scores a PERFECT run when its killer suite collects nothing: a mutant is judged killed by a non-zero pytest exit, so a `--tests` path that does not collect makes every mutant 'killed'. An audit hit it and read 17/17 where the honest number was 16/17. The same failure shape the script already guards on the other side (a stale find-text is an ERROR, not a survivor), one step over — an instrument reporting the suite as stronger than it is. FIXED at 0.110.0: the killer suite must collect and pass on the UNMUTATED tree before any mutation is applied",
+   "pins": [
+    "scripts/prove_red.py::_require_a_live_killer_suite"
+   ],
+   "disposition": "closed at 1.5's audit round; armed by pointing --tests at a path that does not exist"
+  },
+  {
+   "id": "R4.61",
+   "status": "open",
+   "severity": "low",
+   "class": "b",
+   "summary": "`write_unverified` records `committed=False` while its own message says the commit ACTUATED — `_fail` appends `outcome=\"failed\"`, which is not in `_UNKNOWN_OUTCOMES`, so the fold answers the write question 'no' for the one kind whose whole meaning is 'it fired and cannot be confirmed'. NOT a regression (the pre-sink code did the same), but the sink's stated rule was supposed to close this class and does not, because unanswerability is keyed on the outcome STRING and every failure exit shares one. The human channel is covered (the exception text says to check the target system); the record is not",
+   "disposition": "reshape-plan step 1.4 — it needs a per-kind vocabulary to name an unanswerable failure, which is exactly what 1.4's distinct codes provide. Deliberately NOT taken in 1.5: it is a behaviour change beyond the sink's scope and the two are better argued apart",
+   "blocked_by": "reshape-plan 1.4 (distinct codes)"
   }
  ]
 }
