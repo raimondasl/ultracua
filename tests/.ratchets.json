@@ -32,9 +32,9 @@
    "disposition": "reshape-plan 1.6 — FlowSpec.key"
   },
   "run_record_write_sites": {
-   "total": 16,
+   "total": 14,
    "by_file": {
-    "src/ultracua/flows.py": 16
+    "src/ultracua/flows.py": 14
    },
    "disposition": "reshape-plan 1.5 — THE SINK"
   },

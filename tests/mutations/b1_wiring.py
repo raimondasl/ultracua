@@ -1,122 +1,111 @@
-"""The eleven record-plumbing mutations R4.48 measured as surviving the ENTIRE suite, plus six
-added since — two at R4.59 and four at 1.5's first step.
+"""Mutations of the run-record wiring, re-expressed for THE SINK (reshape-plan 1.5).
 
-Each entry is a source transformation applied to a SCRATCH COPY of `src/ultracua/` — never the tree
-under test — plus the reason it is a real defect if it survives. `scripts/prove_red.py` applies them one
-at a time and reports which are killed.
+R4.48 measured eleven mutations of the OLD plumbing surviving the entire suite, because only two cells
+passed `record=` and eight of the ten write sites were never reached. Step 0.3's matrix killed all
+eleven; six more were added at R4.59 and at 1.5's first step, reaching seventeen.
 
-This is the number that decides whether `tests/test_replay_exit_matrix.py` is worth having: before it,
-all eleven survived 1100+ tests, because only two cells in the whole suite passed `record=` to `replay()`
-and eight of the ten write sites were never reached.
+**All seventeen went STALE the moment the sink landed, and `prove_red` reported them as ERRORS rather
+than as survivors** — which is the rule that file exists for. Their find-texts named sites that no
+longer exist: three helpers whose whole job was to UNDO an earlier write, a pre-stamp that had to be
+cleared, a population block that ran on one path. The class they measured has not gone away, though. It
+has MOVED: the questions are now "does every path APPEND its fact?" and "does `finish()` fold them
+correctly?", and a mutation of either is exactly as invisible to a per-scenario test as the old ones
+were.
 
-A mutation that no cell kills is not a bug in the mutation — it is a hole in the matrix, and it must be
-listed in KNOWN_SURVIVORS with a reason and a register id, so the gap is named rather than absent.
+So these are rewritten against the new shape rather than deleted. Each entry is a source transformation
+applied to a SCRATCH COPY of `src/ultracua/` — never the tree under test — plus the reason it is a real
+defect if it survives. A mutation no cell kills is not a bug in the mutation: it is a hole in the
+matrix, and it must be listed in KNOWN_SURVIVORS with a reason and a register id.
 """
 
 from __future__ import annotations
 
 # (id, file, find, replace, why-it-matters)
 MUTANTS = [
-    ("mark_ok_precheck", "flows.py",
-     '        _mark_ok(record)          # M3: a success return that never enters _attempt_replay',
-     '        pass  # MUTANT: _mark_ok removed from the first precheck exit',
-     "the idempotency-precheck success would report ok=False with a stale failure_code (B1's M3)"),
+    ('evidence_unknown_becomes_false', "flows.py",
+     '        if not self._facts or any(f.outcome in _UNKNOWN_OUTCOMES for f in self._facts):\n            return None',
+     '        if False:  # MUTANT: an unknown outcome answers the write question "no"\n            return None',
+     'a run in which an attempt RAISED would report `landed=False` — the confident denial over a write that may have committed, which is the one error direction nothing downstream catches'),
 
-    ("mark_ok_post_refresh", "flows.py",
-     '                    _mark_ok(record)      # M3: as above, on the post-auth-refresh precheck',
-     '                    pass  # MUTANT: _mark_ok removed from the post-refresh precheck',
-     "a write already done, discovered after re-login, would report as a failure"),
+    ('evidence_true_does_not_win', "flows.py",
+     '        if any(getattr(f, field_name) is True for f in self._facts):\n            return True',
+     '        if False:  # MUTANT: evidenced-landed no longer wins\n            return True',
+     'a write evidenced as landed by one attempt would be un-landed by a later attempt failing earlier, and the ledger would skip a row that really was paid'),
 
-    ("mark_ok_relearn", "flows.py",
-     '                _mark_ok(record)      # M3: clears the failed attempts\' ok=False + failure_code',
-     '                pass  # MUTANT: _mark_ok removed from the relearn success',
-     "a relearn that produced the answer would still report the earlier attempts' failure"),
+    ('no_raised_fact', "flows.py",
+     '    except BaseException:\n        _append(outcome="raised", mode="raised")\n        raise',
+     '    except BaseException:\n        raise  # MUTANT: a raised attempt leaves no trace',
+     'M4: `run_cached` can raise AFTER the commit POSTed; without the fact the run reports a confident False rather than unknown, and the attempt vanishes from `attempts`'),
 
-    ("absorb_relearn_success", "flows.py",
-     '                _absorb_usage(record, _relearn_watch.as_dict(settings.model))\n'
-     '                record.mode = "relearn"',
-     '                record.mode = "relearn"  # MUTANT: the relearn spend is not absorbed',
-     "the largest spend in the run (a full re-author) would be missing from the bill (B1's M2)"),
+    ('no_precheck_fact', "flows.py",
+     '        sink.attempt(_AttemptFacts(outcome="precheck", mode="precheck"))\n'
+     '        _record_run(cache, key, ok=True)',
+     '        pass  # MUTANT: the idempotency skip is not recorded\n'
+     '        _record_run(cache, key, ok=True)',
+     'an idempotency skip is evidence about an EARLIER run; without the fact the record answers the write question False for a flow whose write demonstrably already happened'),
 
-    ("absorb_relearn_raise", "flows.py",
-     '                    _absorb_usage(record, _relearn_watch.as_dict(settings.model))\n'
-     '                    record.mode = "raised"',
-     '                    record.mode = "raised"  # MUTANT: spend lost when learn() raises',
-     "a provider 500 mid-authoring would report the earlier attempts' cents against real dollars (F2)"),
+    ('no_relearn_fact', "flows.py",
+     '            rep = res.report\n            sink.attempt(_AttemptFacts(',
+     '            rep = res.report\n            _mutant_dropped = (_AttemptFacts(',
+     'R4.50: the re-author is the largest spend in the run and its calls, traces, heals and duration would be dropped while its dollars were kept'),
 
-    ("auth_refreshed_flag", "flows.py",
-     '                    record.auth_refreshed = True     # G10: previously a log line and nothing else',
-     '                    pass  # MUTANT: the refresh is not recorded',
-     "a caller cannot tell a clean run from one that had to re-authenticate"),
+    ('no_relearn_raised_fact', "flows.py",
+     '                sink.attempt(_AttemptFacts(outcome="relearn_raised", mode="raised"))\n                raise',
+     '                raise  # MUTANT: a provider 500 mid-authoring leaves no trace',
+     'F2: a relearn that raised would report landed=False on a run whose write state is unknown'),
 
-    ("pre_stamp_mode_raised", "flows.py",
-     '        record.attempts += 1\n        record.mode = "raised"',
-     '        record.attempts += 1  # MUTANT: the pre-stamp no longer marks the run unknown',
-     "a raise mid-attempt would leave a CONFIDENT DENIAL about a write that may have committed (M4)"),
+    ('no_auth_refreshed_flag', "flows.py",
+     '                sink.auth_refreshed()',
+     '                pass  # MUTANT: the refresh is not recorded',
+     'G10: a caller cannot tell a clean run from one that had to re-authenticate'),
 
-    ("pre_stamp_attempts", "flows.py",
-     '        record.attempts += 1\n        record.mode = "raised"\n'
-     '        _forget_negative_write_evidence(record)',
-     '        record.mode = "raised"\n        _forget_negative_write_evidence(record)'
-     '  # MUTANT: attempts not counted',
-     "a multi-attempt run would look like a single attempt, understating what it did"),
+    ('failure_code_from_the_internal_kind', "flows.py",
+     '        record.failure_code = "" if exc is None else (getattr(exc, "code", "") or "raised")',
+     '        record.failure_code = "" if exc is None else "replay_error"  # MUTANT: one flat code',
+     'R4.49: the record and the exception would describe one run in two vocabularies again'),
 
-    ("forget_negative_evidence", "flows.py",
-     '        record.ok, record.failure_code = True, ""\n        _forget_negative_write_evidence(record)',
-     '        record.ok, record.failure_code = True, ""'
-     '  # MUTANT: _mark_ok no longer clears negative write evidence',
-     "a `False` meaning 'that attempt did not confirm' would be read as 'no write happened' (F3/F4)"),
+    ('ok_not_derived_from_the_exit', "flows.py",
+     '        record.ok = exc is None',
+     '        record.ok = bool(self._facts) and self._facts[-1].outcome == "ok"  # MUTANT',
+     "R4.57's shape: ok would follow the last ATTEMPT rather than the run, so a precheck skip or a relearn success would report the failed attempt's verdict"),
 
-    ("mode_last_attempt", "flows.py",
-     '        record.mode = report.mode                       # last attempt wins: it is the outcome',
-     '        pass  # MUTANT: the record never learns which path produced the outcome',
-     "the record would keep the pre-stamp's 'raised' for a run that completed normally"),
+    ('finish_is_not_total', "flows.py",
+     '        except BaseException as inner:  # noqa: BLE001 - a record must never replace the real outcome\n            record.note = f"the run record could not be completed: {type(inner).__name__}: {inner}"',
+     '        except BaseException:\n            raise  # MUTANT: the diagnostic replaces the outcome',
+     "finish() runs in replay()'s except arm, so its own failure would REPLACE the exception the caller is being told about"),
 
-    ("llm_calls_accumulate", "flows.py",
-     '        record.llm_calls += report.llm_calls',
-     '        pass  # MUTANT: llm_calls never accumulates',
-     "a healed or replanned run would report 0 LLM calls beside a usage showing spend"),
+    ('no_watch_cross_check', "flows.py",
+     '        if blind or any(r.get("unobserved_llm_path") for r in self._reported_usage):',
+     '        if False:  # MUTANT: a blind watch reports a confident zero',
+     'if the engine reached a router behind neither owner, the run would claim a priced zero over real spend'),
 
-    # R4.59, added at 1.5's first step. These two are not record-PLUMBING like the eleven above; they
-    # are the confident-zero coercion itself, registered because the cell that was supposed to forbid
-    # it (R4.51's) had been asserting the OPPOSITE, strictly, as a standing demand that someone
-    # implement it. Both were armed by hand and both now die.
-    ("cost_sticky_none_merge", "flows.py",
-     '    dst["cost_usd"] = None if (a is None or b is None) else round(a + b, 6)',
-     '    dst["cost_usd"] = round((a or 0) + (b or 0), 6)  # MUTANT: an unknown attempt sums as free',
-     "a priced attempt merged with an unobserved one would report a confident partial sum as the total"),
+    ('carried_no_total_ms', "flows.py",
+     '        total_ms=report.total_ms,',
+     '        total_ms=0.0,  # MUTANT',
+     'a failed run would report 0 ms and a caller timing the fleet would see free failures'),
 
-    ("cost_passthrough_coercion", "flows.py",
-     '        record.usage = dict(usage)\n        return',
-     '        record.usage = dict(usage, cost_usd=usage.get("cost_usd") or 0.0)  # MUTANT\n        return',
-     "a single-attempt run whose engine reported UNKNOWN would claim a priced zero"),
+    ('carried_no_traces', "flows.py",
+     '        traces=tuple(report.traces),',
+     '        traces=(),  # MUTANT',
+     'a caller diagnosing a FAILURE is exactly who needs the traces, and would get none'),
 
-    # R4.47's class, added at 1.5's first step. The population block writes six fields on EVERY
-    # attempt, failed or not, and only the usage absorb was covered: these four survived the whole
-    # matrix until `test_the_population_block_reaches_the_record_on_a_FAILED_run` was written. The
-    # helper could not even express a duration — `FlowReport.total_ms` derives from its traces and
-    # `StepTrace.total_ms` from its spans, so with no cell scripting a span every report measured 0.0.
-    ("population_no_total_ms", "flows.py",
-     "        record.total_ms += report.total_ms",
-     "        pass  # MUTANT: the run's duration never reaches the record",
-     "a failed run would report 0 ms, and a caller timing the fleet would see free failures"),
+    ('carried_no_llm_calls', "flows.py",
+     '        llm_calls=report.llm_calls,',
+     '        llm_calls=0,  # MUTANT',
+     'a healed or replanned run would report 0 LLM calls beside a usage showing spend'),
 
-    ("population_no_traces", "flows.py",
-     "        record.traces.extend(report.traces)",
-     "        pass  # MUTANT: the traces never reach the record",
-     "a caller diagnosing a FAILURE is exactly who needs the traces, and would get none"),
+    ('carried_no_healed_steps', "flows.py",
+     '        healed_steps=report.healed_steps,',
+     '        healed_steps=0,  # MUTANT',
+     'a run that healed would look like a clean 0-LLM replay in the record'),
 
-    ("population_no_healed_steps", "flows.py",
-     "        record.healed_steps += report.healed_steps",
-     "        pass  # MUTANT: heals are not counted",
-     "a run that healed would look like a clean 0-LLM replay in the record"),
+    ('attempts_counts_everything', "flows.py",
+     '        record.attempts = sum(1 for f in self._facts if f.outcome in _ENGINE_OUTCOMES)',
+     '        record.attempts = len(self._facts)  # MUTANT',
+     'attempts has always meant ENGINE attempts; a precheck skip counting as one would make a run that never touched the engine report that it did'),
 
-    ("population_no_idempotency_keys", "flows.py",
-     "        record.idempotency_keys.extend(",
-     "        _mutant_ignored = (",
-     "the keys a resume must re-use would be lost on the failing run that most needs them"),
 ]
 
 # Mutants no cell kills yet. Each needs a reason and, where it is a real gap, a register id — an empty
-# list is the goal, and a silent absence is what this file exists to prevent.
+# dict is the goal, and a silent absence is what this file exists to prevent.
 KNOWN_SURVIVORS: dict = {}

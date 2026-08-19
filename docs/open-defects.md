@@ -12,7 +12,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**37 open**, 18 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**30 open**, 25 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **37 open**, 18 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **30 open**, 25 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -834,20 +834,20 @@ if and only if that branch is ever resumed.
 | R4.41 | open | the SDK choke-point pin allowlists `vision.py`, which does NOT route through `build_client` — so the inference the test states does not hold and `no_llm` would not intercept a vision call |
 | R4.42 | fixed | `flow release` returns "nothing to release" before `release()` runs, so the remedy `flow.py:207` names is dead through the CLI — and WIDENING the status check does not reach the cached-recipe shape (measured) — FIXED at 0.109.0 by DELETING the pre-check (reshape-plan 1.2); `release()` now returns a ReleaseResult and the CLI reports what it cleared |
 | R4.43 | fixed | `_SDK_CTORS` does not match `genai.Client()`, so gemini's construction is invisible and the anti-vacuity floor is met by exactly 3 — which also makes R4.41's own remedy misdiagnose itself — FIXED at 0.4a (PR #179): `Client` added to `_SDK_CTORS`, anti-vacuity floor raised 3 -> 4 measured, `GenerativeModel` kept so the old API stays covered |
-| R4.44 | open | B1: a raised attempt drops its own LLM spend, traces and minted keys, and leaves `ok`/`failure_code` stale from the previous attempt (F2 guarded the relearn leg only) |
-| R4.45 | open | B1: `record.usage == {}` on the miss / escalate / precheck / pre-attempt-refusal / raise exits, against `RunRecord`'s own "always populated" docstring |
-| R4.46 | open | B1: a usage-less later attempt flips a priced total to `None` with no reason flag — a missing key and an unpriceable one are treated alike |
+| R4.44 | fixed | B1: a raised attempt drops its own LLM spend, traces and minted keys, and leaves `ok`/`failure_code` stale from the previous attempt (F2 guarded the relearn leg only) — FIXED at 0.110.0 by THE SINK (reshape-plan 1.5): the run-scoped watch spans the raise, and `_attempt_replay` appends a `raised` FACT before re-raising, so the attempt's spend and its unknown write-state both survive |
+| R4.45 | fixed | B1: `record.usage == {}` on the miss / escalate / precheck / pre-attempt-refusal / raise exits, against `RunRecord`'s own "always populated" docstring — FIXED at 0.110.0 by THE SINK (reshape-plan 1.5): usage no longer comes from each attempt's self-reported dict, so an exit whose report carries no `extra` is a non-event; the pre-attempt precheck exit, which never reaches the engine at all, reports a priced zero rather than `{}` |
+| R4.46 | fixed | B1: a usage-less later attempt flips a priced total to `None` with no reason flag — a missing key and an unpriceable one are treated alike — FIXED at 0.110.0 by THE SINK (reshape-plan 1.5): there is no per-attempt merge left to poison: the watch is the source, and a report claiming more than the watch saw makes the cost unknown WITH a stated reason (`watch_missed_a_router`) rather than silently |
 | R4.47 | fixed | B1: the FAILED-path cell asserts one default and two truthy values, so an engine populating the record only on success keeps it green — FIXED at 1.5's first step: the cell now asserts the population block (attempts, a real duration, traces, usage) and the CLASS is closed browser-free by a matrix cell plus four registered mutants that all survived until it was written |
-| R4.48 | open | B1: eleven wiring mutations of the record plumbing survive the entire suite — only two cells pass `record=` at all |
-| R4.49 | open | B1: `record.failure_code` speaks the internal `kind` vocabulary, not `FlowReplayError.code`, and can name a different attempt than the exception |
-| R4.50 | open | B1: `llm_calls` / `traces` / `healed_steps` / `total_ms` exclude the relearn while `usage` includes it, so two fields disagree about one run |
+| R4.48 | fixed | B1: eleven wiring mutations of the record plumbing survive the entire suite — only two cells pass `record=` at all — FIXED at 0.110.0 by THE SINK (reshape-plan 1.5): all eleven were killed by 0.3's matrix, then went STALE at 1.5 when the sites they named ceased to exist — reported as ERRORS, not survivors. Re-expressed against the sink as sixteen mutations of the fold and the fact-appends: 16 killed, 0 survived |
+| R4.49 | fixed | B1: `record.failure_code` speaks the internal `kind` vocabulary, not `FlowReplayError.code`, and can name a different attempt than the exception — FIXED at 0.110.0 by THE SINK (reshape-plan 1.5): `failure_code` derives from the exception's `.code` at the single exit, so the record and the caller speak one vocabulary and cannot describe different attempts |
+| R4.50 | fixed | B1: `llm_calls` / `traces` / `healed_steps` / `total_ms` exclude the relearn while `usage` includes it, so two fields disagree about one run — FIXED at 0.110.0 by THE SINK (reshape-plan 1.5): `LearnResult.report` is a REQUIRED keyword, and the relearn appends a fact carrying its calls, traces, heals and duration — so the dollars and the calls come from one source |
 | R4.51 | fixed | B1: the "a 0-LLM replay says observed zero" claim has no end-to-end pin — an engine reporting UNKNOWN on every replay passes every cell — FIXED at 1.5's first step: the end-to-end pin exists as a distinguishability cell (see R4.59 for why its first draft was wrong) |
 | R4.52 | open | B1: `BatchRowResult.landed` is the two-state bool the same PR calls a trap, reading `False` on successful write rows and on crashed rows |
 | R4.53 | open | B1: a key-less teacher (`ScriptedProvider`/`MockProvider`) is classified as an unobserved SPENDER, contradicting `flow.py:915-916`; `accounting_failed` is sticky across runs |
 | R4.54 | open | the key scrub's completeness rests on a hand-written variable list (Bedrock/Vertex uncovered) — the shape S14 replaced with a derivation |
 | R4.55 | open | the key scrub is in-process only: on win32 an empty value is an ABSENT one, so a child process would re-read `.env` while both pinning cells stay green |
 | R4.56 | open | a fixture sub-resource silently fails to load and surfaces as a JS `ReferenceError`; the HTTP/1.0 socket-churn cause is REFUTED by measurement (8 vs 6 connections per load) and a sweep would risk 8 hangs — disposition is the shared fixture server |
-| R4.57 | open | a SUCCESSFUL run reports the failed attempt's `failure_code` — `_attempt_replay`'s success exit sets `ok` but never clears it, and `_mark_ok` (which does) is only called on the precheck and relearn exits; found by the exit-set matrix on its first run |
+| R4.57 | fixed | a SUCCESSFUL run reports the failed attempt's `failure_code` — `_attempt_replay`'s success exit sets `ok` but never clears it, and `_mark_ok` (which does) is only called on the precheck and relearn exits; found by the exit-set matrix on its first run — FIXED at 0.110.0 by THE SINK (reshape-plan 1.5): `ok` and `failure_code` are decided once, from whether `replay()` raised, so a successful run cannot inherit the code of an attempt that failed on the way |
 | R4.58 | open | the R4.22 resource sampler measures the wrong quantity: a Windows shard failed TWICE on two DIFFERENT browser tests, both latency-shaped (a 5s Locator.wait_for timeout; a write confirm missing inside its budget), while the same run's PASSING Windows shard was the MORE loaded of the two on 4 of 7 sampled metrics — the first same-run healthy baseline, and it refutes resource exhaustion for this symptom class. Neither CPU nor disk I/O is sampled, which is what a latency failure is about |
 | R4.59 | fixed | a strict xfail added by 0.3 ASSERTED the counterexample — it demanded that `replay()` overwrite an UNKNOWN cost with a confident zero, the understated bill B1 exists to prevent, and `strict=True` made it a standing demand that 1.5 implement it. R4.51 was a coverage gap, not a behaviour defect: the two cases already differ. FIXED by rewriting the cell as the distinguishability property it was named for; src untouched |
 <!-- /generated:r4-index -->
@@ -5140,3 +5140,76 @@ same standard as writing the fix — *what would make this pass, and is that thi
 0.3's six xfails were re-read after this; the other five state a property whose satisfaction is
 unambiguous (a key present, two codes equal, a spend retained). Only this one specified a VALUE, and
 specifying a value is where the counterexample got in.
+
+---
+
+## THE SINK (reshape-plan 1.5, 0.110.0) — seven of B1's findings closed by removing the sites, not by patching them
+
+**Closes R4.44, R4.45, R4.46, R4.48, R4.49, R4.50, R4.57.** Recorded here as one entry because they were
+one defect wearing seven hats: a `RunRecord` written at sixteen sites across two functions, on paths
+that each had to remember to write, to clear what an earlier path wrote, and not to claim a denial they
+had no evidence for. Three of the sixteen sites existed only to UNDO another (`_mark_ok`,
+`_forget_negative_write_evidence`), which is the register's own "patch on a patch" signature.
+
+### The shape
+
+`replay()` is now a wrapper whose only job is calling `_RecordSink.finish()` exactly once; the body is
+`_replay_body`, which **cannot write the record at all**. It appends frozen `_AttemptFacts`; the sink
+folds them at the single exit.
+
+* **usage** comes from ONE run-scoped watch armed as soon as the routers resolve. That is what makes a
+  raised attempt (R4.44), an exit whose report omits `usage` (R4.45) and the relearn (M2/F2) stop
+  needing sites of their own. A **cross-check** keeps it honest in the only direction that matters: an
+  attempt reporting more than the whole-run watch saw means the watch is blind to some router, so the
+  cost becomes unknown **with a stated reason** rather than a confident smaller number (R4.46).
+* **`ok` and `failure_code`** are decided from whether `replay()` raised, and the code is the
+  exception's `.code` — one vocabulary (R4.49), and a successful run cannot inherit a failed attempt's
+  verdict (R4.57).
+* **landed/committed**: True if any attempt evidenced it; else None if any attempt left it unanswerable
+  (raised, precheck-skip, relearn-raise) or none completed; else False.
+* **`LearnResult.report`** is a REQUIRED keyword, so a `learn()` exit that forgets it is a TypeError
+  rather than a silently thinner record (R4.50).
+* **`finish()` is total.** It runs in `replay()`'s `except` arm, where an exception of its own would
+  REPLACE the failure the caller is being told about. It cannot raise; an internal error becomes
+  `record.note`.
+
+### The golden that moved, and why that is the point
+
+Step 1.5's first slice froze three paths BEFORE the sink was written. Two moved as predicted and one is
+the substantive improvement: on **retry-raise → repair**, `landed/committed` went **`False` → `None`**.
+An attempt had raised at an unknown point and the run still recorded a confident "nothing committed" —
+the denial M4 forbids, surviving because the old success block wrote its OWN attempt's value over the
+run's. Predicting it in advance is what made it an argued diff instead of an unnoticed side effect.
+
+### What the instruments caught in the author
+
+Recorded because the programme's claim is that instruments catch fix-code defects, and here is the tally
+for one slice:
+
+1. **All seventeen registered mutants went stale at once** and `prove_red` reported them as ERRORS, not
+   survivors. Re-expressed against the new shape: **16 killed, 0 survived, 0 broken.** Two of the
+   rewritten ones then SURVIVED — `evidence_true_does_not_win` and `finish_is_not_total` — naming two
+   properties no cell drove. Both now have one.
+2. **The ratchet reported ZERO**, which is its stale-derivation failure mode, because the sink's local
+   was named `rec` and hid twelve writes from the guard. The number was never the invariant; CONTAINMENT
+   is, so an AST pin now requires every `record.<field>` write to be lexically inside `_RecordSink`.
+3. **The exit ratchet fired**, reading "2 exits" after the split. It now derives over both halves (18).
+4. **`test_boundary_truth`'s health-view guard** counted `_record_run` sites in `replay()` and found
+   **zero** — the same shape one file over. *"Never raises" is also satisfied by never being called*,
+   and so is *"still records"* by scanning the wrong function.
+5. **The fake engine was lying.** It fabricated `usage` in reports while spending through no router, so
+   the cross-check flagged the watch as blind on cells that should have been clean. The fake now spends
+   through an observable router, which is what makes a cell asserting a call count assert something that
+   happened.
+
+### What it does not prove, and one property that cannot be tested end to end
+
+The fake reproduces the engine's contract, not the engine; `drift_bench` and the browser write-safety
+matrix remain the adjudicators for anything page-side.
+
+And the sticky-evidence rule — *a write evidenced as landed cannot be un-landed by a later attempt
+failing earlier* — is **unreachable end to end by construction**: for a write flow, an attempt that
+lands makes `_auth_retry_allowed` refuse the retry, correctly, because a second run would double-submit.
+"Attempt 1 landed, attempt 2 got nowhere" has no page state behind it. Scripting one anyway would be a
+cell asserting a fiction, so the rule is tested as arithmetic over the fold. That is a real bound on the
+evidence, not a stylistic choice.

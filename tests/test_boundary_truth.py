@@ -434,14 +434,22 @@ def test_replay_still_records_every_outcome_so_the_quiet_half_did_not_become_no_
 
     src = (Path(ultracua.__file__).parent / "flows.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
-    fn = next((n for n in ast.walk(tree)
-               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "replay"), None)
-    assert fn is not None, "could not find `replay` — a rename would make this assertion vacuous"
+    # BOTH functions since 1.5 split them: `replay()` is a wrapper whose only job is calling
+    # `_RecordSink.finish` exactly once, and every outcome now lives in `_replay_body`. Scanning the
+    # wrapper alone found ZERO sites and said so loudly — which is this guard working, not failing:
+    # "never raises" is also satisfied by never being called, and so is "still records" by scanning
+    # the wrong function.
+    fns = [n for n in ast.walk(tree)
+           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+           and n.name in ("replay", "_replay_body")]
+    assert {f.name for f in fns} == {"replay", "_replay_body"}, (
+        f"could not find both halves of replay ({sorted(f.name for f in fns)}) — a rename would make "
+        f"this assertion vacuous")
 
-    calls = [n for n in ast.walk(fn)
+    calls = [n for fn in fns for n in ast.walk(fn)
              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "_record_run"]
     assert len(calls) >= 8, (
-        f"`replay` records the run at only {len(calls)} site(s). It has eight — success, "
+        f"`replay`+`_replay_body` record the run at only {len(calls)} site(s). There are eight — success, "
         f"already-done (x2), quarantine, write_unverified, write_unreadable, the generic failure and "
         f"the crash handler. A missing one is a run the health view never hears about.")
 

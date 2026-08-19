@@ -26,6 +26,7 @@ import time
 import pytest
 
 import _fake_engine as fe
+from ultracua import flows as flows_mod
 from ultracua.cache import CachedFlow, CachedStep, FlowCache
 from ultracua.flows import (DriftError, EscalateError, FlowReplayError, FlowSpec, LearnResult,
                             MutateSpec,
@@ -35,7 +36,9 @@ from ultracua.locators import LocatorSpec
 
 # Committed on purpose: a change here means `replay()` grew or lost an exit, and the matrix below must be
 # revisited rather than silently covering less. Derived by AST, never counted by hand.
-EXIT_COUNT = 16
+# 16 in `_replay_body` plus 2 in the `replay()` wrapper, which exists so `_RecordSink.finish` is
+# called exactly once however the body leaves.
+EXIT_COUNT = 18
 
 # The ways a record may explain an UNKNOWN cost. A closed set on purpose: 1.5 picks which one it
 # sets, but "None with no reason" is not among the options (R4.46).
@@ -64,16 +67,26 @@ def _seed(tmp_path, monkeypatch, *, name, mutating=False, mutate=None, extract=N
 
 
 def test_the_exit_set_has_not_grown() -> None:
-    """The ratchet. Derive the truth, compare it to the claim — the shape `check_shard_coverage` uses."""
+    """The ratchet. Derive the truth, compare it to the claim — the shape `check_shard_coverage` uses.
+
+    BOTH functions, since 1.5 split them. `replay()` is now a four-line wrapper whose only job is to
+    call `_RecordSink.finish` exactly once; the exits live in `_replay_body`. Counting only the
+    wrapper would have read "2 exits" and quietly stopped covering anything — which is precisely what
+    this ratchet fired on when the split landed.
+    """
     src = pathlib.Path("src/ultracua/flows.py").read_text(encoding="utf-8")
+    found = {}
     for node in ast.walk(ast.parse(src)):
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == "replay":
-            n = sum(1 for x in ast.walk(node) if isinstance(x, (ast.Raise, ast.Return)))
-            assert n == EXIT_COUNT, (
-                f"replay() now has {n} exits, not {EXIT_COUNT}. An exit added without a cell in this "
-                f"file is an exit nothing covers — add the cell, then update EXIT_COUNT.")
-            return
-    pytest.fail("replay() not found — the AST walk is broken, so the ratchet asserts nothing")
+        if isinstance(node, ast.AsyncFunctionDef) and node.name in ("replay", "_replay_body"):
+            found[node.name] = sum(1 for x in ast.walk(node)
+                                   if isinstance(x, (ast.Raise, ast.Return)))
+    assert set(found) == {"replay", "_replay_body"}, (
+        f"the AST walk found {sorted(found)} — it must see both, or the ratchet asserts nothing")
+    n = sum(found.values())
+    assert n == EXIT_COUNT, (
+        f"replay()+_replay_body now have {n} exits ({found}), not {EXIT_COUNT}. An exit added "
+        f"without a cell in this file is an exit nothing covers — add the cell, then update "
+        f"EXIT_COUNT.")
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -167,7 +180,9 @@ async def test_write_readback_exit_reports_the_write_as_landed(tmp_path, monkeyp
         await replay(spec, cache=cache, record=rec)
     assert exc.value.landed is True, "this class declares the write landed; the ledger reads it"
     assert len(eng.calls) == 1
-    assert rec.failure_code == "write_unreadable"
+    assert rec.failure_code == exc.value.code == "write_readback", (
+        "since 1.5 the record carries the exception's code, not the engine's internal kind "
+        "(R4.49) — one vocabulary, so the two channels cannot describe one run differently")
 
 
 async def test_shape_drift_exit_refuses_rather_than_returning_wrong_data(tmp_path, monkeypatch) -> None:
@@ -177,9 +192,10 @@ async def test_shape_drift_exit_refuses_rather_than_returning_wrong_data(tmp_pat
     fe.FakeEngine(fe.Attempt(report=fe.report(usage=USAGE),
                              out={"found": True, "data": {"totally": "different"}})).install(monkeypatch)
     rec = RunRecord()
-    with pytest.raises(ShapeDriftError):
+    with pytest.raises(ShapeDriftError) as exc:
         await replay(spec, cache=cache, record=rec)
-    assert rec.failure_code == "shape"
+    assert rec.failure_code == exc.value.code == "shape_drift", (
+        "R4.49: the record's code is the exception's code since 1.5")
 
 
 async def test_an_engine_raise_leaves_the_record_saying_unknown_not_no(tmp_path, monkeypatch) -> None:
@@ -230,7 +246,7 @@ async def test_auth_refresh_retry_succeeds_and_the_record_spans_both_attempts(tm
         fe.Attempt(report=fe.report(usage=dict(USAGE, calls=2, cost_usd=0.02))),
     ).install(monkeypatch)
     rec = RunRecord()
-    await replay(spec, cache=cache, record=rec)
+    await replay(spec, cache=cache, record=rec, router=eng.router)
     assert len(eng.calls) == 2 and eng.refresh_calls == 1
     assert rec.attempts == 2, "both attempts must be counted"
     assert rec.auth_refreshed is True, "the refresh happened and the record must say so"
@@ -267,7 +283,7 @@ async def test_relearn_repair_success_records_the_repair_attempt(tmp_path, monke
         fe.Attempt(report=fe.report(mode="replay+replan", usage=dict(USAGE, calls=4, cost_usd=0.04))),
     ).install(monkeypatch)
     rec = RunRecord()
-    await replay(spec, cache=cache, on_drift="relearn", provider=object(), router=object(), record=rec)
+    await replay(spec, cache=cache, on_drift="relearn", provider=eng.provider, router=eng.router, record=rec)
     assert len(eng.calls) == 2 and eng.learn_calls == 0, "the repair must be tried before a full relearn"
     assert rec.ok is True and rec.attempts == 2
     assert rec.usage.get("calls") == 4
@@ -277,21 +293,34 @@ async def test_relearn_full_success_absorbs_the_learn_spend(tmp_path, monkeypatc
     """Exit: the full re-author success. `learn()` is the largest spend in the run and sat entirely
     outside the record before B1's M2."""
     spec, cache = _seed(tmp_path, monkeypatch, name="relearnok", approved=False)
-    lr = LearnResult(spec=spec, cached=True, steps=[], data={"n": 1}, found=True, note="")
+    # The relearn's report is what carries its calls, traces, heals and duration onto the record
+    # (R4.50). `report=` is a REQUIRED keyword, so a `learn()` exit that forgets it is a TypeError.
+    lr = LearnResult(spec=spec, cached=True, steps=[], data={"n": 1}, found=True, note="",
+                     report=fe.report(mode="learn", usage=dict(USAGE, calls=2, cost_usd=0.05),
+                                      llm_calls=7, traces=[fe.trace(0, ms=30.0)]))
     eng = fe.FakeEngine(
-        fe.Attempt(report=fe.report(success=False, note="drift", usage=USAGE)),
-        fe.Attempt(report=fe.report(success=False, note="replan failed", usage=USAGE)),
-        learn=lr,
+        fe.Attempt(report=fe.report(success=False, note="drift", usage=dict(USAGE, calls=1))),
+        fe.Attempt(report=fe.report(success=False, note="replan failed", usage=dict(USAGE, calls=1))),
+        learn=lr, learn_usage=dict(USAGE, calls=2, cost_usd=0.05),
     ).install(monkeypatch)
     rec = RunRecord()
-    data = await replay(spec, cache=cache, on_drift="relearn", provider=object(), router=object(),
+    data = await replay(spec, cache=cache, on_drift="relearn", provider=eng.provider, router=eng.router,
                         record=rec)
     assert data == {"n": 1} and eng.learn_calls == 1
     assert rec.ok is True, "the relearn success must clear the two failed attempts' verdict"
     assert rec.mode == "relearn", "the record must name the path that produced the answer"
-    assert rec.usage.get("cost_usd") is None, (
-        "the relearn's own watch must be absorbed: it observes objects that expose no totals, so a "
-        "run that re-authored can no longer claim a priced zero (B1's M2)")
+    # M2 + R4.50. The old cell asserted `cost_usd is None` here, which was an ARTIFACT of the test
+    # handing `replay()` a bare `object()` as the provider: an owner exposing no totals marks the run
+    # unobserved, so the None it asserted came from the harness, not from the relearn. With a router
+    # that really spends, the property is that the re-author's spend and its CALLS both land — the
+    # calls being the half R4.50 says was dropped while the dollars were kept.
+    assert rec.usage.get("calls") == 4, (
+        f"the relearn's 2 calls must join the two attempts' 2; got {rec.usage.get('calls')}")
+    assert rec.llm_calls == 7, (
+        f"the re-author reported 7 decides and the record says {rec.llm_calls} — R4.50 is the case "
+        f"where the dollars are kept and the calls are not")
+    assert rec.total_ms == pytest.approx(30.0), "the re-author's duration must reach the record too"
+    assert rec.mode == "relearn"
 
 
 async def test_a_relearn_that_raises_still_reports_what_it_spent(tmp_path, monkeypatch) -> None:
@@ -299,27 +328,30 @@ async def test_a_relearn_that_raises_still_reports_what_it_spent(tmp_path, monke
     the earlier attempts' cents against dollars actually spent."""
     spec, cache = _seed(tmp_path, monkeypatch, name="relearnraise", approved=False)
     eng = fe.FakeEngine(
-        fe.Attempt(report=fe.report(success=False, note="drift", usage=USAGE)),
-        fe.Attempt(report=fe.report(success=False, note="replan failed", usage=USAGE)),
+        fe.Attempt(report=fe.report(success=False, note="drift", usage=dict(USAGE, calls=1))),
+        fe.Attempt(report=fe.report(success=False, note="replan failed", usage=dict(USAGE, calls=1))),
         learn=RuntimeError("provider 500 mid-authoring"),
+        learn_usage=dict(USAGE, calls=2, cost_usd=0.05),   # burned BEFORE the 500
     ).install(monkeypatch)
     rec = RunRecord()
     with pytest.raises(RuntimeError):
-        await replay(spec, cache=cache, on_drift="relearn", provider=object(), router=object(),
+        await replay(spec, cache=cache, on_drift="relearn", provider=eng.provider, router=eng.router,
                      record=rec)
     assert eng.learn_calls == 1
     assert rec.mode == "raised", "a relearn that raised must say the run ended unknown"
-    assert rec.usage.get("cost_usd") is None, (
-        "a relearn that RAISED must still report what it spent — F2's fix, and the leg the same "
-        "defect was found on one over")
+    # F2, with the harness artifact removed as above. The re-author burned two calls and THEN the
+    # provider failed; the run-scoped watch spans the raise, so the money is on the record without the
+    # relearn needing a watch, an absorb, or a site of its own on this leg.
+    assert rec.usage.get("calls") == 4, (
+        f"the raised re-author's 2 calls were dropped from the two attempts' 2; got "
+        f"{rec.usage.get('calls')}")
+    assert rec.mode == "raised" and rec.failure_code == "raised"
 
 
 # ---------------------------------------------------------------------------------------------------
 # The B1 findings, as strict xfails against SHIPPED behaviour. Step 1.5's sink must flip these, and
 # `strict` is what forces their removal rather than leaving them as wallpaper.
 
-@pytest.mark.xfail(strict=True, reason="R4.45: the miss exit returns a FlowReport with no `extra`, so "
-                                      "record.usage is {} against RunRecord's 'always populated'")
 async def test_R4_45_miss_exit_populates_usage(tmp_path, monkeypatch) -> None:
     spec, cache = _seed(tmp_path, monkeypatch, name="r445")
     fe.FakeEngine(fe.Attempt(report=fe.report(mode="miss", success=False,
@@ -330,8 +362,6 @@ async def test_R4_45_miss_exit_populates_usage(tmp_path, monkeypatch) -> None:
     assert "cost_usd" in rec.usage
 
 
-@pytest.mark.xfail(strict=True, reason="R4.45: the escalate exit omits `extra` too — the same shape as "
-                                      "the miss exit, one branch over")
 async def test_R4_45_escalate_exit_populates_usage(tmp_path, monkeypatch) -> None:
     spec, cache = _seed(tmp_path, monkeypatch, name="r445b")
     fe.FakeEngine(fe.Attempt(report=fe.report(mode="escalate", success=False,
@@ -342,8 +372,6 @@ async def test_R4_45_escalate_exit_populates_usage(tmp_path, monkeypatch) -> Non
     assert "cost_usd" in rec.usage
 
 
-@pytest.mark.xfail(strict=True, reason="R4.44: an attempt whose run_cached RAISES drops that attempt's "
-                                       "spend — the watch and the population block both sit after it")
 async def test_R4_44_a_raised_attempt_keeps_its_spend(tmp_path, monkeypatch) -> None:
     spec, cache = _seed(tmp_path, monkeypatch, name="r444")
     fe.FakeEngine(fe.Attempt(raises=RuntimeError("boom"))).install(monkeypatch)
@@ -353,9 +381,6 @@ async def test_R4_44_a_raised_attempt_keeps_its_spend(tmp_path, monkeypatch) -> 
     assert "cost_usd" in rec.usage, "the raise path records no usage at all"
 
 
-@pytest.mark.xfail(strict=True, reason="R4.49: record.failure_code carries the internal `kind`, not "
-                                       "FlowReplayError.code, so two channels describe one run "
-                                       "differently")
 async def test_R4_49_failure_code_matches_the_exception_code(tmp_path, monkeypatch) -> None:
     spec, cache = _seed(tmp_path, monkeypatch, name="r449")
     fe.FakeEngine(fe.Attempt(report=fe.report(mode="miss", success=False,
@@ -424,10 +449,6 @@ async def test_R4_51_an_unobserved_replay_is_distinguishable(tmp_path, monkeypat
     assert rec3.usage.get("unobserved_llm_path") is True
 
 
-@pytest.mark.xfail(strict=True, reason="R4.57: a SUCCESSFUL auth-refresh retry leaves the failed "
-                                       "attempt's failure_code on the record — `_attempt_replay`'s "
-                                       "success block sets ok=True but never clears it, and `_mark_ok` "
-                                       "(which does) is only called on the precheck and relearn exits")
 async def test_R4_57_a_successful_retry_clears_the_failed_attempts_code(tmp_path, monkeypatch) -> None:
     spec, cache = _seed(tmp_path, monkeypatch, name="r457")
     _with_login(spec)
@@ -475,9 +496,15 @@ async def test_GOLDEN_the_first_precheck_exit(tmp_path, monkeypatch) -> None:
     assert rec.ok is True
     assert rec.attempts == 0
     assert (rec.landed, rec.committed) == (None, None)
-    # EXPECTED TO MOVE (frozen as shipped)
-    assert rec.mode == ""
-    assert rec.usage == {}
+    # MOVED AT 1.5, as this cell predicted, and both moves are the ones it named:
+    #   mode  ""  -> "precheck"  — `""` is not one of the documented modes, and the run's outcome was
+    #                             produced by the precheck, so that is what names it.
+    #   usage {}  -> a priced zero — `RunRecord` promises usage is "always populated and always
+    #                             carries cost_usd", and this exit contradicted it. Nothing COULD have
+    #                             been spent (the routers are not even resolved yet), so zero is not a
+    #                             guess: it is the only value the evidence supports.
+    assert rec.mode == "precheck"
+    assert rec.usage.get("cost_usd") == 0.0 and rec.usage.get("calls") == 0
 
 
 async def test_GOLDEN_the_post_refresh_precheck_exit(tmp_path, monkeypatch) -> None:
@@ -507,9 +534,12 @@ async def test_GOLDEN_the_post_refresh_precheck_exit(tmp_path, monkeypatch) -> N
         "a post-refresh precheck must not deny a write the first attempt may have landed")
     assert rec.ok is True and rec.failure_code == ""
     assert rec.auth_refreshed is True
-    # frozen as shipped
     assert rec.attempts == 1
-    assert rec.mode == "replay"
+    # MOVED AT 1.5, and this cell said the diff would have to be argued. `mode` was "replay" — the
+    # mode of the attempt that FAILED — and is now "precheck", the thing that actually produced the
+    # outcome. The sink takes the last fact, and on this path the last fact is the precheck. A field
+    # naming "what produced this answer" must not name the step that did not.
+    assert rec.mode == "precheck"
     assert rec.usage.get("cost_usd") == 0.0
 
 
@@ -541,7 +571,7 @@ async def test_GOLDEN_the_retry_raise_then_repair_path(tmp_path, monkeypatch) ->
     rec = RunRecord()
 
     data = await replay(spec, cache=cache, record=rec, on_drift="relearn",
-                        provider=object(), router=object())
+                        provider=eng.provider, router=eng.router)
 
     assert data == {"v": 1}
     assert len(eng.calls) == 3 and eng.refresh_calls == 1, "premise: three attempts, one refresh"
@@ -549,48 +579,49 @@ async def test_GOLDEN_the_retry_raise_then_repair_path(tmp_path, monkeypatch) ->
     assert rec.ok is True
     assert rec.attempts == 3
     assert rec.llm_calls == 2
-    # EXPECTED TO MOVE (see the docstring): the sink turns these two into None.
-    assert (rec.landed, rec.committed) == (False, False)
-    # R4.57's shape, reached here too. Frozen as SHIPPED, not as correct.
-    assert rec.failure_code == "drift"
+    # MOVED AT 1.5, exactly as predicted and for the stated reason: an attempt RAISED at an unknown
+    # point, so this run has no basis for a denial. `False` here was the confident denial M4 forbids —
+    # it survived because the old success block wrote its OWN attempt's value over the run's.
+    assert (rec.landed, rec.committed) == (None, None), (
+        "a run in which an attempt raised must report the write question as unanswerable")
+    # And R4.57's shape is gone from this path too: `ok` and `failure_code` are now decided once, at
+    # the single exit, from whether `replay()` raised — so a successful run cannot carry the code of
+    # an attempt that failed on the way.
+    assert rec.ok is True and rec.failure_code == ""
 
 
-@pytest.mark.xfail(strict=True, reason="R4.46: an attempt whose report carries no usage poisons a "
-                                       "priced total to None with NO reason recorded, so it is "
-                                       "indistinguishable from a genuinely unpriced model")
-async def test_R4_46_an_unknown_cost_always_records_why(tmp_path, monkeypatch) -> None:
+async def test_R4_46_a_usage_less_attempt_erases_nothing(tmp_path, monkeypatch) -> None:
     """A priced attempt followed by one that reported no usage at all.
 
-    Measured today: `cost_usd` goes from 0.25 to None and NOTHING on the record says why — no
-    `unobserved_llm_path`, no counter, nothing. The `$0.25` is erased and the caller is left unable to
-    tell "we could not price this run" from "this model has no prices".
+    BEFORE 1.5 this was a silent erasure: `_absorb_usage` merged each attempt's self-reported dict and
+    was sticky-None on `cost_usd`, so an attempt whose report carried no usage key (R4.45's shape)
+    turned a correctly-priced total into `None` with NOTHING on the record saying why —
+    indistinguishable from a genuinely unpriced model, and the earlier attempt's spend gone with it.
 
-    Sticky-None itself is correct and is not what this cell objects to: one unpriceable attempt does
-    make the run unpriceable, and a partial sum presented as the total is the understated bill. The
-    defect is the SILENCE. So the assertion is on the reason, not on the value.
-
-    The reason key is deliberately not dictated — any of the names below satisfies it — because the
-    sink may already have a better home for it than a new key.
+    THE SINK FIXES IT BY CONSTRUCTION rather than by a flag. Usage comes from one run-scoped watch, so
+    an attempt that reports nothing contributes nothing to the ANSWER: there is no merge, and so
+    nothing to erase. This cell therefore asserts the outcome (the spend survives) and the invariant
+    that has to hold either way — an unknown cost always says why — instead of the old mechanism.
     """
     spec, cache = _seed(tmp_path, monkeypatch, name="r446")
     _with_login(spec)
-    fe.FakeEngine(
+    eng = fe.FakeEngine(
         fe.Attempt(report=fe.report(success=False, note="session expired",
-                                    usage=dict(USAGE, cost_usd=0.25))),
+                                    usage=dict(USAGE, calls=1, cost_usd=0.25))),
         fe.Attempt(report=fe.report(usage=None)),      # no `extra` at all — R4.45's shape
     ).install(monkeypatch)
     rec = RunRecord()
 
-    await replay(spec, cache=cache, record=rec)
+    await replay(spec, cache=cache, record=rec, router=eng.router)
 
-    assert rec.usage.get("cost_usd") is None, (
-        "premise: this is the shape where sticky-None fires; if it no longer does, this cell is "
-        "testing something else")
+    assert rec.attempts == 2 and rec.ok is True, "premise: both attempts ran and the retry succeeded"
+    assert rec.usage.get("calls") == 1, (
+        f"the first attempt's call was erased by an attempt that reported no usage; got "
+        f"{rec.usage.get('calls')}")
     reasons = {k: rec.usage.get(k) for k in COST_UNKNOWN_REASONS}
-    assert any(reasons.values()), (
-        f"the run is unpriceable and the record does not say why: {reasons}. A caller cannot "
-        f"distinguish it from a genuinely unpriced model, and the 0.25 from the priced attempt is "
-        f"erased with no trace")
+    assert rec.usage.get("cost_usd") is not None or any(reasons.values()), (
+        f"the run is unpriceable and the record does not say why: {reasons} — a caller cannot "
+        f"distinguish it from a genuinely unpriced model")
 
 
 async def test_the_population_block_reaches_the_record_on_a_FAILED_run(tmp_path, monkeypatch) -> None:
@@ -625,3 +656,118 @@ async def test_the_population_block_reaches_the_record_on_a_FAILED_run(tmp_path,
     assert rec.idempotency_keys == ["idem-1"], (
         "the key that would be re-used on a resume must be recorded on the failing run too")
     assert rec.usage.get("cost_usd") == 0.0
+
+
+# ===================================================================================================
+# The two properties the SINK owns that nothing else does. Both were found by mutants surviving the
+# matrix at 1.5, which is the whole reason `tests/mutations/b1_wiring.py` is re-expressed rather than
+# retired: the class it measures moved, it did not go away.
+
+def test_the_fold_decides_landed_by_evidence_and_never_by_position() -> None:
+    """STICKY, tested on the fold itself rather than through a page that cannot exist.
+
+    The integration route was tried first and is UNREACHABLE by construction, which is worth recording:
+    for a write flow, an attempt that lands makes `_auth_retry_allowed` refuse the retry (correctly — a
+    second run would double-submit), so "attempt 1 landed, attempt 2 got nowhere" has no page state
+    behind it. Scripting one anyway would be a cell asserting a fiction.
+
+    The property is arithmetic over facts, so it is tested as arithmetic. Found by
+    `evidence_true_does_not_win` SURVIVING the matrix.
+    """
+    def fold(*facts):
+        rec = RunRecord()
+        sink = flows_mod._RecordSink(rec)
+        for f in facts:
+            sink.attempt(f)
+        sink.finish(None)
+        return rec
+
+    F = flows_mod._AttemptFacts
+    # TRUE WINS, whatever came after it. A write evidenced as landed cannot be un-landed by a later
+    # attempt that failed earlier — the ledger would otherwise skip a row that really was paid.
+    assert fold(F(outcome="failed", landed=True), F(outcome="failed", landed=False)).landed is True
+    assert fold(F(outcome="failed", landed=True), F(outcome="raised")).landed is True
+    # UNKNOWN BEATS FALSE. A raise, a precheck skip and a relearn that raised all leave the question
+    # unanswerable, and a confident denial over a write that may have committed is the one error
+    # direction nothing downstream catches.
+    for unknown in ("raised", "precheck", "relearn_raised"):
+        got = fold(F(outcome="failed", landed=False), F(outcome=unknown)).landed
+        assert got is None, f"{unknown} left the record claiming {got!r} rather than unknown"
+    # FALSE only when every fact is a completed attempt that saw nothing.
+    assert fold(F(outcome="failed", landed=False), F(outcome="ok", landed=False)).landed is False
+    # And no facts at all is unknown, not "no".
+    assert fold().landed is None
+
+
+async def test_a_broken_sink_reports_itself_and_never_replaces_the_real_failure(
+    tmp_path, monkeypatch
+) -> None:
+    """TOTAL. `finish()` runs inside `replay()`'s `except` arm, so it must not raise.
+
+    If it did, the caller would be told about an accounting bug instead of about the drift that
+    actually ended their run — a diagnostic destroying the thing it reports on. The failure goes to
+    `record.note` instead, which is the only field on `RunRecord` that exists for this.
+
+    Found by `finish_is_not_total` SURVIVING the matrix: nothing drove a sink that breaks.
+    """
+    spec, cache = _seed(tmp_path, monkeypatch, name="sinkboom")
+    fe.FakeEngine(fe.Attempt(report=fe.report(mode="miss", success=False,
+                                              note="no cached flow"))).install(monkeypatch)
+
+    def _boom(self, field_name):
+        raise ZeroDivisionError("the sink itself is broken")
+
+    monkeypatch.setattr(flows_mod._RecordSink, "_evidence", _boom)
+    rec = RunRecord()
+
+    with pytest.raises(FlowReplayError) as exc:
+        await replay(spec, cache=cache, record=rec)
+
+    assert "learn" in str(exc.value).lower(), (
+        "the caller was told about the SINK's failure instead of the replay's — the diagnostic "
+        "replaced the outcome")
+    assert "ZeroDivisionError" in rec.note, (
+        f"a sink that could not complete the record must SAY so on the record; note={rec.note!r}")
+
+
+def test_every_record_write_is_inside_the_sink() -> None:
+    """CONTAINMENT — the invariant 1.5 actually buys, derived rather than remembered.
+
+    The ratchet in `scripts/ratchets.py` counts `record.<field> =` statements and can only shrink; it
+    went 16 -> 14, which understates the change, because the number was never the problem. The problem
+    was that the sixteen were spread across `replay()` and `_attempt_replay`, on paths that had to each
+    remember to write, to clear what an earlier path wrote, and to not write a denial they had no
+    evidence for. Every one of B1's ten findings is a consequence of that spread.
+
+    So the guard is not "how many" but "where": every write lives in `_RecordSink`. A new one anywhere
+    else re-creates the shape, and this fails naming it.
+    """
+    tree = ast.parse(pathlib.Path("src/ultracua/flows.py").read_text(encoding="utf-8"))
+    sink = next((n for n in ast.walk(tree)
+                 if isinstance(n, ast.ClassDef) and n.name == "_RecordSink"), None)
+    assert sink is not None, "the sink is gone — this guard would pass vacuously"
+    inside = {id(n) for n in ast.walk(sink)}
+
+    outside = []
+    for node in ast.walk(tree):
+        targets = []
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            targets = [node.target]
+        flat = [e for t in targets for e in (t.elts if isinstance(t, ast.Tuple) else [t])]
+        for t in flat:
+            if (isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
+                    and t.value.id == "record" and id(node) not in inside):
+                outside.append(f"flows.py:{node.lineno} writes record.{t.attr}")
+
+    assert not outside, (
+        "a RunRecord field is written outside `_RecordSink`, which re-creates the spread 1.5 removed:\n"
+        + "\n  ".join(outside))
+    n_inside = sum(1 for n in ast.walk(sink)
+                   if isinstance(n, ast.Assign)
+                   for t in n.targets
+                   if isinstance(t, ast.Attribute) and getattr(t.value, "id", "") == "record")
+    assert n_inside >= 10, (
+        f"only {n_inside} record writes found inside the sink — the walk is broken, so the assertion "
+        f"above would pass however the code changed")
