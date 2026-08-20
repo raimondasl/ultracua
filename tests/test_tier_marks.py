@@ -110,6 +110,37 @@ def test_parts_describing_a_different_tree_are_refused_in_both_directions() -> N
         tier.merge_observations([part("x", TREE[:-1], selected=TREE[:-1])], TREE)
     assert TREE[-1] in str(exc2.value)
 
+    # AND THE REFUSAL MUST NAME THE RIGHT CAUSE, which is a different question from refusing.
+    #
+    # Found by using the tool: a STALE LOCAL part sitting beside four fresh CI ones was refused with
+    # "main has moved" — true of one cause, wrong about this one, and the reader would have gone
+    # looking at `main`. When the parts disagree with EACH OTHER, exactly one is stale and naming it
+    # is the actionable answer; `cancelled` meaning three different things is the same shape one
+    # instrument over.
+    # The stale part carries an OLD name — which is what actually happened: two tests were renamed
+    # after the local observation was emitted. Note a stale part with merely FEWER ids is invisible
+    # here, because `seen` is a UNION; it is the ids the tree no longer has that give it away.
+    fresh = [part("ci-1", TREE, selected=["a::1", "a::2"], path="ci1.json"),
+             part("ci-2", TREE, selected=["b::1", "b::2"], path="ci2.json")]
+    stale = part("local-win32", TREE + ["a::old_name"], selected=TREE + ["a::old_name"],
+                 path="local.json")
+    with pytest.raises(tier.MergeRefused) as exc3:
+        tier.merge_observations(fresh + [stale], TREE)
+    msg = str(exc3.value)
+    assert "DISAGREE WITH EACH OTHER" in msg, "the odd part out was not diagnosed"
+    assert "local.json" in msg and "local-win32" in msg, "it must name the stale part"
+    assert "main has moved" not in msg, (
+        "a disagreement among parts is being reported as the tree having moved — the wrong cause, "
+        "confidently stated, which sends the reader to look at the wrong thing")
+
+    # ...and the converse: when every part AGREES and only the tree differs, that IS the tree-moved
+    # case and must still say so. Without this, "always blame the parts" satisfies the assert above.
+    agreeing = [part("ci-1", TREE + ["c::x"], selected=TREE + ["c::x"], path="a.json"),
+                part("ci-2", TREE + ["c::x"], selected=TREE + ["c::x"], path="b.json")]
+    with pytest.raises(tier.MergeRefused) as exc4:
+        tier.merge_observations(agreeing, TREE)
+    assert "refs/pull" in str(exc4.value) and "DISAGREE" not in str(exc4.value)
+
 
 # ---------------------------------------------------------------------------------------------------
 # 3. COMPLETENESS — every test must have been RUN by some part.

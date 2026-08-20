@@ -541,10 +541,36 @@ def merge_observations(parts, expected, notes=None):
             lines.append(f"    {len(extra)} they have and this tree does not: {', '.join(extra[:5])}")
         if missing:
             lines.append(f"    {len(missing)} this tree has and they do not: {', '.join(missing[:5])}")
-        lines.append(
-            "    A pull_request run tests refs/pull/N/merge, not your branch tip, so this is what you "
-            "get once main has moved. Push, let CI finish and pull again — or emit a part locally."
-        )
+        # WHICH cause, not just THAT it happened. Found by using this tool: a stale local part sitting
+        # beside four fresh CI ones was refused with "main has moved" — a confident WRONG diagnosis of
+        # a condition that has several causes, which is the overloaded-outcome shape this register
+        # keeps paying for (`cancelled` meaning three different things).
+        #
+        # If the parts DISAGREE WITH EACH OTHER then one of them is stale, and naming it is the
+        # actionable answer. Only when they all agree, and differ from the tree together, is "the tree
+        # moved" the right thing to say.
+        by_size: dict = {}
+        for path, d in parts:
+            by_size.setdefault(len(d["collected"]), []).append((path, d))
+        if len(by_size) > 1:
+            majority = max(by_size, key=lambda k: len(by_size[k]))
+            lines.append("")
+            lines.append("    THE PARTS DISAGREE WITH EACH OTHER, so one of them is stale rather than "
+                         "the tree having moved:")
+            for size, group in sorted(by_size.items()):
+                if size == majority:
+                    continue
+                for path, d in group:
+                    lines.append(f"      {path.name} (label {d['label']!r}) collected {size}, while "
+                                 f"{len(by_size[majority])} other part(s) collected {majority}")
+            lines.append("    Delete the stale part and merge again. `pull` deliberately leaves "
+                         "non-`tier-marks-*` files alone, so a local observation is never destroyed.")
+        else:
+            lines.append(
+                "    Every part agrees, so it is the TREE that differs. A pull_request run tests "
+                "refs/pull/N/merge, not your branch tip, so this is what you get once main has moved "
+                "— or once you edited a test after pushing. Push, let CI finish, and pull again."
+            )
         raise MergeRefused("\n".join(lines))
 
     # (3) COVERAGE. Every test must have been RUN by some part, or its class is a guess, not evidence.
