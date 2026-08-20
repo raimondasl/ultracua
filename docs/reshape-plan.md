@@ -694,7 +694,7 @@ failure §13 exists to correct.
 | # | step | why here | audits |
 |---|---|---|---|
 | 0 | **~~CI capacity~~ → CI provisioning** *(done, 2026-08-20)* | PREREQUISITE, and it blocked everything below because 0.8 cannot exist until CI's full run completes. **It was not a capacity problem.** Measured over 58 ubuntu jobs: the SUITE is 12.4–13.8 min, flat, and is the fastest arm; the variance is entirely `playwright install --with-deps chromium`, which killed 8 of 58 jobs (6 of them still inside `apt-get` at the wall, having run ZERO tests). Fix: delete `--with-deps` — it installs nine FONT packages and no libraries. See below and `docs/ci-provisioning.md` | 3 lenses |
-| 1 | **0.8 — CI-derived marks** | the rule it was filed under now says to build it: 5.00 h spent, clause (a) passed, five slices left. Zero `src/`. Depends on step 0 | none |
+| 1 | **0.8 — marks from an observation** *(done, 2026-08-20)* | the manifest is now built from runs that already happened, CI's four shards included. NOTE the rule this was filed under does NOT authorise it: `manifest_cost.verdict` answers ONE question about merge-mode, and its clause (b) is a merge-specific safety clause that this design preserves by construction rather than trades away. Shipped on its own argument. Zero `src/` | 1 |
 | 2 | **2.1 — B2** | unblocked since day one and never started; zero `src/`, therefore zero audit burden; it is the goal | none |
 | 3 | **1.4 — distinct codes** | the ONE Phase-1 step B3 waits on. Scope shrank: R4.49 is already closed | 2 |
 | 4 | **2.2 — B3** | unblocked by 1.4 | 1 |

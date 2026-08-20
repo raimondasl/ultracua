@@ -182,7 +182,30 @@ Violating any of these is a blocking defect, not a trade-off:
   whose find-text no longer matches is reported as an ERROR, not a survivor, because a stale mutation
   silently reports the suite as stronger than it is. A survivor is a hole in the matrix, not a bug in the
   mutation: add a cell, or register it with a reason and a finding id.
-- **Re-deriving the tier manifest is TAXED, and the tax is now metered, not remembered.** Measured at
+- **Re-deriving the tier manifest no longer needs a local suite run (0.8).** `pytest --emit-marks PATH`
+  writes an OBSERVATION -- `collected`/`selected`/`reported`/`launches` -- and NEVER the manifest, which
+  is what lets a CI shard emit evidence although it may never write a classification. CI's four `test`
+  jobs each emit one and upload it; `python scripts/tier_marks.py pull` fetches them, and `merge` checks
+  the contract, writes a CANDIDATE, validates THAT with the fixed-point loop (via
+  `ULTRACUA_TIER_MANIFEST`), and swaps only on convergence. **Both halves of that earned their keep on
+  their first real use**: the candidate-swap reported "the candidate did NOT converge. The committed
+  manifest is UNTOUCHED" where write-then-validate would have left a broken artifact on disk, and the
+  identity check caught a test RENAMED after its observation was emitted -- in 2 s, naming both sides.
+  **Identity is the collected ID SET, never a sha**: on a `pull_request` GitHub checks out
+  `refs/pull/N/merge`, so a run correctly identified by your commit collected a different TREE (verified,
+  run 32380417760 -> `HEAD is now at 2c908fc Merge 5d47964 into 4f7ac67`), and the inflated `total` would
+  then DISARM the deletion detector, which only runs when `len(collected) >= data["total"]`. It is
+  LOCAL-FIRST on purpose: an earlier draft made CI the sole supplier, which needs an open PR, `gh` auth,
+  no concurrent push and a 16-25 min wait, with the 36-minute local run as the fallback -- that moves the
+  tax behind a network precondition rather than removing it. **A SINGLE-PLATFORM part set cannot
+  DE-CLASSIFY** (it holds existing browser marks and says how many): a local emit is single-platform by
+  construction, and measured, two windows parts moved a ubuntu-only launcher into the fast tier where
+  ubuntu's `fast` job then raises. Promotion still works from one arm, because that direction is safe.
+  And the CI label is `os-group` with the attempt in the artifact NAME only -- put the attempt in the
+  LABEL and a re-run gives one shard two labels, which makes attempt reconciliation inert (measured: it
+  was). Reconciliation is last-wins for `selected`/`reported` and a UNION for `launches`, because a
+  completeness record expires and evidence does not.
+- **The older tax, kept for the history it explains.** Measured at
   0.109.0: **31m58s** for the marks phase plus **2m03s** for the fixed-point loop (1 round, 15 tests
   promoted back — all of `test_drift_bench.py`, the known order-dependent population). A full
   `--store-browser-marks` run appends what it cost to `tests/.manifest_cost.jsonl`, and

@@ -210,11 +210,19 @@ def test_the_delta_table_is_derived_from_git_and_finds_the_known_history() -> No
 # 5. The pipeline is WIRED to the recorder — driven, not asserted about.
 
 class _FakeConfig:
-    def __init__(self, store: bool):
-        self._store = store
+    """A stand-in for pytest's `Config`, and the KeyError on an unknown option is DELIBERATE.
+
+    A `.get(name, None)` here would let a new option the real hook starts reading default to "off"
+    silently, so the cell below would keep passing while exercising a path that no longer exists.
+    An option added to `pytest_addoption` must be added here too — that is the fake failing loudly
+    rather than drifting, which is what happened when `--emit-marks` landed.
+    """
+
+    def __init__(self, store: bool, emit=None):
+        self._opts = {"--store-browser-marks": store, "--tier": "all", "--emit-marks": emit}
 
     def getoption(self, name):
-        return {"--store-browser-marks": self._store, "--tier": "all"}[name]
+        return self._opts[name]
 
 
 class _FakeItem:
@@ -241,7 +249,9 @@ class _FakeSession:
         self.items = [_FakeItem(i) for i in ids]
         # Every selected id reported, i.e. the run actually executed. A cell modelling
         # `--collect-only` clears this instead.
-        tier.REPORTED.update(ids)
+        # REPORTED is a nodeid -> OUTCOME map (the value decides whether an observation may
+        # de-classify a browser test), so a bare `update(ids)` would try to read each id as a pair.
+        tier.REPORTED.update({i: "passed" for i in ids})
 
 
 def test_a_marks_run_records_its_own_cost(tmp_path: Path, monkeypatch) -> None:

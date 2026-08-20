@@ -378,3 +378,43 @@ def test_every_scan_in_this_file_goes_red_when_armed() -> None:
         f"DESCRIBING the thing it forbids -- including the paragraph in ci.yml explaining why "
         f"`--with-deps` was removed, which is the one comment guaranteed to mention apt."
     )
+
+
+def test_the_shard_emits_tier_marks_under_a_label_that_ignores_the_attempt(steps) -> None:
+    """The 0.8 wiring, derived from the workflow rather than remembered.
+
+    Two properties, and the second is the one that was measurably WRONG when it first shipped.
+
+    (a) The shard step must carry `--emit-marks` and set `ULTRACUA_MARKS_LABEL`, and an upload for
+        `tier-marks-*` must exist. Without this cell the flag can be deleted from `ci.yml` and every
+        test in the repo stays green — and CI stays green too, because the upload deliberately carries
+        `continue-on-error: true` and `if-no-files-found: ignore` (a missing part must not redden four
+        merge-gate jobs; the loudness belongs in `tier_marks.py`, which can name the missing shard).
+
+    (b) The LABEL must not vary with `github.run_attempt`. `_tiers.reconcile_attempts` groups a re-run's
+        artifacts BY LABEL so a truncated first attempt is superseded by the complete second one — and
+        the first draft put `attempt${{ github.run_attempt }}` in the label, giving one shard two
+        labels and making that reconciliation inert in production. Measured: it kept 3 of 3. The
+        attempt still belongs in the artifact NAME, which is all upload-artifact@v4's immutable-name
+        rule needs, and this cell pins exactly that split.
+    """
+    shard = next((s for s in steps if "--splits" in s.run), None)
+    assert shard is not None, "no sharded pytest step in ci.yml; this cell has stopped guarding it"
+    assert "--emit-marks" in shard.run, (
+        "the sharded run no longer emits tier marks, so CI produces no observations and re-deriving "
+        "the manifest goes back to a ~36-minute local suite run (reshape-plan step 0.8)")
+
+    label = next((ln for ln in shard.block if "ULTRACUA_MARKS_LABEL" in ln), None)
+    assert label is not None, "the shard emits marks but does not label the part"
+    assert "run_attempt" not in label, (
+        f"ULTRACUA_MARKS_LABEL varies with the run attempt ({label.strip()}), so a re-run produces TWO "
+        f"labels for one shard and `_tiers.reconcile_attempts` reconciles nothing. Keep the attempt in "
+        f"the artifact NAME instead — that is what v4's immutable-name rule needs.")
+    for axis in ("matrix.os", "matrix.group"):
+        assert axis in label, f"the label does not distinguish {axis}, so two shards share one label"
+
+    uploads = [s for s in steps if any("tier-marks-" in ln for ln in s.block)]
+    assert uploads, "nothing uploads the tier marks, so nothing can ever pull them"
+    assert any("run_attempt" in ln for s in uploads for ln in s.block), (
+        "the artifact name does not carry the run attempt; a re-run would collide with the first "
+        "attempt's artifact under upload-artifact@v4's immutable-name rule")

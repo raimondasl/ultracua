@@ -227,7 +227,36 @@ jobs:
         # NEITHER shard while both report green, which is a silent loss of coverage that no test can fail
         # for. Balance comes from `.test_durations`; when it goes stale, unknown tests are estimated and
         # the shards drift in WALL-CLOCK only — never in coverage.
-        run: uv run --group bench --group providers --group mcp pytest -q --splits 2 --group ${{ matrix.group }}
+        env:
+          # Names the part by (os, shard) and DELIBERATELY NOT by attempt. "Re-run failed jobs" leaves
+          # artifacts from both attempts under one run id (measured on run 31677764463), and the merge
+          # reconciles them per LABEL — so putting the attempt in here would give one shard two labels
+          # and make that reconciliation inert. Measured: it was, until 2026-08-20. The attempt stays in
+          # the artifact NAME below, which is all v4's immutable-name rule needs.
+          # `tests/test_ci_provisioning.py` pins that this template does not mention run_attempt.
+          ULTRACUA_MARKS_LABEL: ${{ matrix.os }}-${{ matrix.group }}
+        run: uv run --group bench --group providers --group mcp pytest -q --splits 2 --group ${{ matrix.group }} --emit-marks .scratch/marks/part.json
+
+      # THE TIER MARKS. This is the whole of reshape-plan step 0.8 on the CI side: the shard above
+      # already observed which tests launch a browser (an autouse probe records it on every run), and
+      # until now that evidence was thrown away — so a contributor adding three browser-free cells paid
+      # a 36-minute local suite run to rediscover it. Emitting costs one JSON dump and this upload.
+      #
+      # `continue-on-error` and `if-no-files-found: ignore`, matching the sampler below rather than
+      # inverting it. The tempting inversion — make a missing part redden the job — was refused: it
+      # would put an artifact-service flake on all four merge-gate jobs with nothing to acknowledge it,
+      # which `ci.yml`'s own note at the suite step calls "the D0 over-refusal shape wearing a CI hat".
+      # The loudness belongs in `scripts/tier_marks.py`, which REFUSES to merge an incomplete set and
+      # can say exactly which shard is missing, where a human can act on it.
+      - name: Upload tier marks
+        if: always()
+        timeout-minutes: 5
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: tier-marks-${{ matrix.os }}-${{ matrix.group }}-${{ github.run_attempt }}
+          path: .scratch/marks/part.json
+          if-no-files-found: ignore
 
       # ALWAYS, not `if: failure()` — a baseline from a PASSING run is the entire point, and is what four
       # failure-only post-mortems could not provide. Peaks, because the peak is what the failure is about
