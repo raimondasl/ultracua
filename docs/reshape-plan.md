@@ -683,7 +683,7 @@ failure §13 exists to correct.
 
 | # | step | why here | audits |
 |---|---|---|---|
-| 0 | **CI capacity** | PREREQUISITE, and it blocks everything below. On PR #184 both ubuntu shards hit the 25-minute job timeout — one stuck in `apt` before running a single test, the other killed with pytest still alive at 25.3 min, where the same shard took 15m19s on #183 nine tests earlier. Until it completes, ubuntu gives no signal on any PR, AND 0.8 cannot exist, because CI-derived marks require CI's full run to finish. Windows is at 16.6–18.5 min | none |
+| 0 | **~~CI capacity~~ → CI provisioning** *(done, 2026-08-20)* | PREREQUISITE, and it blocked everything below because 0.8 cannot exist until CI's full run completes. **It was not a capacity problem.** Measured over 58 ubuntu jobs: the SUITE is 12.4–13.8 min, flat, and is the fastest arm; the variance is entirely `playwright install --with-deps chromium`, which killed 8 of 58 jobs (6 of them still inside `apt-get` at the wall, having run ZERO tests). Fix: delete `--with-deps` — it installs nine FONT packages and no libraries. See below and `docs/ci-provisioning.md` | 3 lenses |
 | 1 | **0.8 — CI-derived marks** | the rule it was filed under now says to build it: 5.00 h spent, clause (a) passed, five slices left. Zero `src/`. Depends on step 0 | none |
 | 2 | **2.1 — B2** | unblocked since day one and never started; zero `src/`, therefore zero audit burden; it is the goal | none |
 | 3 | **1.4 — distinct codes** | the ONE Phase-1 step B3 waits on. Scope shrank: R4.49 is already closed | 2 |
@@ -699,28 +699,70 @@ rather than before it. The tail is unchanged, and its reasons are unchanged.
 **What did not change and should not be re-litigated:** 1.4 before B3 (the one hard edge in Phase 2);
 0.5 with 1.1, 0.6 after 1.5, 0.7 with 2.3 (§12's triggers, none of which have fired); 1.8 last.
 
-### Step 0, stated so it is not over-built
+### Step 0 — and it was the wrong step, which is the point
 
-Two facts and one unknown. **Fact:** `.test_durations` records **836** ids against **1 191** collected,
-so 30% of the suite is duration-ESTIMATED and the split is balanced on a guess. **Fact:** windows
-finishes both shards in 16.6–18.5 min against the same 25-minute budget. **Unknown:** whether ubuntu is
-now genuinely slower or hung once — `-q` prints no progress, so the killed job's log cannot say, and
-one observation cannot distinguish them.
+**Everything the paragraph that stood here asserted was false, and all of it was refutable for the
+price of one `gh run view`.** It is left described rather than deleted, because how it went wrong is
+worth more than what it said.
 
-So step 0 does the two cheap things whose effect is measurable and stops: raise `timeout-minutes`
-25 → 40, and regenerate `.test_durations` on the next full run. A third shard is the scaling answer and
-is deliberately NOT taken first — it costs runners on every PR forever, and buying it before knowing
-whether the problem is balance, growth or a hang is the same "fix before measuring" this document keeps
-refusing. If ubuntu still exceeds 25 min with an accurate durations file, that IS the measurement, and
-sharding follows from it.
+It claimed an Unknown — *"whether ubuntu is now genuinely slower or hung once; `-q` prints no
+progress, so the killed job's log cannot say, and one observation cannot distinguish them"* — and
+proposed two cheap levers: raise `timeout-minutes` 25 → 40, and regenerate `.test_durations`.
+
+Measured (`docs/ci-provisioning.md`, 58 ubuntu jobs):
+
+* the dead jobs died in **step 4**, `playwright install --with-deps chromium`, *before pytest was ever
+  invoked*. `-q` is irrelevant; that step's log is apt's own timestamped output and says exactly what
+  happened. There were **eight** such observations, not one.
+* the **suite** is 12.4–13.8 min across every job that reached it, dead flat, and ubuntu is the
+  **fastest** arm (windows 15.2–17.7). Nothing supported a capacity finding about either.
+* `--with-deps` installs **nine font packages and zero libraries** on this runner image — 21.1 MB of
+  CJK/Cyrillic/Thai glyph coverage the suite never renders — over a mirror that killed 8 of 58 jobs.
+* **windows was the control the whole time**: same download, no apt, 18/18 at 18–29 s.
+
+Both levers were therefore no-ops. Regenerating `.test_durations` cannot help a job that collects zero
+tests, and the shards were already balanced (~4%: ubuntu 13.7/13.1, windows 16.3/15.4). Raising the
+budget to 40 would have rescued 2 of 8 and bought the other 6 a fifteen-minute-longer death. **Neither
+was taken; `ci.yml`'s job budgets are unchanged.**
+
+**Why it went wrong is the reusable part.** A job named `tests (ubuntu-latest 2/2)` died having run no
+tests, and both the maintainer and the author of this section read `cancelled` as "the suite got
+slower" — because the observable outcome carries no attribution. A concurrency cancellation, an apt
+hang and a genuinely over-long suite are the *same string*. That is the third inviolable ("never
+silently return or act WRONG — fail LOUD") wearing a CI hat, and it wrote a wrong prerequisite into
+this plan one day after §13 was written to stop exactly that kind of thing.
+
+So the shipped step 0 is: delete the flag, budget **every** authored step except the one whose duration
+IS the signal (the suite), and pin the CLASS in `tests/test_ci_provisioning.py` — one browser install,
+shared by both OSes, no apt anywhere — with a standing arming cell that mutates the workflow FIVE ways
+and requires each to be caught (four violations that must be caught, and one legal shape that must not
+be: a comment mentioning `apt-get`, which the paragraph explaining the removal necessarily does).
+
+**Refused, and recorded so it is not re-proposed:** a `timeout-minutes` on the suite step (a second
+ceiling under the job wall, on the growing arm, with nothing to acknowledge it — the D0 shape); a job
+budget raise (the removal restores ~11 min of headroom under the existing 25); a smoke-launch step
+(it would be a second transcription of `browser.py`'s launch path, and headless resolves to a
+*different* binary, so it could certify the wrong one); and any claim that a job-level `cancelled` now
+means the suite over-ran — the `always()`/`failure()` tail and GitHub's own injected steps make that
+unprovable, and an earlier draft asserted it with a worked sum that was wrong on the failure path.
+
+**And the honest acceptance note:** a clean streak after this merge is NOT evidence. **44 of the 58
+jobs completed with the install under two minutes while the flag was still present**, and the fault is
+episodic — eight clean overnight hours sit between two failure episodes. So "ten green ubuntu runs" is
+satisfied by the UNCHANGED workflow and cannot distinguish the fix from the base rate; that is
+green-is-not-evidence pointed at this step's own adjudicator. What is checkable is static (the pin fails
+if the flag returns) and distributional (the ubuntu install step should sit in the windows band,
+~18–30 s, not merely "under a minute").
 
 ### What would make THIS order wrong
 
 * If 1.4's audits return more than ~4 findings, the 1.4x audit multiplier measured here is an
   underestimate and Phase 1's remaining estimate needs re-deriving again — not the order, the *price*.
-* If step 0's two cheap levers do not bring ubuntu back inside the budget, the cause is a hang rather
-  than balance, and step 0 becomes a diagnosis rather than a config change — which is a different size
-  of job and would sit in front of 0.8 for longer than this order assumes.
+* ~~If step 0's two cheap levers do not bring ubuntu back inside the budget, the cause is a hang rather
+  than balance~~ — **this fired before either lever was pulled.** The antecedent was already satisfied
+  when it was typed, and the diagnosis it priced as "a different size of job" cost one `gh run view`.
+  The lesson generalises past this row: a bullet that names the condition under which a plan is wrong
+  is worth checking *at the time of writing*, not only afterwards.
 * If B2 turns out to need a `src/` change after all — the boundary ledger derives module-level bindings
   from the live import graph, which §5 asserts is possible without one — then 2.1 acquires an audit
   burden and its promotion above 1.4 loses its justification.

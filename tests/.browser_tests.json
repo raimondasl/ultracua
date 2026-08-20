@@ -1,6 +1,6 @@
 {
  "_comment": "DERIVED, never hand-edited. A test is a browser test iff it was OBSERVED launching one, OR the fast tier later caught it launching (attribution is order-dependent when a module shares browser work through a fixture). Regenerate with `pytest -q --store-browser-marks` then `python scripts/derive_test_tiers.py`, which iterates to the fixed point. An unclassified test makes a tiered run fail loudly rather than skip it.",
- "total": 1191,
+ "total": 1197,
  "browser": [
   "tests/test_annotation_disposition.py::test_the_r427_population_arrives_non_demotable_so_the_verb_cannot_dispose_of_it",
   "tests/test_audit.py::test_advisory_mode_reports_but_never_quarantines",
@@ -617,6 +617,12 @@
   "tests/test_cache_unreadable.py::test_an_unreadable_entry_raises_instead_of_reporting_not_learned",
   "tests/test_cache_unreadable.py::test_health_reports_unreadable_rather_than_taking_down_the_fleet_view",
   "tests/test_cache_unreadable.py::test_the_mcp_tool_list_drops_an_unreadable_flow_instead_of_advertising_it",
+  "tests/test_ci_provisioning.py::test_every_authored_step_is_budgeted_or_allowlisted",
+  "tests/test_ci_provisioning.py::test_every_scan_in_this_file_goes_red_when_armed",
+  "tests/test_ci_provisioning.py::test_no_allowlist_entry_names_a_step_that_walked_away",
+  "tests/test_ci_provisioning.py::test_no_provisioning_exception_names_a_step_that_walked_away",
+  "tests/test_ci_provisioning.py::test_no_step_anywhere_smuggles_provisioning_onto_the_critical_path",
+  "tests/test_ci_provisioning.py::test_the_browser_install_is_one_step_shared_by_both_oses",
   "tests/test_cli.py::test_ago_never",
   "tests/test_cli.py::test_ago_units",
   "tests/test_cli.py::test_canary_exit_one_when_any_stale",
