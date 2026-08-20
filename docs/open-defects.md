@@ -814,7 +814,7 @@ if and only if that branch is ever resumed.
 | R4.21 | open | `record()`'s refusal stays non-terminal — deliberate, but each retry re-fires the write |
 | R4.22 | open | Windows `ERR_NO_BUFFER_SPACE`, **10 occurrences**; socket churn refuted at 0.104.0; occurrence 8 (local) argues local ≠ CI, and occurrence 9 landed on a DOCS-ONLY PR, and occurrence 10's same-run A/B shows the PASSING shard MORE loaded on peak TIME_WAIT, handles, processes and non-paged pool — the countable axis is refuted for both symptom classes; see R4.58 |
 | R4.23 | open | `test_flows_dry_run_holds_a_real_write_flow` failed once under load, undiagnosed |
-| R4.24 | open | a localhost round-trip stalled past the 5 s budget; ships unmitigated, 2 occurrences |
+| R4.24 | open | a localhost round-trip stalled past the 5 s budget; ships unmitigated, 2 occurrences. The obvious mitigation (`ULTRACUA_ACTION_TIMEOUT_MS=15000` in CI) was BUILT and REFUSED: the bench records the ambient `settings.action_timeout_ms`, `baselines/drift_v2.json` pins it, and `test_drift_bench.py::test_the_baseline_is_current` exact-compares it, so an ambient override reddens a corpus-provenance test minutes into a shard. That refusal lived only in this narrative from 0.85.0 to 0.110.0 while `tests/test_production_timeouts.py` said the opposite in its docstring AND in the failure message a reader sees when the guard fires — the file even contradicted itself, one cell down. Now CARRIED by a pin, and the advice is derived from `ci.yml` + `baselines/` rather than written |
 | R4.25 | fixed | the load-dependent "cluster of three" was one defect + one bad test — assertion fixed in 0.88.0 |
 | R4.26 | fixed | the recorder credited a DEFERRED write to the next click — closed in 0.88.0 |
 | R4.27 | open | the wire promotion marks ordinary GraphQL-style READS as writes (12/12 measured) |
@@ -3455,6 +3455,34 @@ is byte-identical and no caller starts seeing a note where it never had one.
   one occurrence that trade is not worth it, and this register's own rule is that a fix on thin evidence
   is worse than none. **So R4.24 ships unmitigated**, with the sampler (0.84.0) in place to characterise
   the next occurrence.
+
+  **AND THE REFUSAL WAS NEVER CARRIED — found 2026-08-20, while auditing an unrelated CI slice.** The
+  paragraph above is correct and was, from 0.85.0 to 0.110.0 (2026-08-07 to 2026-08-20), the *only* place
+  it existed.
+  `tests/test_production_timeouts.py` — the file whose entire subject is this decision — said the
+  opposite in the two places a reader actually meets it: its module docstring opened "CI now sets
+  `ULTRACUA_ACTION_TIMEOUT_MS=15000`", and the failure message of
+  `test_the_shipped_timeout_default_has_not_been_raised` ended "CI buys time with
+  `ULTRACUA_ACTION_TIMEOUT_MS` in .github/workflows/ci.yml; **that is the knob to reach for**". The
+  variable has never appeared in `ci.yml` (`git log -S` over that path returns no commits). So the guard
+  that exists to stop someone raising the shipped default was, at the moment it fired, directing them to
+  the one mitigation this entry refused — and doing it would have reddened
+  `test_drift_bench.py::test_the_baseline_is_current` minutes into a shard, for a reason nothing at the
+  failure site explains. The file also **contradicted itself**: one cell down,
+  `test_raising_the_bound_for_ci_is_an_env_var_and_the_env_var_still_exists` says plainly that "R4.24's
+  mitigation was NOT shipped". Two prose claims, opposite, in one 89-line file, and the false half was
+  the one printed on failure.
+
+  That is this register's own recurring finding — *citing a guard is not carrying it* — which the very
+  docstring at fault quotes. Closed the way the register prefers: the advice is no longer written but
+  **derived**, from `ci.yml` and from which fields `baselines/` actually pins (they are asymmetric —
+  `action_timeout_ms` is pinned, `nav_timeout_ms` is not, so the second knob remains legitimately
+  available and the message says so per field). A new cell,
+  `test_ci_does_not_override_a_timeout_that_a_baseline_pins`, turns the 14-minute confusing bench
+  failure into a one-second explained one in the fast tier, and a standing arming cell drives the
+  violation each run so the absence it asserts cannot go quietly vacuous. **R4.24 itself stays OPEN**:
+  the flake is still unmitigated and none of this changes that. What changed is that the reason is now
+  enforced instead of remembered.
 
   **OCCURRENCE 2 (0.90.0, local windows, incidental to the R4.5 slice and recorded because a single
   observation was the stated reason not to act).** Same shape, DIFFERENT test — so the "one flaky test"

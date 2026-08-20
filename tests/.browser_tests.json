@@ -1,6 +1,6 @@
 {
  "_comment": "DERIVED, never hand-edited. A test is a browser test iff it was OBSERVED launching one, OR the fast tier later caught it launching (attribution is order-dependent when a module shares browser work through a fixture). Regenerate with `pytest -q --store-browser-marks` then `python scripts/derive_test_tiers.py`, which iterates to the fixed point. An unclassified test makes a tiered run fail loudly rather than skip it.",
- "total": 1197,
+ "total": 1201,
  "browser": [
   "tests/test_annotation_disposition.py::test_the_r427_population_arrives_non_demotable_so_the_verb_cannot_dispose_of_it",
   "tests/test_audit.py::test_advisory_mode_reports_but_never_quarantines",
@@ -903,8 +903,12 @@
   "tests/test_obs.py::test_usage_totals_add_tolerates_none",
   "tests/test_obs.py::test_version_is_single_sourced_from_pyproject",
   "tests/test_pin.py::test_parse_is_strict_no_wrong_value_no_crash",
+  "tests/test_production_timeouts.py::test_a_comment_about_the_variable_is_not_mistaken_for_setting_it",
+  "tests/test_production_timeouts.py::test_ci_does_not_override_a_timeout_that_a_baseline_pins",
   "tests/test_production_timeouts.py::test_raising_the_bound_for_ci_is_an_env_var_and_the_env_var_still_exists",
+  "tests/test_production_timeouts.py::test_the_derived_facts_are_not_vacuous",
   "tests/test_production_timeouts.py::test_the_guard_can_actually_fail",
+  "tests/test_production_timeouts.py::test_the_pinned_override_guard_goes_red_when_armed",
   "tests/test_production_timeouts.py::test_the_shipped_timeout_default_has_not_been_raised[action_timeout_ms]",
   "tests/test_production_timeouts.py::test_the_shipped_timeout_default_has_not_been_raised[nav_timeout_ms]",
   "tests/test_provider_live.py::test_gemini_complete_parses_real_sdk_response",
