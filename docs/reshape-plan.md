@@ -672,10 +672,20 @@ the only remaining work with that property.
 
 ### The re-derived order
 
+**STRICTLY LINEAR.** Confirmed with the maintainer on 2026-08-19: nothing here runs in parallel, one
+slice at a time. That is not a scheduling detail — §5 priced Phases 0–2 at 55–80 engineer-days *"with
+the benchmark's B2–B5 running in parallel from day one"*, so with a linear order the programme's total
+is the SUM of the phases rather than the max. Phase 2 alone was priced at ~14 days. §5's headline
+number is therefore an underestimate for how the work is actually being done, and should be read as
+the parallel-world figure it says it is. No attempt is made here to re-derive it: the day estimates
+have never been measured against reality, and inventing a new one would be the same typed-number
+failure §13 exists to correct.
+
 | # | step | why here | audits |
 |---|---|---|---|
-| 1 | **0.8 — CI-derived marks** | the rule it was filed under now says to build it: 5.00 h spent, clause (a) passed, five slices left. Zero `src/` | none |
-| 2 | **2.1 — B2**, in parallel from here on | unblocked since day one and never started; zero `src/`, therefore zero audit burden; it is the goal | none |
+| 0 | **CI capacity** | PREREQUISITE, and it blocks everything below. On PR #184 both ubuntu shards hit the 25-minute job timeout — one stuck in `apt` before running a single test, the other killed with pytest still alive at 25.3 min, where the same shard took 15m19s on #183 nine tests earlier. Until it completes, ubuntu gives no signal on any PR, AND 0.8 cannot exist, because CI-derived marks require CI's full run to finish. Windows is at 16.6–18.5 min | none |
+| 1 | **0.8 — CI-derived marks** | the rule it was filed under now says to build it: 5.00 h spent, clause (a) passed, five slices left. Zero `src/`. Depends on step 0 | none |
+| 2 | **2.1 — B2** | unblocked since day one and never started; zero `src/`, therefore zero audit burden; it is the goal | none |
 | 3 | **1.4 — distinct codes** | the ONE Phase-1 step B3 waits on. Scope shrank: R4.49 is already closed | 2 |
 | 4 | **2.2 — B3** | unblocked by 1.4 | 1 |
 | 5 | **1.3 — cannot-spend** | completes the accounting story B3 consumes; small, one audit | 1 |
@@ -689,10 +699,28 @@ rather than before it. The tail is unchanged, and its reasons are unchanged.
 **What did not change and should not be re-litigated:** 1.4 before B3 (the one hard edge in Phase 2);
 0.5 with 1.1, 0.6 after 1.5, 0.7 with 2.3 (§12's triggers, none of which have fired); 1.8 last.
 
+### Step 0, stated so it is not over-built
+
+Two facts and one unknown. **Fact:** `.test_durations` records **836** ids against **1 191** collected,
+so 30% of the suite is duration-ESTIMATED and the split is balanced on a guess. **Fact:** windows
+finishes both shards in 16.6–18.5 min against the same 25-minute budget. **Unknown:** whether ubuntu is
+now genuinely slower or hung once — `-q` prints no progress, so the killed job's log cannot say, and
+one observation cannot distinguish them.
+
+So step 0 does the two cheap things whose effect is measurable and stops: raise `timeout-minutes`
+25 → 40, and regenerate `.test_durations` on the next full run. A third shard is the scaling answer and
+is deliberately NOT taken first — it costs runners on every PR forever, and buying it before knowing
+whether the problem is balance, growth or a hang is the same "fix before measuring" this document keeps
+refusing. If ubuntu still exceeds 25 min with an accurate durations file, that IS the measurement, and
+sharding follows from it.
+
 ### What would make THIS order wrong
 
 * If 1.4's audits return more than ~4 findings, the 1.4x audit multiplier measured here is an
   underestimate and Phase 1's remaining estimate needs re-deriving again — not the order, the *price*.
+* If step 0's two cheap levers do not bring ubuntu back inside the budget, the cause is a hang rather
+  than balance, and step 0 becomes a diagnosis rather than a config change — which is a different size
+  of job and would sit in front of 0.8 for longer than this order assumes.
 * If B2 turns out to need a `src/` change after all — the boundary ledger derives module-level bindings
   from the live import graph, which §5 asserts is possible without one — then 2.1 acquires an audit
   burden and its promotion above 1.4 loses its justification.
