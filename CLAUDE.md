@@ -48,7 +48,7 @@ than a rewrite or a `flows/` split, and records what NOT to re-propose. It chang
 in; it does not re-sequence `correctness-plan.md` and closes none of its findings.
 
 **Phase 0's instruments are BUILT** — the fast tier, register-as-data and the exit-set matrix — so the
-plan is no longer a proposal. **§13 RE-PRICES it** — §12's own trigger fired (1.5's audits returned twelve, against a ~3 threshold), so the order was re-derived from measurement: 0.8 (CI-derived marks) first because the manifest tax crossed its 4 h rule at 5.00 h, then **B2** (unblocked since day one, never started, zero audit burden), then 1.4. The order is STRICTLY LINEAR — nothing runs in parallel, so §5's 55-80 day figure, which assumed Phase 2 alongside from day one, is the parallel-world number. §12 fixed the earlier order and holds 0.5/0.6/0.7 with named triggers,
+plan is no longer a proposal. **§13 RE-PRICES it** — §12's own trigger fired (1.5's audits returned twelve, against a ~3 threshold), so the order was re-derived from measurement: a **step 0** (CI provisioning, done 2026-08-20), then 0.8 (CI-derived marks) because the manifest tax crossed its 4 h rule at 5.00 h, then **B2** (unblocked since day one, never started, zero audit burden), then 1.4. **Step 0 is worth reading even though it is closed** — it was filed as "CI capacity" on the reading that ubuntu's suite had got slower, and the suite was never involved: 8 of 58 ubuntu jobs were killed inside `playwright install --with-deps chromium`, six of them still in `apt-get` at the wall having run ZERO tests, while the suite stayed flat at 12.4-13.8 min and remained the FASTEST arm. `--with-deps` installs nine font packages and no libraries. A `cancelled` job says nothing about which mechanism failed, and a wrong prerequisite got written into the plan on that ambiguity one day after §13 was written to prevent exactly that. `docs/ci-provisioning.md` holds the measurement, because Actions logs expire. The order is STRICTLY LINEAR — nothing runs in parallel, so §5's 55-80 day figure, which assumed Phase 2 alongside from day one, is the parallel-world number. §12 fixed the earlier order and holds 0.5/0.6/0.7 with named triggers,
 derived from which instrument each Phase-1 step's own pins name (only 0.4 is gating; nothing names
 0.5–0.7). Read §12 before picking a step, for the same reason `correctness-plan.md` exists: picking ad
 hoc re-creates the orderings a plan exists to prevent.
@@ -387,6 +387,18 @@ another skip/refusal class is added — S5 creates one by design:
   "nothing", the alert is a regression however correct it is — this is the D0 over-refusal shape wearing
   a reporting hat. Prefer an acknowledgement that already exists (`flow unapprove` served here) over a
   new flag, and keep a fleet-level guard underneath so acknowledging EVERYTHING is still loud.
+
+* **CI IS A REPORTING SURFACE, and its outcomes are the least-enumerated ones here.** A job's
+  `conclusion` is a single overloaded word: over 58 ubuntu jobs, `cancelled` meant an apt hang that ran
+  ZERO tests, a superseding push, AND a run killed with the suite mid-flight — same string, nothing to
+  tell them apart. That ambiguity wrote a wrong prerequisite into `reshape-plan.md` §13, one day after
+  §13 was written to stop exactly that. The fix (step 0, 2026-08-20) was the allowlist shape again: **every
+  authored step in `ci.yml` carries `timeout-minutes` except a written allowlist** (today one entry —
+  the suite, whose duration IS the signal), so a provisioning over-run fails at a NAMED step in
+  minutes. `tests/test_ci_provisioning.py` pins it, with five armed mutations. What it deliberately does
+  NOT claim is the converse — a job-level `cancelled` still has several causes, because the
+  `always()`/`failure()` tail and GitHub's own injected steps are unbudgetable, and a draft that
+  asserted otherwise had a worked sum that was wrong on the failure path.
 
 Corollary for both: pin the quiet direction as hard as the loud one. "Alert on everything" passes every
 test written for the finding.

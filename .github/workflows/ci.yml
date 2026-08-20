@@ -37,16 +37,20 @@ jobs:
       UV_PYTHON: "3.12"
     steps:
       - uses: actions/checkout@v5
+        timeout-minutes: 5
         with:
           # FULL history. `tests/test_manifest_cost.py` derives the tier manifest's re-derivation
           # deltas from `git log --follow` over it, and a depth-1 clone shows ONE revision —
           # reproduced against a real shallow clone before it could go red here.
           fetch-depth: 0
       - name: Install uv
+        timeout-minutes: 5
         uses: astral-sh/setup-uv@v8.2.0
         with:
           enable-cache: true
-      - run: uv run --group bench --group providers --group mcp pytest -q --tier fast
+      - name: Run the fast tier
+        timeout-minutes: 9
+        run: uv run --group bench --group providers --group mcp pytest -q --tier fast
 
   # RED-PROOF. The matrix's whole claim is a NUMBER — eleven mutations of the record plumbing that
   # survived the entire 1100-test suite (R4.48) are now killed — and a claim nobody re-measures is how a
@@ -63,16 +67,20 @@ jobs:
       UV_PYTHON: "3.12"
     steps:
       - uses: actions/checkout@v5
+        timeout-minutes: 5
         with:
           # FULL history. `tests/test_manifest_cost.py` derives the tier manifest's re-derivation
           # deltas from `git log --follow` over it, and a depth-1 clone shows ONE revision —
           # reproduced against a real shallow clone before it could go red here.
           fetch-depth: 0
       - name: Install uv
+        timeout-minutes: 5
         uses: astral-sh/setup-uv@v8.2.0
         with:
           enable-cache: true
-      - run: uv run --group bench --group providers --group mcp python scripts/prove_red.py tests/mutations/b1_wiring.py
+      - name: Apply every wiring mutation
+        timeout-minutes: 14
+        run: uv run --group bench --group providers --group mcp python scripts/prove_red.py tests/mutations/b1_wiring.py
 
   # Sharding trades one silent failure for another if left unchecked: a test in NO shard leaves every
   # shard GREEN, and nothing in the suite can fail for it — the coverage is gone and the signal that
@@ -86,16 +94,20 @@ jobs:
       UV_PYTHON: "3.12"
     steps:
       - uses: actions/checkout@v5
+        timeout-minutes: 5
         with:
           # FULL history. `tests/test_manifest_cost.py` derives the tier manifest's re-derivation
           # deltas from `git log --follow` over it, and a depth-1 clone shows ONE revision —
           # reproduced against a real shallow clone before it could go red here.
           fetch-depth: 0
       - name: Install uv
+        timeout-minutes: 5
         uses: astral-sh/setup-uv@v8.2.0
         with:
           enable-cache: true
-      - run: uv run --group bench --group providers --group mcp python scripts/check_shard_coverage.py
+      - name: Check the shards partition the collection
+        timeout-minutes: 9
+        run: uv run --group bench --group providers --group mcp python scripts/check_shard_coverage.py
 
   test:
     name: tests (${{ matrix.os }} ${{ matrix.group }}/2)
@@ -108,9 +120,14 @@ jobs:
         # SHARDED, because the suite was 21m53s against this job's 25-minute timeout on Windows and grows
         # every slice — a deterministic failure approaching, unlike the intermittent WSAENOBUFS below.
         # Measured alternative, rejected: pooling Chromium across sessions has a ceiling of 2.9 min
-        # (356.7ms -> 84.7ms per session over ~650 sessions) and cannot reach the suite without moving all
-        # 836 tests onto a session-scoped event loop, because a Playwright Browser is loop-bound.
-        # Sharding buys ~11 min per arm with no product change, and scales as the suite grows.
+        # (356.7ms -> 84.7ms per session over ~650 sessions) and cannot reach the suite without moving
+        # all 1191 collected tests onto a session-scoped event loop, because a Playwright Browser is
+        # loop-bound. (This line said "836 tests" until reshape-plan step 0; that was the collection size when the
+        # split was written, and `.test_durations` still holds exactly those 836 ids -- so ~30% of the
+        # suite is duration-ESTIMATED. Measured, that costs nothing worth fixing: the shards land
+        # 13.7/13.1 min on ubuntu and 16.3/15.4 on windows, ~4% apart. Balance is not this arm's
+        # problem, and regenerating the file was refused on that measurement -- see
+        # docs/ci-provisioning.md.)
         #
         # Separate RUNNERS, deliberately, not `-n 2` on one: xdist would double concurrent Chromium on a
         # single machine, which is the standing suspect for the WSAENOBUFS failure. This halves per-runner
@@ -120,6 +137,7 @@ jobs:
       UV_PYTHON: "3.12"                        # match the dev interpreter (project requires >=3.12)
     steps:
       - uses: actions/checkout@v5
+        timeout-minutes: 5
         with:
           # FULL history. `tests/test_manifest_cost.py` derives the tier manifest's re-derivation
           # deltas from `git log --follow` over it, and a depth-1 clone shows ONE revision —
@@ -127,18 +145,40 @@ jobs:
           fetch-depth: 0
 
       - name: Install uv
+        timeout-minutes: 5
         uses: astral-sh/setup-uv@v8.2.0   # no moving `v8` tag is published; pin the full release
         with:
           enable-cache: true
 
       # The suite drives real headless Chromium against local HTTP fixtures (no API keys, no network),
-      # so it needs the browser + (on Linux) its system libraries. `--group bench` pulls in MiniWoB++.
-      - name: Install Chromium + system deps (Linux)
-        if: runner.os == 'Linux'
-        run: uv run --group bench playwright install --with-deps chromium
-
-      - name: Install Chromium (Windows)
-        if: runner.os == 'Windows'
+      # so it needs the browser. `--group bench` pulls in MiniWoB++.
+      #
+      # ONE step, byte-identical on both OSes, and deliberately WITHOUT `--with-deps`. The Linux arm
+      # carried that flag and it was measured to install NOTHING but fonts: on every ubuntu job that got
+      # past `apt-get update`, apt reported all of Chromium's runtime libraries as "already the newest
+      # version" and printed the same plan -- `0 upgraded, 9 newly installed`, all nine of them
+      # `fonts-*`/`xfonts-*`, 21.1 MB of CJK/Cyrillic/Thai/Unifont glyph coverage. The libraries this
+      # suite actually needs are on the runner image already.
+      #
+      # What the flag COST was the ubuntu arm: 8 of 58 jobs over two days died inside it. Six were
+      # still in `apt-get update` at the wall, having run ZERO tests, after the runner-local
+      # `azure.archive.ubuntu.com` mirror was `Ign:`-ed and apt failed over to the public archive with
+      # no effective timeout -- one stalled 22m55s on a single 126 kB file. Others crawled through the
+      # font fetch at 26.9 kB/s (13m05s) and starved the suite of the job's budget. Meanwhile the SUITE
+      # step was 12.4-13.8 min throughout, flat, making ubuntu the FASTEST arm -- so the `cancelled`
+      # jobs were misread as a capacity problem, which is how a wrong prerequisite reached
+      # docs/reshape-plan.md section 13. Windows was the control the whole time: same download, no apt,
+      # 18/18 completions at 18-29 s.
+      #
+      # Nothing here renders a non-Latin glyph -- `tests/` holds twelve distinct non-ASCII codepoints,
+      # none of them CJK, Cyrillic or Thai, and every one sits in a Python comment or string constant
+      # rather than in an HTML fixture. `docs/ci-provisioning.md` carries the full measurement, because
+      # Actions logs expire and this comment would otherwise become unfalsifiable prose.
+      #
+      # `tests/test_ci_provisioning.py` pins the CLASS, not this instance: one browser install, shared
+      # by both OSes, with no apt/sudo/`--with-deps` anywhere on the critical path.
+      - name: Install Chromium
+        timeout-minutes: 8
         run: uv run --group bench playwright install chromium
 
       # R4.22 instrument. Four occurrences of `ERR_NO_BUFFER_SPACE`, four different tests, both shards,
@@ -149,6 +189,7 @@ jobs:
       # It also measures NON-PAGED POOL, which no previous occurrence captured and which is the resource
       # WSAENOBUFS is actually about. Every hypothesis so far has been about something else.
       - name: Start the resource sampler (Windows)
+        timeout-minutes: 2
         if: runner.os == 'Windows'
         continue-on-error: true
         shell: pwsh
@@ -159,6 +200,22 @@ jobs:
           $p.Id | Out-File sampler.pid
           Write-Output "sampler pid $($p.Id)"
 
+      # THE ONE STEP WITH NO `timeout-minutes`, deliberately. The allowlist lives in
+      # `tests/test_ci_provisioning.py`, which refuses a second entry without a stated reason.
+      #
+      # What that buys, stated at exactly its strength and no further: every OTHER authored step in
+      # this file is budgeted, so a PROVISIONING over-run now fails at a NAMED step, in minutes, with
+      # the job budget mostly unspent. It does NOT buy the converse. A job-level `cancelled` still has
+      # more than one cause -- this suite exhausting the wall, the concurrency group superseding the
+      # run, or the `always()`/`failure()` tail below running past it -- and the budgets are NOT summed
+      # to exclude that. An earlier draft did claim the converse and was wrong twice over: the failure
+      # path is longer than the success path, and GitHub injects its own unbudgetable steps
+      # (`Set up job`, `Post Install uv`, `Complete job`) that no `timeout-minutes` can reach.
+      #
+      # Bounding this step too was refused. It would put a second, tighter ceiling underneath the job
+      # wall with nothing to acknowledge it -- a scheduled future red on the merge gate, on the arm
+      # that is actually growing (windows, 15.2-17.7 min). That is the D0 over-refusal shape wearing a
+      # CI hat, and the job budget below already bounds this step.
       - name: Run the test suite (shard ${{ matrix.group }} of 2)
         # `--group providers` installs the OpenAI / Gemini SDKs and `--group mcp` the MCP SDK, so the
         # provider live-path + MCP-server tests actually run here (they `importorskip` and would
@@ -176,6 +233,7 @@ jobs:
       # failure-only post-mortems could not provide. Peaks, because the peak is what the failure is about
       # and the post-mortem's post-teardown numbers structurally cannot show it.
       - name: Resource sampler summary (peaks + baseline)
+        timeout-minutes: 3
         if: always() && runner.os == 'Windows'
         continue-on-error: true
         shell: pwsh
@@ -195,6 +253,7 @@ jobs:
           "{0,-18} min={1,10}  (MB)" -f 'free_mb', ($free | Measure-Object -Minimum).Minimum
 
       - name: Upload resource samples
+        timeout-minutes: 5
         if: always() && runner.os == 'Windows'
         continue-on-error: true
         uses: actions/upload-artifact@v4
@@ -221,6 +280,7 @@ jobs:
       #
       # `continue-on-error` so a diagnostic can never itself redden a run.
       - name: Resource post-mortem (on failure only)
+        timeout-minutes: 5
         if: failure()
         continue-on-error: true
         shell: pwsh

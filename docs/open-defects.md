@@ -12,7 +12,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**31 open**, 26 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**34 open**, 26 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **31 open**, 26 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **34 open**, 26 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -852,6 +852,9 @@ if and only if that branch is ever resumed.
 | R4.59 | fixed | a strict xfail added by 0.3 ASSERTED the counterexample — it demanded that `replay()` overwrite an UNKNOWN cost with a confident zero, the understated bill B1 exists to prevent, and `strict=True` made it a standing demand that 1.5 implement it. R4.51 was a coverage gap, not a behaviour defect: the two cases already differ. FIXED by rewriting the cell as the distinguishability property it was named for; src untouched |
 | R4.60 | fixed | `scripts/prove_red.py` scores a PERFECT run when its killer suite collects nothing: a mutant is judged killed by a non-zero pytest exit, so a `--tests` path that does not collect makes every mutant 'killed'. An audit hit it and read 17/17 where the honest number was 16/17. The same failure shape the script already guards on the other side (a stale find-text is an ERROR, not a survivor), one step over — an instrument reporting the suite as stronger than it is. FIXED at 0.110.0: the killer suite must collect and pass on the UNMUTATED tree before any mutation is applied |
 | R4.61 | open | `write_unverified` records `committed=False` while its own message says the commit ACTUATED — `_fail` appends `outcome="failed"`, which is not in `_UNKNOWN_OUTCOMES`, so the fold answers the write question 'no' for the one kind whose whole meaning is 'it fired and cannot be confirmed'. NOT a regression (the pre-sink code did the same), but the sink's stated rule was supposed to close this class and does not, because unanswerability is keyed on the outcome STRING and every failure exit shares one. The human channel is covered (the exception text says to check the target system); the record is not |
+| R4.62 | open | `playwright install` exits 0 when the host is missing a Chromium shared library. Verified in the installed driver: `coreBundle.js:64433` ends the CLI install with `validateHostRequirementsForExecutablesIfNeeded(...).catch(e => { e.name = 'Playwright Host validation warning'; console.error(e) })` — the ldd verdict is renamed to a warning and discarded. NOT silent overall: the same call at `coreBundle.js:38335`, on the LAUNCH path, is awaited with no catch and throws, so the first browser test fails loudly. The cost is ATTRIBUTION, which is this slice's own class one door over — a provisioning fault presents as a test failure, ~1 min into the suite instead of at a step called `Install Chromium`. It became load-bearing at reshape-plan step 0, when `--with-deps` was dropped and the runner image became the thing supplying those libraries |
+| R4.63 | open | The shard count is TRANSCRIBED three times and reconciled nowhere: `scripts/check_shard_coverage.py`'s `SPLITS = 2`, `ci.yml`'s `group: [1, 2]`, and `ci.yml`'s `--splits 2`. Moving to three shards in the workflow leaves `check_shard_coverage` silently asserting a 2-way partition — it would keep passing while the property it exists to prove (union == full collection, no duplicates) went unchecked for the real partition. Same shape as `flow_key_transcriptions` and the other ratcheted transcription classes, and the instrument that closes it now exists |
+| R4.64 | open | In `fast`, `red-proof` and `shard-coverage`, network provisioning and the work are FUSED into a single `- run:` — `uv run --group bench --group providers --group mcp pytest -q --tier fast` resolves and downloads from PyPI before pytest starts. Step 0’s step budgets therefore name nothing in those three jobs: 'the fast tier step timed out' still cannot say whether the index hung or the tier hung, which is verbatim the defect step 0 exists to close, surviving in the three jobs it did not reach. The `test` job has the same shape one level down — its first `uv run` is the `Install Chromium` step, which silently carries the whole sync |
 <!-- /generated:r4-index -->
 
 
