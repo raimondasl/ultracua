@@ -88,14 +88,27 @@ def _browser_launch_probe(request):
     _tiers.PER_TEST[request.node.nodeid] = _tiers.STATE["n"] - before
 
 
+def pytest_runtest_logreport(report) -> None:
+    """Every id that produced a report ACTUALLY RAN. See `_tiers.guard_every_selected_test_ran`."""
+    _tiers.REPORTED.add(report.nodeid)
+
+
 def pytest_sessionfinish(session, exitstatus) -> None:
     _tiers.write_offenders()   # only when non-empty, i.e. only beside an already-red fast run
     if not session.config.getoption("--store-browser-marks"):
         return
     if session.config.getoption("--tier") != "all":
         raise pytest.UsageError("--store-browser-marks needs a FULL run; drop --tier")
+    # THREE sensors, because a "whole suite observation" can fail in three independent ways and two of
+    # them used to be checked while the third was not: TIERED (above), UNDER-COLLECTED, and NARROWED by
+    # deselection. `session.items` here is POST-deselection — measured: 1201 full, 626 under
+    # `--splits 2 --group 1`, 22 under `-k tiers` — whereas `_tiers.COLLECTED` is recorded before any
+    # filtering, so the pair is an exact narrowing detector that a merely SKIPPED test does not trip.
+    selected = [i.nodeid for i in session.items]
     try:
         _tiers.guard_full_collection(len(_tiers.COLLECTED))
+        _tiers.guard_not_narrowed(len(_tiers.COLLECTED), len(selected))
+        _tiers.guard_every_selected_test_ran(selected, _tiers.REPORTED)
     except _tiers.PartialDerivation as exc:
         raise pytest.UsageError(str(exc)) from exc
     browser, fast = _tiers.write_manifest()

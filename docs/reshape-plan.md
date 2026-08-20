@@ -631,7 +631,17 @@ FAIL (b) 3 de-classification(s) in the last 10 delta(s)
 
 **Clause (a) has flipped.** Five hours of wall-clock have gone into re-deriving the tier manifest, and
 five Phase-1 steps remain, each needing one or two full runs. Clause (b) still refuses **merge-mode** —
-correctly, and permanently as far as the data goes. But the rule's own docstring names a third option
+correctly, and permanently as far as the data goes.
+
+> **CORRECTION (2026-08-20).** "Permanently as far as the data goes" was falsified within 24 hours, by
+> the rule itself. Clause (b) read a ROLLING WINDOW of the last ten deltas, so once the sole
+> de-classifying revision scrolled out, `manifest_cost.py report` began printing **"VERDICT: SWITCH to
+> merge-mode"** on every invocation — the repo's one executable rule recommending the design CLAUDE.md
+> refuses. Nothing about the workflow had changed; the window had moved. Clause (b) now reads ALL of
+> history (de-classification is a CAPABILITY, not a recent-events statistic: one observation proves
+> merging would freeze a real event, and a quiet stretch afterwards does not unprove it), the verdict
+> is DO NOT switch again, and `test_an_OLD_declassification_still_refuses_the_merge` arms the exact
+> regression. The sentence above is left standing because being wrong this fast is the finding. But the rule's own docstring names a third option
 that costs neither: **derive the marks from CI's existing full run**, which is ~0 marginal minutes on
 both OSes with de-classification intact. It was filed as a CANDIDATE with "the rule below is what says
 when it is worth building". The rule now says it.

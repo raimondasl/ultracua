@@ -429,6 +429,26 @@
    "severity": "low",
    "summary": "In `fast`, `red-proof` and `shard-coverage`, network provisioning and the work are FUSED into a single `- run:` — `uv run --group bench --group providers --group mcp pytest -q --tier fast` resolves and downloads from PyPI before pytest starts. Step 0’s step budgets therefore name nothing in those three jobs: 'the fast tier step timed out' still cannot say whether the index hung or the tier hung, which is verbatim the defect step 0 exists to close, surviving in the three jobs it did not reach. The `test` job has the same shape one level down — its first `uv run` is the `Install Chromium` step, which silently carries the whole sync",
    "disposition": "Split each fused step into a budgeted `uv sync` and a budgeted work step, so a provisioning over-run names itself in every job rather than only in `test`. Deliberately deferred from step 0: the measured fault was on the `test` job's ubuntu arm and the fix there was a REMOVAL, whereas this is a restructuring of three healthy jobs with no observed failure behind it — worth doing, not worth bundling. Note `setup-uv`'s `enable-cache: true` means a cold cache is the unmeasured case; the budgets chosen in step 0 assume a warm one"
+  },
+  {
+   "id": "R4.65",
+   "status": "fixed",
+   "severity": "medium",
+   "summary": "`scripts/manifest_cost.py`'s executable rule silently flipped to recommending the design CLAUDE.md refuses. Clause (b) -- 'the thing merging would lose is not happening' -- read a ROLLING WINDOW (`deltas[1:][-10:]`), so once the sole de-classifying revision (35357b5, three tests, the fast tier's own arming cells) scrolled past ten, `report` began printing 'VERDICT: SWITCH to merge-mode' on every invocation. `docs/reshape-plan.md` §13 had stated 24 hours earlier that clause (b) refuses merge-mode 'permanently as far as the data goes'; nothing about the workflow had changed, the window had moved. De-classification is a CAPABILITY, not a recent-events statistic: one observation proves merging would freeze a real event and a quiet stretch does not unprove it. Note `tests/test_manifest_cost.py:166` already asserted the honest form (`any(d.declassified for d in deltas[1:])`) and stayed green throughout -- the rule and its own test were reading different histories. FIXED: clause (b) reads all of history; `test_an_OLD_declassification_still_refuses_the_merge` arms an old event plus a 40-delta clean tail, verified RED against the rolling-window rule",
+   "pins": [
+    "tests/test_manifest_cost.py::test_an_OLD_declassification_still_refuses_the_merge"
+   ]
+  },
+  {
+   "id": "R4.66",
+   "status": "fixed",
+   "severity": "high",
+   "summary": "The tier manifest's write path was guarded on ONE axis of four, and two of the open ones destroy it silently while printing success. `write_manifest()` classifies from `PER_TEST` (what RAN) while `guard_full_collection` checked `COLLECTED` (what was collected). (i) SHARDING: pytest-split deselects AFTER the root conftest records COLLECTED, so under `--splits 2 --group 1` COLLECTED is 1201 while only 626 run -- the guard passes and the write would delete ~575 classifications. This is what CI runs on every PR, and it is the axis any CI-derived-marks design must emit from. (ii) COLLECT-ONLY: measured live, `pytest -q --collect-only --store-browser-marks` printed 'wrote .browser_tests.json: 0 browser, 0 fast' over 1201 classifications and reported success. `PartialDerivation`'s own docstring says the `--tier` guard 'covered the wrong axis'; there were two more. FIXED with two sensors rather than two more flag checks: `guard_not_narrowed` (selected < collected -- catches --splits/-k/-m/--deselect together) and `guard_every_selected_test_ran` (REPORTS, not PER_TEST, because a SKIPPED test never runs the autouse probe and keying on PER_TEST would refuse any machine that legitimately skips -- measured 3 items / 2 skipped / 3 reported / 1 in PER_TEST)",
+   "disposition": "Found while scouting reshape-plan step 0.8 (CI-derived marks), which cannot be built on a write path that silently truncates from a sharded observation. Shipped ahead of 0.8 as its prerequisite",
+   "pins": [
+    "tests/test_tiers.py::test_a_sharded_derivation_refuses_even_though_the_collection_is_whole",
+    "tests/test_tiers.py::test_a_collect_only_derivation_refuses_instead_of_wiping_the_manifest"
+   ]
   }
  ]
 }

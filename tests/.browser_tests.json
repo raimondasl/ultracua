@@ -1,6 +1,6 @@
 {
  "_comment": "DERIVED, never hand-edited. A test is a browser test iff it was OBSERVED launching one, OR the fast tier later caught it launching (attribution is order-dependent when a module shares browser work through a fixture). Regenerate with `pytest -q --store-browser-marks` then `python scripts/derive_test_tiers.py`, which iterates to the fixed point. An unclassified test makes a tiered run fail loudly rather than skip it.",
- "total": 1201,
+ "total": 1204,
  "browser": [
   "tests/test_annotation_disposition.py::test_the_r427_population_arrives_non_demotable_so_the_verb_cannot_dispose_of_it",
   "tests/test_audit.py::test_advisory_mode_reports_but_never_quarantines",
@@ -849,6 +849,7 @@
   "tests/test_magnitude.py::test_zero_variance_floor_boundary",
   "tests/test_manifest_cost.py::test_a_corrupt_ledger_is_loud_rather_than_skipped",
   "tests/test_manifest_cost.py::test_a_marks_run_records_its_own_cost",
+  "tests/test_manifest_cost.py::test_an_OLD_declassification_still_refuses_the_merge",
   "tests/test_manifest_cost.py::test_deletion_is_caught_by_a_different_guard_so_merging_would_only_lose_declassification",
   "tests/test_manifest_cost.py::test_every_ci_job_that_runs_pytest_fetches_the_history_it_needs",
   "tests/test_manifest_cost.py::test_only_the_marks_phase_argues_that_the_tax_is_real",
@@ -1062,8 +1063,10 @@
   "tests/test_steps_hash_gate.py::test_re_authored_steps_refuse_under_a_stale_approval",
   "tests/test_steps_hash_gate.py::test_the_gate_is_silent_on_an_unapproved_flow",
   "tests/test_steps_hash_gate.py::test_unapprove_then_reapprove_rebinds",
+  "tests/test_tiers.py::test_a_collect_only_derivation_refuses_instead_of_wiping_the_manifest",
   "tests/test_tiers.py::test_a_partial_derivation_refuses_rather_than_deleting_the_manifest",
   "tests/test_tiers.py::test_a_refused_launch_is_not_counted_as_a_launch",
+  "tests/test_tiers.py::test_a_sharded_derivation_refuses_even_though_the_collection_is_whole",
   "tests/test_tiers.py::test_an_expected_refusal_is_not_recorded_as_an_offence",
   "tests/test_tiers.py::test_an_unclassified_test_makes_a_tiered_run_refuse_rather_than_skip",
   "tests/test_tiers.py::test_fast_tier_refuses_a_BrowserSession",

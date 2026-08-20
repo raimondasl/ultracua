@@ -135,6 +135,43 @@ def test_the_verdict_can_reach_both_answers() -> None:
     assert free.switch is False, free.reasons
 
 
+def test_an_OLD_declassification_still_refuses_the_merge() -> None:
+    """THE REGRESSION THIS CELL EXISTS FOR, and it shipped once.
+
+    Clause (b) used to read a ROLLING WINDOW — `deltas[1:][-10:]`. `docs/reshape-plan.md` §13 stated
+    on 2026-08-19 that (b) refuses merge-mode "permanently as far as the data goes"; within 24 hours
+    the only de-classifying revision in the whole history had scrolled out of the last ten and
+    `report` began printing "VERDICT: SWITCH to merge-mode" on every invocation — the repo's one
+    executable rule recommending the design CLAUDE.md refuses. Nothing about the workflow had
+    changed. The window had moved.
+
+    De-classification is a CAPABILITY, not a recent-events statistic: one observation proves merging
+    would have frozen a real event, and a quiet stretch afterwards does not unprove it.
+
+    The neighbouring cell cannot catch this — its de-classification sits at position 1 of 2, inside
+    any plausible window — so the shape that distinguishes them is an OLD event followed by a long
+    clean tail. That difference is a WINDOW, not a constant, which is why this is a separate cell and
+    not another assert beside it.
+    """
+    first = manifest_cost.Delta(rev="0", date="d", subject="first", total=1)
+    expensive = [{"phase": "marks", "seconds": 9 * 3600}]
+
+    # One de-classification, then a clean tail longer than any window anyone would pick.
+    long_tail = [first, _delta(["t::a"])] + [_delta() for _ in range(40)]
+    v = manifest_cost.verdict(long_tail, expensive)
+    assert v.switch is False, (
+        "a de-classification 40 deltas ago no longer refuses the merge — clause (b) has gone back to "
+        "reading a rolling window, so 'nothing lately' is again being read as 'cannot happen'.\n"
+        + "\n".join(v.reasons)
+    )
+    assert "across all 41 delta(s)" in " ".join(v.reasons), (
+        "the reason text no longer states the span it read; a reader cannot tell a window from a "
+        "history, which is exactly how this went unnoticed")
+
+    # And the clean corner still reaches yes, so this is a rule and not a pre-written conclusion.
+    assert manifest_cost.verdict([first] + [_delta() for _ in range(40)], expensive).switch is True
+
+
 def test_only_the_marks_phase_argues_that_the_tax_is_real() -> None:
     """The fixed-point loop is ~1 minute and is NOT what makes re-derivation expensive; counting it
     toward the threshold would let a cheap phase argue for a one-way trade."""
@@ -180,9 +217,31 @@ class _FakeConfig:
         return {"--store-browser-marks": self._store, "--tier": "all"}[name]
 
 
+class _FakeItem:
+    def __init__(self, nodeid: str):
+        self.nodeid = nodeid
+
+
 class _FakeSession:
-    def __init__(self, store: bool):
+    """A stand-in for pytest's `Session`, and it must model `items` or it proves nothing.
+
+    `pytest_sessionfinish` reads `session.items` for the two completeness guards added alongside the
+    sharding fix (`guard_not_narrowed`, `guard_every_selected_test_ran`). A fake without it raised
+    `AttributeError` the moment those landed — which is the fake DOING ITS JOB: the alternative was to
+    make the real hook tolerate a missing attribute, and a `getattr(session, "items", [])` would have
+    turned a real pytest change into a silently-skipped guard. Fidelity here, tolerance nowhere.
+
+    `selected` defaults to `collected` because the normal case is a whole run; a cell that wants to
+    model a NARROWED run passes fewer.
+    """
+
+    def __init__(self, store: bool, selected: "list[str] | None" = None):
         self.config = _FakeConfig(store)
+        ids = selected if selected is not None else list(tier.COLLECTED)
+        self.items = [_FakeItem(i) for i in ids]
+        # Every selected id reported, i.e. the run actually executed. A cell modelling
+        # `--collect-only` clears this instead.
+        tier.REPORTED.update(ids)
 
 
 def test_a_marks_run_records_its_own_cost(tmp_path: Path, monkeypatch) -> None:
