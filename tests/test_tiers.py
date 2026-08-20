@@ -219,6 +219,58 @@ def test_a_partial_derivation_refuses_rather_than_deleting_the_manifest() -> Non
     tier.guard_full_collection(data["total"] + 5)      # so is a grown one
 
 
+def test_a_sharded_derivation_refuses_even_though_the_collection_is_whole() -> None:
+    """THE THIRD AXIS, which was open, and which CI runs on every PR.
+
+    `pytest-split` DESELECTS: it leaves the collection whole and shrinks only what runs. Measured with
+    a `trylast` hook — under `--splits 2 --group 1` the root conftest records `COLLECTED = 1201`
+    because pytest-split deselects later, while `session.items` is 626. So `guard_full_collection`
+    saw a whole collection and PASSED, and `write_manifest()` — which classifies from `PER_TEST`,
+    i.e. from what RAN — would have written 626 and deleted ~575, printing "wrote
+    .browser_tests.json: N browser, M fast" as a success.
+
+    That is `PartialDerivation`'s own named disaster on an axis its docstring did not cover; it says
+    the `--tier` guard "covered the wrong axis", and this was a third one. Verified live after the
+    fix: `pytest -q --splits 2 --group 1 --collect-only --store-browser-marks` exits 4 with the
+    manifest byte-identical.
+    """
+    with pytest.raises(tier.PartialDerivation) as exc:
+        tier.guard_not_narrowed(collected=1201, selected=626)
+    msg = str(exc.value)
+    assert "626" in msg and "1201" in msg, "the refusal must say how much would have been lost"
+    assert "--splits" in msg, "it must name the thing that causes it, or the reader cannot act"
+
+    tier.guard_not_narrowed(collected=1201, selected=1201)  # a whole run passes
+    tier.guard_not_narrowed(collected=0, selected=0)        # and an empty one is not this guard's news
+
+
+def test_a_collect_only_derivation_refuses_instead_of_wiping_the_manifest() -> None:
+    """THE FOURTH AXIS — and the reason this is ONE general sensor rather than a fourth flag check.
+
+    Measured live against the committed manifest, before the guard existed:
+    `pytest -q --collect-only --store-browser-marks` printed "wrote .browser_tests.json: 0 browser,
+    0 fast", wiping 1201 classifications and reporting success. Nothing could see it: the collection
+    was whole, nothing was deselected, and the tier was `all`.
+
+    The sensor is REPORTS, not `PER_TEST`, and the difference is load-bearing in the quiet direction:
+    a SKIPPED test never runs the autouse probe fixture, so keying on `PER_TEST` would refuse any
+    machine where a test legitimately skips. Measured on a 3-test file with 2 skipped:
+    `items == 3`, `reported == 3`, `PER_TEST == 1`. So skips pass and `--collect-only` (reported == 0)
+    does not — one check covering `--collect-only`, an aborted run, and a collection error alike.
+    """
+    ran = ["a::x", "b::y"]
+    tier.guard_every_selected_test_ran(ran, set(ran))       # a complete observation passes
+
+    with pytest.raises(tier.PartialDerivation) as exc:
+        tier.guard_every_selected_test_ran(ran, set())      # --collect-only: nothing reported
+    msg = str(exc.value)
+    assert "--collect-only" in msg, "the refusal must name the usual cause"
+    assert "a::x" in msg, "it must name ids, so the reader can tell a wipe from a partial"
+
+    # THE QUIET DIRECTION, pinned as hard as the loud one: a skip reports, so it must NOT refuse.
+    tier.guard_every_selected_test_ran(ran, {"a::x", "b::y", "c::skipped_but_reported"})
+
+
 def test_the_manifest_exists_and_is_internally_consistent() -> None:
     data = json.loads(tier.MANIFEST.read_text(encoding="utf-8"))
     browser, fast = data["browser"], data["fast"]

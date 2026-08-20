@@ -80,7 +80,26 @@ PHASES = ("marks", "fixed_point")
 
 # The rule, executable rather than argued. Both halves must hold before the cheap design is taken.
 SWITCH_AFTER_HOURS = 4.0     # cumulative MEASURED marks-phase wall time
-CLEAN_WINDOW = 10            # consecutive recent deltas that must contain no de-classification
+
+# Clause (b) reads ALL of history, and did not always. It used to read a ROLLING WINDOW of the last ten
+# deltas, and that is a different question from the one the trade turns on.
+#
+# De-classification is a CAPABILITY of this workflow, not a recent-events statistic. Merging freezes a
+# test's class forever, so ONE observed de-classification anywhere is proof that merging would have
+# frozen a real event; a later quiet stretch is not evidence that it has stopped being possible, only
+# that nothing happened to trip it lately. A rolling window silently converts "not lately" into
+# "cannot happen".
+#
+# MEASURED, and this is why the window is gone rather than merely widened: `docs/reshape-plan.md` §13
+# stated on 2026-08-19 that clause (b) refuses merge-mode "permanently as far as the data goes". Within
+# 24 hours the sole de-classifying revision (35357b5, three tests -- the fast tier's own arming cells)
+# had scrolled out of the last ten, and `report` began printing "VERDICT: SWITCH to merge-mode" -- the
+# one executable rule in this repo recommending, on every invocation, the design CLAUDE.md refuses.
+# Nothing about the workflow had changed; the window had moved.
+#
+# `tests/test_manifest_cost.py` already asserted the honest form one instrument over
+# (`any(d.declassified for d in deltas[1:])`), and that cell stayed green throughout. The rule now
+# reads the same history its own test does.
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -191,20 +210,28 @@ class Verdict:
     reasons: list
 
 
-def verdict(deltas: list, ledger: list,
-            *, after_hours: float = SWITCH_AFTER_HOURS, window: int = CLEAN_WINDOW) -> Verdict:
-    """May the rewrite be traded for a merge? Both halves must hold.
+def verdict(deltas: list, ledger: list, *, after_hours: float = SWITCH_AFTER_HOURS) -> Verdict:
+    """May the rewrite be traded for a MERGE? Both halves must hold.
 
     (a) the tax is real — cumulative MEASURED marks-phase wall time exceeds `after_hours`; and
-    (b) the thing merging would lose is not happening — no de-classification in the last `window`
-        deltas.
+    (b) the thing merging would lose has NEVER been observed — no de-classification anywhere in the
+        manifest's history. See the note beside `SWITCH_AFTER_HOURS` for why this is all of history
+        and not a rolling window; the short version is that one observation proves the risk is real
+        and a later quiet stretch does not unprove it.
 
     Unmeasured re-derivations count toward NEITHER: an unknown cost cannot argue for a cheaper design,
     which is the conservative direction here (the trade is one-way and its failure is silent).
+
+    THIS ANSWERS ONE QUESTION ABOUT ONE DESIGN. It is not a general "is the manifest tax worth
+    attacking" verdict, and must not be quoted as approval for any other design — in particular not
+    for CI-derived marks, which the docstring at the top of this file names as a third option and
+    which clause (b) does not speak to at all (it preserves de-classification by construction rather
+    than trading it away). A rule cited for something it does not decide is this register's own
+    recurring finding, one instrument over.
     """
     hours = sum(r["seconds"] for r in ledger if r.get("phase") == "marks") / 3600.0
-    recent = [d for d in deltas[1:]][-window:]           # deltas[0] is the first revision: no delta
-    declassified = sum(len(d.declassified) for d in recent)
+    history = deltas[1:]                                 # deltas[0] is the first revision: no delta
+    declassified = sum(len(d.declassified) for d in history)
 
     reasons = []
     tax_is_real = hours > after_hours
@@ -215,8 +242,8 @@ def verdict(deltas: list, ledger: list,
     )
     clean = declassified == 0
     reasons.append(
-        f"{'PASS' if clean else 'FAIL'} (b) {declassified} de-classification(s) in the last "
-        f"{len(recent)} delta(s) — merging would have kept every one of them stale"
+        f"{'PASS' if clean else 'FAIL'} (b) {declassified} de-classification(s) across all "
+        f"{len(history)} delta(s) — merging would have kept every one of them stale forever"
     )
     return Verdict(switch=tax_is_real and clean, reasons=reasons)
 

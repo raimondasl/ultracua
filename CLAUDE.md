@@ -193,7 +193,14 @@ Violating any of these is a blocking defect, not a trade-off:
   DOES lose **de-classification** — a test that stops launching keeps its browser mark forever, still
   collects, and is silently deselected from the fast tier for good. Measured: of the three manifest
   deltas so far, ONE de-classified three tests, and they were the tier's own arming cells. So the
-  verdict today is DO NOT switch. Also measured and refused: gating on a collection fingerprint would
+  verdict today is DO NOT switch — and that verdict is now ENFORCED rather than merely stated: clause
+  (b) read a rolling ten-delta window until 0.8's prerequisites, so when the one de-classifying
+  revision scrolled out the report began recommending merge-mode, the design this very paragraph
+  refuses. It reads all of history now. **And the write path is guarded on FOUR axes, not one** —
+  tiered, under-collected, NARROWED by deselection, and never-ran. The last two were open: a sharded
+  `--store-browser-marks` (which is what CI runs) passed the collection guard and would have written
+  only the shard, and `--collect-only --store-browser-marks` wrote `0 browser, 0 fast` over 1201
+  classifications and called it a success. Both measured, both now refuse. Also measured and refused: gating on a collection fingerprint would
   have saved zero runs (all three deltas added ids). Run the report before proposing either.
 
 - **A shard must never be a hole.** `pytest-split` partitions the real collection, so a new test file

@@ -112,6 +112,10 @@ CURRENT: list = [None]
 FAST_OFFENDERS: set = set()
 OFFENDERS_FILE = Path(__file__).parent / ".fast_offenders.json"
 
+# Every nodeid that produced at least one test REPORT this run. The sensor behind
+# `guard_every_selected_test_ran`: a skip reports, `--collect-only` does not.
+REPORTED: set = set()
+
 # Every Playwright entry point that can open a browser or start the driver. Listed from the CLASS rather
 # than from what this repo calls today: `launch` and `__aenter__` are the two the suite uses, and the
 # others are here so a future `connect_over_cdp` cannot enter through an unwatched door.
@@ -267,7 +271,7 @@ class PartialDerivation(Exception):
 
 
 def guard_full_collection(collected: int) -> None:
-    """Refuse to rewrite the manifest from a run that collected less than it already describes."""
+    """Refuse to rewrite the manifest from a run that COLLECTED less than it already describes."""
     if not MANIFEST.exists():
         return  # first derivation: there is nothing to lose
     known = load_manifest().get("total", 0)
@@ -277,6 +281,76 @@ def guard_full_collection(collected: int) -> None:
             f"classifies {known}. Writing now would DELETE {known - collected} classification(s). "
             f"Run it over the whole suite (`pytest -q --store-browser-marks`), or delete the manifest "
             f"first if you really mean to derive from scratch."
+        )
+
+
+def guard_every_selected_test_ran(selected_ids, reported_ids) -> None:
+    """Refuse to rewrite the manifest from a run that SELECTED tests it never actually executed.
+
+    The general sensor, and it replaces a growing list of per-flag ones. `write_manifest()` classifies
+    from `PER_TEST`, which is populated by an autouse fixture — so ANY route that collects a test
+    without running it silently drops that test's classification.
+
+    MEASURED, live, against the committed manifest: `pytest -q --collect-only --store-browser-marks`
+    printed "wrote .browser_tests.json: 0 browser, 0 fast" — a TOTAL WIPE of 1201 classifications,
+    reported as a success. Neither the tier guard, nor `guard_full_collection` (collection was whole),
+    nor `guard_not_narrowed` (nothing was deselected) could see it.
+
+    Why REPORTS rather than `PER_TEST`, which would be the obvious sensor: a SKIPPED test never runs
+    the autouse fixture, so it is absent from `PER_TEST` — keying on that would refuse any machine
+    where a test legitimately skips (a missing optional dependency group, a platform guard). A skip
+    DOES produce reports. Measured on a 3-test file with 2 skipped: `items == 3`, `reported == 3`,
+    `PER_TEST == 1`. Under `--collect-only`: `reported == 0`.
+
+    So this one check covers `--collect-only`, a run aborted part-way, and a collection error that
+    prevents execution — without a per-flag exemption for any of them, and without refusing a skip.
+    """
+    missing = sorted(set(selected_ids) - set(reported_ids))
+    if missing:
+        raise PartialDerivation(
+            f"--store-browser-marks selected {len(selected_ids)} test(s) but {len(missing)} of them "
+            f"never RAN, so the manifest is written from an incomplete observation and would drop "
+            f"their classifications.\n"
+            f"    The usual cause is `--collect-only` (measured: it wrote a 0-browser, 0-fast "
+            f"manifest over 1201 classifications and called it a success). A run aborted part-way "
+            f"does the same. Re-run to completion: `pytest -q --store-browser-marks`.\n"
+            f"    First few: " + ", ".join(missing[:3])
+        )
+
+
+def guard_not_narrowed(collected: int, selected: int) -> None:
+    """Refuse to rewrite the manifest from a run that SELECTED less than it collected.
+
+    THE THIRD AXIS, and it was open. `PartialDerivation`'s own docstring says the `--tier` guard
+    "covered the wrong axis: it stops a tiered regeneration and says nothing about a narrowed one",
+    and `guard_full_collection` was the answer for narrowing-by-collection. But a run can also be
+    narrowed by DESELECTION, which leaves the collection whole and shrinks only what runs — and that
+    is invisible to both.
+
+    MEASURED, because it is not obvious. Under `pytest --splits 2 --group 1`, pytest-split deselects
+    AFTER the root conftest's `pytest_collection_modifyitems` records `COLLECTED`. So on a shard:
+
+        COLLECTED = 1201     (the guard above sees a WHOLE collection and passes)
+        session.items = 626  (what actually runs, so what `PER_TEST` covers)
+
+    `write_manifest()` classifies from `PER_TEST`, so a sharded `--store-browser-marks` would have
+    written 626 classifications, DELETED ~575, and printed "wrote .browser_tests.json: N browser,
+    M fast" as a success — the exact disaster the class above is named for, one axis over. Verified by
+    calling `guard_full_collection(1201)` against the committed 1201-id manifest: it passes.
+
+    Deselection is the right sensor rather than "did every test run", and the difference matters:
+    a SKIPPED test stays in `session.items` (measured: 1 passed + 2 skipped -> items == 3), so a
+    machine that legitimately skips is not refused, while `--splits`, `-k`, `-m` and `--deselect` are
+    all caught by one check. That is the CLASS, not a fourth per-axis guard.
+    """
+    if selected < collected:
+        raise PartialDerivation(
+            f"--store-browser-marks collected {collected} test(s) but only {selected} were SELECTED "
+            f"to run — {collected - selected} were deselected, and the manifest is written from what "
+            f"RAN. Writing now would drop every deselected test's classification while the collection "
+            f"looked whole.\n"
+            f"    This is what `--splits`/`--group` (a CI shard), `-k`, `-m` and `--deselect` all do. "
+            f"Re-run without them: `pytest -q --store-browser-marks`."
         )
 
 
