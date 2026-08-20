@@ -449,6 +449,24 @@
     "tests/test_tiers.py::test_a_sharded_derivation_refuses_even_though_the_collection_is_whole",
     "tests/test_tiers.py::test_a_collect_only_derivation_refuses_instead_of_wiping_the_manifest"
    ]
+  },
+  {
+   "id": "R4.67",
+   "status": "fixed",
+   "severity": "low",
+   "summary": "The tier manifest could only be re-derived by a full local suite run -- twelve ledger entries at 1917-3151 s -- while CI already ran that same suite four times per PR (two shards x two OSes) and threw the launch evidence away. Three consecutive slices paid ~36 min each to add six, four and three browser-free cells. FIXED at step 0.8: `pytest --emit-marks PATH` writes an OBSERVATION (collected/selected/reported/launches) and never the manifest, so a shard may emit evidence although it may never write a classification; `scripts/tier_marks.py merge` checks a contract and writes a CANDIDATE, validates THAT with the fixed-point loop via ULTRACUA_TIER_MANIFEST, and swaps only on convergence. Local-first by correction: an earlier design made CI the sole supplier, which needed an open PR + gh auth + no concurrent push + a 16-25 min wait with the 36-min local run as fallback -- moving the tax behind a network precondition rather than removing it",
+   "pins": [
+    "tests/test_tier_marks.py"
+   ]
+  },
+  {
+   "id": "R4.68",
+   "status": "fixed",
+   "severity": "medium",
+   "summary": "Identity for a set of tier marks is the COLLECTED ID SET, never a commit sha, and a sha-keyed design would have been silently wrong. On a `pull_request` GitHub checks out `refs/pull/N/merge`, not the branch tip: run 32380417760 reports headSha 5d47964 while its checkout log says `HEAD is now at 2c908fc Merge 5d47964 into 4f7ac67`. So a run correctly IDENTIFIED by a commit collected a DIFFERENT tree, and once main has moved that tree carries tests the developer does not have. The resulting inflated `total` would then DISARM the deletion detector in `tests/test_tiers.py`, which only runs when `len(collected) >= data['total']` -- the fault switching off its own alarm. Refusing on the id set also covers a stale part, a part from main, and a tree edited after the push, with no extra sensors and no clean-tree check. Demonstrated live during the slice: a test renamed after the observation was emitted was refused in 2 s, naming both sides of the difference",
+   "pins": [
+    "tests/test_tier_marks.py::test_parts_describing_a_different_tree_are_refused_in_both_directions"
+   ]
   }
  ]
 }

@@ -18,6 +18,8 @@ Two reasons this lives at the ROOT rather than in `tests/`, and the second was m
 
 from __future__ import annotations
 
+import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -41,6 +43,11 @@ def pytest_addoption(parser) -> None:
     parser.addoption(
         "--store-browser-marks", action="store_true", default=False,
         help="record per-test browser launches and rewrite tests/.browser_tests.json (needs a FULL run)",
+    )
+    parser.addoption(
+        "--emit-marks", action="store", default=None, metavar="PATH",
+        help="write this run's OBSERVATION to PATH (never the manifest). Safe on a shard, safe on CI; "
+             "merge parts with `python scripts/tier_marks.py merge`",
     )
 
 
@@ -89,12 +96,51 @@ def _browser_launch_probe(request):
 
 
 def pytest_runtest_logreport(report) -> None:
-    """Every id that produced a report ACTUALLY RAN. See `_tiers.guard_every_selected_test_ran`."""
-    _tiers.REPORTED.add(report.nodeid)
+    """Every id that produced a report ACTUALLY RAN, and the WORST outcome it reached.
+
+    Two consumers, and the second is why the value is kept rather than just the key:
+    `_tiers.guard_every_selected_test_ran` reads the key set; `_tiers.merge_observations` reads the
+    outcome, because a test that died in setup reports and launches nothing — indistinguishable from
+    "no longer needs a browser" if you only count launches.
+    """
+    outcome = "failed" if report.failed else ("skipped" if report.skipped else "passed")
+    prev = _tiers.REPORTED.get(report.nodeid)
+    if prev is None or _tiers._OUTCOME_RANK[outcome] > _tiers._OUTCOME_RANK[prev]:
+        _tiers.REPORTED[report.nodeid] = outcome
 
 
 def pytest_sessionfinish(session, exitstatus) -> None:
     _tiers.write_offenders()   # only when non-empty, i.e. only beside an already-red fast run
+
+    # EMIT. Deliberately before, and independent of, the store path: an observation is evidence, not a
+    # classification, so a SHARD may emit one even though it may never write the manifest. That
+    # asymmetry is the whole design — the four CI shards each emit, and one cheap merge does what a
+    # 36-minute local run used to.
+    emit_to = session.config.getoption("--emit-marks")
+    if emit_to:
+      # NEVER allowed to redden a run. Measured: `--emit-marks` at an unwritable path raised out of
+      # this hook, replaced the summary line with a traceback and exited 1 while ten tests had passed.
+      # This flag is on all four merge-gate shard commands, so an emit failure must cost the marks and
+      # nothing else. The ledger append below is wrapped for exactly this reason ("a ledger is not
+      # worth failing a 32-minute suite for"), and the CI upload step carries `continue-on-error`.
+      # The LOUD channel is the merge's own coverage clause, which refuses an incomplete set and names
+      # the missing shard where a human can act on it.
+      try:
+        selected = [i.nodeid for i in session.items]
+        label = os.environ.get("ULTRACUA_MARKS_LABEL") or f"local-{sys.platform}"
+        record = _tiers.observation(
+            collected=_tiers.COLLECTED, selected=selected, reported=_tiers.REPORTED,
+            launches=_tiers.PER_TEST, exitstatus=exitstatus,
+            seconds=time.monotonic() - _STARTED[0], label=label,
+        )
+        out = Path(emit_to)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(record, indent=1, sort_keys=True) + chr(10), encoding="utf-8")
+        print(f"{chr(10)}wrote observation {out} "
+              f"({len(record['launches'])} launching of {len(selected)} selected, label={label!r})")
+      except Exception as exc:  # pragma: no cover - a diagnostic never fails a run
+        print(f"{chr(10)}(tier marks not emitted: {exc})")
+
     if not session.config.getoption("--store-browser-marks"):
         return
     if session.config.getoption("--tier") != "all":

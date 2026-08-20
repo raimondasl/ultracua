@@ -32,9 +32,24 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import sys
 from pathlib import Path
 
 MANIFEST = Path(__file__).parent / ".browser_tests.json"
+
+# An override, and it exists for ONE reason: a merged manifest must be VALIDATED BEFORE it replaces the
+# committed one. `scripts/tier_marks.py` writes a CANDIDATE, points the fixed-point loop at it through
+# this variable, and swaps only if the loop converges. The alternative — write the real file, then check
+# it — leaves a wrong manifest on disk whenever the check fails, and the check's own failure branch says
+# "Fix it; do not re-run this script", i.e. it would hand the reader a confident misdiagnosis over an
+# artifact that costs a 36-minute run to rebuild.
+#
+# Deliberately NOT a general knob: nothing in the suite reads it, and `tests/test_tiers.py` pins that
+# the committed path is what an unset environment resolves to.
+_MANIFEST_ENV = "ULTRACUA_TIER_MANIFEST"
+_DEFAULT_MANIFEST = MANIFEST
+if os.getenv(_MANIFEST_ENV):
+    MANIFEST = Path(os.environ[_MANIFEST_ENV])
 
 # Scrubbed for every run. `ultracua.config` calls `load_dotenv()` at import, and `load_dotenv` does not
 # override a variable that is already SET — so an empty value is enough, which is what CLAUDE.md tells
@@ -112,9 +127,17 @@ CURRENT: list = [None]
 FAST_OFFENDERS: set = set()
 OFFENDERS_FILE = Path(__file__).parent / ".fast_offenders.json"
 
-# Every nodeid that produced at least one test REPORT this run. The sensor behind
-# `guard_every_selected_test_ran`: a skip reports, `--collect-only` does not.
-REPORTED: set = set()
+# nodeid -> the WORST outcome it reported this run ("passed" / "skipped" / "failed").
+#
+# Two jobs. As a KEY SET it is the sensor behind `guard_every_selected_test_ran` (a skip reports,
+# `--collect-only` does not). As a VALUE it decides whether an observation may DE-CLASSIFY a test:
+# a test that died in setup — a raising fixture, an unreachable browser — reports and launches
+# nothing, which is indistinguishable from "no longer needs a browser" if you only look at the launch
+# count. So browser -> fast requires a PASSING observation; see `merge_observations`.
+REPORTED: dict = {}
+
+# Ranked worst-last, so `max` over a test's reports gives the one that decides.
+_OUTCOME_RANK = {"passed": 0, "skipped": 1, "failed": 2}
 
 # Every Playwright entry point that can open a browser or start the driver. Listed from the CLASS rather
 # than from what this repo calls today: `launch` and `__aenter__` are the two the suite uses, and the
@@ -382,3 +405,200 @@ def _write(browser, fast) -> None:
         + "\n",
         encoding="utf-8",
     )
+
+
+# ---------------------------------------------------------------------------------------------------
+# OBSERVATIONS: the manifest, derived from runs that already happened.
+#
+# Re-deriving the manifest costs a full suite run — 1917-3151 s across the twelve entries in
+# `tests/.manifest_cost.jsonl`. CI already pays that on every PR, four times over (two shards x two
+# OSes), and throws the evidence away. An OBSERVATION is that evidence, serialised.
+#
+# The shape is deliberately NOT "the browser ids". It carries `collected` / `selected` / `reported`
+# as well, because those are what let a merge tell apart three cases a bare id list conflates: a test
+# that ran and did not launch (a classification), a test no part selected (a missing shard), and a
+# test that was selected and never ran (a truncated observation). Only the first is evidence; the
+# other two are reasons to REFUSE.
+
+SCHEMA = 1
+
+
+class MergeRefused(Exception):
+    """The parts do not describe this tree, or do not describe it completely."""
+
+
+def observation(*, collected, selected, reported, launches, exitstatus, seconds, label) -> dict:
+    """One run's worth of evidence. Writes no classification and never touches the manifest."""
+    return {
+        "schema": SCHEMA,
+        "label": label,
+        "platform": sys.platform,
+        "exitstatus": int(exitstatus),
+        "seconds": round(float(seconds), 1),
+        "collected": sorted(collected),
+        "selected": sorted(selected),
+        "reported": {k: reported[k] for k in sorted(reported)},
+        "launches": {k: int(v) for k, v in sorted(launches.items()) if v},
+    }
+
+
+def load_observation(path: Path) -> dict:
+    """Read one part. A corrupt or truncated part is an ERROR naming the file, never skipped.
+
+    `scripts/manifest_cost.py` states this rule for its ledger ("a corrupt ledger is loud, never
+    skipped"). Here it matters more: a silently dropped part means the merge writes a manifest missing
+    everything that part observed, and reports success.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise MergeRefused(f"{path} is not a readable observation: {exc}") from exc
+    if not isinstance(data, dict) or data.get("schema") != SCHEMA:
+        got = data.get("schema") if isinstance(data, dict) else "?"
+        raise MergeRefused(
+            f"{path} has schema {got}, expected {SCHEMA}. Re-emit it rather than merging across "
+            f"schemas — an older part may not carry the fields the contract checks."
+        )
+    for field in ("label", "collected", "selected", "reported", "launches"):
+        if field not in data:
+            raise MergeRefused(f"{path} is missing {field!r}; it is not a complete observation")
+    return data
+
+
+def reconcile_attempts(parts):
+    """One part per label: LAST wins for COVERAGE, but launches are UNIONED.
+
+    Re-running a failed CI job produces a second artifact for the same (os, shard) — measured on run
+    31677764463, which held `resource-samples-windows-latest-1-1` AND `...-1-2`. "Re-run failed jobs"
+    is the most common CI action there is, so treating duplicates as an error would refuse exactly
+    when a human most needs the tool.
+
+    WHY THE TWO FIELDS ARE TREATED DIFFERENTLY, and the first draft got this wrong in the unsafe
+    direction. `selected`/`reported` are a COMPLETENESS record, and the later attempt is the
+    authoritative one — that is the whole reason to dedup, since the earlier attempt of a re-run is
+    usually TRUNCATED (it was killed; that is why it was re-run) and would otherwise fail the
+    truncation clause. But `launches` is EVIDENCE, and evidence does not expire: a test observed
+    launching on attempt 1 that happens not to reach the browser on attempt 2 is still a browser test.
+    Last-wins on launches measurably moved such a test into the fast tier, where it RAISES.
+
+    Same asymmetry as the cross-part union one clause down, and the same reason: over-classifying
+    costs fast-tier size, under-classifying breaks the tier.
+    """
+    keep = {}
+    for path, data in parts:
+        label = data["label"]
+        if label in keep:
+            merged = dict(data)
+            merged["launches"] = {**keep[label][1]["launches"], **data["launches"]}
+            keep[label] = (path, merged)
+        else:
+            keep[label] = (path, data)
+    return [keep[k] for k in sorted(keep)]
+
+
+def merge_observations(parts, expected, notes=None):
+    """`(browser, fast)` from a set of observations, or REFUSE.
+
+    `expected` is THIS tree's collection, and it is the only honest identity. A commit sha is not one:
+    on a `pull_request` GitHub checks out `refs/pull/N/merge`, so a run tagged with your branch tip
+    actually collected a MERGE of your branch into main — verified, run 32380417760 checked out
+    2c908fc, "Merge 5d47964 into 4f7ac67". Matching by sha would hand you marks for a tree containing
+    tests you do not have, and the inflated `total` would then DISARM the deletion detector at
+    `tests/test_tiers.py`, which only runs when `len(collected) >= data["total"]`.
+
+    Refusing on the ID SET catches that, and catches the same thing arriving by any other route: a
+    stale part from an earlier push, a part from `main`, a tree edited after the push. No clean-tree
+    check is needed on top — an edited tree collects differently, which is the same signal.
+    """
+    if not parts:
+        raise MergeRefused("no observation parts were given; there is nothing to merge")
+    parts = reconcile_attempts(parts)
+    expected_set = set(expected)
+    if not expected_set:
+        raise MergeRefused("this tree collected NO tests; refusing to write an empty manifest")
+
+    # (1) Every part must be a COMPLETE observation of whatever it selected.
+    for path, d in parts:
+        selected, reported = set(d["selected"]), set(d["reported"])
+        if not selected:
+            raise MergeRefused(f"{path} selected no tests — an empty part classifies nothing")
+        if not selected <= set(d["collected"]):
+            raise MergeRefused(f"{path} selected tests it never collected; it is not self-consistent")
+        never_ran = sorted(selected - reported)
+        if never_ran:
+            raise MergeRefused(
+                f"{path} selected {len(selected)} test(s) but {len(never_ran)} never ran, so it is a "
+                f"TRUNCATED observation — the job was killed, or this was a --collect-only run. "
+                f"First few: {', '.join(never_ran[:3])}"
+            )
+
+    # (2) IDENTITY, by id set rather than by sha. See the docstring.
+    seen = set().union(*(set(d["collected"]) for _p, d in parts))
+    if seen != expected_set:
+        extra, missing = sorted(seen - expected_set), sorted(expected_set - seen)
+        lines = ["these observations describe a DIFFERENT collection than this tree:"]
+        if extra:
+            lines.append(f"    {len(extra)} they have and this tree does not: {', '.join(extra[:5])}")
+        if missing:
+            lines.append(f"    {len(missing)} this tree has and they do not: {', '.join(missing[:5])}")
+        lines.append(
+            "    A pull_request run tests refs/pull/N/merge, not your branch tip, so this is what you "
+            "get once main has moved. Push, let CI finish and pull again — or emit a part locally."
+        )
+        raise MergeRefused("\n".join(lines))
+
+    # (3) COVERAGE. Every test must have been RUN by some part, or its class is a guess, not evidence.
+    ran = set().union(*(set(d["selected"]) for _p, d in parts))
+    unobserved = sorted(expected_set - ran)
+    if unobserved:
+        raise MergeRefused(
+            f"{len(unobserved)} test(s) were collected by these observations but RUN by none of them, "
+            f"so a shard is missing. Merging now would classify them from no evidence at all. "
+            f"First few: {', '.join(unobserved[:3])}\n"
+            f"    Parts present: {', '.join(d['label'] for _p, d in parts)}"
+        )
+
+    # (4) CLASSIFY. Browser iff observed launching ANYWHERE. The union is the safe direction: a test
+    # wrongly in the browser tier merely runs slowly, while one wrongly in the fast tier RAISES.
+    launched = set().union(*(set(d["launches"]) for _p, d in parts))
+
+    # (5) A DE-CLASSIFICATION needs a PASSING observation behind it. A test that dies in setup — a
+    # raising fixture, an unreachable browser — reports and launches nothing, which reads identically
+    # to "it stopped needing a browser". Direction of error decides: keeping a stale browser mark costs
+    # fast-tier size, dropping a real one puts a launch in the fast tier where it RAISES.
+    was_browser = set(load_manifest().get("browser", ())) if MANIFEST.exists() else set()
+    for _path, d in parts:
+        for nid, outcome in d["reported"].items():
+            if outcome != "passed" and nid in was_browser and nid not in launched:
+                launched.add(nid)
+
+    # (6) ...and it needs evidence from EVERY PLATFORM, which a single-platform part set does not have.
+    #
+    # MEASURED, and this is not an edge case: the documented local path
+    # (`pytest --emit-marks ... && tier_marks.py merge`) is single-platform BY CONSTRUCTION. Two
+    # windows parts covering the whole tree pass identity and coverage, the merge succeeds, and a test
+    # that launches only on ubuntu moves browser -> fast — where CI's ubuntu `fast` job then RAISES on
+    # it. Candidate-then-swap cannot catch this either: the fixed-point loop runs `--tier fast` on the
+    # producing platform, so it never exercises the arm that would object.
+    #
+    # This is a HOLD, not a refusal, so there is no D0 exposure: new tests still classify, new launches
+    # still promote, and only the unsafe direction is withheld. `platform` was already recorded and
+    # read by nothing; this is what it is for.
+    platforms = {d.get("platform") for _p, d in parts}
+    if len(platforms) < 2:
+        held = sorted(was_browser - launched)
+        launched |= set(held)
+        if held and notes is not None:
+            notes.append(
+                f"HELD {len(held)} existing browser mark(s): these observations come from one platform "
+                f"({', '.join(sorted(str(x) for x in platforms))}), so they cannot show that a test "
+                f"stopped needing a browser EVERYWHERE. Pull a full CI set to de-classify."
+            )
+
+    return sorted(launched & expected_set), sorted(expected_set - launched)
+
+
+def write_manifest_from(browser, fast) -> "tuple[int, int]":
+    """Write a manifest from an explicit classification (the merge path). See `_write`."""
+    _write(sorted(browser), sorted(fast))
+    return len(browser), len(fast)
