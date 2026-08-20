@@ -48,7 +48,7 @@ than a rewrite or a `flows/` split, and records what NOT to re-propose. It chang
 in; it does not re-sequence `correctness-plan.md` and closes none of its findings.
 
 **Phase 0's instruments are BUILT** — the fast tier, register-as-data and the exit-set matrix — so the
-plan is no longer a proposal. **§12 fixes Phase 1's order and holds 0.5/0.6/0.7 with named triggers**,
+plan is no longer a proposal. **§13 RE-PRICES it** — §12's own trigger fired (1.5's audits returned twelve, against a ~3 threshold), so the order was re-derived from measurement: 0.8 (CI-derived marks) first because the manifest tax crossed its 4 h rule at 5.00 h, then **B2** (unblocked since day one, never started, zero audit burden), then 1.4. The order is STRICTLY LINEAR — nothing runs in parallel, so §5's 55-80 day figure, which assumed Phase 2 alongside from day one, is the parallel-world number. §12 fixed the earlier order and holds 0.5/0.6/0.7 with named triggers,
 derived from which instrument each Phase-1 step's own pins name (only 0.4 is gating; nothing names
 0.5–0.7). Read §12 before picking a step, for the same reason `correctness-plan.md` exists: picking ad
 hoc re-creates the orderings a plan exists to prevent.
