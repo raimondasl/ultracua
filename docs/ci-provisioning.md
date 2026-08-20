@@ -270,9 +270,42 @@ What *is* checkable:
 * **Distributional** — the ubuntu install step should now sit in the windows distribution
   (~18–30 s), not merely "under a minute". A single sample above ~2 min is worth investigating even
   if the job passes.
+
+  **MEASURED on the change's own run (32336893648): 11 s and 12 s** — below the windows band
+  (22 s, 19 s) rather than inside it, because ubuntu was never the slower runner; the apt call was.
+  The prediction above is left as written rather than edited to match, since a forecast rewritten
+  after the fact stops being a forecast.
 * **The A/B the merge itself performs** — after this change the ubuntu arm runs the full browser
   suite with those nine font packages absent. Both shards must be read, since the ~500 browser tests
   are split two ways and one shard is half the experiment.
+
+### The result of the change's own run
+
+`32336893648`, all eight jobs green:
+
+| job | install | suite | total |
+|---|---|---|---|
+| ubuntu 1/2 | **11 s** | 822 s (13.7 m) | 14.0 m |
+| ubuntu 2/2 | **12 s** | 809 s (13.5 m) | 13.8 m |
+| windows 1/2 | 22 s | 993 s (16.6 m) | 17.2 m |
+| windows 2/2 | 19 s | 912 s (15.2 m) | 15.8 m |
+
+Two things this shows and one it does not.
+
+**The font experiment passed on BOTH ubuntu shards.** The ~500 browser tests are split two ways, so
+one shard would have been half the experiment; both ran the full suite against real headless
+Chromium with those nine packages absent, and both are green. `drift_bench` runs inside these
+shards, so its invariants — including the resolver ones a font-metric shift could plausibly disturb
+— held on CI. (A local `within_wall_budget` miss during this slice was taken on a host at 336 MB
+available and 3323 pages/sec, and is not evidence of anything.)
+
+**The suite cost nothing.** Ubuntu 13.5–13.7 min sits inside the 12.4–13.8 band measured with the
+fonts present. Removing 79.5 MB of glyph coverage changed no timing and no outcome.
+
+**What it does NOT show is that the apt fault is gone.** 44 of the 58 jobs before this change also
+completed with the install under two minutes. One green run is consistent with both "the mirror is
+healthy today" and "the dependency is deleted" — it is the *static* pin, not this run, that
+distinguishes them.
 
 **Unresolved, and it should stay written down:** whether the apt failures were a standing property
 of the runner fleet or an external mirror incident that has already ended. The data is episodic —
