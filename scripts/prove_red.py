@@ -102,7 +102,10 @@ def main() -> int:
                     default=["tests/test_replay_exit_matrix.py",
                              "tests/test_batch_row_evidence_golden.py",
                              "tests/test_write_question_golden.py",
-                             "tests/test_landed_arms_the_ledger.py"],
+                             # BROWSER-FREE ONLY. The `red-proof` job does not install Playwright, so
+                             # a killer-suite leg with a browser cell fails EVERY mutant's baseline —
+                             # measured on CI, 8 failed / 135 passed on both arms, while green locally.
+                             "tests/test_ledger_arm_property.py"],
                     help="what to run against each mutant (default: the exit-set matrix + the two "
                          "1.4b evidence goldens)")
     args = ap.parse_args()
