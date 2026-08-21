@@ -2871,6 +2871,17 @@ class _RecordSink:
         `False` — a run in which something RAISED, or which skipped on an idempotency precheck, has
         no basis for a denial, and a confident `False` over a write that may have committed is the
         one error direction nothing downstream catches.
+
+        KEYED ON THE FIELD SINCE 1.4b, NOT ON THE OUTCOME STRING (R4.61). It used to ask whether the
+        attempt's `outcome` was in `_UNKNOWN_OUTCOMES` — but every failure exit appends the SAME string,
+        `"failed"`, so one string had to answer for `write_unverified` (whose entire meaning is "the
+        commit fired and cannot be confirmed") and for an ordinary drift alike. No per-kind test could
+        catch that; there was nothing per-kind to look at.
+
+        A fact that does not know now says so itself. The four outcomes the old set named still leave
+        the question open, because they append nothing for these fields and `_AttemptFacts` defaults
+        both to `None` — so the safe answer is the DEFAULT rather than a membership someone has to
+        remember to add.
         """
         if any(getattr(f, field_name) is True for f in self._facts):
             return True
@@ -2970,7 +2981,11 @@ async def _attempt_replay_body(spec, router, cache, key, meta, check_shape, *, c
     # arming point, where a MAYBE must read as a no. A report needs the third state, and keeping it as
     # a separate local is what stops the two questions sharing one variable.
     #
-    # `None` until the evidence block runs, because until then nothing has been observed either way.
+    # `None` until the evidence block runs, because until then nothing has been observed either way —
+    # and that initial value is the SAFE one on purpose. There is no `_fail` call between here and the
+    # evidence block today, but if one were ever added it would record UNKNOWN rather than a denial,
+    # which is the direction this whole field exists to get right. The two arming tokens above start
+    # at `False` for the opposite and equally deliberate reason: a maybe must never arm the ledger.
     committed_report: Optional[bool] = None
 
     # What this attempt observed, filled once the report is in hand. `_append` (owned by the guard
