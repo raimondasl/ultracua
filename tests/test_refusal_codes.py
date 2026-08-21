@@ -66,8 +66,8 @@ SITE_TABLE = {
                         "WriteUnconfirmableError"],        # (1.4) a write flow with no confirm check
     "run_batch":       ["BatchArgumentError",              # (1.4) no spec for a non-empty batch
                         "BatchArgumentError",              # (1.4) a bad on_row_error
-                        "BatchBoundError",                 # (1.4) a write batch with no max_rows
-                        "BatchBoundError",                 # (1.4) more rows than max_rows
+                        "BatchBoundExceededError",         # (1.4) more rows than max_rows
+                        "BatchUnboundedError",             # (1.4) a write batch with no max_rows
                         "LedgerUnusableError",             # (1.4) a bad/foreign resume ledger
                         "NotLearnedError",                 # (1.4) nothing to batch
                         "UndeclaredWriteError"],           # (1.4) mutating steps, no declaration

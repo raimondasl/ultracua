@@ -484,6 +484,30 @@
    "summary": "`retryable` is now a CONSTANT on every refusal a caller can receive. 1.4a's audit showed `MetaUnreadableError.retryable=True` was the R4.18 mistake on the read twin — it is raised from `_learn_once` and `_reset_learn_baselines`, whose own comments say a write may already have landed — so it became False. That leaves `AuthExpiredError` as the only retryable class, and it is defined but NEVER RAISED in src/. So no refusal any caller actually receives advertises a retry, and a B3 bucket keyed on the flag would measure nothing",
    "disposition": "The right fix is to SPLIT the pre-write and post-write halves of `meta_unreadable` — an `approve`/`unapprove`/`release` sharing violation genuinely is safe to auto-retry — rather than to relax a flag. Pinned meanwhile by `test_no_typed_error_is_both_retryable_and_post_actuation`, which asserts the retryable set is exactly {AuthExpiredError} AND that it stays unraised, so the day either changes is loud",
    "blocked_by": "needs its own slice; a flag relaxed without splitting the class re-creates R4.18"
+  },
+  {
+   "id": "R4.71",
+   "status": "open",
+   "severity": "medium",
+   "class": "b",
+   "summary": "`not_learned` SURVIVES A COMPLETED RELEARN, so a run that actually ran `learn()` is told the remedy is `flow learn`. The engine's failure `kind` is never updated by the relearn block — the repair attempt's kind is discarded — so `raise _classify_replay_failure(kind)(...)` still resolves the ORIGINAL `\"miss\"`. Reproduced against the real relearn block via `tests/_fake_engine.py`: `NotLearnedError code='not_learned'` with `learn() calls before the raise: 1` and a message that reads \"replay drifted ... suffix-replan failed ... re-learn failed\". Population is UNAPPROVED flows only (`--include-unapproved` / unattended self-heal): an approved flow is refused at `_preflight_row` with `relearn_refused` first. NOT a safety defect — 1.4a attached a machine-actionable instruction where there was previously only the generic `replay_error`, and the instruction points the wrong way",
+   "disposition": "The fix is in `_replay_body`, not in the vocabulary: the relearn block must carry its own kind forward. Out of 1.4a's scope (which re-classes raises, it does not change what `kind` a path computes) and out of 1.4b's (readers). What 1.4a DID correct is the axis: `NotLearnedError` was declared `can_follow_actuation=False` while the six other classes reachable from that same program point declare True, and a relearn actuates the write during discovery"
+  },
+  {
+   "id": "R4.72",
+   "status": "open",
+   "severity": "low",
+   "class": "d",
+   "summary": "`not_learned` names a STATE, and its three raise sites need three different next steps — on `unapprove()`, this project's designated ACKNOWLEDGEMENT verb, it prescribes `flow learn`, which drives a browser and an LLM and can actuate a write during discovery. Measured: approve -> \"nothing to approve, learn the flow first\"; unapprove -> \"nothing to unapprove, learn or record the flow first\"; run_batch -> \"nothing to batch, learn and approve the flow first\". Same code, opposite directions. At ecd9af2 all three were the base `replay_error`, so 1.4a attached a machine-actionable instruction where there was none",
+   "disposition": "Deliberately not split in 1.4a. `not_learned` correctly names the STATE at all three, and the codes-name-a-remedy rule would force a third code for a refusal nobody has ever needed to bucket. The narrower defect is `unapprove`'s MESSAGE (a revoke on an unlearned flow is arguably a no-op, not an invitation to learn), which is pre-existing text. Revisit when B3 has a consumer that actually buckets these"
+  },
+  {
+   "id": "R4.73",
+   "status": "open",
+   "severity": "low",
+   "class": "l",
+   "summary": "ONE condition, TWO word-order-transposed slugs on two code fields: a recipe stale against its approval is `stale_approval` on `ToolOutcome` (the taxonomy) and `approval_stale` on `SkippedFlow` (mcpserver). Both read `_approval_recipe_stale`. 1.4a's `RESERVED_CODES` FREEZES the duplication rather than resolving it — it reserves `approval_stale` so the taxonomy cannot adopt it, which is correct as a collision guard and leaves the transposition in place. A third near-identical slug, `approval_binding_stale`, now names a DIFFERENT condition (the spec surface moved), so a reader has three similar strings for two conditions",
+   "disposition": "Resolving it means renaming a slug on the MCP wire, which is a compatibility change and belongs with 2.2 (B3), where the consumer that buckets on these fields appears. The split of `approval_binding_stale` FROM `stale_approval` is deliberate and argued (tamper-shaped vs ordinary spec edit) and is not what this finding questions"
   }
  ]
 }

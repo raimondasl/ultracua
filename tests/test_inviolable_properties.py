@@ -824,7 +824,7 @@ async def test_every_typed_error_carries_a_DISTINCT_machine_readable_code() -> N
         f"the subclass walk and REGISTRY disagree about the taxonomy: "
         f"walk-only={sorted({c.__name__ for c in errs} - {c.__name__ for c in REGISTRY.values()})}, "
         f"registry-only={sorted({c.__name__ for c in REGISTRY.values()} - {c.__name__ for c in errs})}")
-    assert len(errs) >= 27, (
+    assert len(errs) >= 28, (
         f"only {len(errs)} typed errors found — the walk is broken, not the taxonomy small: {errs}")
 
     by_code: dict = {}

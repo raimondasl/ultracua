@@ -624,7 +624,19 @@ class NotLearnedError(FlowReplayError):
 
     code = "not_learned"
     retryable = False
-    can_follow_actuation = False
+    # TRUE, and 1.4a's first draft said False — the same false declaration the audit caught on
+    # `MetaUnreadableError`, one class over. Three of its four raise sites ARE pre-flight
+    # (`approve`, `unapprove`, `run_batch`), but the fourth is the engine's `"miss"` kind, which
+    # arrives at `raise _classify_replay_failure(kind)(...)` in `_replay_body` — and the six OTHER
+    # classes reachable from that identical program point all declare True. On the relearn path that
+    # site is reached after `learn()` has run, and a learn performs the write during discovery on a
+    # declared write flow.
+    #
+    # The axis is a property of the CLASS, so it is True if ANY raise site qualifies. That is the
+    # conservative reading and the only safe one: it licenses `retryable` and `landed`, and both are
+    # False here, so nothing is weakened by saying so.
+    landed = False
+    can_follow_actuation = True
 
 
 class NotApprovedError(FlowReplayError):
@@ -797,14 +809,32 @@ class BatchArgumentError(FlowReplayError):
     can_follow_actuation = False
 
 
-class BatchBoundError(FlowReplayError):
-    """A write batch's blast radius is unstated or exceeded — no `max_rows`, or more rows than it allows.
+class BatchUnboundedError(FlowReplayError):
+    """A write batch was submitted with no `max_rows`, so its blast radius is unstated.
 
-    The APPROVAL BOUND: one human approval must not authorize an unbounded number of writes. Its own
-    code because the remedy is a human reviewing the extra rows and then raising the bound — never an
-    automatic widening, which is what a caller reading a generic refusal might attempt."""
+    The APPROVAL BOUND: one human approval must not authorize an unbounded number of writes. CALLER-
+    FIXABLE — the caller states the bound it intends, which is what its message says.
 
-    code = "batch_bound"
+    SPLIT FROM `batch_bound_exceeded`, and 1.4a's first draft had them sharing one code. The audit
+    caught it: the two remedies are opposite, and this one's message ("Pass max_rows=N >= the row
+    count") is precisely the automatic widening the OTHER one must never be given — so under a shared
+    slug, an agent that learned this remedy would apply it to a refusal that exists to stop it.
+    `FlowReplayError`'s own docstring says a caller reacts "by KIND without string-parsing the
+    message", so the prose difference is unavailable to the consumer the code exists for."""
+
+    code = "batch_unbounded"
+    retryable = False
+    can_follow_actuation = False
+
+
+class BatchBoundExceededError(FlowReplayError):
+    """A write batch carries more rows than the `max_rows` its caller declared.
+
+    NOT caller-fixable, and that is the whole distinction from `batch_unbounded`: the bound was stated
+    and the input exceeds it, so raising it authorizes writes nobody reviewed. The remedy is a HUMAN
+    reviewing the extra rows first."""
+
+    code = "batch_bound_exceeded"
     retryable = False
     can_follow_actuation = False
 
@@ -4326,11 +4356,11 @@ async def run_batch(
 
     # Approval bound: a write batch MUST declare its blast radius (one approval now authorizes N writes).
     if is_mutate and max_rows is None:
-        raise BatchBoundError(
+        raise BatchUnboundedError(
             f"{spec.name!r}: a write batch requires max_rows — one approval must not authorize unbounded "
             f"writes. Pass max_rows=N (>= the row count) after reviewing the input.")
     if max_rows is not None and len(rows) > max_rows:
-        raise BatchBoundError(
+        raise BatchBoundExceededError(
             f"{spec.name!r}: batch has {len(rows)} rows but max_rows={max_rows} — refuse. Raise max_rows only "
             f"after reviewing the extra rows.")
 

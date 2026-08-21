@@ -334,7 +334,7 @@ def test_the_abstract_base_is_not_raisable_which_is_why_it_is_not_parametrized_a
     with pytest.raises(TypeError, match="ABSTRACT"):
         F.FlowReplayError("x")
     assert F.FlowReplayError not in _typed_error_family()
-    assert len(_typed_error_family()) >= 27, (
+    assert len(_typed_error_family()) >= 28, (
         f"the family walk found {len(_typed_error_family())} concrete classes — it is broken, not the "
         f"taxonomy small, and the parametrized property above would be asserting almost nothing")
 
