@@ -281,6 +281,12 @@ def _typed_error_family() -> list[type]:
                 walk(s)
 
     walk(F.FlowReplayError)
+    # ...defined in `ultracua`. `__subclasses__()` is a live interpreter view, so a probe class defined
+    # in a test — or a downstream user's own subclass — lands in it, and CPython registers a class in
+    # its bases' subclass lists BEFORE `__init_subclass__` runs, so even a REFUSED one is there. This
+    # list is a parametrize argument evaluated at COLLECTION time, which makes the leak's effect depend
+    # on import order. Its twin in `test_inviolable_properties` was measured red by the 1.4a audit.
+    out = [c for c in out if c.__module__.split(".")[0] == "ultracua"]
     # The CONCRETE family. The abstract base is excluded since 1.4 because it can no longer be
     # RAISED — and the exclusion is justified by a checked fact, not by an assumption: the cell below
     # asserts the refusal, so if the base ever became constructible again this list would silently

@@ -352,6 +352,27 @@ RESERVED_CODES = frozenset({
     "spec_unreadable", "recipe_unreadable", "learn_refused", "write_not_exposed", "name_collision",
 })
 
+# ...and the slugs this taxonomy DELIBERATELY SHARES with `mcpserver`'s `SkippedFlow.code`, because
+# they name the SAME REMEDY reached on a different surface: "this flow has no cached recipe, learn it"
+# and "this flow is not approved, a human must approve it" are one instruction whether `tools/list`
+# declined to advertise the flow or a call refused mid-flight. B3 keys its buckets on (surface, code),
+# so the alignment HELPS it — an operator asking "what is wrong with this flow" gets one answer.
+#
+# STATED AND PINNED RATHER THAN SILENTLY ALLOWED, and the distinction cost this slice a finding. The
+# first draft simply omitted these two from `RESERVED_CODES` while its own comment claimed the set
+# covered every `SkippedFlow` code — so the rule read as violated by the slice's two most-raised
+# classes, with nothing to say whether that was intent or an oversight.
+# `test_the_reserved_and_aligned_sets_together_cover_every_skipped_flow_code` DERIVES the SkippedFlow
+# vocabulary from `mcpserver`'s source and fails if a slug is in neither set — so this cannot go stale
+# the way a hand-typed list does, which is the shape this slice deleted twice elsewhere.
+#
+# The alignment is only SAFE because `QUIET_SKIPS` — the fleet's quiet allowlist — is compared solely
+# against `SkippedFlow.code` and never against a `ToolOutcome`/`BatchRowResult`/`RunRecord` code.
+# Measured, and pinned by `test_the_quiet_allowlist_is_only_ever_compared_against_SkippedFlow_code`:
+# without that containment, `not_approved` (which fires for a DECLARED WRITE, "approval-gated whatever
+# the caller asked for") would put a write refusal in the bucket the fleet reads as ordinary.
+ALIGNED_CODES = frozenset({"not_learned", "not_approved"})
+
 # code -> class, populated by `__init_subclass__`. The taxonomy, derived rather than declared.
 REGISTRY: "dict[str, type[FlowReplayError]]" = {}
 
@@ -940,13 +961,33 @@ class MetaUnreadableError(FlowReplayError):
     ABSENT sidecar (that is how a sidecar is first created)."""
 
     code = "meta_unreadable"
-    retryable = True     # a sharing violation clears; this is the one refusal here that IS worth retrying
-    # ...and that flag is licensed by THIS axis, not by the comment above it. Raised only from
-    # `_update_meta` before the read-modify-write it refuses; its one in-`replay()` caller (the
-    # relearn pin-clear) is unreachable for a write flow because `_preflight_row` refuses
-    # `on_drift="relearn"` for one. That is a guard at a DISTANCE, and 1.6 rewrites the predicate
-    # it keys on (`is_write_flow`) — see the pins in `tests/test_refusal_codes.py`.
-    can_follow_actuation = False
+
+    # NOT RETRYABLE, AND 1.4a's FIRST DRAFT HAD IT THE OTHER WAY — the same mistake R4.18 made on the
+    # WRITE twin, one release later, inside the guard built to prevent it.
+    #
+    # `retryable = True` had stood since R3.8 on the reading that this class "is only ever raised
+    # PRE-WRITE, so nothing has actuated". 1.4a wrote that reading down as `can_follow_actuation =
+    # False` and the audit of 1.4a refuted it from the file's own comments. `_update_meta(...,
+    # on_unreadable="raise")` has EIGHT callers, and two of them run after a write may have landed:
+    #
+    #   * `_learn_once`, whose comment three lines above the call says "`learn()` performs the write
+    #     during discovery on a declared write flow, so 'discard and re-run learn' prescribes re-firing
+    #     a commit that already landed";
+    #   * `_reset_learn_baselines`, whose comment says a delete "would discard a recording of a write
+    #     the human just demonstrated — re-creating it means performing that write again".
+    #
+    # So an MCP agent receiving `ToolOutcome(code="meta_unreadable", retryable=True)` after a learn
+    # that actuated a commit is being told to re-run the thing that fires it a second time. That is
+    # inviolable #3, reached through a transient AV/indexer sharing violation — the very failure the
+    # message describes as harmless.
+    #
+    # Direction of error decides it, exactly as it did for the twin: a missed auto-retry costs an
+    # operator one manual re-run; a wrongly-advertised one can double-submit. The MESSAGE still tells a
+    # HUMAN to retry, because for a human that is right and they can see which call it came from — this
+    # flag is the instruction to an AUTONOMOUS agent, which cannot.
+    retryable = False
+    landed = False           # explicit: nothing here observes a confirm, and a maybe is a no
+    can_follow_actuation = True
 
 
 class MetaUnwritableError(FlowReplayError):

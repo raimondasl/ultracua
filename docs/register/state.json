@@ -467,6 +467,23 @@
    "pins": [
     "tests/test_tier_marks.py::test_parts_describing_a_different_tree_are_refused_in_both_directions"
    ]
+  },
+  {
+   "id": "R4.69",
+   "status": "open",
+   "severity": "medium",
+   "class": "b",
+   "summary": "The H9 quarantine's READ twin eats the value-contract reason, and a test docstring asserts the mitigation that does not exist. `_quarantine` wraps its `_update_meta` in `except MetaUnwritableError` and re-raises carrying the H9 reason (R4.17) — the READ half, `MetaUnreadableError`, is not caught, so it escapes `_do_quarantine` bare and the operator is told about a sidecar IO error instead of about a wrong VALUE. Reproduced with a control: armed, the escaping message carries no trace of the finding; unarmed, the quarantine persists. `tests/test_meta_load_provenance.py::test_an_unreadable_sidecar_does_not_replace_the_H9_quarantine_reason` states in its docstring that \"`_do_quarantine` catches it and still raises `FlowQuarantineError` with the H9 reason plus a note that persistence failed\" — `_do_quarantine` (flows.py) calls `_quarantine` bare and catches nothing. PRE-EXISTING, not introduced by 1.4a; the sibling-path shape one twin over, which is this register's most-repeated finding",
+   "disposition": "NOT taken in 1.4a: `_quarantine`'s raise-vs-skip design was settled by two adversarial passes (skipping loses the audit judge's non-re-derivable finding permanently), so a third answer needs its own slice and its own audit rather than a catch bolted on. What 1.4a DID fix is the false assurance it had itself added — `MetaUnreadableError.can_follow_actuation` was `False` and is `True`, which made the class non-retryable and closed the double-submit half"
+  },
+  {
+   "id": "R4.70",
+   "status": "open",
+   "severity": "low",
+   "class": "d",
+   "summary": "`retryable` is now a CONSTANT on every refusal a caller can receive. 1.4a's audit showed `MetaUnreadableError.retryable=True` was the R4.18 mistake on the read twin — it is raised from `_learn_once` and `_reset_learn_baselines`, whose own comments say a write may already have landed — so it became False. That leaves `AuthExpiredError` as the only retryable class, and it is defined but NEVER RAISED in src/. So no refusal any caller actually receives advertises a retry, and a B3 bucket keyed on the flag would measure nothing",
+   "disposition": "The right fix is to SPLIT the pre-write and post-write halves of `meta_unreadable` — an `approve`/`unapprove`/`release` sharing violation genuinely is safe to auto-retry — rather than to relax a flag. Pinned meanwhile by `test_no_typed_error_is_both_retryable_and_post_actuation`, which asserts the retryable set is exactly {AuthExpiredError} AND that it stays unraised, so the day either changes is loud",
+   "blocked_by": "needs its own slice; a flag relaxed without splitting the class re-creates R4.18"
   }
  ]
 }

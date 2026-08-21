@@ -501,3 +501,140 @@ def test_the_runtime_guard_and_the_RATCHET_are_two_sensors_rather_than_two_copie
             "the ratchet did NOT see `raise FlowReplayError.__new__(FlowReplayError)`. Both sensors are "
             "now blind to the same shape, which makes them two copies of one guard rather than two "
             "sensor classes — and the zero this ratchet reports would no longer mean what it says.")
+
+
+@pytest.mark.parametrize("spelling", ["FlowReplayError", "flows.FlowReplayError"])
+def test_the_ratchet_sees_the_base_class_under_BOTH_spellings(spelling) -> None:
+    """FOUND BY THE 1.4a AUDIT, in the shape 1.4a added to close an indirection.
+
+    Shape (b) of `derive_bare_flow_replay_error` exists because `_classify_replay_failure` reaches the
+    base through a TABLE — the class sits in a value position and becomes a raise through a variable,
+    which the raise-site shape structurally cannot see. Its first draft matched `ast.Name` only.
+
+    MEASURED: a `{"miss": flows.FlowReplayError}` table in `mcpserver/server.py` reported ZERO
+    producers. And that is the ONE spelling every module except `flows.py` would use — `mcpserver` and
+    `daemon` both import the module, not the name. A shape added to close an indirection that closes
+    half of it is this register's "patch on a patch" verbatim, one level down.
+
+    So: both spellings, driven through the real derivation over a scratch copy.
+    """
+    import shutil
+    import subprocess
+    import sys
+    import tempfile
+
+    root = pathlib.Path(__file__).parents[1]
+    with tempfile.TemporaryDirectory() as tmp:
+        dst = pathlib.Path(tmp)
+        shutil.copytree(root / "src", dst / "src", ignore=shutil.ignore_patterns("__pycache__"))
+        # Put the probe where that spelling is natural: the bare name inside flows.py, the dotted one
+        # in a module that imports flows — which is what makes this cell about REACH, not syntax.
+        target = ("ultracua/flows.py" if spelling == "FlowReplayError"
+                  else "ultracua/mcpserver/server.py")
+        with (dst / "src" / target).open("a", encoding="utf-8") as fh:
+            fh.write(f"\n\n_PROBE_TABLE = {{'miss': {spelling}}}\n")
+        probe = (
+            "import pathlib, sys; sys.path.insert(0, r'%s');"
+            "import ratchets as R;"
+            "R.ROOT = pathlib.Path(r'%s'); R.SRC = R.ROOT / 'src' / 'ultracua';"
+            "hits = R.derive_bare_flow_replay_error();"
+            "print(len(hits))" % (root / "scripts", dst)
+        )
+        out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True)
+        assert out.returncode == 0, f"the probe failed: {out.stderr}"
+        n = int(out.stdout.strip())
+        assert n == 1, (
+            f"a `{{'miss': {spelling}}}` table reported {n} base-coded producers, not 1. Zero means the "
+            f"derivation is blind to this spelling and its reported zero does not mean what it says; "
+            f"two means an Attribute chain is being counted once per node.")
+
+
+# ---------------------------------------------------------------------------------------------------
+# The OTHER vocabularies. `ToolOutcome.code`, `SkippedFlow.code`, `BatchRowResult.code` and
+# `RunRecord.failure_code` are fields this taxonomy shares with codes `mcpserver` mints itself, and B3
+# buckets on them. Both cells below DERIVE the other vocabulary from source rather than listing it.
+
+
+def _skipped_flow_codes() -> set:
+    """The `SkippedFlow` vocabulary, derived from `mcpserver`'s own source."""
+    server = pathlib.Path(__file__).parents[1] / "src" / "ultracua" / "mcpserver" / "server.py"
+    tree = ast.parse(server.read_text(encoding="utf-8"), filename=str(server))
+    out = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "SkippedFlow":
+            # (spec_name, code, detail) — positionally, and `code=` if ever passed by keyword.
+            for a in n.args[1:2]:
+                if isinstance(a, ast.Constant):
+                    out.add(a.value)
+            for kw in n.keywords:
+                if kw.arg == "code" and isinstance(kw.value, ast.Constant):
+                    out.add(kw.value.value)
+    return out
+
+
+def test_the_reserved_and_aligned_sets_together_cover_every_skipped_flow_code() -> None:
+    """FOUND BY THE 1.4a AUDIT. `RESERVED_CODES`'s own comment said it covered every `SkippedFlow`
+    code and listed six of the eight — the two omitted being precisely the two the slice then minted
+    as taxonomy classes.
+
+    So the rule read as violated by `NotLearnedError` and `NotApprovedError`, with nothing in the tree
+    to say whether that was deliberate. It IS deliberate — they name the same remedy on a different
+    surface — but a hand-typed set cannot express intent, only omission.
+
+    DERIVED, so it cannot go stale: every code `mcpserver` mints must be either RESERVED (the taxonomy
+    may not take it) or ALIGNED (the taxonomy takes it on purpose, meaning the same thing). A ninth
+    `SkippedFlow` code added tomorrow fails here until someone says which.
+    """
+    from ultracua.flows import ALIGNED_CODES, REGISTRY, RESERVED_CODES
+
+    minted = _skipped_flow_codes()
+    assert len(minted) >= 8, f"the derivation found only {sorted(minted)} — it is broken"
+
+    unclassified = sorted(minted - RESERVED_CODES - ALIGNED_CODES)
+    assert not unclassified, (
+        f"{unclassified} are minted as `SkippedFlow` codes and are in neither RESERVED_CODES nor "
+        f"ALIGNED_CODES. Say which: reserved means the taxonomy may not take the slug; aligned means it "
+        f"takes it deliberately because the two name the SAME remedy.")
+
+    # ALIGNED means the taxonomy really does use it — an alignment nobody took is just a hole.
+    unused = sorted(ALIGNED_CODES - set(REGISTRY))
+    assert not unused, f"{unused} are declared aligned but no taxonomy class carries them"
+    # ...and RESERVED means it really does NOT.
+    stolen = sorted(RESERVED_CODES & set(REGISTRY))
+    assert not stolen, f"{stolen} are reserved and a taxonomy class carries them anyway"
+    print(f"\n  SkippedFlow mints {len(minted)}; aligned with the taxonomy: {sorted(ALIGNED_CODES)}")
+
+
+def test_the_quiet_allowlist_is_only_ever_compared_against_SkippedFlow_code() -> None:
+    """THE CONTAINMENT THAT MAKES THE ALIGNMENT SAFE, and it is the direction that would hurt.
+
+    `QUIET_SKIPS` is the fleet's quiet allowlist. `not_approved` is in it AND is now a taxonomy code —
+    and `NotApprovedError` fires for a flow that "declares a write, which is approval-gated whatever
+    the caller asked for". If that slug ever reached `QUIET_SKIPS` from a `ToolOutcome` or a
+    `BatchRowResult`, a WRITE REFUSAL would land in the bucket the fleet reads as ordinary, which is
+    R3.9/CLI-1 exactly: a flow leaving the fleet with cron reporting green.
+
+    It does not today — both comparisons are against a `SkippedFlow` — and this is what keeps it that
+    way. Structural, because the hazard is a comparison someone adds later, not one that exists now.
+    """
+    server = pathlib.Path(__file__).parents[1] / "src" / "ultracua" / "mcpserver" / "server.py"
+    tree = ast.parse(server.read_text(encoding="utf-8"), filename=str(server))
+
+    uses = []
+    for n in ast.walk(tree):
+        if not (isinstance(n, ast.Compare) and len(n.ops) == 1
+                and isinstance(n.ops[0], (ast.In, ast.NotIn))):
+            continue
+        if _dotted(n.comparators[0]).split(".")[-1] != "QUIET_SKIPS":
+            continue
+        uses.append((n.lineno, ast.unparse(n.left)))
+
+    assert uses, "no `... in QUIET_SKIPS` comparison found — this cell is asserting nothing"
+    # The left side must be a `SkippedFlow`'s code. Keyed on the RECEIVER's name, which the two live
+    # sites spell `s.code` inside a comprehension over `self.skipped` / `listing.skipped`.
+    bad = [f"line {ln}: {expr}" for ln, expr in uses if expr not in ("s.code",)]
+    assert not bad, (
+        f"{bad} compares something other than a `SkippedFlow`'s code against QUIET_SKIPS. Two of that "
+        f"allowlist's three members are also taxonomy codes now, and `not_approved` fires for a "
+        f"DECLARED WRITE — putting a write refusal in the fleet's quiet bucket (R3.9/CLI-1).")
+    print(f"\n  QUIET_SKIPS compared at {len(uses)} site(s), all against a SkippedFlow's code")

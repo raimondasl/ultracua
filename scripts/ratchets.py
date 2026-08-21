@@ -210,18 +210,32 @@ def _base_coded_sites():
                 if ann is not None:
                     skip |= {id(x) for x in ast.walk(ann)}
 
+        # An `Attribute` chain CONTAINS a `Name`, and `ast.walk` visits both — so a dotted reference
+        # would otherwise be counted twice. Resolve the outermost node and suppress its interior.
         for n in ast.walk(tree):
-            # (a) a raise naming the class.
+            if isinstance(n, ast.Attribute) and _dotted(n).split(".")[-1] == "FlowReplayError":
+                skip |= {id(x) for x in ast.walk(n) if x is not n}
+
+        for n in ast.walk(tree):
+            # (a) a raise naming the class, bare or dotted.
             if isinstance(n, ast.Raise) and isinstance(n.exc, ast.Call):
                 name = _dotted(n.exc.func).split(".")[-1]
                 if name == "FlowReplayError":
                     base.append(Site(_rel(path), n.lineno, "raise"))
                 elif name in fam:
                     sub.append(Site(_rel(path), n.lineno, f"raise {name}"))
-            # (b) the bare NAME in a value position — a dict value, a variable, a default. This is the
+            # (b) the class in a VALUE position — a dict value, a variable, a default. This is the
             #     shape that catches `_classify_replay_failure`'s table, whose entry becomes a raise
             #     through a Call and which (a) structurally cannot see.
-            elif isinstance(n, ast.Name) and n.id == "FlowReplayError" and id(n) not in skip:
+            #
+            #     BOTH SPELLINGS. The first draft matched `ast.Name` only, so `flows.FlowReplayError`
+            #     in a value position was invisible — and that is the ONE spelling every module except
+            #     `flows.py` would use, `mcpserver` and `daemon` included. A shape added to close an
+            #     indirection that closes half of it is this register's "patch on a patch" verbatim;
+            #     found by the 1.4a audit, reproduced, and armed by
+            #     `test_the_ratchet_sees_the_base_class_under_BOTH_spellings`.
+            elif (isinstance(n, (ast.Name, ast.Attribute))
+                  and _dotted(n).split(".")[-1] == "FlowReplayError" and id(n) not in skip):
                 base.append(Site(_rel(path), n.lineno, "value ref"))
             # (c) a surviving `"replay_error"` literal — a getattr default, a comparison, a fixture.
             elif (isinstance(n, ast.Constant) and n.value == "replay_error"

@@ -765,7 +765,23 @@ async def test_no_failure_report_is_constructed_without_a_reason() -> None:
 
 
 def _typed_errors() -> list:
-    """Every concrete `FlowReplayError` subclass, derived by walking the class tree."""
+    """Every concrete `FlowReplayError` subclass DEFINED IN `ultracua`, derived by walking the tree.
+
+    THE PACKAGE FILTER IS LOAD-BEARING, and it was added because the 1.4a audit made this cell red.
+    `__subclasses__()` is a live view maintained by the interpreter: a class defined anywhere — a test
+    probe, a downstream user's own subclass — appears in it, and CPython registers a class in its
+    bases' subclass lists BEFORE `__init_subclass__` runs, so even a class the hook REFUSED is in
+    there. `tests/test_refusal_codes.py` defines eight such probes inside `pytest.raises`, and the
+    derived-equality assertion below then reported `walk-only=['_Probe', '_ProbeOk']` whenever that
+    file ran first. Measured: green in file order, red in the reverse — a latent flake that
+    `pytest-randomly`, a different shard split, or any hand-run subset would surface.
+
+    Filtering on the module is the right fix rather than making the probes clean up after themselves,
+    for two reasons. A probe cannot reliably remove itself (the subclass list is cleared by the cyclic
+    collector, not by a `del`), and the property being asserted is about the SHIPPED taxonomy — a
+    downstream user subclassing `FlowReplayError` in their own package must not be able to fail our
+    invariant test.
+    """
     import ultracua.flows  # noqa: F401 — ensure the subclasses are imported before walking
     from ultracua.flows import FlowReplayError
 
@@ -776,7 +792,9 @@ def _typed_errors() -> list:
             if sub not in seen:
                 seen.append(sub)
                 stack.append(sub)
-    return seen
+    ours = [c for c in seen if c.__module__.split(".")[0] == "ultracua"]
+    assert ours, "the package filter removed the entire taxonomy — it is wrong, not the tree empty"
+    return ours
 
 
 async def test_every_typed_error_carries_a_DISTINCT_machine_readable_code() -> None:
@@ -843,8 +861,27 @@ async def test_no_typed_error_is_both_retryable_and_post_actuation() -> None:
     post_act = sorted(c.__name__ for c in REGISTRY.values() if c.can_follow_actuation)
     print(f"  retryable: {retryable}")
     print(f"  can follow an actuation: {post_act}")
-    assert retryable, "no class is retryable — B3 must not be told the flag is a constant"
     assert post_act, "no class can follow an actuation — the axis has been cleared wholesale"
+
+    # THE STATE OF `retryable` AFTER 1.4a, STATED RATHER THAN DISCOVERED. `AuthExpiredError` is the
+    # only retryable class left and it is DEFINED BUT NEVER RAISED in `src/` — the heuristic auth path
+    # cannot attribute a drift to expiry confidently, so it raises `DriftError`. `MetaUnreadableError`
+    # was the last raisable one and 1.4a's audit showed its flag was the R4.18 mistake on the read
+    # twin, one release later.
+    #
+    # So: EVERY refusal a caller can actually receive today is non-retryable. That is a fact B3 has to
+    # be told, because a bucket keyed on a flag that never varies is a bucket that measures nothing —
+    # and it is a fact that should CHANGE, by splitting the pre-write and post-write halves of
+    # `meta_unreadable` rather than by relaxing a flag. Asserted here so the day it changes is loud.
+    assert retryable == ["AuthExpiredError"], (
+        f"the retryable set moved to {retryable}. If a class became retryable, prove it is raised only "
+        f"from positions where nothing can have actuated — that is what `can_follow_actuation` is for, "
+        f"and getting it wrong double-submits (R4.18, and again on the read twin at 1.4a).")
+    raise_sites = (Path(__file__).parents[1] / "src" / "ultracua" / "flows.py").read_text(
+        encoding="utf-8")
+    assert "raise AuthExpiredError(" not in raise_sites, (
+        "AuthExpiredError is now RAISED, so `retryable=True` is reachable for the first time. Re-check "
+        "its `can_follow_actuation=False` against the new raise site before believing this cell.")
 
     bad = sorted(c.__name__ for c in REGISTRY.values() if c.retryable and c.can_follow_actuation)
     assert not bad, (
