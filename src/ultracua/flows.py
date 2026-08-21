@@ -883,6 +883,103 @@ class LedgerUnusableError(FlowReplayError):
     can_follow_actuation = False
 
 
+@dataclass(frozen=True)
+class Outcome:
+    """The REPORT projection of one exception: which refusal, and may an agent re-run it.
+
+    `armed` is `FlowReplayError.landed` UNDER A DIFFERENT NAME, and the rename is the point. That
+    token is the durable dedupe ledger's two-state ARM, where a MAYBE reads as a no; a report needs a
+    tri-state. Calling it `landed` here would put a tidy-looking `o.landed` one dot away from the two
+    arming guards — and `None` is falsy, so the collapse would "work" until somebody wrote
+    `is not False`, at which point a row that was never paid is skipped forever. There is no
+    `o.landed` to unify, so the mistake is not expressible.
+
+    Deliberately NOT carrying a write ANSWER. That question has exactly one definition
+    (`_RecordSink._evidence`) and `_row_write_evidence` projects from it; a second copy here would need
+    hand-agreement with the fold forever.
+    """
+
+    code: str
+    retryable: bool
+    armed: bool          # `exc.landed` — the LEDGER's token, here only ever to RAISE a report to True
+
+
+# A crash is the one exception carrying no taxonomy attributes at all. `"raised"` is the word
+# `_RecordSink.finish` already writes into `RunRecord.failure_code` for the same event, so the two
+# surfaces say ONE word for one event — and `RESERVED_CODES` owns it, so no taxonomy class can take it.
+_CRASH_OUTCOME = Outcome(code="raised", retryable=False, armed=False)
+
+
+def outcome_of(exc: BaseException) -> Outcome:
+    """TOTAL over `BaseException`, and serving the crash row is the whole justification for that.
+
+    Inside `except FlowReplayError` the attributes are exact and loud — the base defines all four and
+    `__init_subclass__` makes every subclass DECLARE them — which is why 1.4a converted the MCP sites
+    to direct reads rather than a helper. The site that cannot read attributes is `run_batch`'s bare
+    `except Exception`, which today reports `code=""`: indistinguishable in a `--json` report from the
+    duplicate-row refusal, which is a different event entirely.
+    """
+    if isinstance(exc, FlowReplayError):
+        return Outcome(code=exc.code, retryable=exc.retryable, armed=exc.landed)
+    return _CRASH_OUTCOME
+
+
+# The row statuses on which a confident DENIAL is EARNED, because no browser ran for that row at all.
+# QUIET IS AN ALLOWLIST: a status added tomorrow is UNKNOWN by default rather than silently denied.
+_ROW_NEVER_RAN = frozenset({"invalid", "planned", "skipped"})
+
+
+def _row_write_evidence(record: "Optional[RunRecord]", status: str,
+                        outcome: "Optional[Outcome]" = None,
+                        *, ledger_says_committed: bool = False) -> Optional[bool]:
+    """A batch row's write column. ONE definition, and it is the RECORD's (R4.52).
+
+    The field's question is "may this row's write have committed" — which is `RunRecord.committed`'s
+    question, NOT `RunRecord.landed`'s. `landed` asks "may a resume SKIP this whole row" and needs
+    EVERY recipe write ok, so projecting it here would print `false` beside an `error` string saying
+    the write DID commit, on a flow whose trailing step drifted after a confirmed commit.
+
+    Composed so the sources cannot conflict — the two that RAISE are checked first, then the record
+    answers, then one clause may LOWER an unknown:
+
+      * `ledger_says_committed` and `armed` raise to True. A report must never DENY what the durable
+        ledger has already, irrevocably, acted on.
+      * the RECORD answers if this row called `replay()`; otherwise the STATUS does, via the allowlist.
+      * **`record.attempts == 0` lowers an unknown to False** — and only an unknown, never a True.
+
+    THAT LAST CLAUSE READS A MEASUREMENT, NOT A DECLARATION, and the choice was deliberate. The obvious
+    alternative is the exception's own `can_follow_actuation`, which says whether the class can escape
+    post-actuation — but R4.74 records that this axis has NO SENSOR and that two of its twenty-eight
+    declarations were measurably wrong when 1.4a's audit checked them by hand. Lowering an unknown to a
+    confident denial is the narrowing direction, the one nothing downstream catches, so it must not
+    rest on an unsensed claim. `attempts` is a fact about THIS run: zero engine attempts means nothing
+    could have actuated, full stop.
+
+    MEASURED, and the two agree on today's population — `not_approved` reports `attempts=0`,
+    `write_unverified` and `drift` report `1`. Where they would DISAGREE, the measurement is the safer
+    one: a class wrongly declared `can_follow_actuation=False` but raised after an attempt gets a
+    confident False from the declaration and an honest `None` from the count.
+
+    Without SOME lowering clause every refusal on a write batch reads `null` and the field carries no
+    information at all — `not_approved` indistinguishable from `write_unverified`. That is the D0
+    over-refusal this register has already shipped once, wearing a reporting hat.
+
+    NEVER route a `ledger.record(...)` guard through this function; `tests/test_landed_arms_the_ledger`
+    fails if you do.
+    """
+    if ledger_says_committed:
+        return True
+    if outcome is not None and outcome.armed:
+        return True
+    if record is None:
+        return False if status in _ROW_NEVER_RAN else None
+    if record.committed is True:
+        return True
+    if record.committed is None and record.attempts == 0:
+        return False
+    return record.committed
+
+
 def _classify_replay_failure(kind: str) -> type[FlowReplayError]:
     """Map an `_attempt_replay` failure `kind` to its taxonomy class (default: DriftError)."""
     return {
@@ -2629,17 +2726,21 @@ class _AttemptFacts:
 # real spend, but they are not attempts, and `RunRecord.attempts` has always counted attempts.
 _ENGINE_OUTCOMES = frozenset({"ok", "failed", "raised"})
 
-# The outcomes after which the write question is UNANSWERABLE rather than answered "no". A raise can
-# happen after the commit POSTed; a precheck skip is evidence about an EARLIER run, never this one.
+# `_UNKNOWN_OUTCOMES` LIVED HERE AND IS GONE (1.4b, R4.61). It listed the outcomes after which the
+# write question was UNANSWERABLE, and `_evidence` consulted it — which meant unanswerability was keyed
+# on the `outcome` STRING while every failure exit shares one string, `"failed"`. So the one kind whose
+# entire meaning is "the commit FIRED and cannot be confirmed" was answered "no" along with every
+# ordinary drift. No per-kind test could have caught that; there was nothing per-kind to look at.
 #
-# `relearn` IS IN THIS SET, and leaving it out was a regression the first draft shipped: a relearn is a
-# live LLM authoring run against a page that has demonstrably drifted, and discovery can actuate a
-# write — `LearnResult.performed_write` exists for exactly that, and `_learn` refuses to CACHE a flow
-# whose write it could not attribute. So a completed relearn licenses no denial. Before the sink, the
-# same guarantee came from `_mark_ok` -> `_forget_negative_write_evidence`, one of the three helpers
-# the sink deleted as "existing only to UNDO another"; deleting the helper deleted the property with
-# it, and the relearn cell asserted `ok`/`mode`/`usage` but never `landed`, so nothing noticed.
-_UNKNOWN_OUTCOMES = frozenset({"raised", "precheck", "relearn", "relearn_raised"})
+# `_evidence` now keys on the FIELD. A fact that does not know says `None`, and `_AttemptFacts` defaults
+# both write fields to `None`, so an append site that states nothing is UNKNOWN rather than a denial —
+# the safe direction, by construction rather than by remembering to add a string to a set.
+#
+# The set's own hard-won member is preserved on those append sites: `relearn` was left OUT of it by the
+# first draft and that was a regression, because a relearn is a live LLM authoring run against a page
+# that has demonstrably drifted, and discovery CAN actuate a write (`LearnResult.performed_write`
+# exists for exactly that). A completed relearn licenses no denial — and now it cannot accidentally
+# give one, because saying nothing means unknown.
 
 
 class _RecordSink:
@@ -2770,10 +2871,21 @@ class _RecordSink:
         `False` — a run in which something RAISED, or which skipped on an idempotency precheck, has
         no basis for a denial, and a confident `False` over a write that may have committed is the
         one error direction nothing downstream catches.
+
+        KEYED ON THE FIELD SINCE 1.4b, NOT ON THE OUTCOME STRING (R4.61). It used to ask whether the
+        attempt's `outcome` was in `_UNKNOWN_OUTCOMES` — but every failure exit appends the SAME string,
+        `"failed"`, so one string had to answer for `write_unverified` (whose entire meaning is "the
+        commit fired and cannot be confirmed") and for an ordinary drift alike. No per-kind test could
+        catch that; there was nothing per-kind to look at.
+
+        A fact that does not know now says so itself. The four outcomes the old set named still leave
+        the question open, because they append nothing for these fields and `_AttemptFacts` defaults
+        both to `None` — so the safe answer is the DEFAULT rather than a membership someone has to
+        remember to add.
         """
         if any(getattr(f, field_name) is True for f in self._facts):
             return True
-        if not self._facts or any(f.outcome in _UNKNOWN_OUTCOMES for f in self._facts):
+        if not self._facts or any(getattr(f, field_name) is None for f in self._facts):
             return None
         return False
 
@@ -2864,6 +2976,17 @@ async def _attempt_replay_body(spec, router, cache, key, meta, check_shape, *, c
     # inherits the arming with nothing to remember.
     landed = False        # may a resume SKIP this whole row (every recipe write ran ok)
     committed = False     # did ANYTHING commit (the first recipe write ran ok) — the disclosure gate
+    # ...and the REPORT projection of `committed`, which is TRI-STATE (R4.61). The two above are the
+    # ARMING tokens: they are folded by `or` into `landed_any`/`committed_any` and reach the single
+    # arming point, where a MAYBE must read as a no. A report needs the third state, and keeping it as
+    # a separate local is what stops the two questions sharing one variable.
+    #
+    # `None` until the evidence block runs, because until then nothing has been observed either way —
+    # and that initial value is the SAFE one on purpose. There is no `_fail` call between here and the
+    # evidence block today, but if one were ever added it would record UNKNOWN rather than a denial,
+    # which is the direction this whole field exists to get right. The two arming tokens above start
+    # at `False` for the opposite and equally deliberate reason: a maybe must never arm the ledger.
+    committed_report: Optional[bool] = None
 
     # What this attempt observed, filled once the report is in hand. `_append` (owned by the guard
     # above) merges it with the outcome, so every exit records the SAME set of facts — including the
@@ -2875,7 +2998,15 @@ async def _attempt_replay_body(spec, router, cache, key, meta, check_shape, *, c
         # is `_RecordSink.finish`'s decision, made over every attempt at the single exit — which is
         # what stops a later success from inheriting this attempt's failure code (R4.57) and stops
         # this attempt's `False` from being read as the run's answer.
-        _append(outcome="failed", landed=landed, committed=committed)
+        # R4.61. The FACT carries the tri-state; the RETURN carries the two-state arming pair,
+        # unchanged. Before 1.4b both came from `committed`, so a `write_unverified` failure — whose
+        # whole meaning is "the commit FIRED and cannot be confirmed" — appended a confident `False`
+        # and the record DENIED a commit its own message asserts.
+        #
+        # The tuple below is deliberately NOT widened: it feeds `landed_any = landed_any or landed2`
+        # and the single arming point, and a tri-state folded by `or` would reach the durable ledger
+        # as a three-valued lattice. `tests/test_landed_arms_the_ledger.py` is what holds that split.
+        _append(outcome="failed", landed=landed, committed=committed_report)
         return False, None, reason, kind, landed, committed
 
     # A learned pin anchors the OLD final page; a repaired flow may end elsewhere, so only trust the
@@ -3016,6 +3147,14 @@ async def _attempt_replay_body(spec, router, cache, key, meta, check_shape, *, c
     all_writes_ok = bool(recipe_writes) and all(i in ran_ok for i in recipe_writes)
     landed = bool(out.get("write_landed") and all_writes_ok)
     committed = bool(out.get("write_landed") and recipe_writes and recipe_writes[0] in ran_ok)
+    # The REPORT projection starts where the arming token does. Only ONE exit below raises it to
+    # UNKNOWN, and that exit is named there rather than here — an allowlist of size one, so a kind
+    # added tomorrow is answerable-by-default and has to argue its way into being unknown.
+    #
+    # The other direction was considered and REFUSED: making every failed write-flow attempt unknown
+    # satisfies every safety test and destroys the field, because `mutating` is a GUESS with 28%
+    # measured false positives on read-only controls. That is D0 over-refusal wearing a reporting hat.
+    committed_report = committed
 
     if report.mode == "miss":
         return _fail("no learned flow — run learn first", "miss")
@@ -3032,6 +3171,12 @@ async def _attempt_replay_body(spec, router, cache, key, meta, check_shape, *, c
             # `relearn` would re-author a flow that already fired, and an auth-refresh retry would fire it
             # again. Deliberately NOT `landed` — we do not KNOW it committed, and ledger.py's invariant is
             # "never a false skip of an un-landed write", so a keyed retry is the safer side of that trade.
+            # R4.61, AND THE WHOLE OF IT. This exit's meaning is "the commit ACTUATED and the page
+            # cannot report on it", so the REPORT must say UNKNOWN rather than deny it. The ARMING
+            # token stays False three lines up — `ledger.py`'s invariant is "never a false skip of an
+            # un-landed write", and a keyed retry is the safer side of that trade. Two questions, two
+            # answers, one event; `WriteUnverifiedError`'s own docstring says both.
+            committed_report = None
             return _fail(f"{out.get('error')}", "write_unverified")
         return _fail(f"data not found / write not confirmed on replay: {out.get('error')}", "drift")
     if spec.mutate is not None and spec.extract is not None and not out.get("extract_found"):
@@ -3073,7 +3218,7 @@ async def _attempt_replay_body(spec, router, cache, key, meta, check_shape, *, c
         if mode == "replay" and spec.audit:
             _capture_audit(cache, key, spec, meta, report, data, eff=eff,
                            truncated=bool(out.get("truncated")), cached_flow=cached_flow)
-    _append(outcome="ok", landed=landed, committed=committed)
+    _append(outcome="ok", landed=landed, committed=committed_report)
     return True, data, "", "", landed, committed
 
 
@@ -3558,7 +3703,7 @@ async def _replay_body(
     # Idempotency precheck (opt-in, one-shot writes): if the end-state already holds, skip the write.
     if await _precheck_done(spec):
         # A skip is evidence about an EARLIER run, never about this one, so it makes the write
-        # question unanswerable rather than answering it "no" (see `_UNKNOWN_OUTCOMES`).
+        # question unanswerable rather than answering it "no" — the write fields stay `None`.
         sink.attempt(_AttemptFacts(outcome="precheck", mode="precheck"))
         _record_run(cache, key, ok=True)
         _log.info("flow %r: write already done (idempotency precheck) — skipped", spec.name)
@@ -4287,7 +4432,23 @@ class BatchRowResult:
     # see CLAUDE.md) that says whether this row's write may have committed.
     code: str = ""
     retryable: bool = False
-    landed: bool = False
+    # RENAMED FROM `landed` AND MADE TRI-STATE AT 1.4b (R4.52), and the rename is not cosmetic.
+    # THREE fields were spelled `landed` and asked three different questions:
+    #     `exc.landed`      may the durable dedupe LEDGER record this row     (two-state ARM)
+    #     `RunRecord.landed`  may a resume SKIP this row (EVERY recipe write ok)
+    #     this one          did ANYTHING commit                              (the FIRST write ok)
+    # and this is the one that reaches `--json`. 1.4b changes its ANSWER on four row kinds, so leaving
+    # the name would hand every existing consumer a silently different value under an unchanged key.
+    # Renaming makes that a KeyError instead — the loud direction — and it is free exactly once,
+    # because the field had no reader anywhere in `src/`, `scripts/` or `benchmarks/`.
+    #
+    # PROJECTED from `RunRecord.committed` by `_row_write_evidence`, never re-decided here. `None`
+    # means the question was never answerable for this row.
+    #
+    # `False` IS EVIDENCE-BOUNDED, NOT AN ORACLE (CLAUDE.md). A write step that succeeded whose confirm
+    # read ABSENT reports `False`, and B3 must not derive "refused correctly" from it — see R4.66.
+    # The default stays `False` because the never-ran rows depend on it.
+    committed: Optional[bool] = False
 
 
 @dataclass
@@ -4304,6 +4465,14 @@ class BatchRun:
     resumed: int = 0                 # rows already committed on a prior run (resume) — skipped, not re-fired
     dry_run: bool = False
     job_id: Optional[str] = None     # the resume token this run keyed its ledger on (None = no ledger)
+
+
+def _planned_row(index: int, keys: list, status: str) -> "BatchRowResult":
+    """The dry-run preview row. ONE expression produces TWO statuses, so the write answer for both
+    lives here rather than being inlined into a comprehension where only one of them is readable."""
+    return BatchRowResult(index=index, ok=True, idempotency_keys=keys, status=status,
+                          committed=_row_write_evidence(None, status,
+                                                     ledger_says_committed=status == "resumed"))
 
 
 async def run_batch(
@@ -4402,10 +4571,10 @@ async def run_batch(
             resolved = _preflight_row(spec, row, meta=meta, cached_flow=cached_flow,
                                       require_approved=require_approved, on_drift="raise")
         except FlowReplayError as exc:
+            o = outcome_of(exc)
             invalid.append(BatchRowResult(index=i, status="invalid", ok=False, error=str(exc),
-                                          code=getattr(exc, "code", ""),
-                                          retryable=bool(getattr(exc, "retryable", False)),
-                                          landed=bool(getattr(exc, "landed", False))))
+                                          code=o.code, retryable=o.retryable,
+                                          committed=_row_write_evidence(None, "invalid", o)))
             resolved_rows.append(None)
             preview_keys.append([])
             continue
@@ -4423,6 +4592,7 @@ async def run_batch(
             if kt in seen:
                 invalid.append(BatchRowResult(
                     index=i, status="invalid", ok=False,
+                    committed=_row_write_evidence(None, "invalid"),
                     error=f"duplicate of row {seen[kt]} — an identical write would mint the same "
                           f"Idempotency-Key, so a backend dedupe would silently suppress it. Add a "
                           f"disambiguating slot (e.g. a reference/nonce) if these are distinct writes."))
@@ -4438,10 +4608,10 @@ async def run_batch(
     # DRY-RUN: the plan is valid and complete; actuate nothing (no browser, no health). Under `resume`, a row
     # already committed on a prior run previews as "resumed" (it would be skipped) rather than "planned".
     if dry_run:
-        report = [BatchRowResult(
-            index=i, ok=True, idempotency_keys=preview_keys[i],
-            status="resumed" if (ledger and ledger.is_committed(preview_keys[i])) else "planned")
-            for i in range(len(rows))]
+        report = [_planned_row(i, preview_keys[i],
+                               "resumed" if (ledger and ledger.is_committed(preview_keys[i]))
+                               else "planned")
+                  for i in range(len(rows))]
         resumed = sum(1 for r in report if r.status == "resumed")
         return BatchRun(status="planned", rows=report, total=len(rows), resumed=resumed,
                         dry_run=True, job_id=resume)
@@ -4459,22 +4629,31 @@ async def run_batch(
         for i, row in enumerate(rows):
             if stopped:
                 report.append(BatchRowResult(index=i, status="skipped", ok=False,
+                                             committed=_row_write_evidence(None, "skipped"),
                                              error="skipped — an earlier row failed (on_row_error='stop')"))
                 continue
             # RESUME: a row already committed under this job-id is SKIPPED, not re-fired (no browser). It does
             # NOT consume the stop budget — its write landed on a prior run, so it satisfies "committed once".
             if ledger is not None and ledger.is_committed(preview_keys[i]):
-                report.append(BatchRowResult(index=i, status="resumed", ok=True,
-                                             idempotency_keys=preview_keys[i],
-                                             error="already committed on a prior run (resume) — not re-fired"))
+                report.append(BatchRowResult(
+                    index=i, status="resumed", ok=True, idempotency_keys=preview_keys[i],
+                    committed=_row_write_evidence(None, "resumed", ledger_says_committed=True),
+                    error="already committed on a prior run (resume) — not re-fired"))
                 continue
             t0 = time.perf_counter()
+            # ONE RECORD PER ROW. `replay()` writes it at its single exit, so the row can PROJECT the
+            # write answer instead of re-deciding it — a third definition beside `exc.landed` and
+            # `record.committed` is what 1.4b exists to avoid. A record SHARED across rows would report
+            # the last row's verdict on every row; `replay_calls` is the detector for that.
+            rec = RunRecord()
             try:
                 data = await replay(spec, params=row, require_approved=require_approved, on_drift="raise",
-                                    check_shape=check_shape, provider_name=provider_name, cache=cache)
+                                    check_shape=check_shape, provider_name=provider_name, cache=cache,
+                                    record=rec)
                 report.append(BatchRowResult(index=i, status="ok", ok=True,
                                              ms=(time.perf_counter() - t0) * 1000.0, data=data,
-                                             idempotency_keys=preview_keys[i]))
+                                             idempotency_keys=preview_keys[i],
+                                             committed=_row_write_evidence(rec, "ok")))
                 # Record STRICTLY AFTER the write confirmed (durable before the next row fires). A crash
                 # before this leaves the row unrecorded -> a re-run re-fires it with the SAME key -> the
                 # backend dedupes (never a silent double-write).
@@ -4498,21 +4677,24 @@ async def run_batch(
                 # re-fired by every subsequent resume. Do not narrow this back to a class check.
                 if (getattr(exc, "landed", False) and ledger is not None and preview_keys[i]):
                     ledger.record(i, preview_keys[i], getattr(exc, "code", "landed"))
+                o = outcome_of(exc)
                 report.append(BatchRowResult(index=i, status="failed", ok=False,
                                              ms=(time.perf_counter() - t0) * 1000.0, error=str(exc),
                                              idempotency_keys=preview_keys[i],
-                                             code=getattr(exc, "code", ""),
-                                             retryable=bool(getattr(exc, "retryable", False)),
-                                             landed=bool(getattr(exc, "landed", False))))
+                                             code=o.code, retryable=o.retryable,
+                                             committed=_row_write_evidence(rec, "failed", o)))
                 if on_row_error == "stop":
                     stopped = True
             except Exception as exc:  # noqa: BLE001 - a crash (browser/unexpected) hard-stops (page state is
                 #                       suspect — firing more writes into it is the silent-continue danger),
                 #                       but is fully recorded, never swallowed.
+                o = outcome_of(exc)
                 report.append(BatchRowResult(index=i, status="failed", ok=False,
                                              ms=(time.perf_counter() - t0) * 1000.0,
                                              error=f"{type(exc).__name__}: {exc}",
-                                             idempotency_keys=preview_keys[i]))
+                                             idempotency_keys=preview_keys[i],
+                                             code=o.code, retryable=o.retryable,
+                                             committed=_row_write_evidence(rec, "failed", o)))
                 stopped = True
     finally:
         if ledger is not None:

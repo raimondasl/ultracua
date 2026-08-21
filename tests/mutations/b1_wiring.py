@@ -23,8 +23,8 @@ from __future__ import annotations
 # (id, file, find, replace, why-it-matters)
 MUTANTS = [
     ('evidence_unknown_becomes_false', "flows.py",
-     '        if not self._facts or any(f.outcome in _UNKNOWN_OUTCOMES for f in self._facts):\n            return None',
-     '        if False:  # MUTANT: an unknown outcome answers the write question "no"\n            return None',
+     '        if not self._facts or any(getattr(f, field_name) is None for f in self._facts):\n            return None',
+     '        if False:  # MUTANT: a fact that does not know answers the write question "no"\n            return None',
      'a run in which an attempt RAISED would report `landed=False` — the confident denial over a write that may have committed, which is the one error direction nothing downstream catches'),
 
     ('evidence_true_does_not_win', "flows.py",
@@ -77,8 +77,8 @@ MUTANTS = [
     # ---- the four guarantees the two adversarial audits of 1.5 added. Each has a cell; each mutant
     # ---- is what proves the cell is the thing keeping it.
     ('relearn_success_is_answerable', "flows.py",
-     '_UNKNOWN_OUTCOMES = frozenset({"raised", "precheck", "relearn", "relearn_raised"})',
-     '_UNKNOWN_OUTCOMES = frozenset({"raised", "precheck", "relearn_raised"})  # MUTANT',
+     '                outcome="relearn", mode="relearn",',
+     '                outcome="relearn", mode="relearn", landed=False, committed=False,  # MUTANT',
      "a relearn is a live authoring run that CAN actuate a write (LearnResult.performed_write exists "
      "for it), so folding a completed relearn as answerable-and-no is a confident denial — the HIGH "
      "regression the first draft of the sink shipped"),
@@ -161,6 +161,56 @@ MUTANTS = [
      '        attempts = len(self._facts)  # MUTANT',
      'attempts has always meant ENGINE attempts; a precheck skip counting as one would make a run that never touched the engine report that it did'),
 
+
+    # ---- 1.4b: R4.52's row projection and R4.61's unanswerable write. Each has a cell; each mutant
+    # ---- is what proves the cell is the thing keeping it.
+    ('write_unverified_denies_its_own_commit', "flows.py",
+     '            committed_report = None\n            return _fail(',
+     '            committed_report = committed  # MUTANT: R4.61 reintroduced\n            return _fail(',
+     "R4.61 exactly: the one kind whose meaning is 'the commit FIRED and cannot be confirmed' records a "
+     "confident committed=False. Nothing downstream catches a denial, and an operator's tooling reads "
+     "the record rather than the message"),
+
+    ('row_projects_the_arming_token', "flows.py",
+     '    if record.committed is True:\n'
+     '        return True\n'
+     '    if record.committed is None and record.attempts == 0:\n'
+     '        return False\n'
+     '    return record.committed',
+     '    if record.landed is True:  # MUTANT: the row projects the SKIP question\n'
+     '        return True\n'
+     '    if record.landed is None and record.attempts == 0:\n'
+     '        return False\n'
+     '    return record.landed',
+     "landed asks 'may a resume SKIP this whole row' and needs EVERY recipe write ok; the row's "
+     "question is 'may this row's write have committed'. Projecting the wrong one prints false beside "
+     "an error string saying the write DID commit"),
+
+    ('row_denial_rests_on_a_declaration', "flows.py",
+     '    if record.committed is None and record.attempts == 0:',
+     '    if record.committed is None and outcome is not None and not outcome.armed:  # MUTANT',
+     "lowering an unknown to a confident DENIAL must rest on a measurement (did any engine attempt "
+     "run) and not on a class attribute: R4.74 records that can_follow_actuation has no sensor and "
+     "that two of its declarations were measurably wrong when checked by hand"),
+
+    ('row_never_ran_allowlist_denies_everything', "flows.py",
+     '        return False if status in _ROW_NEVER_RAN else None',
+     '        return False  # MUTANT: every recordless row denies the commit',
+     "QUIET IS AN ALLOWLIST. A row status nobody has argued into _ROW_NEVER_RAN must read UNKNOWN, so "
+     "a status added tomorrow cannot silently deny a write it knows nothing about"),
+
+    # ---- 1.4b's audit: the ARM, collapsed through a local variable. The AST pin that first guarded
+    # ---- this was GREEN over exactly this rewrite, because the needle stays in the guard and the
+    # ---- banned symbols sit one statement above it. A text scan is the wrong sensor for a behaviour.
+    ('ledger_arm_reads_the_tri_state_report', "flows.py",
+     '                if (getattr(exc, "landed", False) and ledger is not None and preview_keys[i]):',
+     '                o_arm = outcome_of(exc)  # MUTANT: the report reaches the two-state arm\n'
+     '                if (_row_write_evidence(rec, "failed", o_arm) is not False\n'
+     '                        and ledger is not None and preview_keys[i]):',
+     "`_row_write_evidence` returns None for `write_unverified`, and `None is not False`. The arm "
+     "fires, a durable commit line is written for a row nothing confirmed was paid, and every later "
+     "resume of that job SKIPS it. ledger.py's invariant verbatim: never a false skip of an un-landed "
+     "write. Killed by test_landed_arms_the_ledger's driven per-class property, NOT by any text scan"),
 ]
 
 # Mutants no cell kills yet. Each needs a reason and, where it is a real gap, a register id — an empty

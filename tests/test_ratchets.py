@@ -362,3 +362,49 @@ def test_each_shape_of_the_base_code_ratchet_catches_its_own_injection(
     assert shape in notes, (
         f"the injected {shape!r} site was counted but is reported as {sorted(notes)} — a reader running "
         f"`--print` would be sent to the wrong shape")
+
+
+def test_prove_reds_killer_suite_is_browser_free() -> None:
+    """The `red-proof` CI job does NOT install Playwright, so a killer-suite leg containing a browser
+    cell fails EVERY mutant's baseline run.
+
+    MEASURED on CI, not reasoned: adding `tests/test_landed_arms_the_ledger.py` to the default suite
+    gave `8 failed, 135 passed` on BOTH arms — `BrowserType.launch: Executable doesn't exist` — while
+    the same command was green locally, where Chromium happens to be installed. That is CLAUDE.md's
+    "a local green is weaker evidence than CI, in two measured ways" on the platform axis, and it cost
+    a push to find.
+
+    Derived from the manifest rather than declared: a file is browser-free when the tier manifest
+    holds no browser mark for any of its ids. So a killer-suite leg that starts launching a browser
+    fails HERE, in the fast tier, instead of on CI one push later.
+    """
+    import ast
+    import json
+
+    manifest = json.loads((ROOT / "tests" / ".browser_tests.json").read_text(encoding="utf-8"))
+    browser_ids = set(manifest.get("browser", []))
+    assert len(browser_ids) > 100, (
+        f"the manifest lists only {len(browser_ids)} browser tests — it is not loaded, and this cell "
+        f"would pass over anything")
+
+    src = (ROOT / "scripts" / "prove_red.py").read_text(encoding="utf-8")
+    legs = []
+    for node in ast.walk(ast.parse(src)):
+        if (isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "add_argument"
+                and any(isinstance(a, ast.Constant) and a.value == "--tests" for a in node.args)):
+            for kw in node.keywords:
+                if kw.arg == "default":
+                    legs = [e.value for e in kw.value.elts if isinstance(e, ast.Constant)]
+    assert legs, "could not derive `--tests`'s default from prove_red.py — this cell is inert"
+
+    offenders = {}
+    for leg in legs:
+        assert (ROOT / leg).exists(), f"killer-suite leg {leg} does not exist"
+        hits = sorted(i for i in browser_ids if i.startswith(leg + "::"))
+        if hits:
+            offenders[leg] = hits[:3]
+    assert not offenders, (
+        f"these killer-suite legs contain BROWSER tests: {offenders}. The `red-proof` job installs no "
+        f"Playwright, so every mutant's baseline run would fail on a missing Chromium — loudly, but "
+        f"naming the browser rather than the mutation. Move the browser-free cells to their own file.")
+    print(f"\n  killer suite: {len(legs)} leg(s), all browser-free")

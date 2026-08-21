@@ -80,6 +80,19 @@ def report(mode: str = "replay", success: bool = True, *, usage: Optional[dict] 
     usage absorb beside them was killed. A helper that cannot express a field is a hole in every cell
     that would have used it.
     """
+    # FIDELITY CLAUSE (1.4b's audit). The real engine BREAKS on the first failing step and sets
+    # `success = False`; the only upgrade past that needs `mode="repair"`, which `run_batch` cannot
+    # reach (it always calls `replay(..., on_drift="raise")`). So `success=True` beside a not-ok trace
+    # is a report no run can produce — and a cell built on one asserts a population that does not
+    # exist. Measured: a cell scripting exactly that "proved" `record.landed != record.committed` on an
+    # OK row, where the two provably coincide.
+    if success and mode != "repair":
+        bad = [t_.index for t_ in (traces or []) if t_.meta.get("ok") is False]
+        if bad:
+            raise ValueError(
+                f"report(success=True) with failing step(s) {bad}: the engine breaks on the first "
+                f"failing step and reports success=False. Script `success=False`, or `mode='repair'` "
+                f"if you mean a replan that recovered.")
     extra: dict = {} if usage is None else {"usage": usage}
     return FlowReport(mode=mode, success=success, traces=list(traces or []), llm_calls=llm_calls,
                       note=note, extra=extra, healed_steps=healed_steps)
