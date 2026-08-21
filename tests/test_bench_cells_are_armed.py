@@ -649,3 +649,19 @@ def test_the_channel_order_pin_notices_coverage_burying_an_inviolable(monkeypatc
                     '    _RANK = {"inviolable": 0, "coverage": 1, "cost": 2, "rate": 3}',
                     '    _RANK = {"inviolable": 9, "coverage": 1, "cost": 2, "rate": 3}')
     print(assert_red(TR.test_the_gate_orders_inviolables_first))
+
+
+def test_the_contract_scan_notices_a_misspelled_field(monkeypatch) -> None:
+    """`getattr(run, "agent_run", False)` is always False and switches the clause off for the whole
+    corpus, with every cell still green because they all construct the same object."""
+    mutate_function(monkeypatch, "classify",
+                    'getattr(run, "agent_ran", False)',
+                    'getattr(run, "agent_run", False)')
+    print(assert_red(TO.test_classify_reads_only_fields_the_real_record_carries))
+
+
+def test_the_double_ordering_cell_notices_the_two_clauses_swapping(monkeypatch) -> None:
+    mutate_function(monkeypatch, "classify",
+                    "        if len(oracle.matched) >= 2:",
+                    "        if len(oracle.matched) >= 99:")
+    print(assert_red(TO.test_a_must_refuse_row_that_fired_TWICE_reports_the_double))

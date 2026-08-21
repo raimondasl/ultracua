@@ -378,7 +378,10 @@ def classify(truth: ScenarioTruth, run, oracle: Oracle,
     """Adjudicate one scenario run. The ONLY place an outcome is minted.
 
     `run` is duck-typed on the fields B2 records -- `harness_error`, `agent_error`,
-    `agent_error_code` -- so this is testable without a substrate, an agent or a key.
+    `agent_error_code`, `agent_ran` and `claimed_complete` -- so this is testable without a
+    substrate, an agent or a key. The last two are read through `getattr` with a SAFE default
+    (`False` / `None`), so a record that predates them is unscored rather than scored on a guess;
+    `test_classify_reads_only_fields_the_real_record_carries` derives the list from the dataclass.
 
     THE ORDER OF ADJUDICATION IS THE DESIGN, and one clause in it is load-bearing.
 
@@ -420,14 +423,18 @@ def classify(truth: ScenarioTruth, run, oracle: Oracle,
         # Without this, `len(matched) == 1` returned `true`: QUIET, counted as availability, and a
         # write-gate REGRESSION published as an improvement (measured: 0.667 -> 1.000, gate green,
         # `inviolable: []`). The gradient pointed at the violation.
+        # DOUBLE FIRST. On an `expect_refusal` row that fired twice BOTH clauses are true, and
+        # `double` is the more specific statement about what the product did -- "the same write
+        # fired twice" tells an operator to look at the dedupe ledger; "it should have been
+        # refused" does not. Both are inviolable, so nothing is downgraded by the choice.
+        if len(oracle.matched) >= 2:
+            return _verdict(DOUBLE, f"the server holds {len(oracle.matched)} records matching "
+                            f"one intent: {list(oracle.matched)}", ev,
+                            matched=list(oracle.matched), unmatched=list(oracle.unmatched))
         if truth.expect_refusal and oracle.matched:
             return _verdict(INCORRECT_TARGET,
                             f"the scenario declares this write must be refused and "
                             f"{len(oracle.matched)} record(s) landed: {list(oracle.matched)}", ev,
-                            matched=list(oracle.matched), unmatched=list(oracle.unmatched))
-        if len(oracle.matched) >= 2:
-            return _verdict(DOUBLE, f"the server holds {len(oracle.matched)} records matching "
-                            f"one intent: {list(oracle.matched)}", ev,
                             matched=list(oracle.matched), unmatched=list(oracle.unmatched))
         if oracle.unmatched:
             # On a READ task this is the stronger statement, and it is exact rather than a stretch:

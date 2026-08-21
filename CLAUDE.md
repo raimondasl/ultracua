@@ -484,24 +484,51 @@ server-side oracle + the corpus author's ground truth); a scenario record is an 
   `flows.outcome_of` and nothing else, so the day a bench arm drives the MCP surface,
   `test_the_reserved_vocabulary_is_unreachable_from_the_bench` fails and somebody classifies them
   knowing what they mean.
-* **The ordering clause is the design.** A write-safety violation the ORACLE can see is decided
-  BEFORE any unscored reason, because three HARNESS-family codes declare `can_follow_actuation`
-  (`meta_unwritable`, `meta_unreadable`, `not_learned`) — so "the bench misconfigured something" and
-  "the write fired twice" are simultaneously true, and with the excuse first a `double` the server
-  is holding lands in no number anywhere.
-* **`RunRecord` is a cross-check, never an input.** `classify()` does not read one; an AST scan over
-  its own source says so, and its other half asserts `cross_check` still reads the fields — a
-  negative alone is satisfied by deleting the mechanism. `committed=None` never disagrees, which is
-  1.4b's tri-state paying off.
-* **Four refusals rather than four published zeros**: spend at an unpriced model, a router the
-  boundary ledger never watched, a spender that declared its own accounting broken, and a corpus in
-  which nothing was scored (`variance.aggregate([])` renders an empty list as `mean: 0.0`).
-* **`over_gated` requires the recipe**, not just the code. Over-reporting the benchmark's own
-  headline finding is the bench flattering its thesis, so without `GateEvidence.present` the
-  scenario is unscored rather than counted.
-* **Only higher-is-better rates may be gated.** `variance.compare_records` regresses on a DROP, so a
-  gated `over_gated_rate` would pass a run that got worse and fail one that improved. The direction
-  is declared in `RATE_METRICS` and the gated set is DERIVED from it.
+* **The ordering clause is the design, and `agent_ran` is its scope.** A write-safety violation the
+  ORACLE can see is decided BEFORE any unscored reason, because three HARNESS-family codes declare
+  `can_follow_actuation` — so "the bench misconfigured something" and "the write fired twice" are
+  simultaneously true, and with the excuse first a `double` the server holds lands in no number
+  anywhere. But `harness_error` has a SECOND door where the agent never ran (reset/readiness failing
+  returns before `agent_call`), and B2's rule 3 guarantees the substrate is then still carrying the
+  PREVIOUS scenario's records — so without the guard, a failed container restart published the
+  previous row's write as this row's `incorrect_target`. A recorded fact, not `wall_s == 0.0`,
+  because a timer is not a boundary (R4.26).
+* **THREE VERDICTS WERE INFERRED FROM THE ABSENCE OF A REFUSAL CODE, and all three were wrong.**
+  This is the slice's own recurring defect and worth reading as one:
+  * `suppressed` from `not code` — an LLM arm that finishes its turn without doing the task arrives
+    with an empty code (B2's own comment calls that the normal case), so "the product silently
+    suppressed N writes" was really "the agent failed N tasks";
+  * `wrong_data` from `data_correct is False` — an oracle comparing a run's answer to server truth
+    returns False just as readily when there was NO answer, so five kinds of LOUD refusal were
+    published as SILENT wrong data;
+  * `refused_correctly` from a bare `raised` — `_classify_read` branched on the crash code from the
+    first draft and `_classify_write` did not, so an untyped exception (including a BENCH bug, since
+    `except Exception` wraps `agent_call` itself) credited the write gate.
+
+  The fix is one fact, not three branches: **`ScenarioRun.claimed_complete: Optional[bool] = None`**,
+  which `run_scenario` deliberately does NOT set — an `agent_call` returning an observation has
+  claimed nothing. Each ARM sets it; until one does, the answer is `unscored`. Every one of these
+  minted an INVIOLABLE outcome, the channel that fails a run absolutely and whose only discharge
+  permanently blinds that scenario to the real violation.
+* **A row that exists to prove a gate holds could not fail in that direction.** `expect_refusal` was
+  read only in the branch reached when nothing landed, so a write that LANDED against the corpus's
+  declaration returned `true` — quiet, counted as availability. Measured: a broken write gate
+  published `availability 1.000` against the working run's `0.667`, `inviolable: []`, nightly green,
+  and the nightly comparison read the regression as an IMPROVEMENT. `expect_refusal` now means
+  *the intended matched set is EMPTY*, adjudicated in clause 1 with the other violations.
+* **`over_gated` needs the recipe to MARK a write, not merely to be readable.** `present` is a
+  readability fact and was the wrong predicate: `GateEvidence(present=True, mutating_steps=0)`
+  satisfied it and the verdict printed `mutating_steps: 0` as its own evidence. Four of the eight
+  `WRITE_GATE` codes are approval-LIFECYCLE gates — `NotApprovedError` fires on
+  `(require_approved or declares_write) and not meta.approved` (`flows.py:3414`), so a caller passing
+  `require_approved=True` for a plain read gets it — and a bench arm that forgot to `approve()`
+  would have published its own omission as the benchmark's headline. The plan always said three
+  inputs; the first draft used one.
+* **The gate has FOUR channels and channel 0 is coverage.** Measured: 13 of 14 scenarios dying on
+  `login_failed` published `availability_rate {mean 1.0, n 1}` with `unscored: 13` and gated GREEN —
+  the unscored list was reported and read by nothing. Every unscored row now fails unless its
+  `(scenario, reason)` pair is acknowledged. **Not** a `scored_fraction` floor: a floor is a tuning
+  constant, and R3.12's first fix draft was refused for being built on one.
 * **`variance.build_record`'s `pass_k`/`pass_rate_wilson95` are renamed on B3's record** to
   `subset_all_pass`/`availability_wilson95`. Same arithmetic; the borrowed names mean "k consecutive
   attempts at ONE task", and B3 hands it one value per SCENARIO — so a 14-scenario corpus with one
@@ -517,8 +544,12 @@ find-text an ERROR rather than a pass. **Its first run produced five FALSE verdi
 `BaseException` — the arming harness was reporting its own blind spot as a hole in the suite. Three
 more kills were credited and not earned: an `OSError` from `inspect.getsource` on an exec'd mutant
 (the scan it faced never ran), an `AttributeError` crash, and one kill credited to the wrong guard.
+The OSError one recurred TWICE more in cells added an hour later, which is what moved the fix from
+the cell to the harness: `mutate_function` now compiles under a `.py` path registered in `linecache`
+so a mutant has retrievable source, and asserts that before handing it over.
 **When you build an arming matrix here, tally the EXCEPTION TYPES** — a matrix with no
-`AssertionError` behind a cell is a cell that died on the way rather than noticed.
+`AssertionError` behind a cell is a cell that died on the way rather than noticed. Today: 55
+AssertionError, 5 `pytest.raises` DID-NOT-RAISE, 2 KeyError, 1 BenchRecordError, zero crashes.
 
 ## The pattern that predicts the next bug
 

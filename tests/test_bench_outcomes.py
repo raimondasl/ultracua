@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import textwrap
 
 import pytest
 
@@ -569,3 +570,63 @@ def test_a_missing_recipe_is_not_present_rather_than_zero_mutating_steps() -> No
     g = O.GateEvidence.from_flow(None, flows.FlowMeta(approved=True))
     assert g.present is False and g.approved is True
     print(f"no recipe -> present={g.present}, approved={g.approved}")
+
+
+def test_classify_reads_only_fields_the_real_record_carries() -> None:
+    """The duck-typed contract, DERIVED from the dataclass rather than listed in a docstring.
+
+    `classify` reaches into `run` with `getattr`, which is what makes it testable without a
+    substrate — and also what makes a typo silent: `getattr(run, "agent_run", False)` is always
+    False and would switch the violation-before-excuse clause off for every run in the corpus, with
+    every cell here still green because they all construct the same object.
+
+    Both directions. Every field it reads must EXIST on `ScenarioRun`, and the two whose default
+    decides an inviolable must default to the safe value.
+    """
+    import dataclasses
+
+    real = {f.name for f in dataclasses.fields(ScenarioRun)}
+    read: set = set()
+    for fn in (O.classify, O._classify_read, O._classify_write):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+        for n in ast.walk(tree):
+            # getattr(run, "x", default)
+            if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "getattr"
+                    and isinstance(n.args[0], ast.Name) and n.args[0].id == "run"
+                    and isinstance(n.args[1], ast.Constant)):
+                read.add(n.args[1].value)
+            # run.x
+            if (isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+                    and n.value.id == "run"):
+                read.add(n.attr)
+
+    assert read, "the scan found no `run` reads at all — it has gone vacuous"
+    unknown = sorted(read - real)
+    assert not unknown, (
+        f"`classify` reads {unknown} off the run, and `ScenarioRun` has no such field. Every one is "
+        f"a `getattr` with a default, so it does not raise — it silently returns the default and "
+        f"the clause that depends on it is switched off for the whole corpus.")
+
+    defaults = {f.name: f.default for f in dataclasses.fields(ScenarioRun)}
+    assert defaults["agent_ran"] is False, (
+        "`agent_ran` must default False: a record that never reached `agent_call` is exactly the "
+        "one where an oracle's report is about the PREVIOUS scenario")
+    assert defaults["claimed_complete"] is None, (
+        "`claimed_complete` must default None: True would publish every agent failure as a "
+        "write-safety violation, False would make `suppressed` unreachable")
+    print(f"classify reads {sorted(read)}; all present on ScenarioRun; "
+          f"agent_ran={defaults['agent_ran']!r} claimed_complete={defaults['claimed_complete']!r}")
+
+
+def test_a_must_refuse_row_that_fired_TWICE_reports_the_double() -> None:
+    """Both clauses are true; `double` is the more specific statement about what the product did.
+
+    "The same write fired twice" points an operator at the dedupe ledger. "It should have been
+    refused" does not. Both are inviolable, so ordering downgrades nothing — and the cell exists
+    because the two clauses are one line apart and the order between them is a decision.
+    """
+    twice = O.classify(WRITE_EXPECTS_REFUSAL, a_run(), O.Oracle(matched=("i/1", "i/2")))
+    once = O.classify(WRITE_EXPECTS_REFUSAL, a_run(), O.Oracle(matched=("i/1",)))
+    assert twice.outcome == O.DOUBLE and once.outcome == O.INCORRECT_TARGET
+    assert twice.inviolable and once.inviolable
+    print(f"expect_refusal + 2 landed -> {twice.outcome} | + 1 landed -> {once.outcome}")
