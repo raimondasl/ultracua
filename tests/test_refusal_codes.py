@@ -433,3 +433,71 @@ def test_the_guard_does_not_refuse_a_LEGITIMATE_new_class() -> None:
             raise probe("a well-formed refusal must still be raisable and catchable")
     finally:
         REGISTRY.pop("probe_ok", None)
+
+
+def test_the_registry_key_is_the_class_s_LIVE_code() -> None:
+    """`__init_subclass__` keys `REGISTRY` at CLASS-CREATION time, so a code changed afterwards leaves
+    the registry pointing at the old slug while the class reports the new one.
+
+    Neither existing guard sees it. The distinct-code property derives `by_code` from live attributes,
+    so it only fires if the mutation creates a DUPLICATE; the walk-vs-`REGISTRY` equality compares class
+    NAMES, so both sides still match. Exposure is nil today — nothing does a `REGISTRY[code]` lookup —
+    but B3 is precisely the consumer that will, and it is one line to pin.
+    """
+    from ultracua.flows import REGISTRY
+
+    drift = {key: cls.__name__ + "." + cls.code for key, cls in REGISTRY.items() if key != cls.code}
+    assert not drift, (
+        f"REGISTRY is keyed on a code these classes no longer carry: {drift}. A lookup by the live code "
+        f"would KeyError, and a lookup by the stale key returns a class that disagrees with it.")
+    assert len(REGISTRY) >= 27, f"REGISTRY holds only {len(REGISTRY)} classes — it is not being populated"
+
+
+def test_the_runtime_guard_and_the_RATCHET_are_two_sensors_rather_than_two_copies_of_one() -> None:
+    """THE ARGUMENT FOR HAVING BOTH, made checkable instead of claimed in a docstring.
+
+    `FlowReplayError.__init__` refuses the base at RUN time — and it is defeatable, measured:
+
+        FlowReplayError.__new__(FlowReplayError)   ->  a raisable instance, code == 'replay_error'
+
+    `__init__` never runs, so `type(self) is FlowReplayError` never fires. Nothing in the tree does
+    this, so it is not a live defect; it is the shape this register calls "a guard that asserts a
+    negative", and a second guard of the SAME class would inherit the same blind spot.
+
+    The ratchet is a different class of sensor — it reads the SOURCE, at authoring time — and it sees
+    exactly what the runtime guard cannot. Verified here rather than asserted: a scratch copy carrying
+    `raise FlowReplayError.__new__(FlowReplayError)` makes the derivation report it, because the bare
+    NAME lands in a value position that no raise-callee exclusion covers.
+    """
+    import shutil
+    import subprocess
+    import sys
+    import tempfile
+
+    from ultracua.flows import FlowReplayError
+
+    # The runtime guard's blind spot, demonstrated — not merely described.
+    sneaky = FlowReplayError.__new__(FlowReplayError)
+    assert sneaky.code == "replay_error", "the bypass no longer produces a base-coded refusal"
+    with pytest.raises(FlowReplayError):
+        raise sneaky
+
+    # ...and the other sensor catching it.
+    root = pathlib.Path(__file__).parents[1]
+    with tempfile.TemporaryDirectory() as tmp:
+        dst = pathlib.Path(tmp)
+        shutil.copytree(root / "src", dst / "src", ignore=shutil.ignore_patterns("__pycache__"))
+        with (dst / "src" / "ultracua" / "flows.py").open("a", encoding="utf-8") as fh:
+            fh.write("\n\ndef _probe():\n    raise FlowReplayError.__new__(FlowReplayError)\n")
+        probe = (
+            "import pathlib, sys; sys.path.insert(0, r'%s');"
+            "import ratchets as R;"
+            "R.ROOT = pathlib.Path(r'%s'); R.SRC = R.ROOT / 'src' / 'ultracua';"
+            "print(len(R.derive_bare_flow_replay_error()))" % (root / "scripts", dst)
+        )
+        out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True)
+        assert out.returncode == 0, f"the probe failed: {out.stderr}"
+        assert int(out.stdout.strip()) > 0, (
+            "the ratchet did NOT see `raise FlowReplayError.__new__(FlowReplayError)`. Both sensors are "
+            "now blind to the same shape, which makes them two copies of one guard rather than two "
+            "sensor classes — and the zero this ratchet reports would no longer mean what it says.")
