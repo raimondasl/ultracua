@@ -281,7 +281,11 @@ def _typed_error_family() -> list[type]:
                 walk(s)
 
     walk(F.FlowReplayError)
-    return [F.FlowReplayError] + out
+    # The CONCRETE family. The abstract base is excluded since 1.4 because it can no longer be
+    # RAISED — and the exclusion is justified by a checked fact, not by an assumption: the cell below
+    # asserts the refusal, so if the base ever became constructible again this list would silently
+    # stop covering it and that cell goes red first.
+    return out
 
 
 @pytest.mark.parametrize("err", _typed_error_family(), ids=lambda c: c.__name__)
@@ -310,6 +314,23 @@ def test_no_typed_error_reaches_the_user_as_a_traceback(
         f"{err.__name__} reached the user without its remedy text; the error carries the operator's "
         f"whole recovery path and a traceback buries it")
     assert "Traceback" not in (out.err + out.out)
+
+
+def test_the_abstract_base_is_not_raisable_which_is_why_it_is_not_parametrized_above() -> None:
+    """The fact `_typed_error_family` relies on, checked rather than assumed.
+
+    Dropping the base from a parametrized list is exactly how a property quietly stops covering
+    something. It is legitimate here for ONE reason — 1.4 made the base unconstructible, because
+    `code="replay_error"` names no remedy and twenty-four refusals shared it — and that reason has to
+    be a red test, not a comment. If the base becomes raisable again, this fails and the list above is
+    under-covering from the same commit.
+    """
+    with pytest.raises(TypeError, match="ABSTRACT"):
+        F.FlowReplayError("x")
+    assert F.FlowReplayError not in _typed_error_family()
+    assert len(_typed_error_family()) >= 27, (
+        f"the family walk found {len(_typed_error_family())} concrete classes — it is broken, not the "
+        f"taxonomy small, and the parametrized property above would be asserting almost nothing")
 
 
 # ==================== what the pre-merge adversarial audit found IN this fix ====================
@@ -413,14 +434,28 @@ def test_the_unwritable_sidecar_error_is_not_advertised_as_retryable() -> None:
     raised pre-write, so nothing has actuated. This class is raised from post-actuation positions too.
     Of the whole typed family only the classes that cannot follow an actuation are retryable, and this
     assertion states that rule rather than one class's flag.
+
+    DERIVED OVER `REGISTRY` SINCE 1.4, and the reason is this cell's own history. It listed FOUR
+    post-actuation classes by hand; 1.4 added fifteen more classes, and a hand list is only as good as
+    the day it was typed — a sixteenth would have walked straight past a cell that reads as coverage.
+    The axis it now reads (`can_follow_actuation`) is declared per class and enforced at class
+    creation, so this asserts the rule over WHATEVER the family turns out to be.
     """
     assert F.MetaUnwritableError.retryable is False
-    post_actuation = [F.WriteUnverifiedError, F.WriteReadbackError, F.MetaUnwritableError,
-                      F.FlowQuarantineError]
+    post_actuation = sorted((c for c in F.REGISTRY.values() if c.can_follow_actuation),
+                            key=lambda c: c.__name__)
+    assert len(post_actuation) >= 4, (
+        f"only {[c.__name__ for c in post_actuation]} can follow an actuation — the axis has been "
+        f"cleared wholesale, so this cell would assert nothing")
     bad = [c.__name__ for c in post_actuation if c.retryable]
     assert not bad, (
         f"{bad} tell an autonomous agent to re-run a flow that may already have committed. Direction of "
         f"error decides this: a missed auto-retry costs one manual re-run; a wrong one double-submits.")
+    # ...and the four the hand list used to name are still in it, so the derivation replaced the list
+    # rather than quietly shrinking past it.
+    for cls in (F.WriteUnverifiedError, F.WriteReadbackError, F.MetaUnwritableError,
+                F.FlowQuarantineError):
+        assert cls in post_actuation, f"{cls.__name__} lost its can_follow_actuation mark"
 
 
 def test_replay_still_records_every_outcome_so_the_quiet_half_did_not_become_no_half() -> None:

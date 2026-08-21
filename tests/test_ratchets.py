@@ -119,25 +119,56 @@ def test_every_derivation_matches_something() -> None:
         assert hits, f"{name} matched NOTHING — the pattern is broken, not the codebase clean"
 
 
-def test_a_zero_ratchet_still_proves_its_pattern_is_live(scratch_src) -> None:
-    """The exemption above must not become a way to hide a dead pattern.
+# How to GUT each zero-ratchet's liveness evidence, so the cell below can watch the derivation refuse.
+# A `MAY_BE_ZERO` entry with no row here fails, which is what makes the exemption earned rather than
+# claimed: joining that set costs an entry, and a ratchet that cannot be gutted cannot prove it is live.
+#
+# Each value is (pattern, replacement, minimum-hits, expected message fragment).
+LIVENESS_GUTS = {
+    # `\brecord\.` on a word boundary so `self._record.` — a READ of the sink's own attribute — is
+    # untouched. EVERY write, not a couple: leaving one leaves `inside` non-empty and the cell asserts
+    # nothing.
+    "run_record_write_sites": (r"\brecord\.", "_gone.", 10, "matches NOTHING inside"),
+    # Every `raise <Subclass>(` at once — the SUBCLASS raises are what prove the walk still reaches the
+    # family. Leaving one behind leaves `sub` non-empty and the assert never fires.
+    "bare_flow_replay_error": (r"raise (?=[A-Z])(\w*Error)\(", r"raise _Gone_\1(", 12,
+                               "no `raise <FlowReplayError subclass>"),
+}
 
-    `derive_run_record_write_sites` returns zero by design, so the usual "it matched something" check
-    cannot speak for it. Its liveness comes from the sink's own writes: delete them and the derivation
-    must FAIL rather than quietly report a clean tree.
+
+def test_every_zero_ratchet_has_a_way_to_prove_it_is_live() -> None:
+    """`MAY_BE_ZERO` is an EXEMPTION, and an exemption nobody arms is a way to hide a dead pattern.
+
+    The cell below was written for one ratchet and named its derivation by hand. A second joined the
+    set at 1.4, and a hand-named cell would have left it un-armed while reading as coverage — the
+    "structural scan that names ONE function" shape, in the arming rather than in the scan.
     """
+    missing = sorted(ratchets.MAY_BE_ZERO - set(LIVENESS_GUTS))
+    assert not missing, (
+        f"{missing} may report zero and this file has no way to prove their patterns are live. Add a "
+        f"LIVENESS_GUTS row, or do not exempt them.")
+    stale = sorted(set(LIVENESS_GUTS) - ratchets.MAY_BE_ZERO)
+    assert not stale, f"{stale} have a gut recipe and are no longer exempt — drop the row"
+
+
+@pytest.mark.parametrize("target", sorted(LIVENESS_GUTS))
+def test_a_zero_ratchet_still_proves_its_pattern_is_live(target, scratch_src) -> None:
+    """The exemption must not become a way to hide a dead pattern.
+
+    A `MAY_BE_ZERO` derivation returns zero by design, so the usual "it matched something" check cannot
+    speak for it. Its liveness comes from the OTHER half of the same walk — the writes inside the sink,
+    the raises of the subclasses — and deleting that half must make the derivation FAIL rather than
+    quietly report a clean tree.
+    """
+    pattern, replacement, floor, message = LIVENESS_GUTS[target]
     path = scratch_src.root / "flows.py"
-    text = path.read_text(encoding="utf-8")
-    # EVERY write, not a couple: leaving one behind leaves `inside` non-empty and the cell asserts
-    # nothing. `\brecord\.` on a word boundary so `self._record.` — a READ of the sink's own attribute
-    # — is untouched.
-    gutted, n = re.subn(r"\brecord\.", "_gone.", text)
-    assert n >= 10, f"only {n} record writes found to remove — this cell would be vacuous"
+    gutted, n = re.subn(pattern, replacement, path.read_text(encoding="utf-8"))
+    assert n >= floor, f"{target}: only {n} liveness sites found to remove — this cell would be vacuous"
     scratch_src.append("flows.py", "")          # register the file for restore
     path.write_text(gutted, encoding="utf-8")
 
-    with pytest.raises(AssertionError, match="matches NOTHING inside"):
-        ratchets.derive_run_record_write_sites()
+    with pytest.raises(AssertionError, match=re.escape(message)):
+        ratchets.RATCHETS[target][0]()
 
 
 def test_the_baseline_is_internally_consistent_and_covers_exactly_the_derivations() -> None:

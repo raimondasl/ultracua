@@ -336,22 +336,110 @@ class FlowHealth:
     approval_stale: bool = False
 
 
+_CODE_SLUG = re.compile(r"[a-z][a-z0-9_]*")
+
+# Codes owned by OTHER vocabularies that share a FIELD with this taxonomy. `ToolOutcome.code` carries
+# five codes `mcpserver` mints itself; `SkippedFlow.code` carries eight; `BatchRowResult.code` will
+# carry two of its own; `_RecordSink` writes "raised" into `RunRecord.failure_code`. A collision is not
+# a style problem — B3 buckets on these fields, so two meanings under one slug is R3.7's overloaded
+# `anchor_id=None` in a code space: one token, two states, and the consumer cannot tell them apart.
+RESERVED_CODES = frozenset({
+    "replay_error",                                     # the abstract base's poison sentinel
+    "raised",                                           # _RecordSink's non-typed fallback
+    "unknown_tool", "write_denied", "already_done",     # mcpserver-minted ToolOutcome codes
+    "elicitation_unsupported", "declined",
+    "approval_stale",                                   # a SkippedFlow code, keyed on the RECIPE only
+    "spec_unreadable", "recipe_unreadable", "learn_refused", "write_not_exposed", "name_collision",
+})
+
+# code -> class, populated by `__init_subclass__`. The taxonomy, derived rather than declared.
+REGISTRY: "dict[str, type[FlowReplayError]]" = {}
+
+
 class FlowReplayError(RuntimeError):
     """Replay could not be trusted: no cached flow, page drift, data not found, or shape change.
 
-    Base of a small TYPED taxonomy so a caller (esp. the H2 MCP server) can react to a failure by
-    KIND without string-parsing the message: `.code` is a stable machine-readable slug and
-    `.retryable` says whether re-running as-is could plausibly succeed. Every subclass still IS a
-    `FlowReplayError`, so existing `except FlowReplayError` keeps catching all of them (the change is
-    additive — the base is still raised for config refusals like not-approved / no-confirm-check)."""
+    The ABSTRACT base of a TYPED taxonomy, so a caller (esp. the H2 MCP server) can react to a failure
+    by KIND without string-parsing the message. Four axes, and each one is a different question:
 
-    code = "replay_error"
+      `.code`                 a stable machine-readable slug naming WHAT SOMEONE MUST DO
+      `.retryable`            may an autonomous caller re-run this as-is?
+      `.landed`               did the write already commit? — the ARMING token the retry-dedupe
+                              ledger reads. Two-state on purpose: `RunRecord.landed` is the
+                              tri-state REPORT of the same event, and they are different questions
+                              with different consumers.
+      `.can_follow_actuation` can this class be raised from a position where THIS run's write may
+                              already have fired? The positional fact `retryable` and `landed` both
+                              depend on, made explicit so neither can be inherited by accident.
+
+    NOT INSTANTIABLE SINCE 1.4. `code="replay_error"` names no remedy, and TWENTY-FOUR refusals shared
+    it — a missing env var, an unbounded batch and a stale approval arrived at the MCP wire as one
+    word, so nothing downstream could tell them apart and B3's aggregator would have frozen its
+    vocabulary against the undifferentiated slug. Making the base abstract is the only sensor that also
+    reaches the INDIRECT raise (`raise _classify_replay_failure(kind)(...)`), whose callee is a Call
+    and which an AST scan keyed on a class name structurally cannot see.
+
+    It remains the `except` target of the whole family, so every existing `except FlowReplayError` is
+    unchanged — the taxonomy narrowed, the catch did not."""
+
+    code = "replay_error"          # POISON. No concrete class may carry it; nothing may emit it.
     retryable = False
     # Did the WRITE already land when this was raised? Only ever True where the code POSITIVELY knows it
     # did — it arms the retry-dedupe ledger, and `ledger.py`'s invariant is "never a false skip of an
     # un-landed write", so a maybe is a no. Callers that own a ledger (run_batch, the MCP write surface)
     # record the row on the way past instead of leaving the one case they KNOW committed unrecorded.
     landed = False
+    can_follow_actuation = False
+
+    def __init__(self, *args):
+        if type(self) is FlowReplayError:
+            raise TypeError(
+                "FlowReplayError is the ABSTRACT `except` target of the refusal taxonomy, and its code "
+                "names no remedy — raise a concrete subclass so the failure has a name a caller can act "
+                "on. See flows.REGISTRY for the vocabulary (reshape-plan 1.4).")
+        super().__init__(*args)
+
+    def __init_subclass__(cls, **kw):
+        """THE INVARIANT, ENFORCED ONCE, at class-creation time.
+
+        Every clause here was a hand-written check somewhere else first, and each of those checks was
+        only as good as the day it was typed: `test_boundary_truth` listed FOUR post-actuation classes
+        by hand, and fifteen new ones would have walked straight past it. A rule that runs when the
+        class is defined cannot be under-covered by a class defined later.
+        """
+        super().__init_subclass__(**kw)
+        for attr in ("code", "retryable", "can_follow_actuation"):
+            if attr not in cls.__dict__:
+                raise TypeError(
+                    f"{cls.__name__} must declare `{attr}` explicitly rather than inherit it. That is "
+                    f"R4.18: `MetaUnwritableError` inherited `retryable=True` from its PRE-write twin, "
+                    f"and an MCP agent honouring it re-fired a commit that had already actuated.")
+        # `landed` may be inherited ONLY where it provably cannot be anything but False. This is the
+        # cross-check the two axes owe each other: a class that can follow an actuation has a real
+        # choice to make about landing, so it must make it in writing.
+        if cls.can_follow_actuation and "landed" not in cls.__dict__:
+            raise TypeError(
+                f"{cls.__name__} can be raised after an actuation, so it must state `landed` "
+                f"explicitly rather than inherit a denial it never considered.")
+        if not (isinstance(cls.code, str) and _CODE_SLUG.fullmatch(cls.code)):
+            raise TypeError(f"{cls.__name__}.code must be a lower_snake slug, not {cls.code!r}")
+        if cls.code in RESERVED_CODES:
+            raise TypeError(
+                f"{cls.__name__}.code {cls.code!r} already belongs to another vocabulary on a field "
+                f"this taxonomy shares — see RESERVED_CODES.")
+        if cls.code in REGISTRY:
+            raise TypeError(
+                f"{cls.__name__}.code {cls.code!r} already belongs to {REGISTRY[cls.code].__name__} — "
+                f"a caller cannot tell two remedies apart under one slug.")
+        if cls.landed is True and not cls.can_follow_actuation:
+            raise TypeError(
+                f"{cls.__name__} claims a landed write from a position where none could have fired.")
+        if cls.retryable and cls.can_follow_actuation:
+            raise TypeError(
+                f"{cls.__name__} tells an autonomous agent to re-run a flow that may already have "
+                f"committed (inviolable #3). Direction of error decides this: a missed auto-retry costs "
+                f"an operator one manual re-run; a wrongly-advertised one double-submits.")
+        REGISTRY[cls.code] = cls
 
 
 class DriftError(FlowReplayError):
@@ -360,6 +448,8 @@ class DriftError(FlowReplayError):
 
     code = "drift"
     retryable = False
+    landed = False           # explicit: a write CAN drift after actuating
+    can_follow_actuation = True
 
 
 class ShapeDriftError(FlowReplayError):
@@ -368,6 +458,8 @@ class ShapeDriftError(FlowReplayError):
 
     code = "shape_drift"
     retryable = False
+    landed = False           # explicit: reached on a write+extract flow, post-commit
+    can_follow_actuation = True
 
 
 class AuthExpiredError(FlowReplayError):
@@ -377,6 +469,10 @@ class AuthExpiredError(FlowReplayError):
 
     code = "auth_expired"
     retryable = True
+    # Defined and NEVER RAISED in `src/` today (the heuristic auth path cannot attribute a drift
+    # to expiry confidently, so it raises `DriftError`). Kept because the MCP contract advertises
+    # it; its `retryable=True` is licensed only by this axis.
+    can_follow_actuation = False
 
 
 class EscalateError(FlowReplayError):
@@ -385,6 +481,8 @@ class EscalateError(FlowReplayError):
 
     code = "escalate"
     retryable = False
+    landed = False           # explicit: a wall can appear after a commit POSTed
+    can_follow_actuation = True
 
 
 class ParamValidationError(FlowReplayError):
@@ -396,6 +494,7 @@ class ParamValidationError(FlowReplayError):
 
     code = "invalid_params"
     retryable = False
+    can_follow_actuation = False    # raised pre-browser by `validate_params`
 
 
 class FlowQuarantineError(FlowReplayError):
@@ -407,6 +506,8 @@ class FlowQuarantineError(FlowReplayError):
 
     code = "quarantined"
     retryable = False
+    landed = False           # explicit: `_do_quarantine` runs post-attempt
+    can_follow_actuation = True
 
 
 class StaleApprovalError(FlowReplayError):
@@ -421,6 +522,7 @@ class StaleApprovalError(FlowReplayError):
 
     code = "stale_approval"
     retryable = False
+    can_follow_actuation = False    # decided at pre-flight, before anything acts
 
 
 class UnkeyedWriteError(FlowReplayError):
@@ -432,6 +534,7 @@ class UnkeyedWriteError(FlowReplayError):
 
     code = "unkeyed_write"
     retryable = False
+    can_follow_actuation = False    # raised pre-browser, before anything actuates
 
 
 class WriteUnverifiedError(FlowReplayError):
@@ -449,6 +552,8 @@ class WriteUnverifiedError(FlowReplayError):
 
     code = "write_unverified"
     retryable = False
+    landed = False           # explicit, and a MAYBE is a no — see the docstring
+    can_follow_actuation = True
 
 
 class WriteReadbackError(FlowReplayError):
@@ -465,6 +570,237 @@ class WriteReadbackError(FlowReplayError):
     code = "write_readback"
     retryable = False
     landed = True     # the confirm PASSED; only the readback missed — the side effect is certain
+    can_follow_actuation = True
+
+
+# ---------------------------------------------------------------------------------------------------
+# THE CONFIG / PRE-FLIGHT REFUSALS (reshape-plan 1.4).
+#
+# Twenty-four refusals used to raise the base class, so `flow not approved`, `no login configured`,
+# `batch has more rows than max_rows` and `the slot schema changed since approval` all arrived at a
+# caller as `code="replay_error"`. The MCP wire published that word; `DryRunReport.aborted` recorded
+# it; `BatchRowResult.code` carried it; and B3 was about to freeze an outcome vocabulary against it.
+#
+# THE CODES NAME A REMEDY, NOT A SITE. Two refusals in different functions that need the same human
+# action share a code (`not_learned` is raised from three); one function whose refusals need different
+# actions gets several. That is what makes the vocabulary useful to a benchmark: `refused` sub-buckets
+# derive from the code, and a bucket nobody can act on differently is a bucket nobody needs.
+#
+# EVERY ONE OF THEM IS PRE-ACTUATION. `_preflight_row` and `validate_params` run before the driver is
+# acquired; `run_batch`'s seven precede its pre-flight loop; `approve`/`unapprove` open no browser; the
+# login pair runs before the flow's own steps. So all fifteen are `retryable=False, landed=False,
+# can_follow_actuation=False` — and that is a derived fact, pinned in `tests/test_refusal_codes.py`
+# rather than restated fifteen times here. Nothing new becomes retryable in this slice.
+
+
+class NotLearnedError(FlowReplayError):
+    """There is no cached recipe for this flow, so there is nothing to approve, batch, or replay.
+
+    An ABSENCE, not a drift — and the distinction is the reason `_classify_replay_failure` maps the
+    engine's `"miss"` kind here rather than to `DriftError`. A drift means the learned path stopped
+    matching; this means there was never a path. The remedy is `flow learn` / `flow record`, never a
+    retry."""
+
+    code = "not_learned"
+    retryable = False
+    can_follow_actuation = False
+
+
+class NotApprovedError(FlowReplayError):
+    """The flow exists and is not approved, and this call requires approval (or it declares a write,
+    which is approval-gated whatever the caller asked for).
+
+    Distinct from `StaleApprovalError`, which means a human DID approve and the thing they approved has
+    moved. Here nobody has approved anything yet. Both need a human; only one of them needs a human to
+    re-read a diff."""
+
+    code = "not_approved"
+    retryable = False
+    can_follow_actuation = False
+
+
+class ApprovalBindingStaleError(FlowReplayError):
+    """The flow's SPEC surface — its slot schema or its value contracts — changed since approval.
+
+    DELIBERATELY NOT `stale_approval`, and this was the most argued decision in 1.4. `StaleApprovalError`
+    means the cached STEPS no longer match what a human blessed: a recipe re-authored under a live
+    approval, which is the tamper-shaped refusal the sticky-approval hole exists to catch. This one is
+    the ordinary consequence of editing a spec — widening a slot's domain, tightening a contract — and
+    it is expected, frequent, and benign to fix.
+
+    Merging them would degrade the operator's response to the tamper case into a reflex, and the tree
+    already keeps them apart three ways: `health.approval_stale` reads the RECIPE predicate only,
+    `dry_run` labels only the recipe binding `stale_approval:`, and `mcpserver` mints a `SkippedFlow`
+    code `approval_stale` off that same recipe-only flag. One remedy verb (`flow approve`), two
+    different things to read first.
+
+    (`flows.py`'s own comment at the recipe gate says it in the source: "The two gates above bind the
+    SPEC; this one binds the STEPS.")"""
+
+    code = "approval_binding_stale"
+    retryable = False
+    can_follow_actuation = False
+
+
+class RelearnRefusedError(FlowReplayError):
+    """`on_drift="relearn"` is refused for this call — because the flow writes, because it is approved,
+    or because params were supplied.
+
+    CALLER-FIXABLE by changing the call, which is what separates it from the approval refusals: no
+    human has to review anything, the caller just asked for a combination that is not safe. All three
+    reasons are re-authoring hazards (a relearn re-runs the flow and so re-performs a write; it replays
+    steps no human reviewed under a live approval; it returns data for the frozen defaults rather than
+    the per-run params)."""
+
+    code = "relearn_refused"
+    retryable = False
+    can_follow_actuation = False
+
+
+class WriteUnconfirmableError(FlowReplayError):
+    """A flow DECLARED as a write has no confirm check, so replay could never verify that it landed.
+
+    The remedy is to set one (`flow set-mutate` with `confirm_*`) and re-approve. Distinct from
+    `UndeclaredWriteError`, whose flow declares NOTHING; here the declaration exists and is incomplete,
+    and the person who wrote it can complete it."""
+
+    code = "write_unconfirmable"
+    retryable = False
+    can_follow_actuation = False
+
+
+class UndeclaredWriteError(FlowReplayError):
+    """A recorded step MUTATES but the spec declares no write, so a batch cannot verify each row landed.
+
+    KEPT APART FROM `write_unconfirmable`, and the reason is measured rather than aesthetic. This fires
+    on `is_write_flow(...) and spec.mutate is None` — a flow marked mutating by the keyword classifier
+    or by wire promotion, and that classifier has a measured 28% false-positive rate on ordinary
+    read-only controls ("Show borders" -> `order`, "Sender" -> `send`). For a READ caught that way the
+    fleet twin of this refusal says plainly that *none of the remedies work*: declaring `mutate` demands
+    a confirm a read cannot satisfy, and re-recording re-derives the same verdict. The acknowledgement
+    is `flow unapprove` — visibility is the whole of the remedy until a `mutating` mark can say WHY it
+    was set.
+
+    So a benchmark must be able to separate "the author forgot the confirm" from "we over-gated a read",
+    and one code for both would mint that confusion into a frozen vocabulary."""
+
+    code = "undeclared_write"
+    retryable = False
+    can_follow_actuation = False
+
+
+class SlotUnboundError(FlowReplayError):
+    """A supplied slot is not bound to any recorded type/select step, so its value would change the
+    flow's Idempotency-Key without being entered on the page.
+
+    NOT `invalid_params`, deliberately. That code means "fix the arguments", and an agent honouring it
+    retries with different values — but this refuses identically for EVERY value forever, so the retry
+    loop never terminates. The flow has to be re-recorded so the slot binds the step it fills."""
+
+    code = "slot_unbound"
+    retryable = False
+    can_follow_actuation = False
+
+
+class PrecheckUnsafeError(FlowReplayError):
+    """A parameterized write cannot use a one-shot precheck: the precheck is row-blind, so it could
+    report a DISTINCT row's write as already-done and skip it.
+
+    The only refusal in the pre-flight set whose harm is a SUPPRESSED write rather than an unverified
+    one, which is why it carries its own code: direction of error is this project's primary axis, and a
+    silently-skipped commit is the failure nothing downstream catches."""
+
+    code = "precheck_unsafe"
+    retryable = False
+    can_follow_actuation = False
+
+
+class SecretEnvUnsetError(FlowReplayError):
+    """A secret slot's environment variable is not set, so the value cannot be resolved.
+
+    NOT `invalid_params`, and `ParamValidationError`'s docstring already drew this line before the code
+    existed: a secret's env being unset is an operator-config gap, not the caller's arguments to fix.
+    Secrets resolve from `$env` and are never passed as params, so an agent that "fixed" its arguments
+    in response would be doing the one thing the slot contract forbids."""
+
+    code = "secret_env_unset"
+    retryable = False
+    can_follow_actuation = False
+
+
+class LoginEnvUnsetError(FlowReplayError):
+    """The login's username/password environment variables are not set.
+
+    The same remedy as `secret_env_unset` — export the variable — but a different variable, named on a
+    different object (`LoginSpec.username_env`/`password_env` rather than `SlotSpec.secret_env`), and
+    reached on the auth path rather than the param path. Kept apart so an operator is told which."""
+
+    code = "login_env_unset"
+    retryable = False
+    can_follow_actuation = False
+
+
+class LoginUnconfiguredError(FlowReplayError):
+    """Auth cannot be refreshed because the spec has no `login`, or no `storage_state` to save the
+    refreshed cookies into. A spec-authoring gap, decided before a browser opens."""
+
+    code = "login_unconfigured"
+    retryable = False
+    can_follow_actuation = False
+
+
+class LoginFailedError(FlowReplayError):
+    """The login RAN and did not work — the form could not be auto-filled, or the success check was
+    unmet afterwards.
+
+    NOT retryable: the credentials or the selectors are wrong, and re-running reproduces it. Distinct
+    from `AuthExpiredError`, which means auth was fine and has now lapsed; here the mechanism for
+    getting auth is itself broken. `storage_state` is left untouched, so nothing is lost."""
+
+    code = "login_failed"
+    retryable = False
+    can_follow_actuation = False
+
+
+class BatchArgumentError(FlowReplayError):
+    """A `run_batch` call's own arguments are wrong — a non-empty batch with no spec, or an
+    `on_row_error` outside {stop, continue}.
+
+    A programmer error at the batch API, not a flow problem: no row was examined and nothing about the
+    flow is implicated. Kept inside the taxonomy rather than raised as a `ValueError`, because
+    `cli.py`'s batch path catches `FlowReplayError` to print `BATCH REFUSED: …` — a stranger class
+    there would hand an operator a stack trace for a typo (R4.18's shape)."""
+
+    code = "invalid_batch_request"
+    retryable = False
+    can_follow_actuation = False
+
+
+class BatchBoundError(FlowReplayError):
+    """A write batch's blast radius is unstated or exceeded — no `max_rows`, or more rows than it allows.
+
+    The APPROVAL BOUND: one human approval must not authorize an unbounded number of writes. Its own
+    code because the remedy is a human reviewing the extra rows and then raising the bound — never an
+    automatic widening, which is what a caller reading a generic refusal might attempt."""
+
+    code = "batch_bound"
+    retryable = False
+    can_follow_actuation = False
+
+
+class LedgerUnusableError(FlowReplayError):
+    """The resume ledger cannot be opened: a job-id that is not a safe filename component, or a ledger
+    file whose header belongs to a different flow.
+
+    NOT retryable, and that is worth stating because its sibling `MetaUnreadableError` IS — a sidecar
+    sharing violation clears on its own, but `ledger.LedgerError` is raised for exactly two causes and
+    neither is transient. Refusing rather than mangling the id is deliberate: a silently-mangled id
+    could alias two distinct jobs onto one ledger, and a resume keyed on the wrong ledger skips rows
+    that never committed."""
+
+    code = "ledger_unusable"
+    retryable = False
+    can_follow_actuation = False
 
 
 def _classify_replay_failure(kind: str) -> type[FlowReplayError]:
@@ -475,7 +811,7 @@ def _classify_replay_failure(kind: str) -> type[FlowReplayError]:
         "quarantine": FlowQuarantineError,
         "write_unreadable": WriteReadbackError,
         "write_unverified": WriteUnverifiedError,
-        "miss": FlowReplayError,  # no learned flow — an absence, not a drift
+        "miss": NotLearnedError,  # no learned flow — an absence, not a drift
     }.get(kind, DriftError)
 
 
@@ -605,6 +941,12 @@ class MetaUnreadableError(FlowReplayError):
 
     code = "meta_unreadable"
     retryable = True     # a sharing violation clears; this is the one refusal here that IS worth retrying
+    # ...and that flag is licensed by THIS axis, not by the comment above it. Raised only from
+    # `_update_meta` before the read-modify-write it refuses; its one in-`replay()` caller (the
+    # relearn pin-clear) is unreachable for a write flow because `_preflight_row` refuses
+    # `on_drift="relearn"` for one. That is a guard at a DISTANCE, and 1.6 rewrites the predicate
+    # it keys on (`is_write_flow`) — see the pins in `tests/test_refusal_codes.py`.
+    can_follow_actuation = False
 
 
 class MetaUnwritableError(FlowReplayError):
@@ -636,12 +978,20 @@ class MetaUnwritableError(FlowReplayError):
     # agent re-invokes, `ledger.is_committed` is False, and the commit fires twice. Inviolable #3.
     #
     # That pre-emption is fixed in `_record_run`, so this flag is now belt-and-braces — kept
-    # because the family's convention is unambiguous: of eleven classes, the only two that are retryable
-    # are raised strictly before anything can act. Direction of error decides it. A missed auto-retry
-    # costs an operator one manual re-run; a wrongly-advertised one can double-submit, and this file's
-    # own rule is never to build something that is only correct if `landed` happens to be true.
+    # because the family's convention is unambiguous: the only retryable classes are the ones raised
+    # strictly before anything can act. Direction of error decides it. A missed auto-retry costs an
+    # operator one manual re-run; a wrongly-advertised one can double-submit, and this file's own rule
+    # is never to build something that is only correct if `landed` happens to be true.
     # The message still tells a HUMAN to retry — this flag is the instruction to an autonomous agent.
+    #
+    # SINCE 1.4 THAT CONVENTION IS A TYPE ERROR, NOT A CONVENTION. `__init_subclass__` refuses any class
+    # that is both `retryable` and `can_follow_actuation`, so the rule holds for the twenty-seventh
+    # class as well as for the twelfth. (This comment said "of eleven classes" for two releases while
+    # there were twelve — which is the argument for deriving the count rather than typing it, and why
+    # nothing here quotes one any more.)
     retryable = False
+    landed = False           # explicit: it can raise after a commit POSTed, and a maybe is a no
+    can_follow_actuation = True
 
 
 def _update_meta(cache: FlowCache, key: str, mutate: Callable[["FlowMeta"], None], *,
@@ -1179,7 +1529,7 @@ async def _form_login(page, login: LoginSpec) -> None:
     user = os.environ.get(login.username_env)
     pw = os.environ.get(login.password_env)
     if not user or not pw:
-        raise FlowReplayError(
+        raise LoginEnvUnsetError(
             f"login credentials not in env (need {login.username_env} and {login.password_env})"
         )
     to = {"timeout": login.timeout_ms} if login.timeout_ms else {}  # per-step ceiling, if set
@@ -1197,7 +1547,7 @@ async def _form_login(page, login: LoginSpec) -> None:
         else:
             await pass_loc.press("Enter", **to)
     except Exception as exc:  # noqa: BLE001 - heuristic selectors may not match; guide the user
-        raise FlowReplayError(
+        raise LoginFailedError(
             f"could not auto-fill the login form at {login.url} ({type(exc).__name__}) — pass "
             f"explicit username_selector/password_selector/submit_selector, or a callable login "
             f"for multi-step/SSO flows"
@@ -1258,9 +1608,9 @@ async def refresh_auth(spec: FlowSpec, *, headless: Optional[bool] = None) -> No
     login can't overwrite a working session's cookies.
     """
     if spec.login is None:
-        raise FlowReplayError(f"{spec.name!r}: no `login` configured — cannot refresh auth")
+        raise LoginUnconfiguredError(f"{spec.name!r}: no `login` configured — cannot refresh auth")
     if not spec.storage_state:
-        raise FlowReplayError(f"{spec.name!r}: set `storage_state` (a path) so refreshed cookies can be saved")
+        raise LoginUnconfiguredError(f"{spec.name!r}: set `storage_state` (a path) so refreshed cookies can be saved")
     _log.info("flow %r: refreshing auth (re-login -> %s)", spec.name, spec.storage_state)
     session = await BrowserSession(
         headless=headless if headless is not None else spec.headless
@@ -1271,7 +1621,7 @@ async def refresh_auth(spec: FlowSpec, *, headless: Optional[bool] = None) -> No
         else:
             await _form_login(session.page, spec.login)
             if not await _login_succeeded(session.page, spec.login):
-                raise FlowReplayError(
+                raise LoginFailedError(
                     f"{spec.name!r}: login did not appear to succeed (still on the login page or "
                     f"success check unmet) — check credentials/selectors; storage_state left unchanged"
                 )
@@ -1512,7 +1862,7 @@ def approve(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> None:
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     cached = cache.get(key)
     if cached is None:
-        raise FlowReplayError(f"{spec.name!r}: nothing to approve — learn the flow first")
+        raise NotLearnedError(f"{spec.name!r}: nothing to approve — learn the flow first")
     sh = _slots_hash(spec)
     ch = _contracts_hash(spec)
     steps_h = steps_hash(cached)
@@ -1535,7 +1885,7 @@ def unapprove(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> None:
     # Mirror `approve`'s guard: don't silently mint a meta sidecar (and promise a re-seed) for a flow that was
     # never learned in the first place.
     if cache.get(key) is None:
-        raise FlowReplayError(f"{spec.name!r}: nothing to unapprove — learn or record the flow first")
+        raise NotLearnedError(f"{spec.name!r}: nothing to unapprove — learn or record the flow first")
     _update_meta(cache, key, lambda m: setattr(m, "approved", False), on_unreadable="raise")
 
 
@@ -2701,7 +3051,7 @@ def validate_params(spec: FlowSpec, params: Optional[dict]) -> dict:
                 if slot.required:
                     # An UNSET env var is an operator-config gap, NOT a caller-fixable argument -> base
                     # replay_error (the caller can't fix it by changing arguments).
-                    raise FlowReplayError(
+                    raise SecretEnvUnsetError(
                         f"{spec.name!r}: secret slot {name!r} needs env var {slot.secret_env!r} set")
                 continue
             resolved[name] = val
@@ -2771,11 +3121,11 @@ def _preflight_row(
     # confirm check first (the more actionable of the two) and still reports an unkeyable commit second.
     # Widening a guard should not silently reshuffle the messages of the population it already covered.
     if declares_write and not spec.mutate.has_confirm():
-        raise FlowReplayError(
+        raise WriteUnconfirmableError(
             f"{spec.name!r}: a write flow needs a confirm check — set "
             f"mutate.confirm_selector / confirm_text_contains / confirm_url_contains")
     if on_drift == "relearn" and is_write_flow(spec, cached_flow):
-        raise FlowReplayError(
+        raise RelearnRefusedError(
             f"{spec.name!r}: on_drift='relearn' is refused for a flow that writes — re-authoring re-runs "
             f"the flow, which re-performs the write"
             + ("" if declares_write else
@@ -2806,7 +3156,7 @@ def _preflight_row(
     # no slot-bound steps, so it would run the DEFAULT values and return data for them, silently ignoring the
     # per-run params (a silently-wrong read, inviolable #2). Refuse the combination rather than mislead.
     if parameterizing and on_drift == "relearn":
-        raise FlowReplayError(
+        raise RelearnRefusedError(
             f"{spec.name!r}: on_drift='relearn' can't be combined with params — a re-author ignores the "
             f"per-run values and would return data for the frozen defaults. Use on_drift='fail' (the "
             f"default) with params, or drop params to relearn the frozen flow.")
@@ -2817,7 +3167,7 @@ def _preflight_row(
     # Every skipped gate is NAMED in the report, so a dry run of an unapproved or re-authored
     # recipe can never be mistaken for a run of an approved one.
     if not skip_approval_gates and (require_approved or declares_write) and not meta.approved:
-        raise FlowReplayError(f"{spec.name!r}: flow not approved — learn it, verify it, then approve")
+        raise NotApprovedError(f"{spec.name!r}: flow not approved — learn it, verify it, then approve")
     # The approval is bound to the slot schema. A slotted flow whose domain changed since approve() (e.g. a
     # payee enum loosened to any string) must refuse until re-approved — a stale approval must never
     # authorize a WIDER contract than the human reviewed (an injection surface, worst on a write).
@@ -2827,7 +3177,7 @@ def _preflight_row(
     # types the EMPTY STRING into a credential field before the submit, and the write mints a different
     # Idempotency-Key than the same logical write did while slotted.
     if not skip_approval_gates and meta.approved and _slots_hash(spec) != meta.slots_hash:
-        raise FlowReplayError(
+        raise ApprovalBindingStaleError(
             f"{spec.name!r}: the slot schema changed since approval — re-approve the flow before replaying "
             f"it (a widened/edited slot domain must not run under a stale approval)")
     # H9: the human value-contract overlay is likewise approval-bound. A tightened OR loosened OR fully
@@ -2836,7 +3186,7 @@ def _preflight_row(
     # the re-approval. Base replay_error (a config re-bless, not a data quarantine). The machine seed is
     # learn-bound, not hashed, so it can never silently widen a human-approved guarantee.
     if not skip_approval_gates and meta.approved and _contracts_hash(spec) != meta.contracts_hash:
-        raise FlowReplayError(
+        raise ApprovalBindingStaleError(
             f"{spec.name!r}: value contracts changed since approval — re-approve the flow before replaying it "
             f"(a tightened or loosened value guarantee must be re-blessed by a human)")
     # RECIPE INTEGRITY — the gate that makes `approved` mean what a human thinks it means. The two gates above
@@ -2863,7 +3213,7 @@ def _preflight_row(
     # re-seeds shape/contracts and resets the magnitude history). So refuse, exactly as a write flow already
     # does: recovery on an approved flow is a human action (`flow record`/`flow learn`, then re-approve).
     if not skip_approval_gates and meta.approved and on_drift == "relearn":
-        raise FlowReplayError(
+        raise RelearnRefusedError(
             f"{spec.name!r}: on_drift='relearn' is refused for an APPROVED flow — re-authoring would replay "
             f"steps no human reviewed under the existing approval (and would re-baseline the value contracts). "
             f"Fix it deliberately: `flow record`/`flow learn`, review with `flow inspect`, then `flow approve`. "
@@ -2878,7 +3228,7 @@ def _preflight_row(
         bound = {s.slot for s in cached_flow.steps if s.slot and s.action in ("type", "select")}
         unbound = sorted(k for k in resolved if k not in bound)
         if unbound:
-            raise FlowReplayError(
+            raise SlotUnboundError(
                 f"{spec.name!r}: slot(s) {unbound} were supplied but aren't bound to any recorded "
                 f"type/select step — the value would change the flow's idempotency key without being "
                 f"entered on the page (a silent wrong/duplicate action). Bind each slot to the step it "
@@ -2887,7 +3237,7 @@ def _preflight_row(
     # NO row awareness. On a PARAMETERIZED write a generic end-state left by one row would make a DIFFERENT
     # row's write skip as "already-done" — a silently suppressed write. Its retry-safety is the row-keyed key.
     if declares_write and parameterizing and spec.mutate.has_precheck():
-        raise FlowReplayError(
+        raise PrecheckUnsafeError(
             f"{spec.name!r}: a parameterized write can't use a one-shot precheck (mutate.precheck_*) — the "
             f"precheck is row-blind and could skip a distinct row's write as already-done. Remove the precheck "
             f"(the row-keyed Idempotency-Key gives retry-dedup safety), or replay this row without params.")
@@ -2987,7 +3337,7 @@ async def dry_run(spec: FlowSpec, params: Optional[dict] = None, *,
         resolved = _preflight_row(spec, params, meta=meta, cached_flow=cached,
                                   require_approved=False, on_drift="raise", skip_approval_gates=True)
     except FlowReplayError as exc:
-        rep.aborted = getattr(exc, "code", "replay_error")
+        rep.aborted = exc.code
         rep.abort_detail = str(exc)
         return rep
 
@@ -3893,16 +4243,16 @@ async def run_batch(
         # capability probe return a valid shape without dereferencing `spec`.)
         return BatchRun(status="ok", rows=[], total=0, dry_run=dry_run)
     if spec is None:
-        raise FlowReplayError("run_batch: a non-empty batch needs a spec")
+        raise BatchArgumentError("run_batch: a non-empty batch needs a spec")
     if on_row_error not in ("stop", "continue"):
-        raise FlowReplayError(f"run_batch: on_row_error must be 'stop' or 'continue', not {on_row_error!r}")
+        raise BatchArgumentError(f"run_batch: on_row_error must be 'stop' or 'continue', not {on_row_error!r}")
 
     cache = cache or _default_cache()
     key = flow_key(spec.goal, spec.start_url, spec.scope)
     meta = _load_meta(cache, key)
     cached_flow = cache.get(key)
     if cached_flow is None:
-        raise FlowReplayError(f"{spec.name!r}: nothing to batch — learn and approve the flow first")
+        raise NotLearnedError(f"{spec.name!r}: nothing to batch — learn and approve the flow first")
     # Key the write guards off the ACTUAL mutating signal, not just the declaration. A flow learned as a
     # "read" (spec.mutate=None) whose steps in fact POST is cached with `step.mutating=True` and, on replay,
     # STILL fires the write (flow._replay_step gates on `step.mutating`). Trusting spec.mutate alone would
@@ -3917,7 +4267,7 @@ async def run_batch(
     # write). Refuse loud: declare the write + a confirm check so each row's landing is verified. (Matches the
     # recorder, which refuses to cache an undeclared write.)
     if is_mutate and spec.mutate is None:
-        raise FlowReplayError(
+        raise UndeclaredWriteError(
             f"{spec.name!r}: this flow performs a write (a mutating step) but isn't declared as a write — so "
             f"replay can't verify each row's write LANDED, which a batch (and its resume ledger) requires. "
             f"Declare it via `mutate` with a confirm check (e.g. `flow set-mutate`) and re-approve, then batch it.")
@@ -3931,15 +4281,15 @@ async def run_batch(
             ledger = RunLedger.open(cache, key, resume, spec.scope)
             ledger.committed()
         except LedgerError as exc:
-            raise FlowReplayError(f"{spec.name!r}: {exc}") from exc
+            raise LedgerUnusableError(f"{spec.name!r}: {exc}") from exc
 
     # Approval bound: a write batch MUST declare its blast radius (one approval now authorizes N writes).
     if is_mutate and max_rows is None:
-        raise FlowReplayError(
+        raise BatchBoundError(
             f"{spec.name!r}: a write batch requires max_rows — one approval must not authorize unbounded "
             f"writes. Pass max_rows=N (>= the row count) after reviewing the input.")
     if max_rows is not None and len(rows) > max_rows:
-        raise FlowReplayError(
+        raise BatchBoundError(
             f"{spec.name!r}: batch has {len(rows)} rows but max_rows={max_rows} — refuse. Raise max_rows only "
             f"after reviewing the extra rows.")
 

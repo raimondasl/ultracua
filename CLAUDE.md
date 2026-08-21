@@ -43,7 +43,8 @@ inventory it must dispose of.
 **And read `docs/reshape-plan.md` before proposing a refactor** — it answers "why does every change
 break something". It measures the shapes that manufacture the recurring defect classes (a 27-param
 positional funnel, string-keyed dict channels, a record written at 10 sites, 33 raw `spec.mutate`
-predicates, 24 `flow_key` transcriptions, 24 bare `raise FlowReplayError`), argues for re-shaping rather
+predicates, 24 `flow_key` transcriptions, 24 bare `raise FlowReplayError` — the last of those
+closed at 1.4), argues for re-shaping rather
 than a rewrite or a `flows/` split, and records what NOT to re-propose. It changes the shape fixes land
 in; it does not re-sequence `correctness-plan.md` and closes none of its findings.
 
@@ -154,6 +155,28 @@ Violating any of these is a blocking defect, not a trade-off:
   NAME it are a fourth thing to check beside the ratchets, the mutants and the goldens. Name every
   half, and fail if a named half is MISSING rather than scanning whatever is found.
 
+- **A refusal names a REMEDY, and the base class is abstract (1.4a, 0.111.0).** Twenty-four refusals
+  shared `code="replay_error"`, so "flow not approved", "no login configured" and "batch has more rows
+  than max_rows" all reached the MCP wire, `DryRunReport.aborted` and a `--json` batch report as one
+  word. Now 27 distinct codes, and `FlowReplayError("x")` **raises `TypeError`** — which is the only
+  sensor that also reaches the INDIRECT raise (`raise _classify_replay_failure(kind)(...)` resolves its
+  class at run time, so no AST scan keyed on a class name can see it, and that route produced the
+  base-coded refusal for the commonest failure a fresh flow has). The base is still the `except` target
+  of the whole family: the taxonomy narrowed, the catch did not.
+  * **Four axes, and `__init_subclass__` enforces the relations between them ONCE.** `code` (a remedy),
+    `retryable` (may an agent re-run), `landed` (the ledger's two-state ARMING token — NOT
+    `RunRecord.landed`'s tri-state report), and `can_follow_actuation` (can this be raised after the
+    write may have fired). Each must be DECLARED, never inherited — that is R4.18 in one line, where
+    `MetaUnwritableError` inherited `retryable=True` from its pre-write twin and an MCP agent re-fired a
+    commit. **Retryable + post-actuation is now a TypeError**, as is a duplicate code, a code another
+    vocabulary owns (`RESERVED_CODES` — `ToolOutcome`/`SkippedFlow` share the field), and a `landed=True`
+    claim from a position where nothing could have fired. Two hand-written lists were deleted for this:
+    `test_boundary_truth`'s four post-actuation classes and `test_inviolable_properties`'s `>= 10` floor.
+  * **`tests/test_refusal_codes.py` holds the BINDING** — which class each function raises — as one
+    committed table keyed on the FUNCTION, not the line. Reviewing its diff IS reviewing a taxonomy
+    change. Deliberately not "a cell per subclass at its raise site" (the plan's wording): 24 bespoke
+    cells is the per-branch shape this register keeps re-filing.
+
 - **The RunRecord has ONE writer — `_RecordSink` (1.5, 0.110.0).** `replay()` is a wrapper whose only
   job is calling `finish()` exactly once; `_replay_body` appends frozen `_AttemptFacts` and cannot
   write the record at all. Usage comes from ONE run-scoped watch, so a raised attempt, an exit whose
@@ -167,12 +190,16 @@ Violating any of these is a blocking defect, not a trade-off:
 
 - **Six shapes may only ever SHRINK — the ratchets.** `python scripts/ratchets.py` counts them by AST
   (`--print` for every site, `--update` to re-seed) and `test_every_ratchet_holds` runs it in the fast
-  tier. Today: `spec_mutate_raw` 27, `flow_key_transcriptions` 25, `bare_flow_replay_error` 24,
-  `cli_system_exit` 34, `run_record_write_sites` 16, `engine_positional_params` 98 — each tagged with the
-  Phase-1 step that removes it. **A shrink FAILS too**, asking for `--update`: a ratchet that tolerates
-  progress silently stops ratcheting, and the next regression is measured against the old, looser
-  number. A derivation that matches NOTHING fails with its own message, the rule `prove_red` already
-  applies to a stale mutation. **Do not quote `reshape-plan.md`'s counts** — they were greps, and two of
+  tier. Today: `spec_mutate_raw` 27, `flow_key_transcriptions` 25, `cli_system_exit` 34,
+  `engine_positional_params` 98, and **two at ZERO** — `run_record_write_sites` (1.5) and
+  `bare_flow_replay_error` (1.4) — each tagged with the Phase-1 step that removes it. **A shrink FAILS
+  too**, asking for `--update`: a ratchet that tolerates progress silently stops ratcheting, and the
+  next regression is measured against the old, looser number. A derivation that matches NOTHING fails
+  with its own message, the rule `prove_red` already applies to a stale mutation. **A ratchet whose end
+  state is ZERO is an EARNED exemption** (`MAY_BE_ZERO`): it must prove its own pattern is still live
+  from the other half of the same walk — the writes INSIDE the sink, the raises of the SUBCLASSES — and
+  `LIVENESS_GUTS` in `tests/test_ratchets.py` is what arms that, one row per exemption, with a missing
+  row a red test. **Do not quote `reshape-plan.md`'s counts** — they were greps, and two of
   five were wrong (grep counts the shape inside COMMENTS: `spec.mutate is not None` appears in three
   findings' prose, inflating 27 to 33). Derive, then cite.
 

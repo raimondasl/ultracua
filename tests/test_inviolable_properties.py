@@ -786,8 +786,21 @@ async def test_every_typed_error_carries_a_DISTINCT_machine_readable_code() -> N
     ("the two questions are DIFFERENT — collapsing them was the sixth pass's finding") in the error
     taxonomy rather than in the ledger.
     """
+    from ultracua.flows import REGISTRY, RESERVED_CODES
+
     errs = _typed_errors()
-    assert len(errs) >= 10, f"only {len(errs)} typed errors found — the walk is broken: {errs}"
+    # DERIVED EQUALITY, not a typed floor. This said `>= 10` while there were twelve and, after 1.4,
+    # twenty-seven — a number that only ever gets further from the truth, and a walk that silently lost
+    # half the family would still have cleared it. `REGISTRY` is populated by `__init_subclass__`, so
+    # the two derivations are independent: the class-creation hook and a `__subclasses__` walk have to
+    # agree, and a class defined but never registered (or registered and then removed) is red here.
+    assert {c.__name__ for c in errs} == {c.__name__ for c in REGISTRY.values()}, (
+        f"the subclass walk and REGISTRY disagree about the taxonomy: "
+        f"walk-only={sorted({c.__name__ for c in errs} - {c.__name__ for c in REGISTRY.values()})}, "
+        f"registry-only={sorted({c.__name__ for c in REGISTRY.values()} - {c.__name__ for c in errs})}")
+    assert len(errs) >= 27, (
+        f"only {len(errs)} typed errors found — the walk is broken, not the taxonomy small: {errs}")
+
     by_code: dict = {}
     for cls in errs:
         code = getattr(cls, "code", None)
@@ -796,11 +809,52 @@ async def test_every_typed_error_carries_a_DISTINCT_machine_readable_code() -> N
             f"{cls.__name__}.retryable must be a bool — a caller branches on it")
         assert isinstance(getattr(cls, "landed", None), bool), (
             f"{cls.__name__}.landed must be a bool — it arms the retry-dedupe ledger")
+        assert isinstance(getattr(cls, "can_follow_actuation", None), bool), (
+            f"{cls.__name__}.can_follow_actuation must be a bool — it is what licenses the other two")
         by_code.setdefault(code, []).append(cls.__name__)
     print(f"  {len(errs)} typed errors, codes: {sorted(by_code)}")
     dupes = {c: names for c, names in by_code.items() if len(names) > 1}
     assert not dupes, (
         f"these typed errors share a `code`, so a caller cannot tell them apart by kind: {dupes}")
+
+    # ...and no code may collide with a vocabulary that shares a FIELD with this one. `ToolOutcome.code`
+    # carries five codes `mcpserver` mints itself and `SkippedFlow.code` eight; B3 buckets on those
+    # fields, so one slug meaning two things is R3.7's overloaded token in a code space.
+    collisions = sorted(set(by_code) & RESERVED_CODES)
+    assert not collisions, (
+        f"{collisions} are taxonomy codes AND reserved for another vocabulary on the same field")
+
+
+async def test_no_typed_error_is_both_retryable_and_post_actuation() -> None:
+    """#2c. INVIOLABLE #3, as a property of the taxonomy rather than of a call path.
+
+    `retryable=True` tells an autonomous agent to re-run. If the class can be raised from a position
+    where this run's write may already have committed, that instruction double-submits — which is not
+    hypothetical: R4.18's fix shipped `MetaUnwritableError.retryable = True`, copied from its PRE-write
+    twin without regard to position, and an MCP agent honouring it re-fired a commit that had actuated.
+
+    Since 1.4 the rule is enforced at CLASS CREATION (`__init_subclass__`), so this cell is the
+    behavioural witness for it rather than the enforcement. Both are wanted: the hook cannot fire for a
+    class whose flags are mutated after definition, and this can.
+    """
+    from ultracua.flows import REGISTRY
+
+    retryable = sorted(c.__name__ for c in REGISTRY.values() if c.retryable)
+    post_act = sorted(c.__name__ for c in REGISTRY.values() if c.can_follow_actuation)
+    print(f"  retryable: {retryable}")
+    print(f"  can follow an actuation: {post_act}")
+    assert retryable, "no class is retryable — B3 must not be told the flag is a constant"
+    assert post_act, "no class can follow an actuation — the axis has been cleared wholesale"
+
+    bad = sorted(c.__name__ for c in REGISTRY.values() if c.retryable and c.can_follow_actuation)
+    assert not bad, (
+        f"{bad} tell an autonomous agent to re-run a flow that may already have committed. Direction "
+        f"of error decides this: a missed auto-retry costs one manual re-run; a wrong one "
+        f"double-submits (inviolable #3).")
+    # A `landed=True` claim needs the same licence: a class that cannot follow an actuation cannot have
+    # observed a landed write, and a false arm SKIPS a row that was never paid.
+    liars = sorted(c.__name__ for c in REGISTRY.values() if c.landed and not c.can_follow_actuation)
+    assert not liars, f"{liars} claim a landed write from a position where none could have fired"
 
 
 async def test_the_AUTH_REFRESH_retry_never_reaches_an_llm(

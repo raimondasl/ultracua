@@ -148,18 +148,122 @@ def derive_flow_key_transcriptions() -> list:
     return out
 
 
-def derive_bare_flow_replay_error() -> list:
-    """`raise FlowReplayError(` — the base class, so every one of them carries `code='replay_error'`.
+def _taxonomy_names() -> set:
+    """The `FlowReplayError` family, derived transitively from `flows.py`'s ClassDefs.
 
-    Step 1.4 gives the ~10 refusal kinds distinct codes; B3 must not freeze its vocabulary before then.
+    Never hand-listed. Two members (`MetaUnreadableError`, `MetaUnwritableError`) sit ~130 lines below
+    the rest of the block, and every hand count of this family in the repo's own prose said "eleven"
+    when it was twelve — `flows.py`'s own comment on `MetaUnwritableError.retryable` still does.
     """
-    out = []
-    for path, tree in _modules():
-        for n in ast.walk(tree):
-            if isinstance(n, ast.Raise) and isinstance(n.exc, ast.Call) \
-                    and _dotted(n.exc.func).split(".")[-1] == "FlowReplayError":
-                out.append(Site(_rel(path), n.lineno))
+    names = {"FlowReplayError"}
+    for _path, tree in _modules(only="flows.py"):
+        changed = True
+        while changed:                       # a subclass of a subclass is still in the family
+            changed = False
+            for n in ast.walk(tree):
+                if (isinstance(n, ast.ClassDef) and n.name not in names
+                        and any(_dotted(b).split(".")[-1] in names for b in n.bases)):
+                    names.add(n.name)
+                    changed = True
+    return names
+
+
+def _base_enforcement_nodes(tree) -> set:
+    """The ids of nodes belonging to the mechanism that ENFORCES this ratchet's invariant.
+
+    A ratchet must not count its own guard. `FlowReplayError.__init__` says
+    `if type(self) is FlowReplayError` — a bare-name value reference — and `RESERVED_CODES` lists
+    `"replay_error"` as the poison sentinel no concrete class may carry. Both are shape (b)/(c) matches
+    and both exist to make the shape unexpressible; counting them would leave the ratchet permanently
+    at 2 and unable to reach the zero that IS the invariant.
+    """
+    out = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ClassDef) and n.name == "FlowReplayError":
+            out |= {id(x) for x in ast.walk(n)}
+        if isinstance(n, ast.Assign) and any(_dotted(t_) == "RESERVED_CODES" for t_ in n.targets):
+            out |= {id(x) for x in ast.walk(n)}
     return out
+
+
+def _base_coded_sites():
+    """(sites that can PRODUCE a base-coded refusal, sites raising a SUBCLASS) — the same walk."""
+    fam = _taxonomy_names()
+    base, sub = [], []
+    for path, tree in _modules():
+        skip = _base_enforcement_nodes(tree)
+        # Positions where the bare NAME is not a value: an `except` clause, a ClassDef base, an
+        # isinstance/issubclass argument, an annotation, and a raise's own callee (shape (a) counts it).
+        for n in ast.walk(tree):
+            if isinstance(n, ast.ExceptHandler) and n.type is not None:
+                skip |= {id(x) for x in ast.walk(n.type)}
+            if isinstance(n, ast.ClassDef):
+                for b in n.bases:
+                    skip |= {id(x) for x in ast.walk(b)}
+            if isinstance(n, ast.Call) and _dotted(n.func) in ("isinstance", "issubclass"):
+                for a in n.args:
+                    skip |= {id(x) for x in ast.walk(a)}
+            if isinstance(n, ast.Raise) and isinstance(n.exc, ast.Call):
+                skip.add(id(n.exc.func))
+            for attr in ("annotation", "returns"):
+                ann = getattr(n, attr, None)
+                if ann is not None:
+                    skip |= {id(x) for x in ast.walk(ann)}
+
+        for n in ast.walk(tree):
+            # (a) a raise naming the class.
+            if isinstance(n, ast.Raise) and isinstance(n.exc, ast.Call):
+                name = _dotted(n.exc.func).split(".")[-1]
+                if name == "FlowReplayError":
+                    base.append(Site(_rel(path), n.lineno, "raise"))
+                elif name in fam:
+                    sub.append(Site(_rel(path), n.lineno, f"raise {name}"))
+            # (b) the bare NAME in a value position — a dict value, a variable, a default. This is the
+            #     shape that catches `_classify_replay_failure`'s table, whose entry becomes a raise
+            #     through a Call and which (a) structurally cannot see.
+            elif isinstance(n, ast.Name) and n.id == "FlowReplayError" and id(n) not in skip:
+                base.append(Site(_rel(path), n.lineno, "value ref"))
+            # (c) a surviving `"replay_error"` literal — a getattr default, a comparison, a fixture.
+            elif (isinstance(n, ast.Constant) and n.value == "replay_error"
+                  and id(n) not in skip):
+                base.append(Site(_rel(path), n.lineno, "literal"))
+    return base, sub
+
+
+def derive_bare_flow_replay_error() -> list:
+    """Everything in `src/` that can PRODUCE a refusal carrying the base's `code='replay_error'`.
+
+    REDEFINED AT 1.4, and the reason matters more than the number. This counted the syntactic form
+    `raise FlowReplayError(` — 24 — but that is a proxy for the invariant rather than the invariant.
+    `flows.py`'s `_classify_replay_failure` reaches the same class through a VARIABLE
+    (`raise _classify_replay_failure(kind)(...)`), so the old scan could have read 0 while the
+    commonest refusal on a freshly-learned flow still shipped `replay_error` through four constructors.
+    That is "a structural scan that names ONE function asserts a negative about a body that can walk
+    away", one instrument over. Three shapes, one number:
+
+      (a) `raise <...>FlowReplayError(...)`                             24 at 0.110.0 -> 0
+      (b) the bare NAME in a VALUE position                              1 at 0.110.0 -> 0
+      (c) a surviving `"replay_error"` string literal                    4 at 0.110.0 -> 0
+
+    So the honest figure this slice moves is 29 -> 0, and the PR states both. The KEY is not renamed:
+    `CLAUDE.md`, `reshape-plan.md` and `STATUS.md` all quote it, and a rename is a second edit across
+    lines 1.6 and Phase 3 must touch anyway.
+
+    Shape (c) uses EQUALITY, never substring — the base's docstring contains the slug and comments
+    discuss it, and neither is a producer. The enforcement mechanism is excluded for the same reason
+    (`_base_enforcement_nodes`): a ratchet that counts its own guard can never reach zero.
+
+    END STATE ZERO, and the exemption is EARNED the way `derive_run_record_write_sites` earns its: the
+    same walk must still find the SUBCLASS raises before this may report zero. It is a SECOND SENSOR
+    CLASS rather than a second copy of one — `FlowReplayError.__init__` refuses the base at RUN time;
+    this catches, at authoring time, the shapes no runtime check ever sees (an unraised reference in a
+    table, a surviving literal in a default).
+    """
+    base, sub = _base_coded_sites()
+    assert sub, (
+        "no `raise <FlowReplayError subclass>(` matches anywhere in src/ — the derivation is broken, "
+        "not the codebase clean. That is the stale-derivation failure this file refuses.")
+    return base
 
 
 def derive_cli_system_exit() -> list:
@@ -266,13 +370,18 @@ def derive_engine_positional_params() -> list:
 # failure this file refuses, so an exemption has to be earned: `derive_run_record_write_sites` proves
 # its own pattern is live by asserting it still finds the writes INSIDE `_RecordSink` before returning
 # the ones outside. Nothing else may join this set without the same proof.
-MAY_BE_ZERO = frozenset({"run_record_write_sites"})
+MAY_BE_ZERO = frozenset({"run_record_write_sites", "bare_flow_replay_error"})
 
 
 RATCHETS = {
     "spec_mutate_raw": (derive_spec_mutate_raw, "reshape-plan 1.6 — WriteClass named questions"),
     "flow_key_transcriptions": (derive_flow_key_transcriptions, "reshape-plan 1.6 — FlowSpec.key"),
-    "bare_flow_replay_error": (derive_bare_flow_replay_error, "reshape-plan 1.4 — distinct codes"),
+    "bare_flow_replay_error": (derive_bare_flow_replay_error,
+                               "reshape-plan 1.4 — distinct codes (landed). The invariant is EMISSION, "
+                               "not syntax: the base is unconstructible since 1.4, so the only "
+                               "acceptable value is 0. NOTE the raise-site count alone was 24 and could "
+                               "read 0 while the indirect raise still resolved to the base — hence the "
+                               "three shapes, and the honest figure 29 -> 0."),
     "cli_system_exit": (derive_cli_system_exit, "reshape-plan Phase 3 — one SystemExit funnel"),
     "run_record_write_sites": (derive_run_record_write_sites,
                                "reshape-plan 1.5 — THE SINK (landed; the invariant is now CONTAINMENT, "

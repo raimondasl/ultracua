@@ -26,66 +26,60 @@ import pytest
 
 FLOWS = pathlib.Path(__file__).parents[1] / "src" / "ultracua" / "flows.py"
 
-# EVERY function that raises a taxonomy refusal, with its TOTAL count — the twelve typed sites
-# included, not just the 24 the step re-classes. NAMED, and a missing one is a failure rather than a
-# smaller world: a structural scan that names a function asserts a NEGATIVE about a body that can walk
-# away from it, and 1.5 measured three scans disarmed at once by one function being split in two.
+# WHAT EACH FUNCTION RAISES, as a sorted multiset of class names. Keyed on the FUNCTION, never on the
+# line: a table of line numbers churns on every unrelated edit above it, and a table nobody can read
+# the diff of is a table nobody reads. The multiset still catches everything that matters — a raise
+# re-classed, a raise moved between functions, a raise added or removed — because a change to any of
+# those changes some function's list.
 #
-# Derived, then transcribed — the first draft of this table guessed `_preflight_row: 9` from the bare
-# raises alone and the cell caught it at 12. The three it missed (`FlowQuarantineError` 2750,
-# `UnkeyedWriteError` 2799, `StaleApprovalError` 2855) are the typed SIBLINGS of the nine, which is
-# precisely the population 1.4 must not move by accident.
-REFUSING_FUNCTIONS = {
-    "_update_meta": 1,
-    "_save_meta": 1,
-    "_form_login": 2,
-    "refresh_auth": 3,
-    "approve": 1,
-    "unapprove": 1,
-    "_quarantine": 1,
-    "validate_params": 4,
-    "_preflight_row": 12,
-    "_do_quarantine": 1,
-    "_replay_body": 2,
-    "run_batch": 7,
+# At 0.110.0 every entry marked (1.4) below read `FlowReplayError`, so `flow not approved`, `no login
+# configured` and `batch has more rows than max_rows` all reached a caller as `code="replay_error"`.
+# THE GIT DIFF ON THIS TABLE IS THE RECORD OF WHAT STEP 1.4 CHANGED — review it, not the raise sites.
+SITE_TABLE = {
+    "_update_meta":    ["MetaUnreadableError"],
+    "_save_meta":      ["MetaUnwritableError"],
+    "_quarantine":     ["MetaUnwritableError"],
+    "_do_quarantine":  ["FlowQuarantineError"],
+    "_replay_body":    ["WriteReadbackError", "WriteUnverifiedError"],
+    "_form_login":     ["LoginEnvUnsetError",              # (1.4) credentials not in env
+                        "LoginFailedError"],               # (1.4) the form could not be auto-filled
+    "refresh_auth":    ["LoginFailedError",                # (1.4) login did not appear to succeed
+                        "LoginUnconfiguredError",          # (1.4) no `login` on the spec
+                        "LoginUnconfiguredError"],         # (1.4) no `storage_state` to save into
+    "approve":         ["NotLearnedError"],                # (1.4) nothing to approve
+    "unapprove":       ["NotLearnedError"],                # (1.4) nothing to unapprove
+    "validate_params": ["ParamValidationError",
+                        "ParamValidationError",
+                        "ParamValidationError",
+                        "SecretEnvUnsetError"],            # (1.4) a secret slot's env var is unset
+    "_preflight_row":  ["ApprovalBindingStaleError",       # (1.4) the slot schema moved
+                        "ApprovalBindingStaleError",       # (1.4) the value contracts moved
+                        "FlowQuarantineError",
+                        "NotApprovedError",                # (1.4) flow not approved
+                        "PrecheckUnsafeError",             # (1.4) parameterized write + one-shot precheck
+                        "RelearnRefusedError",             # (1.4) relearn on a write flow
+                        "RelearnRefusedError",             # (1.4) relearn with params
+                        "RelearnRefusedError",             # (1.4) relearn on an APPROVED flow
+                        "SlotUnboundError",                # (1.4) a supplied slot binds no step
+                        "StaleApprovalError",
+                        "UnkeyedWriteError",
+                        "WriteUnconfirmableError"],        # (1.4) a write flow with no confirm check
+    "run_batch":       ["BatchArgumentError",              # (1.4) no spec for a non-empty batch
+                        "BatchArgumentError",              # (1.4) a bad on_row_error
+                        "BatchBoundError",                 # (1.4) a write batch with no max_rows
+                        "BatchBoundError",                 # (1.4) more rows than max_rows
+                        "LedgerUnusableError",             # (1.4) a bad/foreign resume ledger
+                        "NotLearnedError",                 # (1.4) nothing to batch
+                        "UndeclaredWriteError"],           # (1.4) mutating steps, no declaration
 }
 TOTAL_RAISE_SITES = 36
-
-# (enclosing function, line, class raised). CAPTURED AGAINST UNMODIFIED `src/` AT 0.110.0, where every
-# one of the 24 read `FlowReplayError` — which is exactly the finding 1.4 exists to remove.
-SITE_TABLE = [
-    ("_form_login",     1182, "FlowReplayError"),
-    ("_form_login",     1200, "FlowReplayError"),
-    ("refresh_auth",    1261, "FlowReplayError"),
-    ("refresh_auth",    1263, "FlowReplayError"),
-    ("refresh_auth",    1274, "FlowReplayError"),
-    ("approve",         1515, "FlowReplayError"),
-    ("unapprove",       1538, "FlowReplayError"),
-    ("validate_params", 2704, "FlowReplayError"),
-    ("_preflight_row",  2774, "FlowReplayError"),
-    ("_preflight_row",  2778, "FlowReplayError"),
-    ("_preflight_row",  2809, "FlowReplayError"),
-    ("_preflight_row",  2820, "FlowReplayError"),
-    ("_preflight_row",  2830, "FlowReplayError"),
-    ("_preflight_row",  2839, "FlowReplayError"),
-    ("_preflight_row",  2866, "FlowReplayError"),
-    ("_preflight_row",  2881, "FlowReplayError"),
-    ("_preflight_row",  2890, "FlowReplayError"),
-    ("run_batch",       3896, "FlowReplayError"),
-    ("run_batch",       3898, "FlowReplayError"),
-    ("run_batch",       3905, "FlowReplayError"),
-    ("run_batch",       3920, "FlowReplayError"),
-    ("run_batch",       3934, "FlowReplayError"),
-    ("run_batch",       3938, "FlowReplayError"),
-    ("run_batch",       3942, "FlowReplayError"),
-]
 
 # The engine's failure `kind` -> the class `_classify_replay_failure` resolves it to. `"miss"` is the
 # 25th refusal and the one no `raise FlowReplayError(` scan can see: it reaches the base through a
 # VARIABLE (`raise _classify_replay_failure(kind)(...)`), which is why the class table below and the
 # ratchet's shape (b) both exist.
 KIND_TABLE = [
-    ("miss",             "FlowReplayError"),
+    ("miss",             "NotLearnedError"),
     ("escalate",         "EscalateError"),
     ("shape",            "ShapeDriftError"),
     ("quarantine",       "FlowQuarantineError"),
@@ -115,7 +109,7 @@ def _taxonomy_names(tree) -> set:
 
     Two members (`MetaUnreadableError`, `MetaUnwritableError`) live ~130 lines below the rest of the
     block, and every hand count of this family in the repo's own prose said "eleven" when it was
-    twelve. `flows.py:639` still does.
+    twelve — `MetaUnwritableError.retryable`'s own comment says so in `src`.
     """
     names = {"FlowReplayError"}
     changed = True
@@ -161,60 +155,49 @@ def test_the_derivation_sees_the_taxonomy_at_all() -> None:
         assert required in fam, f"{required} is missing from the derived family"
 
 
-def test_every_refusing_function_is_present_and_owns_the_refusals_it_should() -> None:
-    """Named functions, exact counts — so a SPLIT or a RENAME is loud rather than a smaller table.
+def test_every_refusing_function_is_still_there() -> None:
+    """Named functions — so a SPLIT or a RENAME is loud rather than a smaller table.
 
-    This is the half `test_the_site_table_holds` cannot assert on its own: a table derived from a
-    tree where `_preflight_row` has been renamed simply contains no `_preflight_row` rows, and an
-    equality against a table that also lost them would pass.
+    This is the half `test_the_site_table_holds` cannot assert on its own: a table derived from a tree
+    where `_preflight_row` has been renamed simply contains no `_preflight_row` rows, and an equality
+    against a table that also lost them would pass. 1.5 measured three structural scans disarmed at
+    once by one function being split in two, so a scan that names a function must fail when the name
+    is MISSING, not merely when its contents change.
     """
-    tree = _tree()
-    present = {n.name for n in ast.walk(tree)
+    present = {n.name for n in ast.walk(_tree())
                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    missing = sorted(set(REFUSING_FUNCTIONS) - present)
+    missing = sorted(set(SITE_TABLE) - present)
     assert not missing, (
         f"{missing} no longer exist in flows.py — this file asserts a NEGATIVE about their bodies, so a "
         f"rename or a split makes it check nothing. Rename here too, naming BOTH halves.")
 
-    counts: dict = {}
-    for fn, _line, _cls in _derive_sites():
-        counts[fn] = counts.get(fn, 0) + 1
-    for fn, want in sorted(REFUSING_FUNCTIONS.items()):
-        assert counts.get(fn, 0) == want, (
-            f"{fn} raises {counts.get(fn, 0)} taxonomy refusal(s), not {want} — a refusal was added or "
-            f"removed. Update SITE_TABLE in the same diff, with the argument in the PR body.")
-    # ...and no OTHER function may grow one silently. The per-function check above is blind to a
-    # refusal appearing somewhere new, which is how a 25th site would arrive.
-    strays = sorted(set(counts) - set(REFUSING_FUNCTIONS))
-    assert not strays, (
-        f"{strays} raise a taxonomy refusal and are not in REFUSING_FUNCTIONS — a new refusal site. "
-        f"Add it here and to SITE_TABLE, with the code's remedy argued in the PR body.")
-    assert sum(counts.values()) == TOTAL_RAISE_SITES, (
-        f"{sum(counts.values())} taxonomy raise sites, not {TOTAL_RAISE_SITES}")
-
 
 def test_the_site_table_holds() -> None:
-    """THE GOLDEN. Which class each refusal raises, printed, compared to a committed table.
+    """THE GOLDEN. Which class each function raises, printed, compared to a committed table.
 
     A diff here is the point, not a failure: it is what 1.4 changes, and reviewing the diff IS
-    reviewing the slice. What it forbids is a raise being re-classed silently.
+    reviewing the slice. What it forbids is a raise being re-classed, moved or added silently.
     """
     got = _derive_sites()
-    print(f"\n  {len(got)} taxonomy raise sites in flows.py")
-    for fn, line, cls in got:
-        print(f"    {fn:<16} :{line:<5} {cls}")
+    derived: dict = {}
+    for fn, _line, cls in got:
+        derived.setdefault(fn, []).append(cls)
+    for fn in derived:
+        derived[fn].sort()
 
-    # SITE_TABLE covers the 24 that 1.4 re-classes; the 12 that were already typed are covered by the
-    # per-function counts above. Compare only the rows the table claims, keyed on the line.
-    claimed = {line: (fn, cls) for fn, line, cls in SITE_TABLE}
-    derived = {line: (fn, cls) for fn, line, cls in got}
-    for line, (fn, cls) in sorted(claimed.items()):
-        assert line in derived, (
-            f"SITE_TABLE claims a refusal at flows.py:{line} ({fn}) and none is there — the table has "
-            f"gone stale, which makes every row below it untrustworthy too.")
-        assert derived[line] == (fn, cls), (
-            f"flows.py:{line}: SITE_TABLE says {fn} raises {cls}, the tree says "
-            f"{derived[line][0]} raises {derived[line][1]}")
+    print(f"\n  {len(got)} taxonomy raise sites across {len(derived)} functions")
+    for fn, classes in sorted(derived.items()):
+        print(f"    {fn:<18} {', '.join(classes)}")
+
+    assert derived == {k: sorted(v) for k, v in SITE_TABLE.items()}, (
+        "the refusal/class binding moved. Every difference below is a behaviour change a caller can "
+        "see — a code on the MCP wire, in `DryRunReport.aborted`, in a `--json` batch report — so "
+        "update SITE_TABLE in the SAME diff and argue the new code's remedy in the PR body.\n"
+        + "\n".join(
+            f"    {fn:<18} table={sorted(SITE_TABLE.get(fn, []))}  tree={derived.get(fn, [])}"
+            for fn in sorted(set(SITE_TABLE) | set(derived))
+            if sorted(SITE_TABLE.get(fn, [])) != derived.get(fn, [])))
+    assert len(got) == TOTAL_RAISE_SITES, f"{len(got)} raise sites, not {TOTAL_RAISE_SITES}"
 
 
 def test_the_kind_table_holds() -> None:
@@ -283,7 +266,7 @@ def _returns_family(tree, callee: str, fam: set) -> bool:
     return False
 
 
-@pytest.mark.parametrize("fn", sorted(REFUSING_FUNCTIONS))
+@pytest.mark.parametrize("fn", sorted(SITE_TABLE))
 def test_every_raise_in_a_refusing_function_resolves_into_the_family(fn) -> None:
     """A refusal that is not a `FlowReplayError` escapes every `except FlowReplayError` on the replay,
     batch and MCP paths — which is R4.18, and it cost a write-safety critical.
@@ -330,9 +313,123 @@ def test_every_raise_in_a_refusing_function_resolves_into_the_family(fn) -> None
         strangers.append(f"line {n.lineno}: {cls or ast.unparse(func)}")
 
     assert resolved, (
-        f"{fn} is in REFUSING_FUNCTIONS but this walk resolved no raise in it — the cell is asserting "
+        f"{fn} is in SITE_TABLE but this walk resolved no raise in it — the cell is asserting "
         f"a negative over nothing")
     assert not strangers, (
         f"{fn} raises {strangers} — outside the taxonomy, so every `except FlowReplayError` on the "
         f"replay, batch and MCP paths walks straight past it (R4.18). If it genuinely cannot reach a "
         f"caller, add it to ARGUED_NON_TAXONOMY_RAISES with the argument.")
+
+
+# ---------------------------------------------------------------------------------------------------
+# The INVARIANT, enforced once. Every cell below defines a bad class inside `pytest.raises`, so class
+# creation runs `__init_subclass__` and the cell is red by construction — there is no way to write one
+# of these that passes vacuously.
+
+def test_the_abstract_base_cannot_be_raised() -> None:
+    """`code="replay_error"` names no remedy, and 24 refusals shared it.
+
+    This is the only sensor that reaches the INDIRECT raise as well:
+    `raise _classify_replay_failure(kind)(...)` resolves its class at run time, so no AST scan keyed on
+    a class name can see it — and before 1.4 that route produced a base-coded refusal for the
+    commonest failure a fresh flow has.
+    """
+    from ultracua.flows import FlowReplayError
+
+    with pytest.raises(TypeError, match="ABSTRACT"):
+        FlowReplayError("nope")
+    with pytest.raises(TypeError, match="ABSTRACT"):
+        raise FlowReplayError("nope")
+
+
+def test_a_subclass_must_declare_each_axis_rather_than_inherit_it() -> None:
+    """R4.18 in one line: `MetaUnwritableError` inherited `retryable=True` from its PRE-write twin, an
+    MCP agent honoured it, and a commit that had already actuated fired twice."""
+    from ultracua.flows import FlowReplayError
+
+    for omitted in ("code", "retryable", "can_follow_actuation"):
+        attrs = {"code": "probe_omit", "retryable": False, "can_follow_actuation": False}
+        attrs.pop(omitted)
+        with pytest.raises(TypeError, match=f"must declare `{omitted}`"):
+            type("_Probe", (FlowReplayError,), attrs)
+
+
+def test_two_classes_may_not_share_a_code() -> None:
+    from ultracua.flows import FlowReplayError
+
+    with pytest.raises(TypeError, match="already belongs to"):
+        type("_Probe", (FlowReplayError,),
+             {"code": "not_learned", "retryable": False, "can_follow_actuation": False})
+
+
+def test_a_class_may_not_take_a_code_another_vocabulary_owns() -> None:
+    """`ToolOutcome.code` and `SkippedFlow.code` are the SAME FIELD as this taxonomy's on the MCP wire.
+    B3 buckets on it, so one slug meaning two things is an overloaded token a consumer cannot resolve.
+    """
+    from ultracua.flows import FlowReplayError
+
+    for stolen in ("replay_error", "raised", "already_done", "approval_stale"):
+        with pytest.raises(TypeError, match="another vocabulary|ABSTRACT|belongs"):
+            type("_Probe", (FlowReplayError,),
+                 {"code": stolen, "retryable": False, "can_follow_actuation": False})
+
+
+def test_a_code_must_be_a_lower_snake_slug() -> None:
+    from ultracua.flows import FlowReplayError
+
+    for bad in ("Not Learned", "notLearned", "", "not-learned", 7):
+        with pytest.raises(TypeError, match="lower_snake slug"):
+            type("_Probe", (FlowReplayError,),
+                 {"code": bad, "retryable": False, "can_follow_actuation": False})
+
+
+def test_a_post_actuation_class_must_state_landed_rather_than_inherit_a_denial() -> None:
+    """The cross-check the two axes owe each other. A class that CAN follow an actuation has a real
+    choice to make about landing; inheriting `False` is making it by accident, and a false denial is
+    the direction that leaves a committed write unrecorded and re-fired."""
+    from ultracua.flows import FlowReplayError
+
+    with pytest.raises(TypeError, match="must state `landed`"):
+        type("_Probe", (FlowReplayError,),
+             {"code": "probe_post_act", "retryable": False, "can_follow_actuation": True})
+
+
+def test_a_class_may_not_claim_a_landed_write_it_could_not_have_observed() -> None:
+    from ultracua.flows import FlowReplayError
+
+    with pytest.raises(TypeError, match="claims a landed write"):
+        type("_Probe", (FlowReplayError,),
+             {"code": "probe_liar", "retryable": False, "landed": True,
+              "can_follow_actuation": False})
+
+
+def test_a_class_may_not_be_both_retryable_and_post_actuation() -> None:
+    """INVIOLABLE #3, made a TypeError. `retryable=True` tells an autonomous agent to re-run; from a
+    position where the write may already have committed, that is a double-submit."""
+    from ultracua.flows import FlowReplayError
+
+    with pytest.raises(TypeError, match="may already have committed"):
+        type("_Probe", (FlowReplayError,),
+             {"code": "probe_retry", "retryable": True, "landed": False,
+              "can_follow_actuation": True})
+
+
+def test_the_guard_does_not_refuse_a_LEGITIMATE_new_class() -> None:
+    """THE LIVENESS HALF, and without it every cell above is satisfied by a hook that refuses
+    everything — which is the D0 over-refusal shape this register has already shipped once, inside a
+    safety fix, where it made `learn()` unable to author any write at all.
+
+    So: a well-formed class must still be definable, must register, and must be catchable as a
+    `FlowReplayError`. Cleaned up afterwards so the probe does not leak into `REGISTRY` and change
+    what every other cell derives.
+    """
+    from ultracua.flows import REGISTRY, FlowReplayError
+
+    probe = type("_ProbeOk", (FlowReplayError,),
+                 {"code": "probe_ok", "retryable": False, "can_follow_actuation": False})
+    try:
+        assert REGISTRY["probe_ok"] is probe, "a legitimate class was not registered"
+        with pytest.raises(FlowReplayError):
+            raise probe("a well-formed refusal must still be raisable and catchable")
+    finally:
+        REGISTRY.pop("probe_ok", None)

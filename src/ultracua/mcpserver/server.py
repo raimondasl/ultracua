@@ -382,8 +382,7 @@ async def call_flow_tool(
             data = await flows.replay(spec, params=params, require_approved=True, on_drift="raise",
                                       check_shape=True, cache=cache)
         except flows.FlowReplayError as exc:
-            return ToolOutcome(False, code=getattr(exc, "code", "replay_error"),
-                               retryable=bool(getattr(exc, "retryable", False)), message=str(exc))
+            return ToolOutcome(False, code=exc.code, retryable=exc.retryable, message=str(exc))
         return ToolOutcome(True, data=data)
 
     # WRITE path (H2 stage 2). An undeclared write must never reach here (list_flow_tools excludes it); re-check
@@ -401,8 +400,7 @@ async def call_flow_tool(
         try:
             _resolved, keys = flows.preflight_keys(spec, params, cache=cache, require_approved=True)
         except flows.FlowReplayError as exc:
-            return ToolOutcome(False, code=getattr(exc, "code", "replay_error"),
-                               retryable=bool(getattr(exc, "retryable", False)), message=str(exc))
+            return ToolOutcome(False, code=exc.code, retryable=exc.retryable, message=str(exc))
         ledger = RunLedger.open(cache, key, "mcp", spec.scope)
         try:
             # RETRY-DEDUPE: this exact write (same args -> same key) already committed on a prior call? Return
@@ -443,8 +441,7 @@ async def call_flow_tool(
                 # committed row unarmed because its failure happened to surface as `ShapeDriftError`.
                 if keys and getattr(exc, "landed", False):
                     ledger.record(0, keys, getattr(exc, "code", "landed"))
-                return ToolOutcome(False, code=getattr(exc, "code", "replay_error"),
-                                   retryable=bool(getattr(exc, "retryable", False)), message=str(exc))
+                return ToolOutcome(False, code=exc.code, retryable=exc.retryable, message=str(exc))
             # RECORD strictly AFTER the write confirmed. A crash before this leaves the row unrecorded -> a
             # re-run re-fires with the SAME key -> the backend dedupes (the key is the floor, ledger the optimization).
             if keys and isinstance(data, dict) and data.get("status") in ("confirmed", "already-done"):
