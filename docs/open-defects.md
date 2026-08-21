@@ -12,7 +12,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**43 open**, 33 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**44 open**, 33 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **43 open**, 33 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **44 open**, 33 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -871,6 +871,7 @@ if and only if that branch is ever resumed.
 | R4.78 | open | `outcomes.cross_check` has no supplier, so `record_disagrees` is structurally always empty. `adjudicate(record=)` is only ever passed a stand-in from tests; `run_scenario` catches an EXCEPTION, not a `RunRecord`, and nothing in `benchmarks/` calls `replay(record=...)`. So RULE 5's cross-check — the one thing that would catch the product's report disagreeing with the server, including the dangerous 'the write landed and the caller was told it did not' — produces no findings on a real run. B3 owns the contract and B4 owns the arm that must supply it; filed so the wiring cannot be forgotten when the corpus lands. The SAME gap covers `GateEvidence`: nothing outside tests constructs one, and `run_scenario` has no seam to supply it, so `gate=None` is the state of the world and every WRITE_GATE refusal on a read is unscored(`gate_unexplainable`) rather than the headline `over_gated`. Both are B4 arm wiring against a contract B3 fixed |
 | R4.79 | open | The write vocabulary has no word for 'the corpus declared this write must be refused and it LANDED'. B3 maps it onto `incorrect_target` on the argument that an `expect_refusal` row declares an EMPTY intended set, so any landed record is by construction not one it was asked for. That is coherent and it is a STRETCH of a word whose plain meaning is 'the wrong record'. The alternative was a seventh write outcome, which `docs/realistic-benchmark-plan.md` fixes at six. Recorded so the choice is visible rather than discovered by someone reading an `incorrect_target` row and looking for a wrong record that does not exist |
 | R4.80 | open | `variance.compare_records` is the only remaining reader whose cost clause could not be scored by `prove_red` (R4.77: it lives in `benchmarks/`), and its new unknown-cost branches are pinned only by in-process arming. Filed as a pointer rather than a defect: the guards exist and are proved red, but by a weaker instrument than the `src/` half of the same slice |
+| R4.81 | open | `flows.py:219` states the contract that `usage` is ALWAYS populated and always carries `cost_usd`, and FOUR `mode="miss"` early returns in `run_cached` still do not — `flow.py:174` (dry-run misuse), `:192` (no cached flow), `:210` (a terminal refusal) and `:214` (learn without a provider). 1.3 closed the two `escalate` returns for the same reason and left these, deliberately. MEASURED: all four fire after only `cache.get(key)` and a log line — no provider is built and no browser opens — so a literal zero would be SUPPORTABLE there, and the reachable harm is real: a `variance` rep whose learn returns `miss` makes the whole run's cost unknown under the absorbing sum, for a run in which nothing was spent. THE COUNTEREXAMPLE THAT MAKES THIS A SLICE RATHER THAN A FOOTNOTE is `flow.py:1048`, best-of-N's exhausted return: the loop above it MAY have spent, so populating that one with a literal zero would be a confident wrong number. The rule is not 'always populate usage' but 'populate it with what you can support', and a fix that does not distinguish the two makes the accounting worse |
 <!-- /generated:r4-index -->
 
 
