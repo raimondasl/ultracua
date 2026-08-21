@@ -1,12 +1,19 @@
 """What every `BatchRowResult` says about the write — as a committed table, captured BEFORE 1.4b.
 
-reshape-plan step 1.4b closes **R4.52**: `BatchRowResult.landed` is a two-state bool answering a
-three-state question, and it reads `False` on rows where that is not merely uninformative but
+reshape-plan step 1.4b closes **R4.52**: `BatchRowResult.landed` was a two-state bool answering a
+three-state question, and it read `False` on rows where that is not merely uninformative but
 CONTRADICTED by the row's own other fields — a successfully confirmed write, and a row that crashed
 after the POST.
 
+**The field is `BatchRowResult.committed` now.** THREE fields were spelled `landed` and asked three
+different questions — the exception's two-state ledger ARM, the record's "may a resume skip this row",
+and this one's "did anything commit" — and this is the one that reaches `--json`. 1.4b changes its
+ANSWER on four row kinds, so keeping the name would have handed every consumer a silently different
+value under an unchanged key; the rename makes that a `KeyError` instead. Free exactly once, because
+the field had no reader anywhere outside this file.
+
 THIS FILE IS THE EVIDENCE, and it is committed GREEN against unmodified `src/` first. There is no
-other observer: `row.landed` has **zero readers** in `src/`, `tests/`, `scripts/` and `benchmarks/`;
+other observer: `row.committed` has **zero readers** in `src/`, `tests/`, `scripts/` and `benchmarks/`;
 its only escape is `cli.py`'s `dataclasses.asdict(report)` into a `--json` file. Without this table
 1.4b would change an unobserved wire contract with a green suite either side, which is the shape this
 register keeps filing.
@@ -33,23 +40,23 @@ from ultracua.flows import BatchRowResult
 SITES = {
     # 1. pre-flight refusal: a typed `FlowReplayError` from `_preflight_row`, before any browser.
     "invalid_preflight": dict(index=0, status="invalid", ok=False, error="refused",
-                              code="not_approved", retryable=False, landed=False),
+                              code="not_approved", retryable=False, committed=False),
     # 2. duplicate-row refusal: two rows minting the same Idempotency-Key. Carries NO code today.
     "invalid_duplicate": dict(index=1, status="invalid", ok=False, error="duplicate of row 0"),
     # 3a. dry-run preview of a row that would run.
     "planned": dict(index=2, status="planned", ok=True, idempotency_keys=["sha:a"]),
     # 3b. dry-run preview of a row the ledger says already committed.
     "resumed_dryrun": dict(index=3, status="resumed", ok=True, idempotency_keys=["sha:b"],
-                           landed=True),
+                           committed=True),
     # 4. halt-skip: an earlier row failed under on_row_error="stop". Never reached a browser.
     "halt_skipped": dict(index=4, status="skipped", ok=False, error="skipped — an earlier row failed"),
     # 5. live resume: the ledger says this row committed on a PRIOR run, so it was not re-fired.
     "resumed_live": dict(index=5, status="resumed", ok=True, idempotency_keys=["sha:c"],
-                         landed=True,
+                         committed=True,
                          error="already committed on a prior run (resume) — not re-fired"),
     # 6. the ok row. `data` is replay()'s return: for a declared write, {"status": ..., "data": ...}.
     "ok_write_confirmed": dict(index=6, status="ok", ok=True, ms=1.0, idempotency_keys=["sha:d"],
-                               landed=True,
+                               committed=True,
                                data={"status": "confirmed", "data": {"order": "A-1"}}),
     "ok_write_already_done": dict(index=7, status="ok", ok=True, ms=1.0, idempotency_keys=["sha:e"],
                                   data={"status": "already-done", "data": None}),
@@ -57,12 +64,12 @@ SITES = {
     # 7. typed failure, with the exception's evidence copied onto the row.
     "failed_typed_unlanded": dict(index=9, status="failed", ok=False, ms=1.0, error="drift",
                                   idempotency_keys=["sha:f"], code="drift", retryable=False,
-                                  landed=False),
+                                  committed=False),
     "failed_typed_landed": dict(index=10, status="failed", ok=False, ms=1.0, error="readback missed",
                                 idempotency_keys=["sha:g"], code="write_readback", retryable=False,
-                                landed=True),
+                                committed=True),
     # 8. the crash row — a non-taxonomy exception. Carries NO code and NO evidence today.
-    "failed_crash": dict(index=11, status="failed", ok=False, ms=1.0, code="raised", landed=None,
+    "failed_crash": dict(index=11, status="failed", ok=False, ms=1.0, code="raised", committed=None,
                          error="RuntimeError: browser died", idempotency_keys=["sha:h"]),
 }
 
@@ -95,7 +102,7 @@ EXPECTED = {
 
 def _report(kwargs) -> tuple:
     row = BatchRowResult(**kwargs)
-    return (row.status, row.code, row.retryable, row.landed)
+    return (row.status, row.code, row.retryable, row.committed)
 
 
 def test_every_construction_site_consults_the_one_write_definition() -> None:
@@ -128,17 +135,17 @@ def test_every_construction_site_consults_the_one_write_definition() -> None:
         f"removed — add its row to SITES/EXPECTED before changing anything else.")
 
     missing = [n.lineno for n in sites
-               if not any(kw.arg == "landed" for kw in n.keywords)]
+               if not any(kw.arg == "committed" for kw in n.keywords)]
     assert not missing, (
-        f"BatchRowResult is built without `landed=` at line(s) {missing} of `run_batch`, so those rows "
+        f"BatchRowResult is built without `committed=` at line(s) {missing} of `run_batch`, so those rows "
         f"take the dataclass DEFAULT instead of consulting `_row_write_evidence`. One definition means "
         f"every site asks it — otherwise a class that can be raised there tomorrow is silently denied.")
     for n in sites:
         for kw in n.keywords:
-            if kw.arg == "landed":
+            if kw.arg == "committed":
                 expr = ast.unparse(kw.value)
                 assert "_row_write_evidence" in expr, (
-                    f"line {n.lineno} passes `landed={expr}` — a value decided somewhere other than "
+                    f"line {n.lineno} passes `committed={expr}` — a value decided somewhere other than "
                     f"the one definition")
     assert set(SITES) == set(EXPECTED), "SITES and EXPECTED have drifted apart"
 
@@ -154,14 +161,14 @@ def test_the_row_reports_what_the_golden_says(label) -> None:
 
 
 def test_the_whole_table_is_printed_and_survives_the_json_round_trip() -> None:
-    """The only escape `row.landed` has is `cli.py`'s `asdict(report)` into a file, so the golden is
+    """The only escape `row.committed` has is `cli.py`'s `asdict(report)` into a file, so the golden is
     worth exactly what that round-trip preserves. Printed so `-s` shows the table a reviewer reads."""
     print("\n  site                     status    code             retryable  landed")
     for label in sorted(SITES):
         status, code, retryable, landed = _report(SITES[label])
         print(f"    {label:<24} {status:<9} {code or '-':<16} {retryable!s:<10} {landed!s}")
         blob = json.loads(json.dumps(dataclasses.asdict(BatchRowResult(**SITES[label]))))
-        assert blob["landed"] == landed and blob["code"] == code, (
+        assert blob["committed"] == landed and blob["code"] == code, (
             f"{label}: the field does not survive `asdict` -> JSON, which is the ONLY way it leaves "
             f"the process")
 
@@ -240,7 +247,7 @@ async def test_a_confirmed_write_row_no_longer_denies_its_own_commit(tmp_path, m
         f"premise: one ok row, got {[(r.status, r.error) for r in run.rows]}")
     row = run.rows[0]
     assert row.data["status"] == "confirmed", "premise: the write confirmed"
-    assert row.landed is True, (
+    assert row.committed is True, (
         "the confirmed-write row must not deny its own commit — this is the value R4.52 names")
 
 
@@ -258,7 +265,7 @@ async def test_an_unverifiable_write_row_says_UNKNOWN_rather_than_no(tmp_path, m
     row = run.rows[0]
     assert (row.status, row.code) == ("failed", "write_unverified"), (
         f"premise: this row failed as write_unverified, got {(row.status, row.code)}")
-    assert row.landed is None, (
+    assert row.committed is None, (
         "a commit that FIRED and cannot be confirmed must read UNKNOWN, not `false` — `false` here is "
         "a denial an operator would act on")
 
@@ -281,7 +288,7 @@ async def test_a_refusal_that_never_ran_still_says_NO_rather_than_unknown(
         f"premise: the batch refused at pre-flight, got {run.status}")
     row = run.rows[0]
     assert row.code == "not_approved", f"premise: refused for approval, got {row.code!r}"
-    assert row.landed is False, (
+    assert row.committed is False, (
         "a row that never reached a browser must DENY the commit, not call it unknown")
 
 
@@ -299,7 +306,7 @@ async def test_a_crashed_row_carries_a_code_and_an_unknown(tmp_path, monkeypatch
         f"premise: this row crashed, got {(row.status, row.error)}")
     assert row.code == "raised", (
         "a crash must name itself with the SAME word `RunRecord.failure_code` uses for it")
-    assert row.landed is None, "a crash after the POST may have fired denies nothing"
+    assert row.committed is None, "a crash after the POST may have fired denies nothing"
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -441,7 +448,7 @@ async def test_a_row_whose_commit_landed_but_whose_tail_drifted_still_says_yes(
         f"committed={probe.committed!r} landed={probe.landed!r} — without that the assertion below "
         f"cannot tell which one the row projected")
 
-    assert row.landed is True, (
+    assert row.committed is True, (
         "the row must project `committed` (did anything commit), not `landed` (may a resume skip the "
         "whole row). This write went through and only the tail drifted; printing `false` for it is the "
         "denial R4.52 is about, and it would sit beside `cli.py`'s advice to resume the rows that did "

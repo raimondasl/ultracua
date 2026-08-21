@@ -4432,14 +4432,23 @@ class BatchRowResult:
     # see CLAUDE.md) that says whether this row's write may have committed.
     code: str = ""
     retryable: bool = False
-    # TRI-STATE SINCE 1.4b (R4.52). `None` means "this row's write question was never answerable" and
-    # now appears in the `--json` wire contract. PROJECTED from `RunRecord.committed` by
-    # `_row_write_evidence`, never re-decided here.
+    # RENAMED FROM `landed` AND MADE TRI-STATE AT 1.4b (R4.52), and the rename is not cosmetic.
+    # THREE fields were spelled `landed` and asked three different questions:
+    #     `exc.landed`      may the durable dedupe LEDGER record this row     (two-state ARM)
+    #     `RunRecord.landed`  may a resume SKIP this row (EVERY recipe write ok)
+    #     this one          did ANYTHING commit                              (the FIRST write ok)
+    # and this is the one that reaches `--json`. 1.4b changes its ANSWER on four row kinds, so leaving
+    # the name would hand every existing consumer a silently different value under an unchanged key.
+    # Renaming makes that a KeyError instead — the loud direction — and it is free exactly once,
+    # because the field had no reader anywhere in `src/`, `scripts/` or `benchmarks/`.
+    #
+    # PROJECTED from `RunRecord.committed` by `_row_write_evidence`, never re-decided here. `None`
+    # means the question was never answerable for this row.
     #
     # `False` IS EVIDENCE-BOUNDED, NOT AN ORACLE (CLAUDE.md). A write step that succeeded whose confirm
     # read ABSENT reports `False`, and B3 must not derive "refused correctly" from it — see R4.66.
     # The default stays `False` because the never-ran rows depend on it.
-    landed: Optional[bool] = False
+    committed: Optional[bool] = False
 
 
 @dataclass
@@ -4462,7 +4471,7 @@ def _planned_row(index: int, keys: list, status: str) -> "BatchRowResult":
     """The dry-run preview row. ONE expression produces TWO statuses, so the write answer for both
     lives here rather than being inlined into a comprehension where only one of them is readable."""
     return BatchRowResult(index=index, ok=True, idempotency_keys=keys, status=status,
-                          landed=_row_write_evidence(None, status,
+                          committed=_row_write_evidence(None, status,
                                                      ledger_says_committed=status == "resumed"))
 
 
@@ -4565,7 +4574,7 @@ async def run_batch(
             o = outcome_of(exc)
             invalid.append(BatchRowResult(index=i, status="invalid", ok=False, error=str(exc),
                                           code=o.code, retryable=o.retryable,
-                                          landed=_row_write_evidence(None, "invalid", o)))
+                                          committed=_row_write_evidence(None, "invalid", o)))
             resolved_rows.append(None)
             preview_keys.append([])
             continue
@@ -4583,7 +4592,7 @@ async def run_batch(
             if kt in seen:
                 invalid.append(BatchRowResult(
                     index=i, status="invalid", ok=False,
-                    landed=_row_write_evidence(None, "invalid"),
+                    committed=_row_write_evidence(None, "invalid"),
                     error=f"duplicate of row {seen[kt]} — an identical write would mint the same "
                           f"Idempotency-Key, so a backend dedupe would silently suppress it. Add a "
                           f"disambiguating slot (e.g. a reference/nonce) if these are distinct writes."))
@@ -4620,7 +4629,7 @@ async def run_batch(
         for i, row in enumerate(rows):
             if stopped:
                 report.append(BatchRowResult(index=i, status="skipped", ok=False,
-                                             landed=_row_write_evidence(None, "skipped"),
+                                             committed=_row_write_evidence(None, "skipped"),
                                              error="skipped — an earlier row failed (on_row_error='stop')"))
                 continue
             # RESUME: a row already committed under this job-id is SKIPPED, not re-fired (no browser). It does
@@ -4628,7 +4637,7 @@ async def run_batch(
             if ledger is not None and ledger.is_committed(preview_keys[i]):
                 report.append(BatchRowResult(
                     index=i, status="resumed", ok=True, idempotency_keys=preview_keys[i],
-                    landed=_row_write_evidence(None, "resumed", ledger_says_committed=True),
+                    committed=_row_write_evidence(None, "resumed", ledger_says_committed=True),
                     error="already committed on a prior run (resume) — not re-fired"))
                 continue
             t0 = time.perf_counter()
@@ -4644,7 +4653,7 @@ async def run_batch(
                 report.append(BatchRowResult(index=i, status="ok", ok=True,
                                              ms=(time.perf_counter() - t0) * 1000.0, data=data,
                                              idempotency_keys=preview_keys[i],
-                                             landed=_row_write_evidence(rec, "ok")))
+                                             committed=_row_write_evidence(rec, "ok")))
                 # Record STRICTLY AFTER the write confirmed (durable before the next row fires). A crash
                 # before this leaves the row unrecorded -> a re-run re-fires it with the SAME key -> the
                 # backend dedupes (never a silent double-write).
@@ -4673,7 +4682,7 @@ async def run_batch(
                                              ms=(time.perf_counter() - t0) * 1000.0, error=str(exc),
                                              idempotency_keys=preview_keys[i],
                                              code=o.code, retryable=o.retryable,
-                                             landed=_row_write_evidence(rec, "failed", o)))
+                                             committed=_row_write_evidence(rec, "failed", o)))
                 if on_row_error == "stop":
                     stopped = True
             except Exception as exc:  # noqa: BLE001 - a crash (browser/unexpected) hard-stops (page state is
@@ -4685,7 +4694,7 @@ async def run_batch(
                                              error=f"{type(exc).__name__}: {exc}",
                                              idempotency_keys=preview_keys[i],
                                              code=o.code, retryable=o.retryable,
-                                             landed=_row_write_evidence(rec, "failed", o)))
+                                             committed=_row_write_evidence(rec, "failed", o)))
                 stopped = True
     finally:
         if ledger is not None:

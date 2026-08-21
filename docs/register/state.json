@@ -533,6 +533,14 @@
    "class": "g",
    "summary": "A structural test cell that reads `src/` BY PATH cannot be scored by `scripts/prove_red.py`, which installs its mutant as a COPY first on `PYTHONPATH`. Such a cell parses PRISTINE source, so a mutation whose only guard is one of them is reported as an unregistered SURVIVOR — 'a hole in the matrix' — when the guard exists and the harness simply cannot reach it. Found by 1.4b's audit; two cells were converted to `inspect.getsource(module)` and the limit is now documented in `prove_red`'s own docstring, but several path-reading pins remain (test_refusal_codes.py's whole derivation, test_boundary_truth's AST scans, and scripts/ratchets.py by design)",
    "disposition": "NOT a defect in those pins — they are a different sensor class, like the ratchets, and reading the repo tree is correct for them. The defect is that the two instruments cannot tell 'unguarded' from 'unreachable by this harness'. Cheapest real fix: have `prove_red` export the scratch root in the environment and let path-reading cells honour it, so a cell can opt IN to being scored. Deliberately not built inside 1.4b: it touches every structural pin in the repo"
+  },
+  {
+   "id": "R4.76",
+   "status": "open",
+   "severity": "low",
+   "class": "b",
+   "summary": "`_row_write_evidence`'s lowering clause reads `record.attempts == 0`, which is a MEASUREMENT on every path the sink writes and a DATACLASS DEFAULT on the one it cannot. `_RecordSink.finish` is total by design — an internal error goes to `record.note` and forces `usage` to unknown — but it leaves the write fields at their defaults (`attempts=0`, `committed=None`), which the clause then reads as 'no engine attempt ran' and lowers to a confident False. One token, two states, and the available sensor (`record.note`) is never consulted: R3.7's `anchor_id=None` shape. MEASURED with `_RecordSink._usage` patched to raise: the confirmed-write row goes True -> False and the `write_unverified` row None -> False, i.e. the 1.4b fix is DISARMED, not inverted — both equal the pre-1.4b values. No natural trigger found; both repros inject the fault",
+   "disposition": "NOT taken in 1.4b, and the shape of the fix is why: make 'never measured' EXPRESSIBLE on the record (`RunRecord.attempts: Optional[int] = None`, or `finish()`'s fallback stamping it), which then falls through to `return record.committed` -> None. That is a `RunRecord` contract change affecting every reader, bigger than the defect, and it belongs with whoever next opens that dataclass. Do NOT fix it by having `_row_write_evidence` consult `record.note`: a per-branch patch keyed on a diagnostic string, inside the function whose whole justification is one definition. Pin ONCE-ENFORCED at the record when it lands, never at the row"
   }
  ]
 }
