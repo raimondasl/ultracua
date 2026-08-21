@@ -149,6 +149,16 @@ def compare_records(baseline: dict, current: dict, *, rate_floor: float = 0.05,
     larger of `rate_floor` and the baseline's own stdev — i.e. a drop *within the error bars* is noise,
     not a regression. Cost regresses if it rose more than `cost_rel` over the baseline. `speedup` is
     reported but never gated (machine-dependent micro-timing).
+
+    THE TOLERANCE ASSUMES `per_rep` HOLDS REPS OF ONE BENCHMARK, and that assumption is load-bearing
+    rather than incidental. `std` is a measure of run-to-run NOISE only when each value is another
+    attempt at the same thing. Hand it one value per DIFFERENT task and the sample stdev of a 0/1
+    vector is a closed form of the mean — `sqrt(p(1-p)·n/(n-1))`, largest exactly where the rate is
+    most interesting — so the tolerance grows with the spread it is supposed to be measuring.
+    Measured on a 10-scenario corpus: a baseline of 0.700 yields std 0.483, and a current run of
+    **0.300 does not regress**. B3 (`benchmarks/outcomes.py`) therefore does NOT call this function
+    for its rates; it compares against the baseline's Wilson lower bound instead, which is an honest
+    error bar on a proportion measured once. Its record still uses this module's record SHAPE.
     """
     findings: list[dict] = []
     bm, cm = baseline.get("metrics", {}), current.get("metrics", {})

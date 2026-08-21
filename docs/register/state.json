@@ -541,6 +541,30 @@
    "class": "b",
    "summary": "`_row_write_evidence`'s lowering clause reads `record.attempts == 0`, which is a MEASUREMENT on every path the sink writes and a DATACLASS DEFAULT on the one it cannot. `_RecordSink.finish` is total by design — an internal error goes to `record.note` and forces `usage` to unknown — but it leaves the write fields at their defaults (`attempts=0`, `committed=None`), which the clause then reads as 'no engine attempt ran' and lowers to a confident False. One token, two states, and the available sensor (`record.note`) is never consulted: R3.7's `anchor_id=None` shape. MEASURED with `_RecordSink._usage` patched to raise: the confirmed-write row goes True -> False and the `write_unverified` row None -> False, i.e. the 1.4b fix is DISARMED, not inverted — both equal the pre-1.4b values. No natural trigger found; both repros inject the fault",
    "disposition": "NOT taken in 1.4b, and the shape of the fix is why: make 'never measured' EXPRESSIBLE on the record (`RunRecord.attempts: Optional[int] = None`, or `finish()`'s fallback stamping it), which then falls through to `return record.committed` -> None. That is a `RunRecord` contract change affecting every reader, bigger than the defect, and it belongs with whoever next opens that dataclass. Do NOT fix it by having `_row_write_evidence` consult `record.note`: a per-branch patch keyed on a diagnostic string, inside the function whose whole justification is one definition. Pin ONCE-ENFORCED at the record when it lands, never at the row"
+  },
+  {
+   "id": "R4.77",
+   "status": "open",
+   "summary": "`prove_red` structurally cannot mutate `benchmarks/` — pytest puts the repo ROOT at `sys.path[0]`, ahead of the `PYTHONPATH` the mutant is installed on, so every bench mutation reports as a SURVIVOR while the guard is fine; B3's matrix is in-process instead",
+   "severity": "medium",
+   "class": "instrument",
+   "pins": [
+    "tests/test_bench_cells_are_armed.py"
+   ]
+  },
+  {
+   "id": "R4.78",
+   "status": "open",
+   "summary": "`outcomes.cross_check` has no supplier, so `record_disagrees` is structurally always empty. `adjudicate(record=)` is only ever passed a stand-in from tests; `run_scenario` catches an EXCEPTION, not a `RunRecord`, and nothing in `benchmarks/` calls `replay(record=...)`. So RULE 5's cross-check — the one thing that would catch the product's report disagreeing with the server, including the dangerous 'the write landed and the caller was told it did not' — produces no findings on a real run. B3 owns the contract and B4 owns the arm that must supply it; filed so the wiring cannot be forgotten when the corpus lands. The SAME gap covers `GateEvidence`: nothing outside tests constructs one, and `run_scenario` has no seam to supply it, so `gate=None` is the state of the world and every WRITE_GATE refusal on a read is unscored(`gate_unexplainable`) rather than the headline `over_gated`. Both are B4 arm wiring against a contract B3 fixed",
+   "severity": "medium",
+   "class": "benchmark"
+  },
+  {
+   "id": "R4.79",
+   "status": "open",
+   "summary": "The write vocabulary has no word for 'the corpus declared this write must be refused and it LANDED'. B3 maps it onto `incorrect_target` on the argument that an `expect_refusal` row declares an EMPTY intended set, so any landed record is by construction not one it was asked for. That is coherent and it is a STRETCH of a word whose plain meaning is 'the wrong record'. The alternative was a seventh write outcome, which `docs/realistic-benchmark-plan.md` fixes at six. Recorded so the choice is visible rather than discovered by someone reading an `incorrect_target` row and looking for a wrong record that does not exist",
+   "severity": "low",
+   "class": "benchmark"
   }
  ]
 }

@@ -16,7 +16,9 @@ from __future__ import annotations
 import pytest
 
 from benchmarks import customer_bench as CB
+from benchmarks import outcomes as O
 from benchmarks import substrates as S
+from ultracua import flows
 
 
 class _Obs:
@@ -127,12 +129,15 @@ def test_the_record_carries_cost_and_sites_from_the_ledger(substrate, monkeypatc
     assert run.per_model["fast"] == [700, 70, 0, 0, 2]
 
 
-def test_the_record_states_no_verdict_because_the_vocabulary_is_b3s(substrate) -> None:
-    """A half-defined outcome in a recorded artifact is worse than none, because someone will read it.
+def test_the_record_states_no_verdict_even_now_that_b3_has_a_vocabulary(substrate) -> None:
+    """B3 SHIPPED and this record still carries no outcome — that is the point, not an oversight.
 
-    B3 owns `{ok, wrong_data, refused, over_gated}` and the six write outcomes. If B2 invented a
-    provisional field, every record written before B3 would need reconciling against a vocabulary
-    that did not exist when it was written — and the reconciliation would be a guess.
+    The original reason was sequencing: a provisional field would have needed reconciling against a
+    vocabulary that did not exist yet. The reason it survives B3 is stronger. A verdict is an
+    ADJUDICATION (harness facts + a server-side oracle + the corpus author's ground truth); this
+    object is an OBSERVATION. `outcomes.Scored` holds the pair, so nothing that reads a raw scenario
+    record can mistake one for the other — which is the same line B2 already draws between
+    `harness_error` and `agent_error`, one level up.
     """
     run = CB.run_scenario(SCEN, agent_call=lambda s, url: _Obs(40))
     d = run.to_dict()
@@ -255,3 +260,150 @@ def test_the_record_distinguishes_a_seen_zero_from_an_unseen_one(substrate, monk
     assert run.llm_accounting == "unknown"
     assert run.llm_unobserved and "vision" in run.llm_unobserved[0]
     assert run.llm_calls == 0, "the count is still zero — what changed is that it is not a CLAIM"
+
+
+# ---------------------------------------------------------------------------------------------
+# B3 — the refusal arrives STRUCTURED, and the whole chain runs end to end
+# ---------------------------------------------------------------------------------------------
+
+def test_a_refusal_is_recorded_as_a_CODE_and_not_only_as_a_string(substrate) -> None:
+    """`agent_error` is `f"{type(exc).__name__}: {exc}"`, and bucketing a benchmark on that is the
+    "sub-labels from message labels" `reshape-plan.md` 2.2 forbids.
+
+    The code comes through `flows.outcome_of` — 1.4b's seam — so the bench never asks `isinstance`
+    and never mints a code of its own. This is the single dependency that made 1.4 a prerequisite
+    for B3, so it is asserted against the real taxonomy rather than a stand-in.
+    """
+    def raises(scenario, url):
+        raise flows.NotApprovedError("this flow is not approved")
+
+    run = CB.run_scenario(SCEN, agent_call=raises)
+    assert run.agent_error.startswith("NotApprovedError:")
+    assert run.agent_error_code == "not_approved", run.agent_error_code
+    assert run.agent_error_code in flows.REGISTRY
+    assert run.agent_error_retryable is False
+    print(f"refusal recorded as code={run.agent_error_code!r} "
+          f"retryable={run.agent_error_retryable} beside {run.agent_error!r}")
+
+
+def test_a_bare_crash_is_recorded_as_raised_rather_than_as_an_empty_code(substrate) -> None:
+    """An empty code and "it crashed" are different facts. `outcome_of` names the second one, so the
+    bench never has to decide what a missing code means."""
+    def boom(scenario, url):
+        raise ZeroDivisionError("division by zero")
+
+    run = CB.run_scenario(SCEN, agent_call=boom)
+    assert run.agent_error_code == O.CRASH_CODE == "raised"
+    assert run.agent_error_code not in flows.REGISTRY, (
+        "'raised' must stay OUTSIDE the taxonomy — it is `_RecordSink`'s non-typed fallback, and a "
+        "class claiming it would put two meanings under one slug")
+    print(f"a ZeroDivisionError is recorded as code={run.agent_error_code!r}")
+
+
+def test_the_product_s_own_landed_claim_is_recorded_and_never_reaches_the_verdict(substrate) -> None:
+    """`exc.landed` is the ledger's arming token — the product's claim about its own write.
+
+    It rides on the record so `cross_check` can notice it disagreeing with the server, and that is
+    ALL it does. Driven with `WriteReadbackError`, the one class in the taxonomy that declares
+    `landed = True`, so the field is non-default and the assertion is not a tautology.
+    """
+    assert flows.WriteReadbackError.landed is True, "premise moved — pick another armed class"
+
+    def raises(scenario, url):
+        raise flows.WriteReadbackError("the readback did not match")
+
+    run = CB.run_scenario(SCEN, agent_call=raises)
+    assert run.agent_error_landed is True
+
+    # The SERVER says nothing landed. The verdict follows the server, not the claim.
+    truth = O.ScenarioTruth(name=SCEN.name, mutating=True)
+    v = O.classify(truth, run, O.Oracle())
+    assert v.outcome == O.REFUSED_WRONGLY, v
+    assert "landed" not in v.evidence, v.evidence
+    print(f"exc.landed=True recorded; verdict from the server = {v.outcome}")
+
+
+def test_the_whole_chain_runs_from_a_scenario_to_a_gated_record(substrate) -> None:
+    """B2's harness -> B3's verdict -> B3's record -> B3's gate, through the REAL functions.
+
+    Every cell in `test_bench_outcomes.py` constructs its `ScenarioRun` by hand. That pins the
+    classifier and NOT the plumbing, and 1.4b's worst finding was exactly a golden that built its
+    subject by hand and therefore could not see the change it existed for. This one starts where a
+    real run starts.
+    """
+    def ok(scenario, url):
+        return _Obs(40)
+
+    def refuses(scenario, url):
+        raise flows.UndeclaredWriteError("the wire saw a write this flow does not declare")
+
+    good = CB.run_scenario(SCEN, agent_call=ok)
+    bad = CB.run_scenario(CB.Scenario(name="odoo-open-record", substrate="gitea", goal="read"),
+                          agent_call=refuses)
+
+    gate = O.GateEvidence(present=True, mutating_steps=1, mutating_sources=("keyword",),
+                          approved=False)
+    rows = [
+        O.adjudicate(O.ScenarioTruth(name=good.scenario), good, O.Oracle(data_correct=True)),
+        O.adjudicate(O.ScenarioTruth(name=bad.scenario), bad, O.Oracle(), gate),
+    ]
+    assert [r.verdict.outcome for r in rows] == [O.OK, O.OVER_GATED], \
+        [r.verdict.outcome for r in rows]
+
+    rec = O.build_bench_record(rows, bench="customer", provider="anthropic",
+                               timestamp="2026-08-21T00:00:00+00:00")
+    assert rec["outcomes"][O.OVER_GATED] == 1
+    assert rec["metrics"]["availability_rate"]["mean"] == 0.5
+    assert rec["cost_usd"] == 0.0, "no LLM was reached, and the ledger could see that"
+    assert O.gate_bench_record(rec)["ok"] is True, "over_gating is loud, but it is not inviolable"
+    print(f"chain: {[r.verdict.outcome for r in rows]} -> availability "
+          f"{rec['metrics']['availability_rate']['mean']}, cost ${rec['cost_usd']}, "
+          f"gate ok={O.gate_bench_record(rec)['ok']}")
+
+
+def test_adjudicate_mints_the_verdict_BEFORE_it_looks_at_the_record(substrate) -> None:
+    """The two passes stay separate even when called together.
+
+    A record that contradicts the world must not be able to change the outcome — only to appear in
+    `record_disagrees`. Driven with a record claiming success over a run the server refutes.
+    """
+    class _Rec:
+        ok, committed, failure_code = True, True, ""
+
+    run = CB.run_scenario(SCEN, agent_call=lambda s, url: _Obs(40))
+    # The ARM's claim, which `run_scenario` deliberately does not infer. Without it the write
+    # question is unanswerable and there is no verdict for the record to disagree with.
+    run.claimed_complete = True
+    s = O.adjudicate(O.ScenarioTruth(name=run.scenario, mutating=True), run, O.Oracle(),
+                     record=_Rec())
+    assert s.verdict.outcome == O.SUPPRESSED, s.verdict
+    assert len(s.disagreements) == 2, s.disagreements
+    print(f"record says ok/committed; server holds nothing -> verdict {s.verdict.outcome}, "
+          f"{len(s.disagreements)} disagreement(s) {[d['field'] for d in s.disagreements]}")
+
+
+def test_run_scenario_records_that_the_agent_ran_and_claims_nothing_for_it(substrate) -> None:
+    """Two facts B3 needs and one of them `run_scenario` must NOT invent.
+
+    `agent_ran` it can know — it is set immediately before `agent_call`. `claimed_complete` it
+    cannot: an `agent_call` that returns an observation has not claimed the task is done, and
+    inferring success from "it did not raise" is what let an ordinary agent failure be published as
+    a write-safety violation. Each arm sets it; the harness leaves it None.
+    """
+    ok = CB.run_scenario(SCEN, agent_call=lambda s, url: _Obs(40))
+    assert ok.agent_ran is True
+    assert ok.claimed_complete is None, "the harness inferred a completion claim it cannot know"
+
+    def boom(scenario, url):
+        raise flows.DriftError("drifted")
+
+    raised = CB.run_scenario(SCEN, agent_call=boom)
+    assert raised.agent_ran is True, "the agent ran; it just did not finish"
+
+    substrate.fail_reset = True
+    never = CB.run_scenario(SCEN, agent_call=lambda s, url: _Obs(40))
+    assert never.agent_ran is False, (
+        "a scenario abandoned before `agent_call` reports the agent as having run, so an oracle's "
+        "view of the un-reset substrate is charged to this row")
+    print(f"ok={ok.agent_ran} raised={raised.agent_ran} never-ran={never.agent_ran}; "
+          f"claimed_complete stays {ok.claimed_complete!r}")

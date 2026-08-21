@@ -697,7 +697,7 @@ failure §13 exists to correct.
 | 1 | **0.8 — marks from an observation** *(done, 2026-08-20)* | the manifest is now built from runs that already happened, CI's four shards included. NOTE the rule this was filed under does NOT authorise it: `manifest_cost.verdict` answers ONE question about merge-mode, and its clause (b) is a merge-specific safety clause that this design preserves by construction rather than trades away. Shipped on its own argument. Zero `src/` | 1 |
 | 2 | **2.1 — B2** | unblocked since day one and never started; zero `src/`, therefore zero audit burden; it is the goal | none |
 | 3 | **1.4 — distinct codes** *(1.4a done, 0.111.0)* | the ONE Phase-1 step B3 waits on. Scope shrank: R4.49 is already closed. **SPLIT IN TWO**: 1.4a is the VOCABULARY (15 classes, 24 sites re-classed, the ratchet, no behaviour change but the codes); 1.4b is the READERS (`outcome_of`, R4.52's tri-state, R4.61). Different blast radii — one changes what a refusal is CALLED, the other what a record MEANS — so the plan's two audits aim at two diffs rather than one | 2 |
-| 4 | **2.2 — B3** | unblocked by 1.4 | 1 |
+| 4 | **2.2 — B3** *(done, 0.113.0)* | unblocked by 1.4, and it consumed 1.4b's seam directly: `ScenarioRun` records the refusal through `outcome_of` rather than stringifying it, and `CODE_FAMILY` is a TOTAL partition of `flows.REGISTRY` so a code minted later fails the suite instead of falling into a default | 1 |
 | 5 | **1.3 — cannot-spend** | completes the accounting story B3 consumes; small, one audit | 1 |
 | 6 | **0.4b + 1.1** | 1.1's own pin is RED-in-CI | 1 |
 | 7 | **1.6 -> 1.7 -> 1.8** | unchanged; 1.6 is the largest ratchet consumer, 1.8 moves every call site and stays last | 2 / 0 / 1 |

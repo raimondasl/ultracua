@@ -33,11 +33,14 @@ import json
 import sys
 import time
 from dataclasses import dataclass, field
+from typing import Optional
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from ultracua import flows                         # noqa: E402
 
 from benchmarks import substrates as S              # noqa: E402
 from benchmarks.boundary_ledger import BoundaryLedger  # noqa: E402
@@ -96,9 +99,34 @@ class ScenarioRun:
     # deal. Sharing one field would make a benchmark unable to distinguish its own failure from the
     # thing it exists to measure — and a failing agent is the NORMAL case a benchmark records.
     agent_error: str = ""
-    # No `outcome` field, on purpose. B3 defines the vocabulary; a provisional one here would have to
-    # be reconciled with it later, and a half-defined verdict in a recorded artifact is worse than
-    # none because someone will read it.
+    # THE REFUSAL, STRUCTURED (B3). `agent_error` is `f"{type(exc).__name__}: {exc}"` — a string, and
+    # bucketing a benchmark on it would be exactly the "sub-labels from message labels" that
+    # `reshape-plan.md` 2.2 forbids. These three come from `flows.outcome_of`, the seam 1.4b built,
+    # so B3 buckets on the taxonomy's own vocabulary and a code minted tomorrow arrives named.
+    agent_error_code: str = ""
+    agent_error_retryable: bool = False
+    # RECORDED, AND DELIBERATELY NOT AN INPUT TO ANY VERDICT. `exc.landed` is the product's own claim
+    # about its own write — evidence-bounded, never truth (CLAUDE.md). B3's outcome comes from the
+    # SERVER; this rides along only so `outcomes.cross_check` can notice the two disagreeing.
+    agent_error_landed: bool = False
+    # DID THE AGENT RUN AT ALL. `run_scenario` returns early when reset/readiness fails, before
+    # `agent_call` is reached — and B2's rule 3 guarantees the substrate is then still carrying the
+    # PREVIOUS scenario's records. Without this fact an oracle asked about that world reports them
+    # as changed, and B3 mints the previous row's write as this row's `incorrect_target`. A recorded
+    # fact rather than `wall_s == 0.0`, because a timer is not a boundary (R4.26).
+    agent_ran: bool = False
+    # DID THE RUN CLAIM IT FINISHED THE TASK — tri-state, and `None` is the honest default.
+    #
+    # `run_scenario` deliberately does NOT set it: `agent_call` returning an observation is not a
+    # claim about anything, and inferring "it succeeded" from "it did not raise" is exactly what let
+    # an LLM arm's ordinary task failure be published as `suppressed` — a write-safety violation.
+    # Each ARM sets it (a `replay()` that returns without raising HAS claimed success; an agent's
+    # own report of completion is the agent's to give), and until one does, B3 answers the write
+    # question `unscored` rather than guessing in the direction of an inviolable.
+    claimed_complete: Optional[bool] = None
+    # No `outcome` field, and B3 arriving did not change that. B2 records FACTS and B3 mints the
+    # verdict onto an `outcomes.Scored` beside this record, never into it — so nothing that reads a
+    # raw scenario record can mistake an adjudication for an observation.
 
     def to_dict(self) -> dict:
         d = dict(self.__dict__)
@@ -133,6 +161,7 @@ def run_scenario(scenario: Scenario, *, agent_call, reset: bool = True) -> Scena
     started = time.monotonic()
     with BoundaryLedger() as ledger:
         try:
+            run.agent_ran = True          # BEFORE the call: it ran whether or not it returned
             first = agent_call(scenario, substrate.url + scenario.url_path)
             # NOT `if first is not None`. A hook that returns None would have skipped R4.40's guard
             # entirely and produced a clean, scored-looking record — so an agent that cannot show its
@@ -146,6 +175,13 @@ def run_scenario(scenario: Scenario, *, agent_call, reset: bool = True) -> Scena
             # scenario AND discard the spend already incurred, since `usage()` below would never run —
             # so a crashed run would cost real money and leave no artifact saying so.
             run.agent_error = f"{type(exc).__name__}: {exc}"
+            # …and STRUCTURED, through the one seam that classifies both a typed refusal and a bare
+            # crash. `outcome_of` returns `code="raised"` for a non-FlowReplayError, so the bench
+            # never has to ask `isinstance` and never has to invent a code of its own.
+            o = flows.outcome_of(exc)
+            run.agent_error_code = o.code
+            run.agent_error_retryable = o.retryable
+            run.agent_error_landed = o.armed
         finally:
             run.wall_s = round(time.monotonic() - started, 2)
             # In the FINALLY, so spend is recorded on every path out. Cost incurred is cost incurred,
