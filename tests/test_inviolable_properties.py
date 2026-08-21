@@ -765,7 +765,31 @@ async def test_no_failure_report_is_constructed_without_a_reason() -> None:
 
 
 def _typed_errors() -> list:
-    """Every concrete `FlowReplayError` subclass, derived by walking the class tree."""
+    """Every concrete `FlowReplayError` subclass DEFINED IN `ultracua`, derived by walking the tree.
+
+    THE PACKAGE FILTER IS LOAD-BEARING, and it was added because the 1.4a audit made this cell red.
+    `__subclasses__()` is a live view maintained by the interpreter: a class defined anywhere — a test
+    probe, a downstream user's own subclass — appears in it, and CPython registers a class in its
+    bases' subclass lists BEFORE `__init_subclass__` runs, so even a class the hook REFUSED is in
+    there. `tests/test_refusal_codes.py` defines eight such probes inside `pytest.raises`, and the
+    derived-equality assertion below then reported `walk-only=['_Probe', '_ProbeOk']` whenever that
+    file ran first. Measured: green in file order, red in the reverse — a latent flake that
+    `pytest-randomly`, a different shard split, or any hand-run subset would surface.
+
+    THE MECHANISM, corrected — the first version of this note named the wrong one, and it matters
+    because it would have licensed the wrong fix. It said the ghosts survive an explicit
+    `gc.collect()`. They do not: in a plain interpreter the count goes 28 -> 31 -> 28 across a
+    `gc.collect()`. What actually holds them is `pytest.raises`' `ExceptionInfo` and the traceback it
+    carries, which reference the half-built classes for the LIFETIME OF THE TEST ITEM — which is why a
+    narrow selection fails deterministically while running both whole files passes, enough intervening
+    work having dropped the references. So "call `gc.collect()` in a fixture" would have been an
+    unreliable patch that appeared to work.
+
+    Filtering on the module is right regardless of the mechanism, which is the point: it does not
+    depend on WHEN a ghost is collected. And the property being asserted is about the SHIPPED taxonomy
+    — a downstream user subclassing `FlowReplayError` in their own package must not be able to fail our
+    invariant test.
+    """
     import ultracua.flows  # noqa: F401 — ensure the subclasses are imported before walking
     from ultracua.flows import FlowReplayError
 
@@ -776,7 +800,9 @@ def _typed_errors() -> list:
             if sub not in seen:
                 seen.append(sub)
                 stack.append(sub)
-    return seen
+    ours = [c for c in seen if c.__module__.split(".")[0] == "ultracua"]
+    assert ours, "the package filter removed the entire taxonomy — it is wrong, not the tree empty"
+    return ours
 
 
 async def test_every_typed_error_carries_a_DISTINCT_machine_readable_code() -> None:
@@ -786,8 +812,21 @@ async def test_every_typed_error_carries_a_DISTINCT_machine_readable_code() -> N
     ("the two questions are DIFFERENT — collapsing them was the sixth pass's finding") in the error
     taxonomy rather than in the ledger.
     """
+    from ultracua.flows import REGISTRY, RESERVED_CODES
+
     errs = _typed_errors()
-    assert len(errs) >= 10, f"only {len(errs)} typed errors found — the walk is broken: {errs}"
+    # DERIVED EQUALITY, not a typed floor. This said `>= 10` while there were twelve and, after 1.4,
+    # twenty-seven — a number that only ever gets further from the truth, and a walk that silently lost
+    # half the family would still have cleared it. `REGISTRY` is populated by `__init_subclass__`, so
+    # the two derivations are independent: the class-creation hook and a `__subclasses__` walk have to
+    # agree, and a class defined but never registered (or registered and then removed) is red here.
+    assert {c.__name__ for c in errs} == {c.__name__ for c in REGISTRY.values()}, (
+        f"the subclass walk and REGISTRY disagree about the taxonomy: "
+        f"walk-only={sorted({c.__name__ for c in errs} - {c.__name__ for c in REGISTRY.values()})}, "
+        f"registry-only={sorted({c.__name__ for c in REGISTRY.values()} - {c.__name__ for c in errs})}")
+    assert len(errs) >= 28, (
+        f"only {len(errs)} typed errors found — the walk is broken, not the taxonomy small: {errs}")
+
     by_code: dict = {}
     for cls in errs:
         code = getattr(cls, "code", None)
@@ -796,11 +835,71 @@ async def test_every_typed_error_carries_a_DISTINCT_machine_readable_code() -> N
             f"{cls.__name__}.retryable must be a bool — a caller branches on it")
         assert isinstance(getattr(cls, "landed", None), bool), (
             f"{cls.__name__}.landed must be a bool — it arms the retry-dedupe ledger")
+        assert isinstance(getattr(cls, "can_follow_actuation", None), bool), (
+            f"{cls.__name__}.can_follow_actuation must be a bool — it is what licenses the other two")
         by_code.setdefault(code, []).append(cls.__name__)
     print(f"  {len(errs)} typed errors, codes: {sorted(by_code)}")
     dupes = {c: names for c, names in by_code.items() if len(names) > 1}
     assert not dupes, (
         f"these typed errors share a `code`, so a caller cannot tell them apart by kind: {dupes}")
+
+    # ...and no code may collide with a vocabulary that shares a FIELD with this one. `ToolOutcome.code`
+    # carries five codes `mcpserver` mints itself and `SkippedFlow.code` eight; B3 buckets on those
+    # fields, so one slug meaning two things is R3.7's overloaded token in a code space.
+    collisions = sorted(set(by_code) & RESERVED_CODES)
+    assert not collisions, (
+        f"{collisions} are taxonomy codes AND reserved for another vocabulary on the same field")
+
+
+async def test_no_typed_error_is_both_retryable_and_post_actuation() -> None:
+    """#2c. INVIOLABLE #3, as a property of the taxonomy rather than of a call path.
+
+    `retryable=True` tells an autonomous agent to re-run. If the class can be raised from a position
+    where this run's write may already have committed, that instruction double-submits — which is not
+    hypothetical: R4.18's fix shipped `MetaUnwritableError.retryable = True`, copied from its PRE-write
+    twin without regard to position, and an MCP agent honouring it re-fired a commit that had actuated.
+
+    Since 1.4 the rule is enforced at CLASS CREATION (`__init_subclass__`), so this cell is the
+    behavioural witness for it rather than the enforcement. Both are wanted: the hook cannot fire for a
+    class whose flags are mutated after definition, and this can.
+    """
+    from ultracua.flows import REGISTRY
+
+    retryable = sorted(c.__name__ for c in REGISTRY.values() if c.retryable)
+    post_act = sorted(c.__name__ for c in REGISTRY.values() if c.can_follow_actuation)
+    print(f"  retryable: {retryable}")
+    print(f"  can follow an actuation: {post_act}")
+    assert post_act, "no class can follow an actuation — the axis has been cleared wholesale"
+
+    # THE STATE OF `retryable` AFTER 1.4a, STATED RATHER THAN DISCOVERED. `AuthExpiredError` is the
+    # only retryable class left and it is DEFINED BUT NEVER RAISED in `src/` — the heuristic auth path
+    # cannot attribute a drift to expiry confidently, so it raises `DriftError`. `MetaUnreadableError`
+    # was the last raisable one and 1.4a's audit showed its flag was the R4.18 mistake on the read
+    # twin, one release later.
+    #
+    # So: EVERY refusal a caller can actually receive today is non-retryable. That is a fact B3 has to
+    # be told, because a bucket keyed on a flag that never varies is a bucket that measures nothing —
+    # and it is a fact that should CHANGE, by splitting the pre-write and post-write halves of
+    # `meta_unreadable` rather than by relaxing a flag. Asserted here so the day it changes is loud.
+    assert retryable == ["AuthExpiredError"], (
+        f"the retryable set moved to {retryable}. If a class became retryable, prove it is raised only "
+        f"from positions where nothing can have actuated — that is what `can_follow_actuation` is for, "
+        f"and getting it wrong double-submits (R4.18, and again on the read twin at 1.4a).")
+    raise_sites = (Path(__file__).parents[1] / "src" / "ultracua" / "flows.py").read_text(
+        encoding="utf-8")
+    assert "raise AuthExpiredError(" not in raise_sites, (
+        "AuthExpiredError is now RAISED, so `retryable=True` is reachable for the first time. Re-check "
+        "its `can_follow_actuation=False` against the new raise site before believing this cell.")
+
+    bad = sorted(c.__name__ for c in REGISTRY.values() if c.retryable and c.can_follow_actuation)
+    assert not bad, (
+        f"{bad} tell an autonomous agent to re-run a flow that may already have committed. Direction "
+        f"of error decides this: a missed auto-retry costs one manual re-run; a wrong one "
+        f"double-submits (inviolable #3).")
+    # A `landed=True` claim needs the same licence: a class that cannot follow an actuation cannot have
+    # observed a landed write, and a false arm SKIPS a row that was never paid.
+    liars = sorted(c.__name__ for c in REGISTRY.values() if c.landed and not c.can_follow_actuation)
+    assert not liars, f"{liars} claim a landed write from a position where none could have fired"
 
 
 async def test_the_AUTH_REFRESH_retry_never_reaches_an_llm(

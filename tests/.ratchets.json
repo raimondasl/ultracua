@@ -2,11 +2,9 @@
  "_comment": "DERIVED by scripts/ratchets.py, never hand-edited. Each entry counts a SHAPE that Phase 1 removes; the number may only shrink, and a shrink must be locked in with `--update` in the same diff that earned it. Regenerate with `python scripts/ratchets.py --update`.",
  "ratchets": {
   "bare_flow_replay_error": {
-   "total": 24,
-   "by_file": {
-    "src/ultracua/flows.py": 24
-   },
-   "disposition": "reshape-plan 1.4 — distinct codes"
+   "total": 0,
+   "by_file": {},
+   "disposition": "reshape-plan 1.4 — distinct codes (landed). The invariant is EMISSION, not syntax: the base is unconstructible since 1.4, so the only acceptable value is 0. NOTE the raise-site count alone was 24 and could read 0 while the indirect raise still resolved to the base — hence the three shapes, and the honest figure 29 -> 0."
   },
   "cli_system_exit": {
    "total": 34,

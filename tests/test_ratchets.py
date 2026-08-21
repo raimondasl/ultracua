@@ -119,25 +119,56 @@ def test_every_derivation_matches_something() -> None:
         assert hits, f"{name} matched NOTHING — the pattern is broken, not the codebase clean"
 
 
-def test_a_zero_ratchet_still_proves_its_pattern_is_live(scratch_src) -> None:
-    """The exemption above must not become a way to hide a dead pattern.
+# How to GUT each zero-ratchet's liveness evidence, so the cell below can watch the derivation refuse.
+# A `MAY_BE_ZERO` entry with no row here fails, which is what makes the exemption earned rather than
+# claimed: joining that set costs an entry, and a ratchet that cannot be gutted cannot prove it is live.
+#
+# Each value is (pattern, replacement, minimum-hits, expected message fragment).
+LIVENESS_GUTS = {
+    # `\brecord\.` on a word boundary so `self._record.` — a READ of the sink's own attribute — is
+    # untouched. EVERY write, not a couple: leaving one leaves `inside` non-empty and the cell asserts
+    # nothing.
+    "run_record_write_sites": (r"\brecord\.", "_gone.", 10, "matches NOTHING inside"),
+    # Every `raise <Subclass>(` at once — the SUBCLASS raises are what prove the walk still reaches the
+    # family. Leaving one behind leaves `sub` non-empty and the assert never fires.
+    "bare_flow_replay_error": (r"raise (?=[A-Z])(\w*Error)\(", r"raise _Gone_\1(", 12,
+                               "no `raise <FlowReplayError subclass>"),
+}
 
-    `derive_run_record_write_sites` returns zero by design, so the usual "it matched something" check
-    cannot speak for it. Its liveness comes from the sink's own writes: delete them and the derivation
-    must FAIL rather than quietly report a clean tree.
+
+def test_every_zero_ratchet_has_a_way_to_prove_it_is_live() -> None:
+    """`MAY_BE_ZERO` is an EXEMPTION, and an exemption nobody arms is a way to hide a dead pattern.
+
+    The cell below was written for one ratchet and named its derivation by hand. A second joined the
+    set at 1.4, and a hand-named cell would have left it un-armed while reading as coverage — the
+    "structural scan that names ONE function" shape, in the arming rather than in the scan.
     """
+    missing = sorted(ratchets.MAY_BE_ZERO - set(LIVENESS_GUTS))
+    assert not missing, (
+        f"{missing} may report zero and this file has no way to prove their patterns are live. Add a "
+        f"LIVENESS_GUTS row, or do not exempt them.")
+    stale = sorted(set(LIVENESS_GUTS) - ratchets.MAY_BE_ZERO)
+    assert not stale, f"{stale} have a gut recipe and are no longer exempt — drop the row"
+
+
+@pytest.mark.parametrize("target", sorted(LIVENESS_GUTS))
+def test_a_zero_ratchet_still_proves_its_pattern_is_live(target, scratch_src) -> None:
+    """The exemption must not become a way to hide a dead pattern.
+
+    A `MAY_BE_ZERO` derivation returns zero by design, so the usual "it matched something" check cannot
+    speak for it. Its liveness comes from the OTHER half of the same walk — the writes inside the sink,
+    the raises of the subclasses — and deleting that half must make the derivation FAIL rather than
+    quietly report a clean tree.
+    """
+    pattern, replacement, floor, message = LIVENESS_GUTS[target]
     path = scratch_src.root / "flows.py"
-    text = path.read_text(encoding="utf-8")
-    # EVERY write, not a couple: leaving one behind leaves `inside` non-empty and the cell asserts
-    # nothing. `\brecord\.` on a word boundary so `self._record.` — a READ of the sink's own attribute
-    # — is untouched.
-    gutted, n = re.subn(r"\brecord\.", "_gone.", text)
-    assert n >= 10, f"only {n} record writes found to remove — this cell would be vacuous"
+    gutted, n = re.subn(pattern, replacement, path.read_text(encoding="utf-8"))
+    assert n >= floor, f"{target}: only {n} liveness sites found to remove — this cell would be vacuous"
     scratch_src.append("flows.py", "")          # register the file for restore
     path.write_text(gutted, encoding="utf-8")
 
-    with pytest.raises(AssertionError, match="matches NOTHING inside"):
-        ratchets.derive_run_record_write_sites()
+    with pytest.raises(AssertionError, match=re.escape(message)):
+        ratchets.RATCHETS[target][0]()
 
 
 def test_the_baseline_is_internally_consistent_and_covers_exactly_the_derivations() -> None:
@@ -247,3 +278,87 @@ def test_the_check_and_update_surfaces_run() -> None:
                            capture_output=True, text=True)
     assert shown.returncode == 0
     assert "src/ultracua/flows.py:" in shown.stdout, "--print must name sites, not just counts"
+
+
+# ---------------------------------------------------------------------------------------------------
+# 4. A ratchet with SEVERAL shapes needs one injection PER SHAPE.
+#
+# FOUND BY 1.4a's AUDIT. `bare_flow_replay_error` was redefined from one shape to three so it could see
+# the INDIRECT raise (`raise _classify_replay_failure(kind)(...)`, whose class arrives through a
+# variable) and the surviving `"replay_error"` literals. But `INJECTIONS` still injected only shape (a),
+# and `LIVENESS_GUTS` still gutted only shape (a) — so with (b) and (c) NEUTERED and both real
+# regressions restored in `src/`, the derivation reported 0, the verdict was clean, the injection cell
+# still moved +1 and the liveness cell was still green. Every instrument that speaks for this ratchet
+# was blind to two thirds of it.
+#
+# A single-shape ratchet is covered by `INJECTIONS`. A multi-shape one needs a row here, and the cell
+# below fails for a shape nobody armed.
+SHAPE_INJECTIONS = {
+    "bare_flow_replay_error": {
+        # (a) the raise — also covered by INJECTIONS, kept so the three read together.
+        "raise": ("flows.py", '\n\ndef _shape_probe():\n    raise FlowReplayError("x")\n'),
+        # (b) the class in a VALUE position, which is how the indirect raise reaches the base.
+        "value ref": ("flows.py", '\n\n_SHAPE_PROBE_TABLE = {"miss": FlowReplayError}\n'),
+        # (c) a surviving literal — a getattr default, a comparison, a fixture.
+        "literal": ("flows.py", '\n\ndef _shape_probe_code():\n    return "replay_error"\n'),
+    },
+}
+
+
+def test_every_shape_of_a_multi_shape_ratchet_is_armed() -> None:
+    """A ratchet built from several shapes must have each of them injected, or the unarmed ones rot.
+
+    DERIVED FROM THE DERIVATION, never typed: the shapes it can emit are the `note` strings its own
+    source passes to `Site(...)`, so a fourth shape added tomorrow fails here until somebody arms it.
+
+    The first draft of this cell contained `sorted({s for s in shapes} - {s for s in shapes})` and
+    asserted it was empty — a tautology over an empty set, written while fixing a finding about
+    unarmed instruments. Left recorded rather than quietly deleted: "a cell that cannot fail is not a
+    test" is easiest to violate in the cell you are adding to enforce it.
+    """
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(ratchets._base_coded_sites))
+    emitted = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "Site":
+            note = n.args[2] if len(n.args) > 2 else None
+            if isinstance(note, ast.Constant):
+                emitted.add(note.value)
+            elif isinstance(note, ast.JoinedStr):      # f"raise {name}" — the SUBCLASS liveness half
+                continue                               # not a base-coded producer; not armed here
+    assert emitted, "no `Site(..., note)` literals found in the derivation — this cell is inert"
+
+    armed = set(SHAPE_INJECTIONS["bare_flow_replay_error"])
+    assert emitted == armed, (
+        f"`_base_coded_sites` can emit {sorted(emitted)} but SHAPE_INJECTIONS arms {sorted(armed)}. An "
+        f"unarmed shape is one nothing can fail for — measured at 1.4a's audit, where (b) and (c) were "
+        f"both neuterable with the verdict, the injection cell and the liveness cell all staying green.")
+    for name in SHAPE_INJECTIONS:
+        assert name in ratchets.RATCHETS, f"{name} is not a ratchet any more — drop its shape probes"
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPE_INJECTIONS["bare_flow_replay_error"]))
+def test_each_shape_of_the_base_code_ratchet_catches_its_own_injection(
+    shape, scratch_src, pristine_counts
+) -> None:
+    """Each shape, injected alone, must move the ratchet by exactly one and move no neighbour."""
+    target = "bare_flow_replay_error"
+    filename, snippet = SHAPE_INJECTIONS[target][shape]
+    scratch_src.append(filename, snippet)
+
+    after = {k: len(v) for k, v in ratchets.derive_all().items()}
+    assert after[target] == pristine_counts[target] + 1, (
+        f"{target}/{shape}: injecting one site moved the count "
+        f"{pristine_counts[target]} -> {after[target]}, expected +1. A shape nothing can fail for is a "
+        f"shape that will rot, and this ratchet's reported ZERO is only as honest as its weakest shape.")
+    moved = {k: (pristine_counts[k], after[k]) for k in pristine_counts
+             if k != target and pristine_counts[k] != after[k]}
+    assert not moved, f"{target}/{shape} also moved {moved} — the derivations overlap"
+
+    # ...and the site is reported UNDER THAT SHAPE's note, so `--print` tells a reader which one fired.
+    notes = {h.note for h in ratchets.derive_bare_flow_replay_error()}
+    assert shape in notes, (
+        f"the injected {shape!r} site was counted but is reported as {sorted(notes)} — a reader running "
+        f"`--print` would be sent to the wrong shape")

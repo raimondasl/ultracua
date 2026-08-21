@@ -329,7 +329,14 @@ async def test_stale_approval_refused_before_elicit(tmp_path, monkeypatch) -> No
         flows.save_spec(spec)
         confirm = _Confirm(True)
         out = await call_flow_tool("order", cache, arguments={"qty": "9"}, expose_writes=True, confirm=confirm)
-        assert not out.ok and out.code == "replay_error" and "re-approve" in out.message
+        # `approval_binding_stale`, NOT `stale_approval` — 1.4 split them deliberately. This loosened a
+        # SLOT PATTERN, an ordinary spec edit; `stale_approval` is reserved for the cached STEPS no
+        # longer matching what a human blessed, which is the tamper-shaped refusal. One remedy verb
+        # (`flow approve`), two different things to read first, and merging them would degrade the
+        # operator's response to the tamper case into a reflex.
+        assert not out.ok and out.code == "approval_binding_stale" and "re-approve" in out.message
+        assert out.code != "stale_approval", (
+            "a spec edit must not present as a re-authored recipe — see ApprovalBindingStaleError")
         assert confirm.calls == [] and site.writes == []    # refused pre-elicit, never fired
     finally:
         httpd.shutdown()

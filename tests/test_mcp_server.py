@@ -106,8 +106,14 @@ def test_taxonomy_subclasses_and_flags() -> None:
     ):
         assert issubclass(cls, FlowReplayError)   # existing `except FlowReplayError` still catches them
         assert cls.code == code and cls.retryable is retry
-    base = FlowReplayError("x")
-    assert base.code == "replay_error" and base.retryable is False
+    # The base is ABSTRACT since 1.4: `code="replay_error"` names no remedy, and twenty-four refusals
+    # shared it, so an MCP caller could not tell a stale approval from an unbounded batch. It is still
+    # the `except` target of the whole family — the taxonomy narrowed, the catch did not.
+    with pytest.raises(TypeError, match="ABSTRACT"):
+        FlowReplayError("x")
+    assert FlowReplayError.code == "replay_error" and FlowReplayError.retryable is False, (
+        "the base keeps its poison code as a sentinel; `RESERVED_CODES` is what stops a concrete class "
+        "adopting it")
     # H2 stage 3: a bad ARGUMENT is a caller-fixable ParamValidationError (distinct from a config gap).
     assert issubclass(ParamValidationError, FlowReplayError)
     assert ParamValidationError.code == "invalid_params" and ParamValidationError.retryable is False
@@ -238,10 +244,16 @@ async def test_secret_slot_env_resolved_not_an_argument(tmp_path, monkeypatch) -
         assert ok.ok and "/typed-s3cr3t9" in site.gets
         # passing the secret as an argument is refused (invalid_params) — it must come from $env.
         assert (await call_flow_tool("lookup", cache, arguments={"token": "x"})).code == "invalid_params"
-        # env UNSET for a required secret -> a config gap (replay_error), NOT invalid_params.
+        # env UNSET for a required secret -> a config gap, NOT invalid_params. `ParamValidationError`'s
+        # docstring drew that line before 1.4 gave the config gap a name of its own: `invalid_params`
+        # means "fix the arguments", and an agent honouring it would retry with a value — which is the
+        # one thing a secret slot forbids, since secrets resolve from `$env` and are never passed in.
         monkeypatch.delenv("UCA_MCP_TOK")
         unset = await call_flow_tool("lookup", cache)
-        assert not unset.ok and unset.code == "replay_error"
+        assert not unset.ok and unset.code == "secret_env_unset"
+        assert unset.code != "invalid_params", (
+            "the caller-fixable/operator-config boundary must outlive the rename that gave this its "
+            "own code — it is the assertion, not the slug")
     finally:
         httpd.shutdown()
         httpd.server_close()
