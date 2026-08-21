@@ -551,6 +551,20 @@
    "pins": [
     "tests/test_bench_cells_are_armed.py"
    ]
+  },
+  {
+   "id": "R4.78",
+   "status": "open",
+   "summary": "`outcomes.cross_check` has no supplier, so `record_disagrees` is structurally always empty. `adjudicate(record=)` is only ever passed a stand-in from tests; `run_scenario` catches an EXCEPTION, not a `RunRecord`, and nothing in `benchmarks/` calls `replay(record=...)`. So RULE 5's cross-check — the one thing that would catch the product's report disagreeing with the server, including the dangerous 'the write landed and the caller was told it did not' — produces no findings on a real run. B3 owns the contract and B4 owns the arm that must supply it; filed so the wiring cannot be forgotten when the corpus lands",
+   "severity": "medium",
+   "class": "benchmark"
+  },
+  {
+   "id": "R4.79",
+   "status": "open",
+   "summary": "The write vocabulary has no word for 'the corpus declared this write must be refused and it LANDED'. B3 maps it onto `incorrect_target` on the argument that an `expect_refusal` row declares an EMPTY intended set, so any landed record is by construction not one it was asked for. That is coherent and it is a STRETCH of a word whose plain meaning is 'the wrong record'. The alternative was a seventh write outcome, which `docs/realistic-benchmark-plan.md` fixes at six. Recorded so the choice is visible rather than discovered by someone reading an `incorrect_target` row and looking for a wrong record that does not exist",
+   "severity": "low",
+   "class": "benchmark"
   }
  ]
 }
