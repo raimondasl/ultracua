@@ -504,11 +504,28 @@ record would be a distinction with no consumer.
   that is what made the remaining hole obvious. A guarantee with the words "always populated" in it is
   worth checking at every early return.
 
+* **A LOUD CHANNEL HAS TO SURVIVE BEING PRINTED, and this slice's audit found that mine did not.**
+  1.3 made `cost_usd: None` reach the record and added two `compare_records` verdicts carrying
+  `baseline`/`current` as None — then `variance._gate`, the function that decides the exit code,
+  formatted both with `f"{x:.4g}"`. `TypeError: unsupported format string passed to
+  NoneType.__format__`. So a correctly-computed `regressed: True` died BEFORE printing the `[FAIL]`
+  row, its detail, or `== REGRESSION ==`; and the inverse case — a baseline whose cost is unknown,
+  which is DESIGNED to pass — exited 1 instead. **`_money()` was written for exactly this and applied
+  to two of the THREE print sites.** The cell that existed to prove the channel was loud asserted on
+  `compare_records` and never called `_gate`. Two rules fall out: a formatter that cannot render an
+  unknown will meet one, and a cell about a LOUD channel has to drive the thing that speaks.
+
 **And one instrument lesson, caught in the act.** `test_every_escalate_report_carries_its_usage` first
 read `flow.py` from `src/` BY PATH, and its registered mutation was reported as a SURVIVOR while the
 guard was perfectly fine — `prove_red` installs its mutant as a copy on `PYTHONPATH`, so a
 path-reading cell parses pristine source. That is R4.75 happening live. `inspect.getsource(module)` is
 the fix, and it is already written in `prove_red`'s own docstring.
+
+**`tests/_arming.py` decides what a `TypeError` MEANS by its traceback depth.** A guard invoked with
+the wrong arity raises before entering the function (`tb_next is None`) — that is S14's trap and it
+is refused as a kill. A `TypeError` raised INSIDE the guard can be the defect itself: 1.3's `_gate`
+mutation reproduces by making `f"{None:.4g}"` raise, which is precisely the crash it proves.
+Refusing every `TypeError` would have forced a mutation that states something other than the defect.
 
 ## The customer benchmark mints exactly one verdict, in one place (B3, 0.113.0)
 

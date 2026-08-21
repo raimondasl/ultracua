@@ -86,9 +86,18 @@ def assert_red(guard, *args) -> str:
     except (KeyboardInterrupt, SystemExit):
         raise
     except TypeError as exc:
-        raise AssertionError(
-            f"{guard.__name__} raised TypeError ({exc}) — that is this harness calling the cell "
-            f"wrongly, not the cell noticing the mutation") from exc
+        # WHERE the TypeError came from decides what it means, and the traceback says so exactly.
+        # A call that fails on ARITY — the S14 trap, a guard invoked with the wrong number of
+        # arguments — raises before entering the function, so the traceback holds only this frame
+        # and `tb_next` is None. A TypeError raised INSIDE the guard has a deeper frame, and can be
+        # the defect itself: 1.3's own `_gate` mutation reproduces by making `f"{None:.4g}"` raise,
+        # which is precisely the crash it exists to prove. Refusing every TypeError would have
+        # forced a worse mutation — one that states something other than the defect.
+        if exc.__traceback__ is None or exc.__traceback__.tb_next is None:
+            raise AssertionError(
+                f"{guard.__name__} raised TypeError ({exc}) before it started running — that is "
+                f"this harness calling the cell wrongly, not the cell noticing the mutation") from exc
+        return f"TypeError: {str(exc).splitlines()[0][:110]}"
     except BaseException as exc:  # noqa: BLE001 - any genuine complaint is a kill
         return f"{type(exc).__name__}: {str(exc).splitlines()[0][:110]}"
     raise AssertionError(

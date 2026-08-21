@@ -83,6 +83,24 @@ def _money(x) -> str:
     return "UNKNOWN" if x is None else f"${x:.4f}"
 
 
+def _g(x) -> str:
+    """The same rule for a bare number, and the reason it exists is a defect this slice shipped.
+
+    1.3 made `cost_usd: None` reach the RECORD, added two `compare_records` branches whose findings
+    carry `baseline`/`current` as None — and then formatted them with `f"{x:.4g}"`, which raises
+    `TypeError: unsupported format string passed to NoneType.__format__`.
+
+    `_money` was written for exactly this and applied to two of the THREE print sites. The third is
+    `_gate`, the one that decides the exit code. So the loud channel the slice built was computed
+    correctly and then died before printing itself: the `[FAIL] cost_usd` row, its detail and the
+    `== REGRESSION ==` verdict never appeared. The inverse case is worse — a baseline whose cost is
+    unknown is DESIGNED to pass, and crashed to exit 1 instead.
+
+    A formatter that cannot render an unknown is a formatter that will meet one.
+    """
+    return "UNKNOWN" if x is None else f"{x:.4g}"
+
+
 # --- pure, testable aggregation / record / compare --------------------------------------------
 def aggregate(xs) -> dict:
     """mean / std (sample) / min / max / n over a list of numbers."""
@@ -358,7 +376,14 @@ def _gate(baseline_path: Path, current: dict) -> bool:
           f"(baseline {baseline.get('reps')} reps @ {baseline.get('timestamp')}) ==")
     for f in result["findings"]:
         tag = "FAIL" if f["regressed"] else ("ok  " if f["gated"] else "info")
-        print(f"  [{tag}] {f['metric']:<20} baseline={f['baseline']:.4g}  current={f['current']:.4g}")
+        print(f"  [{tag}] {f['metric']:<20} "
+              f"baseline={_g(f['baseline'])}  current={_g(f['current'])}")
+        # The `detail` is the whole content of an unknown-cost verdict — "this run could not
+        # account for its own spend" versus "the baseline's cost is unknown" are opposite
+        # instructions, and the numbers beside them are both UNKNOWN, so printing only the numbers
+        # says nothing at all.
+        if f.get("detail"):
+            print(f"         {f['detail']}")
     print(f"== {'PASS' if result['ok'] else 'REGRESSION'} ==")
     return result["ok"]
 

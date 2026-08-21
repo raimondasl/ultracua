@@ -460,3 +460,129 @@ def test_every_escalate_report_carries_its_usage() -> None:
             f"Every reader then renders the run's cost as UNKNOWN — for a run that escalated before "
             f"it could spend anything.")
     print(f"both escalate returns carry usage: {[l for l, _ in found]}")
+
+
+# ---------------------------------------------------------------------------------------------
+# The LOUD channel has to survive being printed
+# ---------------------------------------------------------------------------------------------
+
+def _record(cost, tmp_path, name):
+    """A record built through the production aggregation, written where `_gate` reads baselines."""
+    import json
+
+    from benchmarks import variance
+
+    rec = variance.build_record("demo", "p", 1, "t", {"replay_success_rate": [1.0]}, cost_usd=cost)
+    path = tmp_path / name
+    path.write_text(json.dumps(rec), encoding="utf-8")
+    return rec, path
+
+
+GATE_CELLS = [
+    # (label, baseline cost, current cost, expected ok, a phrase the operator must actually SEE)
+    ("current unknown -> loud FAIL", 0.01, None, False, "could not account for its own spend"),
+    ("baseline unknown -> PASS, with the reason", None, 0.01, True, "re-record it"),
+    ("both known, no regression", 0.01, 0.01, True, None),
+]
+
+
+@pytest.mark.parametrize("label,base,cur,ok,phrase", GATE_CELLS, ids=[c[0] for c in GATE_CELLS])
+def test_the_cost_gate_prints_its_verdict_instead_of_crashing_on_it(label, base, cur, ok, phrase,
+                                                                    tmp_path, capsys) -> None:
+    """DRIVES `_gate`, WHICH IS THE FUNCTION THAT DECIDES THE EXIT CODE.
+
+    The first version of this slice's gate cell asserted on `compare_records` and never called
+    `_gate` — so the channel it existed to prove was loud was verified everywhere except at the
+    place that speaks. Measured: `_gate` formatted both numbers with `f"{x:.4g}"`, which raises
+    `TypeError` on None, so a correctly-computed `regressed: True` died BEFORE printing the `[FAIL]`
+    row, its detail, or `== REGRESSION ==`. The inverse is worse: a baseline whose cost is unknown
+    is designed to PASS and exited 1 instead.
+
+    `_money` had been written for exactly this and applied to two of the three print sites.
+    """
+    from benchmarks import variance
+
+    _, base_path = _record(base, tmp_path, "baseline.json")
+    current, _ = _record(cur, tmp_path, "current.json")
+
+    assert variance._gate(base_path, current) is ok
+    out = capsys.readouterr().out
+    assert "REGRESSION" in out if not ok else "PASS" in out
+    assert "UNKNOWN" in out or (base is not None and cur is not None), (
+        "an unknown cost was rendered as a number, which is the claim/shrug collapse again")
+    if phrase:
+        assert phrase in out, f"the operator is never told why: {out!r}"
+    print(f"{label:34} -> ok={ok}; the verdict printed")
+
+
+def test_the_number_formatter_renders_an_unknown_rather_than_raising() -> None:
+    """The shape fix, asserted on its own: a formatter that cannot render an unknown will meet one.
+
+    Both directions — a real number must still print as a number, or "render everything as UNKNOWN"
+    satisfies the cell above and destroys the report.
+    """
+    from benchmarks import variance
+
+    assert variance._g(None) == "UNKNOWN"
+    assert variance._g(0.0) == "0"
+    assert variance._g(0.012345) == "0.01234" or variance._g(0.012345) == "0.01235"
+    assert variance._money(None) == "UNKNOWN" and variance._money(0.0) == "$0.0000"
+    print(f"_g: None -> {variance._g(None)}, 0.01 -> {variance._g(0.01)}")
+
+
+def test_the_gate_pin_notices_the_formatter_going_back_to_a_bare_format(monkeypatch, tmp_path,
+                                                                       capsys) -> None:
+    from benchmarks import variance
+    from tests import _arming
+
+    _arming.mutate_function(monkeypatch, variance, "_g",
+                            '    return "UNKNOWN" if x is None else f"{x:.4g}"',
+                            '    return f"{x:.4g}"')
+    # The guard takes fixtures, so this cell must take them too and pass them through — an
+    # arming harness that calls a cell with the wrong arity proves nothing about the cell.
+    print(_arming.assert_red(test_the_cost_gate_prints_its_verdict_instead_of_crashing_on_it,
+                             *GATE_CELLS[0], tmp_path, capsys))
+
+
+def test_the_gate_pin_notices_the_detail_never_being_printed(monkeypatch, tmp_path,
+                                                            capsys) -> None:
+    """The numbers beside an unknown-cost verdict are both UNKNOWN, so the `detail` IS the content:
+    "this run could not account for its own spend" and "the baseline's cost is unknown" are opposite
+    instructions."""
+    from benchmarks import variance
+    from tests import _arming
+
+    _arming.mutate_function(monkeypatch, variance, "_gate",
+                            '        if f.get("detail"):',
+                            "        if False:")
+    # The guard takes fixtures, so this cell must take them too and pass them through — an
+    # arming harness that calls a cell with the wrong arity proves nothing about the cell.
+    print(_arming.assert_red(test_the_cost_gate_prints_its_verdict_instead_of_crashing_on_it,
+                             *GATE_CELLS[0], tmp_path, capsys))
+
+
+def test_the_arming_harness_tells_a_bad_call_from_a_real_crash() -> None:
+    """`assert_red` refuses a TypeError raised BEFORE the guard runs and accepts one raised inside.
+
+    Both halves matter and both were live in this slice. The refusal is S14's trap — a cell invoked
+    with the wrong arity raising `TypeError`, which an earlier harness read as a legitimate
+    complaint. The acceptance is 1.3's own `_gate` mutation, where `f"{None:.4g}"` raising IS the
+    defect being proved; refusing it would have forced a mutation that states something else.
+
+    The discriminator is the traceback depth, not the message — a message check would be a
+    substring classifier, which this repo has measured at 28% false positives elsewhere.
+    """
+    from tests import _arming
+
+    def needs_two_arguments(a, b):
+        raise AssertionError("never reached")
+
+    with pytest.raises(AssertionError, match="before it started running"):
+        _arming.assert_red(needs_two_arguments, 1)          # arity: refused
+
+    def raises_inside():
+        return f"{None:.4g}"
+
+    msg = _arming.assert_red(raises_inside)                 # internal: accepted
+    assert msg.startswith("TypeError:")
+    print(f"arity -> refused | internal -> accepted as {msg[:60]!r}")
