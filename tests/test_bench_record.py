@@ -397,3 +397,60 @@ def test_compare_records_reads_neither_renamed_key() -> None:
     for key in ("pass_k", "pass_rate_wilson95", "subset_all_pass", "availability_wilson95"):
         assert key not in src, f"compare_records reads {key!r}; renaming it changed gating"
     print("compare_records reads neither name — the rename gates nothing differently")
+
+
+def test_the_classifier_mints_every_verdict_through_one_constructor() -> None:
+    """A `Verdict` built by hand can disagree with its own evidence, and one did.
+
+    The unscored path passed `**ev` into the evidence dict and left `code`/`family` at their
+    defaults, so a scenario refused for `slot_unbound` carried `code=""` while its evidence said
+    `slot_unbound` — and `record["families"]["harness"]` printed 0 over a run whose only refusal was
+    a harness one. Two places, one fact, nothing forcing them to agree.
+
+    Derived rather than remembered: `_verdict` takes both from `ev`, and no other construction is
+    allowed inside the classifier, so the disagreement is not expressible.
+    """
+    for fn in (O.classify, O._classify_read, O._classify_write, O._unscored):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+        direct = [n for n in ast.walk(tree)
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                  and n.func.id == "Verdict"]
+        assert not direct, (
+            f"{fn.__name__} constructs a Verdict directly ({len(direct)} site(s)) — route it through "
+            f"`_verdict` so its `code`/`family` cannot disagree with its `evidence`")
+    src = textwrap.dedent(inspect.getsource(O._verdict))
+    assert 'ev.get("code"' in src and 'ev.get("family"' in src, (
+        "_verdict no longer takes both from `ev`, so the two can drift apart again")
+    print("classify/_classify_read/_classify_write/_unscored: 0 direct Verdict constructions")
+
+
+def test_an_unscored_verdict_still_carries_the_code_that_caused_it() -> None:
+    """Driven to the RECORD, not to the Verdict — the field being right is not the point; the
+    published histogram being right is."""
+    run = a_run("s")
+    run.agent_error_code, run.agent_error = "slot_unbound", "SlotUnboundError: x"
+    v = O.classify(O.ScenarioTruth(name="s"), run, O.Oracle())
+    assert (v.outcome, v.code, v.family) == (O.UNSCORED, "slot_unbound", O.HARNESS), v
+
+    rec = build([scored("ok", outcome=O.OK), O.Scored(truth=O.ScenarioTruth(name="s"), run=run,
+                                                      verdict=v)])
+    assert rec["families"][O.HARNESS] == 1, (
+        f"the run's only refusal was a harness one and the histogram says {rec['families']}")
+    print(f"unscored({v.reason}) code={v.code!r} -> families {rec['families']}")
+
+
+def test_the_cost_denominator_is_published_because_it_is_not_reps() -> None:
+    """`cost_usd` sums over ALL scenarios; every rate is over the SCORED ones. Both numbers sit in
+    one record, so `cost_usd / reps` is a wrong per-scenario cost that the record itself invites.
+
+    Asserted where they actually differ, or the cell is a tautology.
+    """
+    rows = [scored("a", outcome=O.OK,
+                   run=a_run("a", per_model={PRICED: (1_000_000, 0, 0, 0, 1)})),
+            O.Scored(truth=O.ScenarioTruth(name="b"), run=a_run("b"),
+                     verdict=O.Verdict(O.UNSCORED, reason="harness_error"))]
+    rec = build(rows)
+    assert rec["reps"] == 1 and rec["cost_scenarios"] == 2, rec
+    assert rec["cost_scenarios"] != rec["reps"], "this cell no longer drives the case it exists for"
+    print(f"cost ${rec['cost_usd']} over {rec['cost_scenarios']} scenarios, "
+          f"rates over reps={rec['reps']}")

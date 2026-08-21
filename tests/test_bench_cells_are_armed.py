@@ -19,6 +19,9 @@ rather than a pass, because a stale mutation silently reports the suite as stron
 from __future__ import annotations
 
 import inspect
+import linecache
+import os
+import tempfile
 import textwrap
 
 import pytest
@@ -38,6 +41,17 @@ def mutate_function(monkeypatch, name: str, find: str, repl: str) -> None:
 
     A stale or ambiguous `find` raises rather than silently applying nothing — `prove_red.py`'s own
     rule, and the reason it reports a non-matching mutation as an ERROR and not as a survivor.
+
+    THE MUTANT'S SOURCE IS RETRIEVABLE, and that is not a nicety. Several guards in these modules
+    are STRUCTURAL — they read `inspect.getsource` and scan the AST. Compiling a mutant under a
+    `<mutant:name>` pseudo-filename makes `getsource` raise `OSError: could not get source code`,
+    the guard dies before it reaches its scan, and this harness scores the crash as a kill. That
+    happened THREE times while writing this file, twice in cells added an hour after the first was
+    fixed by hand — which is what says the fix belongs here rather than in a cell.
+
+    So the mutant is compiled under a `.py` filename registered in `linecache`, which is one of the
+    two things `inspect.getsourcefile` accepts for a path that does not exist on disk. Nothing is
+    written to disk, and `monkeypatch` removes the entry afterwards.
     """
     src = textwrap.dedent(inspect.getsource(getattr(O, name)))
     n = src.count(find)
@@ -46,9 +60,17 @@ def mutate_function(monkeypatch, name: str, find: str, repl: str) -> None:
             f"mutation for {name!r} matches its find-text {n} times, not once. The function has "
             f"moved and this mutation now proves nothing — re-express it against the current "
             f"source rather than deleting it.\nfind: {find!r}")
+    mutated = src.replace(find, repl, 1)
+    path = os.path.join(tempfile.gettempdir(), f"ultracua_mutant_{name}.py")
+    monkeypatch.setitem(linecache.cache, path,
+                        (len(mutated), None, mutated.splitlines(True), path))
     ns: dict = {}
-    exec(compile(src.replace(find, repl, 1), f"<mutant:{name}>", "exec"), O.__dict__, ns)
-    monkeypatch.setattr(O, name, ns[name])
+    exec(compile(mutated, path, "exec"), O.__dict__, ns)
+    mutant = ns[name]
+    # Proven, not assumed: a structural guard is about to call this on the mutant, and if it raises
+    # the guard never runs and its failure is credited to the mutation.
+    assert inspect.getsource(mutant), f"the mutant of {name!r} has no retrievable source"
+    monkeypatch.setattr(O, name, mutant)
 
 
 def mutate_value(monkeypatch, name: str, value) -> None:
@@ -116,11 +138,18 @@ def test_the_quiet_allowlist_pin_notices_unscored_becoming_a_pass(monkeypatch) -
 # The adjudication order — the load-bearing clause
 # ---------------------------------------------------------------------------------------------
 
+# A mutation's REPLACEMENT text can go stale on its own, and `mutate_function` cannot see that: it
+# checks the find-text matches exactly once and says nothing about whether what replaces it still
+# compiles against the current module. Measured — when `_unscored` gained an explicit `ev` parameter
+# this block kept calling it with `**ev` and every cell using it died with `TypeError: _unscored()
+# got an unexpected keyword argument 'code'`. `assert_red` refuses a TypeError as a kill for exactly
+# that reason, so the layer below caught it; without that clause four mutations would have reported
+# as armed while testing the harness's own breakage.
 _HARNESS_FIRST = (
     '    if getattr(run, "harness_error", ""):\n'
-    '        return _unscored("harness_error", detail=run.harness_error, **ev)\n'
+    '        return _unscored("harness_error", ev, detail=run.harness_error)\n'
     '    if fam in UNSCORED_FAMILIES:\n'
-    '        return _unscored("harness_refusal", detail=getattr(run, "agent_error", ""), **ev)\n')
+    '        return _unscored("harness_refusal", ev, detail=getattr(run, "agent_error", ""))\n')
 
 
 @pytest.mark.parametrize("code", ["meta_unwritable", "meta_unreadable", "not_learned"])
@@ -466,3 +495,41 @@ def test_the_naming_pin_notices_the_statistic_being_deleted_instead_of_renamed(m
                     '    rec["subset_all_pass"] = rec.pop("pass_k")',
                     '    rec.pop("pass_k")\n    rec["subset_all_pass"] = {}')
     print(assert_red(TR.test_the_corpus_statistics_are_not_labelled_as_a_reliability_curve))
+
+
+# ---------------------------------------------------------------------------------------------
+# One constructor, and the two numbers that must not be confused
+# ---------------------------------------------------------------------------------------------
+
+def test_the_one_constructor_pin_notices_a_hand_built_verdict(monkeypatch) -> None:
+    """The exact regression: `_unscored` builds its own `Verdict` and loses code/family."""
+    mutate_function(monkeypatch, "_unscored",
+                    "    return _verdict(UNSCORED, reason, ev, detail=detail)",
+                    "    return Verdict(outcome=UNSCORED, reason=reason, evidence={**ev, "
+                    "'detail': detail})")
+    print(assert_red(TR.test_the_classifier_mints_every_verdict_through_one_constructor))
+
+
+def test_the_one_constructor_pin_notices_the_helper_stopping_reading_ev(monkeypatch) -> None:
+    """The other half: routing through `_verdict` is worthless if `_verdict` stops taking both from
+    the evidence it was given."""
+    mutate_function(monkeypatch, "_verdict",
+                    '    return Verdict(outcome=outcome, reason=reason, code=ev.get("code", ""),\n'
+                    '                   family=ev.get("family", ""), evidence={**ev, **extra})',
+                    '    return Verdict(outcome=outcome, reason=reason, evidence={**ev, **extra})')
+    print(assert_red(TR.test_the_classifier_mints_every_verdict_through_one_constructor))
+
+
+def test_the_histogram_pin_notices_a_harness_refusal_going_uncounted(monkeypatch) -> None:
+    """Driven to the published record, so it fails for the reason an operator would notice."""
+    mutate_function(monkeypatch, "_verdict",
+                    '                   family=ev.get("family", ""), evidence={**ev, **extra})',
+                    '                   family="", evidence={**ev, **extra})')
+    print(assert_red(TR.test_an_unscored_verdict_still_carries_the_code_that_caused_it))
+
+
+def test_the_cost_denominator_pin_notices_it_going_away(monkeypatch) -> None:
+    mutate_function(monkeypatch, "build_bench_record",
+                    '    rec["cost_scenarios"] = len(scored)      # the denominator for `cost_usd` -- NOT `reps`',
+                    '    rec["cost_scenarios"] = len(live)')
+    print(assert_red(TR.test_the_cost_denominator_is_published_because_it_is_not_reps))

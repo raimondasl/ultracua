@@ -325,8 +325,24 @@ class Verdict:
                 "family": self.family, "evidence": dict(self.evidence)}
 
 
-def _unscored(reason: str, **evidence) -> Verdict:
-    return Verdict(outcome=UNSCORED, reason=reason, evidence=evidence)
+def _verdict(outcome: str, reason: str, ev: dict, **extra) -> Verdict:
+    """The ONLY constructor the classifier uses, so a verdict's fields cannot disagree with its own
+    evidence.
+
+    Both were true before this existed, and only one of them was published. `ev` always carries the
+    refusal `code` and `family`; the unscored path built its `Verdict` without them, so a scenario
+    refused for `slot_unbound` reported `code=""` while its evidence said `slot_unbound`, and
+    `record["families"]["harness"]` printed **0** over a run whose only refusal WAS a harness one.
+    One fact in two places with nothing forcing them to agree -- R3.7's shape in a report.
+
+    Taking both from `ev` here means no call site can pass a different one.
+    """
+    return Verdict(outcome=outcome, reason=reason, code=ev.get("code", ""),
+                   family=ev.get("family", ""), evidence={**ev, **extra})
+
+
+def _unscored(reason: str, ev: dict, detail: str = "") -> Verdict:
+    return _verdict(UNSCORED, reason, ev, detail=detail)
 
 
 # --------------------------------------------------------------------------------------------
@@ -361,10 +377,9 @@ def classify(truth: ScenarioTruth, run, oracle: Oracle,
     # 1. A VIOLATION THE ORACLE CAN SEE OUTRANKS EVERY EXCUSE. See the docstring.
     if oracle.available:
         if len(oracle.matched) >= 2:
-            return Verdict(DOUBLE, f"the server holds {len(oracle.matched)} records matching one "
-                                   f"intent: {list(oracle.matched)}", code, fam,
-                           {**ev, "matched": list(oracle.matched),
-                            "unmatched": list(oracle.unmatched)})
+            return _verdict(DOUBLE, f"the server holds {len(oracle.matched)} records matching "
+                            f"one intent: {list(oracle.matched)}", ev,
+                            matched=list(oracle.matched), unmatched=list(oracle.unmatched))
         if oracle.unmatched:
             # On a READ task this is the stronger statement, and it is exact rather than a stretch:
             # a read declares no write target, so ANY identity the run changed is by construction not
@@ -372,19 +387,18 @@ def classify(truth: ScenarioTruth, run, oracle: Oracle,
             # inventing one here would be a fifth read outcome smuggled past the closed set.
             why = ("a read task changed a record" if not truth.mutating
                    else "the run changed a record that is not the one it was asked for")
-            return Verdict(INCORRECT_TARGET, f"{why}: {list(oracle.unmatched)}", code, fam,
-                           {**ev, "matched": list(oracle.matched),
-                            "unmatched": list(oracle.unmatched)})
+            return _verdict(INCORRECT_TARGET, f"{why}: {list(oracle.unmatched)}", ev,
+                            matched=list(oracle.matched), unmatched=list(oracle.unmatched))
 
     # 2. OUR FAULT -- most specific first. Neither of these says anything about the product.
     if getattr(run, "harness_error", ""):
-        return _unscored("harness_error", detail=run.harness_error, **ev)
+        return _unscored("harness_error", ev, detail=run.harness_error)
     if fam in UNSCORED_FAMILIES:
-        return _unscored("harness_refusal", detail=getattr(run, "agent_error", ""), **ev)
+        return _unscored("harness_refusal", ev, detail=getattr(run, "agent_error", ""))
 
     # 3. UNANSWERABLE. "The server says nothing changed" is a finding; "we could not ask" is not.
     if not oracle.available:
-        return _unscored("oracle_unavailable", detail=oracle.unavailable_reason, **ev)
+        return _unscored("oracle_unavailable", ev, detail=oracle.unavailable_reason)
 
     decide = _classify_write if truth.mutating else _classify_read
     return decide(truth, run, oracle, gate, code, fam, ev)
@@ -398,41 +412,35 @@ def _classify_read(truth, run, oracle, gate, code, fam, ev) -> Verdict:
     by, so the data answer wins where there is one.
     """
     if oracle.data_correct is True:
-        return Verdict(OK, "the oracle matched the returned data", code, fam, ev)
+        return _verdict(OK, "the oracle matched the returned data", ev)
     if oracle.data_correct is False:
-        return Verdict(WRONG_DATA, "data was returned and it is not what the oracle holds",
-                       code, fam, ev)
+        return _verdict(WRONG_DATA, "data was returned and it is not what the oracle holds", ev)
 
     # No data verdict. Either it refused, or the oracle did not answer -- and those are different.
     if not code:
-        return _unscored("oracle_silent",
-                         detail="the run neither refused nor produced data the oracle adjudicated",
-                         **ev)
+        return _unscored("oracle_silent", ev,
+                         detail="the run neither refused nor produced data the oracle adjudicated")
     if code == CRASH_CODE:
-        return Verdict(REFUSED, "the run raised a non-typed exception", code, fam, ev)
+        return _verdict(REFUSED, "the run raised a non-typed exception", ev)
 
     if fam == WRITE_GATE:
         # THE HEADLINE, and the one place this module refuses to infer. See `GateEvidence`.
         if gate is None or not gate.present:
-            return _unscored("gate_unexplainable",
+            return _unscored("gate_unexplainable", ev,
                              detail=f"{code!r} refused a read task, but the recipe was not readable, "
-                                    f"so 'the write gate fired on a read' would be an inference from "
-                                    f"a code alone",
-                             **ev)
-        return Verdict(OVER_GATED,
-                       f"a read task was refused by the write machinery ({code})",
-                       code, fam,
-                       {**ev, "mutating_steps": gate.mutating_steps,
-                        "mutating_sources": list(gate.mutating_sources),
-                        "approved": gate.approved})
+                                    f"so 'the write gate fired on a read' would be an inference "
+                                    f"from a code alone")
+        return _verdict(OVER_GATED, f"a read task was refused by the write machinery ({code})",
+                        ev, mutating_steps=gate.mutating_steps,
+                        mutating_sources=list(gate.mutating_sources), approved=gate.approved)
 
     if fam == POST_ACTUATION:
         # Reached only when the oracle saw NO changed identity (clause 1 would have taken it
         # otherwise). The engine believed it was writing on a read task and nothing landed.
-        return Verdict(REFUSED, f"a read task reached the write machinery and refused ({code})",
-                       code, fam, ev)
+        return _verdict(REFUSED, f"a read task reached the write machinery and refused ({code})",
+                        ev)
 
-    return Verdict(REFUSED, f"the run refused ({code})", code, fam, ev)
+    return _verdict(REFUSED, f"the run refused ({code})", ev)
 
 
 def _classify_write(truth, run, oracle, gate, code, fam, ev) -> Verdict:
@@ -448,19 +456,18 @@ def _classify_write(truth, run, oracle, gate, code, fam, ev) -> Verdict:
         # write landed and the caller was told it did not -- is real and dangerous (an operator
         # re-runs and doubles it), but it is a disagreement between the product's report and the
         # world, which is `cross_check`'s bucket. The outcome is what happened.
-        return Verdict(TRUE, "the server holds exactly the intended record", code, fam, ev)
+        return _verdict(TRUE, "the server holds exactly the intended record", ev)
 
     # Nothing landed.
     if not code:
         # SILENTLY suppressed: the run reported success and the server holds nothing. The word
         # requires the silence -- a loud refusal that left nothing behind is a refusal, below.
-        return Verdict(SUPPRESSED, "the run reported success and the server holds no record",
-                       code, fam, ev)
+        return _verdict(SUPPRESSED, "the run reported success and the server holds no record", ev)
 
     correct = truth.expect_refusal
-    return Verdict(REFUSED_CORRECTLY if correct else REFUSED_WRONGLY,
-                   f"the write was refused ({code}) and the scenario "
-                   f"{'expects' if correct else 'does not expect'} a refusal", code, fam, ev)
+    return _verdict(REFUSED_CORRECTLY if correct else REFUSED_WRONGLY,
+                    f"the write was refused ({code}) and the scenario "
+                    f"{'expects' if correct else 'does not expect'} a refusal", ev)
 
 
 # --------------------------------------------------------------------------------------------
@@ -661,6 +668,11 @@ def build_bench_record(scored: "list[Scored]", *, bench: str, provider: str, tim
     # write availability, and saying "0%" would be inventing the worst possible number for it.
     per_rep = {k: v for k, v in per_rep.items() if v}
 
+    # Over ALL scenarios, INCLUDING the unscored ones -- cost incurred is cost incurred, and a run
+    # abandoned after the agent spent still spent. That makes it a different denominator from every
+    # rate above, which are over `live`, so the denominator is PUBLISHED rather than left for a
+    # reader to assume: `cost_usd / reps` is a wrong per-scenario cost and nothing else in the
+    # record says so.
     total_cost = sum(_cost_of(s.run) for s in scored)
 
     from benchmarks import variance
@@ -681,6 +693,7 @@ def build_bench_record(scored: "list[Scored]", *, bench: str, provider: str, tim
     # statistic is worth having — and `compare_records` reads neither, so nothing is lost by it.
     rec["subset_all_pass"] = rec.pop("pass_k")
     rec["availability_wilson95"] = rec.pop("pass_rate_wilson95")
+    rec["cost_scenarios"] = len(scored)      # the denominator for `cost_usd` -- NOT `reps`
     rec["vocabulary_version"] = "b3.1"
     rec["outcomes"] = counts
     rec["gated_metrics"] = [n for n in GATED_RATES if n in per_rep]
