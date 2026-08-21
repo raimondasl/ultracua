@@ -365,11 +365,21 @@ def test_two_classes_may_not_share_a_code() -> None:
 def test_a_class_may_not_take_a_code_another_vocabulary_owns() -> None:
     """`ToolOutcome.code` and `SkippedFlow.code` are the SAME FIELD as this taxonomy's on the MCP wire.
     B3 buckets on it, so one slug meaning two things is an overloaded token a consumer cannot resolve.
-    """
-    from ultracua.flows import FlowReplayError
 
-    for stolen in ("replay_error", "raised", "already_done", "approval_stale"):
-        with pytest.raises(TypeError, match="another vocabulary|ABSTRACT|belongs"):
+    THE MATCH IS THE RESERVED BRANCH'S OWN WORDS. The first draft matched
+    `another vocabulary|ABSTRACT|belongs`, and `belongs` is what the DUPLICATE-code branch says too —
+    so the cell passed whichever branch fired. That is not academic: it would go on passing if a
+    reserved code were also admitted into `REGISTRY`, which is precisely the state the audit found
+    `not_learned` and `not_approved` in. A cell that cannot tell WHICH guard fired cannot tell you the
+    guard you meant has stopped firing.
+    """
+    from ultracua.flows import REGISTRY, RESERVED_CODES, FlowReplayError
+
+    for stolen in sorted(RESERVED_CODES):
+        assert stolen not in REGISTRY, (
+            f"{stolen!r} is reserved AND carried by {REGISTRY[stolen].__name__} — the probe below would "
+            f"exercise the duplicate branch instead, and this cell would pass without testing reserved")
+        with pytest.raises(TypeError, match="another vocabulary"):
             type("_Probe", (FlowReplayError,),
                  {"code": stolen, "retryable": False, "can_follow_actuation": False})
 

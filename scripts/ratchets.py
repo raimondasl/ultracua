@@ -169,20 +169,55 @@ def _taxonomy_names() -> set:
 
 
 def _base_enforcement_nodes(tree) -> set:
-    """The ids of nodes belonging to the mechanism that ENFORCES this ratchet's invariant.
+    """The ids of the nodes belonging to the mechanism that ENFORCES this ratchet's invariant.
 
-    A ratchet must not count its own guard. `FlowReplayError.__init__` says
-    `if type(self) is FlowReplayError` — a bare-name value reference — and `RESERVED_CODES` lists
-    `"replay_error"` as the poison sentinel no concrete class may carry. Both are shape (b)/(c) matches
-    and both exist to make the shape unexpressible; counting them would leave the ratchet permanently
-    at 2 and unable to reach the zero that IS the invariant.
+    A ratchet must not count its own guard. There are exactly THREE such nodes:
+      * `FlowReplayError.code = "replay_error"` — the poison sentinel's own DECLARATION. It is the
+        thing every other clause compares against; without it there is no invariant to enforce.
+      * `FlowReplayError.__init__`'s `type(self) is FlowReplayError` — a bare-name value reference;
+      * `RESERVED_CODES`'s `"replay_error"` entry — the slug no concrete class may adopt.
+    All three are shape (b)/(c) matches, all three exist to make the shape unexpressible, and counting
+    them would leave the ratchet permanently at 3 and unable to reach the zero that IS the invariant.
+
+    The THIRD one only became visible when the blanket exemption was narrowed — it had been hiding
+    inside the ClassDef the first draft excluded wholesale. That is the argument for a narrow
+    exemption in one line: a broad one does not just miss producers, it conceals which nodes the
+    invariant actually rests on.
+
+    NARROW BY CONSTRUCTION, and the first draft was not — it exempted the WHOLE `FlowReplayError`
+    ClassDef. Measured by 1.4a's audit: a `@classmethod` returning `"replay_error"` written INSIDE the
+    class body reported 0 producers, while the identical text one line below the class reported 1. The
+    docstring argued for two nodes and the code exempted a hundred lines, which is a blind spot exactly
+    where the taxonomy's own code lives — and 1.4b's declared scope adds a method to that class body.
+
+    So: `__init__`'s own comparison, and the `RESERVED_CODES` assignment. Nothing else, and each is
+    asserted to have been FOUND, because an exemption that silently matches nothing is a guard that
+    stopped guarding.
     """
-    out = set()
+    out, found = set(), []
+    base_cls = next((n for n in ast.walk(tree)
+                     if isinstance(n, ast.ClassDef) and n.name == "FlowReplayError"), None)
+    if base_cls is not None:
+        # ...only the `code = "..."` statement in the class's OWN body, not in a nested def.
+        for stmt in base_cls.body:
+            if isinstance(stmt, ast.Assign) and any(_dotted(t_) == "code" for t_ in stmt.targets):
+                out |= {id(x) for x in ast.walk(stmt)}
+                found.append("FlowReplayError.code")
     for n in ast.walk(tree):
-        if isinstance(n, ast.ClassDef) and n.name == "FlowReplayError":
-            out |= {id(x) for x in ast.walk(n)}
         if isinstance(n, ast.Assign) and any(_dotted(t_) == "RESERVED_CODES" for t_ in n.targets):
             out |= {id(x) for x in ast.walk(n)}
+            found.append("RESERVED_CODES")
+        # `if type(self) is FlowReplayError:` — the abstract guard's own comparison, and ONLY it.
+        if (isinstance(n, ast.Compare) and len(n.ops) == 1 and isinstance(n.ops[0], ast.Is)
+                and isinstance(n.left, ast.Call) and _dotted(n.left.func) == "type"
+                and _dotted(n.comparators[0]).split(".")[-1] == "FlowReplayError"):
+            out |= {id(x) for x in ast.walk(n)}
+            found.append("type(self) is FlowReplayError")
+    if not found and any(isinstance(n, ast.ClassDef) and n.name == "FlowReplayError"
+                         for n in ast.walk(tree)):
+        raise AssertionError(
+            "flows.py defines FlowReplayError but neither enforcement node was found — the exemption "
+            "matches nothing, so either the abstract guard is gone or this derivation is stale.")
     return out
 
 

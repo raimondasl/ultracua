@@ -776,10 +776,18 @@ def _typed_errors() -> list:
     file ran first. Measured: green in file order, red in the reverse — a latent flake that
     `pytest-randomly`, a different shard split, or any hand-run subset would surface.
 
-    Filtering on the module is the right fix rather than making the probes clean up after themselves,
-    for two reasons. A probe cannot reliably remove itself (the subclass list is cleared by the cyclic
-    collector, not by a `del`), and the property being asserted is about the SHIPPED taxonomy — a
-    downstream user subclassing `FlowReplayError` in their own package must not be able to fail our
+    THE MECHANISM, corrected — the first version of this note named the wrong one, and it matters
+    because it would have licensed the wrong fix. It said the ghosts survive an explicit
+    `gc.collect()`. They do not: in a plain interpreter the count goes 28 -> 31 -> 28 across a
+    `gc.collect()`. What actually holds them is `pytest.raises`' `ExceptionInfo` and the traceback it
+    carries, which reference the half-built classes for the LIFETIME OF THE TEST ITEM — which is why a
+    narrow selection fails deterministically while running both whole files passes, enough intervening
+    work having dropped the references. So "call `gc.collect()` in a fixture" would have been an
+    unreliable patch that appeared to work.
+
+    Filtering on the module is right regardless of the mechanism, which is the point: it does not
+    depend on WHEN a ghost is collected. And the property being asserted is about the SHIPPED taxonomy
+    — a downstream user subclassing `FlowReplayError` in their own package must not be able to fail our
     invariant test.
     """
     import ultracua.flows  # noqa: F401 — ensure the subclasses are imported before walking

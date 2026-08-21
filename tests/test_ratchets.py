@@ -278,3 +278,87 @@ def test_the_check_and_update_surfaces_run() -> None:
                            capture_output=True, text=True)
     assert shown.returncode == 0
     assert "src/ultracua/flows.py:" in shown.stdout, "--print must name sites, not just counts"
+
+
+# ---------------------------------------------------------------------------------------------------
+# 4. A ratchet with SEVERAL shapes needs one injection PER SHAPE.
+#
+# FOUND BY 1.4a's AUDIT. `bare_flow_replay_error` was redefined from one shape to three so it could see
+# the INDIRECT raise (`raise _classify_replay_failure(kind)(...)`, whose class arrives through a
+# variable) and the surviving `"replay_error"` literals. But `INJECTIONS` still injected only shape (a),
+# and `LIVENESS_GUTS` still gutted only shape (a) — so with (b) and (c) NEUTERED and both real
+# regressions restored in `src/`, the derivation reported 0, the verdict was clean, the injection cell
+# still moved +1 and the liveness cell was still green. Every instrument that speaks for this ratchet
+# was blind to two thirds of it.
+#
+# A single-shape ratchet is covered by `INJECTIONS`. A multi-shape one needs a row here, and the cell
+# below fails for a shape nobody armed.
+SHAPE_INJECTIONS = {
+    "bare_flow_replay_error": {
+        # (a) the raise — also covered by INJECTIONS, kept so the three read together.
+        "raise": ("flows.py", '\n\ndef _shape_probe():\n    raise FlowReplayError("x")\n'),
+        # (b) the class in a VALUE position, which is how the indirect raise reaches the base.
+        "value ref": ("flows.py", '\n\n_SHAPE_PROBE_TABLE = {"miss": FlowReplayError}\n'),
+        # (c) a surviving literal — a getattr default, a comparison, a fixture.
+        "literal": ("flows.py", '\n\ndef _shape_probe_code():\n    return "replay_error"\n'),
+    },
+}
+
+
+def test_every_shape_of_a_multi_shape_ratchet_is_armed() -> None:
+    """A ratchet built from several shapes must have each of them injected, or the unarmed ones rot.
+
+    DERIVED FROM THE DERIVATION, never typed: the shapes it can emit are the `note` strings its own
+    source passes to `Site(...)`, so a fourth shape added tomorrow fails here until somebody arms it.
+
+    The first draft of this cell contained `sorted({s for s in shapes} - {s for s in shapes})` and
+    asserted it was empty — a tautology over an empty set, written while fixing a finding about
+    unarmed instruments. Left recorded rather than quietly deleted: "a cell that cannot fail is not a
+    test" is easiest to violate in the cell you are adding to enforce it.
+    """
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(ratchets._base_coded_sites))
+    emitted = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "Site":
+            note = n.args[2] if len(n.args) > 2 else None
+            if isinstance(note, ast.Constant):
+                emitted.add(note.value)
+            elif isinstance(note, ast.JoinedStr):      # f"raise {name}" — the SUBCLASS liveness half
+                continue                               # not a base-coded producer; not armed here
+    assert emitted, "no `Site(..., note)` literals found in the derivation — this cell is inert"
+
+    armed = set(SHAPE_INJECTIONS["bare_flow_replay_error"])
+    assert emitted == armed, (
+        f"`_base_coded_sites` can emit {sorted(emitted)} but SHAPE_INJECTIONS arms {sorted(armed)}. An "
+        f"unarmed shape is one nothing can fail for — measured at 1.4a's audit, where (b) and (c) were "
+        f"both neuterable with the verdict, the injection cell and the liveness cell all staying green.")
+    for name in SHAPE_INJECTIONS:
+        assert name in ratchets.RATCHETS, f"{name} is not a ratchet any more — drop its shape probes"
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPE_INJECTIONS["bare_flow_replay_error"]))
+def test_each_shape_of_the_base_code_ratchet_catches_its_own_injection(
+    shape, scratch_src, pristine_counts
+) -> None:
+    """Each shape, injected alone, must move the ratchet by exactly one and move no neighbour."""
+    target = "bare_flow_replay_error"
+    filename, snippet = SHAPE_INJECTIONS[target][shape]
+    scratch_src.append(filename, snippet)
+
+    after = {k: len(v) for k, v in ratchets.derive_all().items()}
+    assert after[target] == pristine_counts[target] + 1, (
+        f"{target}/{shape}: injecting one site moved the count "
+        f"{pristine_counts[target]} -> {after[target]}, expected +1. A shape nothing can fail for is a "
+        f"shape that will rot, and this ratchet's reported ZERO is only as honest as its weakest shape.")
+    moved = {k: (pristine_counts[k], after[k]) for k in pristine_counts
+             if k != target and pristine_counts[k] != after[k]}
+    assert not moved, f"{target}/{shape} also moved {moved} — the derivations overlap"
+
+    # ...and the site is reported UNDER THAT SHAPE's note, so `--print` tells a reader which one fired.
+    notes = {h.note for h in ratchets.derive_bare_flow_replay_error()}
+    assert shape in notes, (
+        f"the injected {shape!r} site was counted but is reported as {sorted(notes)} — a reader running "
+        f"`--print` would be sent to the wrong shape")
