@@ -1,0 +1,103 @@
+# The customer benchmark's two substrates (reshape-plan 2.1 / benchmark-plan B2).
+#
+# TWO, deliberately, and the CONTRAST is the headline the benchmark exists to produce. Odoo is a
+# heavyweight ERP whose UI is generated and whose DOM shifts between releases; Gitea is a small Go
+# app with a stable, hand-written UI. A replay agent that survives drift should show a different
+# curve on each, and one substrate cannot show a curve at all.
+#
+# IMAGES ARE PINNED TO A MINOR, never `:latest`. The bench's whole claim is that a number measured in
+# March is comparable to one measured in June; a floating tag silently re-bases the substrate under
+# the baseline, and `baselines/README.md`'s standing rule is that a rate measured under one
+# configuration is never compared against another. `libfaketime` (below) exists for the same reason
+# one layer down.
+#
+#   docker compose -f benchmarks/substrates/docker-compose.yml --profile gitea up -d
+#   docker compose -f benchmarks/substrates/docker-compose.yml --profile odoo  up -d
+#
+# PROFILES, so the light substrate can run alone. Gitea is ~242 MB of image and ~100 MB resident;
+# Odoo plus Postgres is ~3.2 GB of image and wants ~1 GB. A developer checking a Gitea scenario
+# should not have to start an ERP, and a memory-constrained host can still run half the bench --
+# which is not hypothetical: this was authored on a host with 308 MB available.
+
+name: ultracua-bench
+
+services:
+  # ---- GITEA ---------------------------------------------------------------------------------
+  # SQLite on purpose. Gitea supports Postgres, and using it would make both substrates share one
+  # reset mechanism -- which is exactly why it is refused: a shared mechanism means a reset bug is
+  # invisible in the contrast, and the contrast is the deliverable. SQLite also gives the cheapest
+  # honest reset there is, one file.
+  gitea:
+    profiles: ["gitea", "all"]
+    image: gitea/gitea:1.22
+    environment:
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__database__PATH: /data/gitea/gitea.db
+      GITEA__security__INSTALL_LOCK: "true"       # skip the installer wizard; the bench seeds directly
+      GITEA__server__ROOT_URL: http://localhost:3000/
+      GITEA__server__OFFLINE_MODE: "true"         # no CDN fetches: the bench must not depend on the net
+      GITEA__service__DISABLE_REGISTRATION: "true"
+      GITEA__log__LEVEL: warn
+    volumes:
+      - gitea-data:/data
+    ports:
+      - "3000:3000"
+    healthcheck:
+      # Gitea's own endpoint, not a TCP probe. A port that accepts a connection says the process is
+      # up, not that it can serve -- and R4.40 is exactly the cost of acting on a page that is not
+      # ready yet (a snapshot taken against an unrendered skeleton, authored quietly and persisted).
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/healthz"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  # ---- ODOO + POSTGRES -----------------------------------------------------------------------
+  odoo-db:
+    profiles: ["odoo", "all"]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: odoo
+      POSTGRES_DB: postgres
+    volumes:
+      - odoo-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odoo"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  odoo:
+    profiles: ["odoo", "all"]
+    image: odoo:17
+    depends_on:
+      odoo-db:
+        condition: service_healthy
+    environment:
+      HOST: odoo-db
+      USER: odoo
+      PASSWORD: odoo
+      # ODOO'S DEMO DATA IS CLOCK-COUPLED: invoices, leads and deadlines are seeded relative to
+      # "today", so a scenario asserting "the overdue invoice" changes meaning as the wall clock
+      # moves and a baseline recorded in March fails in June for no reason the bench can see.
+      # `libfaketime` pins the container's clock so the seeded world is the same world every run.
+      # Set by `substrates.py`, which owns the epoch, so the value is recorded in the run record
+      # rather than living only here.
+      LD_PRELOAD: /usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1
+      FAKETIME: "${ULTRACUA_BENCH_FAKETIME:-@2026-01-15 09:00:00}"
+    volumes:
+      - odoo-data:/var/lib/odoo
+    ports:
+      - "8069:8069"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8069/web/database/selector >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
+volumes:
+  gitea-data:
+  odoo-db:
+  odoo-data:

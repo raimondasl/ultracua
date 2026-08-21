@@ -52,47 +52,18 @@ class _Exploding:
         raise LLMWasReached(f"a replay touched provider.{name} — inviolable #1")
 
 
-# `build_client` is the one that MATTERS, and leaving it out is what the pre-merge audit found: it is
-# what BOTH of the others call, so patching only them let a replay construct a real `AnthropicClient`
-# while all 25 cells stayed green (105 live clients built, and the corpus cell printed "0 reached an
-# LLM"). The modules are derived; these names are not, which is the residual leak — closed by
-# `test_llm_client_construction_has_a_single_choke_point` below rather than by a longer list.
-_FACTORIES = ("build_router", "get_provider", "build_client")
-
-
-def _provider_bindings() -> list:
-    """Every module-level NAME through which an LLM client can be constructed — `[(module, attr), …]`.
-
-    DERIVED, not listed, and that is the whole point. `flows.py:47` does
-    `from .providers import build_router, get_provider`, which binds the names at import time, so
-    patching `ultracua.providers.build_router` does NOT reach `ultracua.flows.build_router` — the one
-    `replay()` actually calls. This fixture claimed to make an LLM "unreachable in BOTH directions" and
-    on the `flows.py` construction path it did not: measured, `flows.build_router("anthropic")` ran the
-    real code and returned a router while the patch was active.
-
-    Nothing went red for that, because every cell in this file drives `flow.run_cached`, which imports
-    no provider factory at all. The blindness would have appeared the moment the property was extended
-    to `flows.replay` — which is exactly what S14's breadth asks for. So the patch set is computed from
-    the live import graph and a new consumer module is covered the day it is written.
-    """
-    import sys
-
-    # Import every module that could hold a binding, so the scan cannot miss one by not being loaded.
-    import ultracua.cli  # noqa: F401
-    import ultracua.daemon.server  # noqa: F401
-    import ultracua.flow  # noqa: F401
-    import ultracua.flows  # noqa: F401
-    import ultracua.llm  # noqa: F401
-    import ultracua.providers  # noqa: F401
-
-    out = []
-    for name, mod in list(sys.modules.items()):
-        if not name.startswith("ultracua") or mod is None:
-            continue
-        for attr in _FACTORIES:
-            if callable(getattr(mod, attr, None)):
-                out.append((mod, attr))
-    return out
+# THE DERIVATION LIVES IN ONE PLACE — `benchmarks/boundary_ledger.py` — and is imported here rather
+# than kept as a second copy. Two derivations of one fact is how the fact drifts, and this fact has
+# already drifted twice: S14's first fixture missed `flows.build_router` (the binding `replay()`
+# actually calls) and its second missed `llm.build_client` (the factory the other two CALL), which let
+# a replay construct 105 real Anthropic clients while 25 cells stayed green and a corpus cell printed
+# "0 reached an LLM".
+#
+# The bench needs the identical set for a different purpose — it COUNTS crossings where this file
+# REFUSES them — so the shared module owns the scan and each consumer owns its policy. The root
+# `conftest.py` makes `benchmarks` importable from a test precisely so shared machinery can live there.
+from benchmarks.boundary_ledger import FACTORIES as _FACTORIES  # noqa: E402
+from benchmarks.boundary_ledger import provider_bindings as _provider_bindings  # noqa: E402
 
 
 @pytest.fixture()
@@ -103,7 +74,17 @@ def no_llm(monkeypatch: pytest.MonkeyPatch):
         raise LLMWasReached(f"a replay constructed an LLM client: {a!r}")
 
     bindings = _provider_bindings()
-    assert bindings, "no provider factory bindings found — the patch would be inert and every cell vacuous"
+    # A COUNT FLOOR, not merely non-empty. `provider_bindings` gained an `ensure_imported` default at
+    # step 2.1, and a default is a thing that can move: MEASURED, flipping it to False leaves this
+    # whole file at 27 passed while the bindings it blocks drop from 7 to 5 — `cli.get_provider` and
+    # `daemon.server.get_provider` fall out, because a process that has not imported the CLI does not
+    # have them in `sys.modules`. Truthiness cannot see that; a floor can. Raise it deliberately if
+    # the real number grows, and never lower it to make a red go away.
+    assert len(bindings) >= 7, (
+        f"only {len(bindings)} provider bindings blocked, expected >= 7. Either a consumer module "
+        f"stopped being imported before the scan (check `provider_bindings(ensure_imported=...)`) or "
+        f"a binding disappeared — both make this fixture quietly cover less while every cell here "
+        f"stays green, which is exactly how S14 shipped twice: {sorted(f'{m.__name__}.{a}' for m, a in bindings)}")
     for mod, attr in bindings:
         monkeypatch.setattr(mod, attr, _boom, raising=False)
     return _Exploding()
