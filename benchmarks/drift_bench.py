@@ -74,6 +74,9 @@ from .drift_fixtures import (
     mutation_js,
 )
 from .oracle_provider import OracleProvider, plan_for
+# IMPORTED, not re-derived. The rule is one line long, which is exactly why it was written
+# twice and immediately disagreed with itself — see `variance.sum_cost`.
+from .variance import sum_cost
 
 BENCH_VERSION = 1
 
@@ -214,20 +217,6 @@ KNOWN_NO_DIGEST_MOVE = (
 # ---------------------------------------------------------------------------------------------------
 # Row construction
 # ---------------------------------------------------------------------------------------------------
-def _sum_cost(xs):
-    """UNKNOWN IS ABSORBING, and a real zero is a real zero.
-
-    See `benchmarks/variance._sum_cost` — the same rule, and the same reason: summing an
-    unknown as free produces a number that looks complete and is not.
-    """
-    total = 0.0
-    for x in xs:
-        if x is None:
-            return None
-        total += float(x)
-    return round(total, 6)
-
-
 def build_corpus(seed: int, per_k: int = 3, only: Optional[str] = None) -> list:
     """Every row to run, deterministically. A row is a dict; `js` is its composed mutation."""
     rows: list = []
@@ -666,7 +655,7 @@ def _score(rows: list, *, provider_name: str, seed: int, per_k: int, lint: list,
         # free, and a genuine total of exactly zero — which is what a key-less bench run produces —
         # came back as None because 0.0 is falsy. So the one number this bench can state with
         # certainty was published as "unknown". Absorbing sum, and zero means zero (1.3).
-        "cost_usd": _sum_cost(r["cost_usd"] for r in rows),
+        "cost_usd": sum_cost(r["cost_usd"] for r in rows),
 
         "silent_wrong": len(wrong), "wrong_rows": sorted(set(wrong)),
         "known_wrong_binds": [list(k) for k in KNOWN_WRONG_BINDS],

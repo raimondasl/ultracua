@@ -254,12 +254,22 @@ def test_an_unknown_cost_is_absorbing_in_both_summing_readers() -> None:
     so the one number the bench can state with certainty was published as unknown."""
     from benchmarks import drift_bench, variance
 
-    for mod in (variance, drift_bench):
-        assert mod._sum_cost([0.0, 0.0]) == 0.0, f"{mod.__name__}: a real zero became something else"
-        assert mod._sum_cost([1.0, 2.0]) == 3.0
-        assert mod._sum_cost([1.0, None]) is None, f"{mod.__name__}: an unknown summed as free"
-        assert mod._sum_cost([]) == 0.0
-    print("variance and drift_bench agree: unknown is absorbing, zero is zero")
+    # ONE DEFINITION, asserted by identity rather than by two sets of equal-looking assertions.
+    # This shipped as two copies for one afternoon and they disagreed on their FIRST non-trivial
+    # input — `[0.1, 0.2]` gave 0.30000000000000004 and 0.3, because only one rounded. Comparing
+    # behaviour would have caught that; comparing identity makes it unable to recur.
+    assert variance.sum_cost is drift_bench.sum_cost, (
+        "the two bench readers hold different `sum_cost` objects again — two derivations of one "
+        "rule is how the rule drifts, and this one drifted before either copy had a second caller")
+
+    s = variance.sum_cost
+    assert s([0.0, 0.0]) == 0.0, "a real zero became something else"
+    assert s([1.0, 2.0]) == 3.0
+    assert s([0.1, 0.2]) == 0.3, "the rounding that separated the two copies is gone"
+    assert s([1.0, None]) is None, "an unknown summed as free"
+    assert s([None]) is None
+    assert s([]) == 0.0, "an empty corpus spent nothing, and that is a measurement"
+    print("one sum_cost, shared by both readers: unknown absorbs, zero is zero")
 
 
 class _Report:
@@ -326,21 +336,45 @@ def test_the_absorbing_sum_pin_notices_an_unknown_summing_as_free(monkeypatch) -
     from benchmarks import variance
     from tests import _arming
 
-    _arming.mutate_function(monkeypatch, variance, "_sum_cost",
-                            "        if x is None:\n            return None\n        total += x",
-                            "        total += x or 0.0")
+    _arming.mutate_function(monkeypatch, variance, "sum_cost",
+                            "        if x is None:\n            return None\n"
+                            "        total += float(x)",
+                            "        total += float(x or 0.0)")
     print(_arming.assert_red(test_an_unknown_cost_is_absorbing_in_both_summing_readers))
 
 
 def test_the_absorbing_sum_pin_notices_a_real_zero_becoming_unknown(monkeypatch) -> None:
     """The other direction, and the half `drift_bench` actually shipped: `... or None` turned a
     genuine total of exactly zero into "unknown", because 0.0 is falsy."""
-    from benchmarks import drift_bench
+    from benchmarks import variance
     from tests import _arming
 
-    _arming.mutate_function(monkeypatch, drift_bench, "_sum_cost",
+    _arming.mutate_function(monkeypatch, variance, "sum_cost",
                             "    return round(total, 6)",
                             "    return round(total, 6) or None")
+    print(_arming.assert_red(test_an_unknown_cost_is_absorbing_in_both_summing_readers))
+
+
+def test_the_one_definition_pin_notices_a_second_copy(monkeypatch) -> None:
+    """The identity assertion is what makes the drift unable to recur, so it needs arming too.
+
+    The stand-in is BEHAVIOURALLY identical, asserted before the guard runs — otherwise this cell
+    would go red for the copy being wrong rather than for it being a copy, which is the weaker
+    thing and the one that would still pass if identity stopped being checked."""
+    from benchmarks import drift_bench, variance
+    from tests import _arming
+
+    def _a_second_copy(xs):
+        total = 0.0
+        for x in xs:
+            if x is None:
+                return None
+            total += float(x)
+        return round(total, 6)
+
+    monkeypatch.setattr(drift_bench, "sum_cost", _a_second_copy)
+    for probe in ([0.1, 0.2], [1.0, None], [], [0.0, 0.0]):
+        assert drift_bench.sum_cost(probe) == variance.sum_cost(probe), probe
     print(_arming.assert_red(test_an_unknown_cost_is_absorbing_in_both_summing_readers))
 
 

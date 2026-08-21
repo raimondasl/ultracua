@@ -58,19 +58,24 @@ def _cost(report) -> "Optional[float]":
     return None if cost is None else float(cost)
 
 
-def _sum_cost(xs) -> "Optional[float]":
+def sum_cost(xs) -> "Optional[float]":
     """UNKNOWN IS ABSORBING. One rep whose cost is unknown makes the total unknown.
 
     The alternative — sum what is known and report it as the total — is strictly worse than saying
     nothing, because the number looks complete. This is `UsageTotals.cost_usd`'s own rule (any
     unpriced spend makes the whole bill None) applied one level up.
+
+    PUBLIC, AND THE ONLY DEFINITION. 1.3 shipped this twice for one afternoon — here and in
+    `drift_bench` — and the two copies disagreed on their first non-trivial input: `[0.1, 0.2]` gave
+    `0.30000000000000004` and `0.3`, because only one of them rounded. Two derivations of one fact
+    is how the fact drifts, and this one drifted before either copy had a second caller.
     """
     total = 0.0
     for x in xs:
         if x is None:
             return None
-        total += x
-    return total
+        total += float(x)
+    return round(total, 6)
 
 
 def _money(x) -> str:
@@ -266,7 +271,7 @@ async def run_demo(provider_name: str, reps: int, samples: int = 1, reflect: boo
         "demo", provider_name, reps, _now_iso(),
         {"replay_success_rate": [1.0 if r["ok"] else 0.0 for r in results],
          "speedup": [r["speedup"] for r in results if r["ok"]]},
-        cost_usd=_sum_cost(r["cost"] for r in results),
+        cost_usd=sum_cost(r["cost"] for r in results),
         first_fail=[r["first_fail"] for r in results],
     )
     record["samples"], record["reflect"] = samples, reflect
@@ -304,7 +309,7 @@ async def run_miniwob(provider_name: str, reps: int, all_tasks: bool, seed: int,
                 # Collected then summed, rather than `cost += _cost(...)`: `+=` cannot carry an
                 # unknown, so the accumulator forces a zero at exactly the moment the answer is that
                 # nobody knows.
-                cost = _sum_cost(per_task)
+                cost = sum_cost(per_task)
                 fracs.append(ok / len(tasks))
                 costs.append(cost)
                 print(f"  rep {i + 1}/{reps}: replay success {ok}/{len(tasks)} "
@@ -313,7 +318,7 @@ async def run_miniwob(provider_name: str, reps: int, all_tasks: bool, seed: int,
         server.stop()
     record = build_record(
         "miniwob", provider_name, reps, _now_iso(),
-        {"replay_success_rate": fracs}, cost_usd=_sum_cost(costs),
+        {"replay_success_rate": fracs}, cost_usd=sum_cost(costs),
     )
     record["samples"], record["reflect"] = samples, reflect
     sr = record["metrics"]["replay_success_rate"]
