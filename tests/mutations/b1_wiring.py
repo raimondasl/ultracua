@@ -198,6 +198,19 @@ MUTANTS = [
      '        return False  # MUTANT: every recordless row denies the commit',
      "QUIET IS AN ALLOWLIST. A row status nobody has argued into _ROW_NEVER_RAN must read UNKNOWN, so "
      "a status added tomorrow cannot silently deny a write it knows nothing about"),
+
+    # ---- 1.4b's audit: the ARM, collapsed through a local variable. The AST pin that first guarded
+    # ---- this was GREEN over exactly this rewrite, because the needle stays in the guard and the
+    # ---- banned symbols sit one statement above it. A text scan is the wrong sensor for a behaviour.
+    ('ledger_arm_reads_the_tri_state_report', "flows.py",
+     '                if (getattr(exc, "landed", False) and ledger is not None and preview_keys[i]):',
+     '                o_arm = outcome_of(exc)  # MUTANT: the report reaches the two-state arm\n'
+     '                if (_row_write_evidence(rec, "failed", o_arm) is not False\n'
+     '                        and ledger is not None and preview_keys[i]):',
+     "`_row_write_evidence` returns None for `write_unverified`, and `None is not False`. The arm "
+     "fires, a durable commit line is written for a row nothing confirmed was paid, and every later "
+     "resume of that job SKIPS it. ledger.py's invariant verbatim: never a false skip of an un-landed "
+     "write. Killed by test_landed_arms_the_ledger's driven per-class property, NOT by any text scan"),
 ]
 
 # Mutants no cell kills yet. Each needs a reason and, where it is a real gap, a register id — an empty

@@ -7,6 +7,15 @@ and R4.48 measured ELEVEN mutations of the record plumbing surviving the entire 
     uv run --no-sync python scripts/prove_red.py tests/mutations/b1_wiring.py
     uv run --no-sync python scripts/prove_red.py tests/mutations/b1_wiring.py --tests tests/test_replay_exit_matrix.py
 
+WHAT THIS HARNESS CANNOT SCORE, and it matters because the report says "SURVIVOR" either way.
+The mutant is installed by putting a COPY of `src/` first on `PYTHONPATH`. A cell that reaches the
+code by IMPORT sees the mutant; a cell that reads the source by PATH (`Path(__file__).parents[1] /
+"src" / ...`) sees the pristine repo file and can never contribute a kill. Several structural pins are
+written that way deliberately -- they are a different sensor class, like `scripts/ratchets.py` -- but a
+mutation whose ONLY guard is such a cell will be reported as an unregistered survivor, which reads as a
+hole in the matrix rather than as a limit of the instrument. Prefer `inspect.getsource(module)` in a
+cell you want scored here.
+
 The repo is never modified: `src/` is copied to a temp tree, the mutation is applied there, and pytest
 runs with that tree first on `PYTHONPATH`. A mutation that does not apply cleanly is an ERROR, not a
 survivor — otherwise a stale `find` string would quietly report the suite as strong.
@@ -54,6 +63,22 @@ def _require_a_live_killer_suite(tests: "list[str]") -> None:
     env = dict(os.environ)
     for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
         env[k] = ""
+    # PER PATH, not just the aggregate. When `--tests` became a list the guard kept checking one exit
+    # code, and pytest reports 0 for "one path collected nothing, the others passed" — so a golden
+    # emptied by a rename would be reported as "a hole in the matrix" for every mutant it should have
+    # killed, which is the misdiagnosis this guard exists to prevent. Measured: `pytest <registry> -q`
+    # alone exits 5 (no tests collected); paired with the exit matrix it exits 0.
+    for one in tests:
+        solo = subprocess.run(
+            [sys.executable, "-m", "pytest", one, "-q", "--collect-only", "-p", "no:cacheprovider"],
+            cwd=ROOT, capture_output=True, text=True, env=env)
+        if solo.returncode != 0:
+            raise SystemExit(
+                f"killer-suite path {one!r} collects NOTHING (pytest exit {solo.returncode}). Every "
+                f"mutant would run against a suite missing this leg, and a mutant only it kills would "
+                f"be reported as a SURVIVOR — a hole in the matrix — rather than as a dead path.\n"
+                f"{solo.stdout[-2000:]}")
+
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", *tests, "-q", "--tb=no", "-p", "no:cacheprovider"],
         cwd=ROOT, capture_output=True, text=True, env=env)
@@ -76,7 +101,8 @@ def main() -> int:
     ap.add_argument("--tests", nargs="+",
                     default=["tests/test_replay_exit_matrix.py",
                              "tests/test_batch_row_evidence_golden.py",
-                             "tests/test_write_question_golden.py"],
+                             "tests/test_write_question_golden.py",
+                             "tests/test_landed_arms_the_ledger.py"],
                     help="what to run against each mutant (default: the exit-set matrix + the two "
                          "1.4b evidence goldens)")
     args = ap.parse_args()

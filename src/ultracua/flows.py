@@ -4565,7 +4565,7 @@ async def run_batch(
             o = outcome_of(exc)
             invalid.append(BatchRowResult(index=i, status="invalid", ok=False, error=str(exc),
                                           code=o.code, retryable=o.retryable,
-                                          landed=_row_write_evidence(None, "invalid")))
+                                          landed=_row_write_evidence(None, "invalid", o)))
             resolved_rows.append(None)
             preview_keys.append([])
             continue
@@ -4583,6 +4583,7 @@ async def run_batch(
             if kt in seen:
                 invalid.append(BatchRowResult(
                     index=i, status="invalid", ok=False,
+                    landed=_row_write_evidence(None, "invalid"),
                     error=f"duplicate of row {seen[kt]} — an identical write would mint the same "
                           f"Idempotency-Key, so a backend dedupe would silently suppress it. Add a "
                           f"disambiguating slot (e.g. a reference/nonce) if these are distinct writes."))
@@ -4619,6 +4620,7 @@ async def run_batch(
         for i, row in enumerate(rows):
             if stopped:
                 report.append(BatchRowResult(index=i, status="skipped", ok=False,
+                                             landed=_row_write_evidence(None, "skipped"),
                                              error="skipped — an earlier row failed (on_row_error='stop')"))
                 continue
             # RESUME: a row already committed under this job-id is SKIPPED, not re-fired (no browser). It does

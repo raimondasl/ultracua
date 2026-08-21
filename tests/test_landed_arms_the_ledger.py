@@ -40,6 +40,7 @@ from pathlib import Path
 
 import pytest
 
+import ultracua.flows as F
 from ultracua.cache import CachedFlow, CachedStep, FlowCache
 from ultracua.llm.base import Router, Tier
 from ultracua.locators import LocatorSpec
@@ -877,75 +878,129 @@ def test_every_failure_return_in_attempt_replay_goes_through_the_arming_helper()
         "told to resume a row that already paid:\n  " + "\n  ".join(offenders))
 
 
-def test_the_two_ledger_ARMS_read_the_exception_directly_and_nothing_else() -> None:
-    """1.4b's critic clause, made structural: the two arming reads stay BYTE-IDENTICAL.
+# ===================================================================================================
+# THE ARM, DRIVEN — over the WHOLE taxonomy, because the text scan that stood here was defeated by a
+# local variable.
+#
+# 1.4b put a TRI-STATE report (`_row_write_evidence`) three lines from the two-state ledger ARM, and
+# pinned the arm with an AST scan of the guard's own text. MEASURED, that scan is green over:
+#
+#     o_arm = outcome_of(exc)
+#     may_have_committed = _row_write_evidence(rec, "failed", o_arm)
+#     if (may_have_committed is not False and getattr(exc, "landed", False) is not None
+#             and ledger is not None and preview_keys[i]):
+#         ledger.record(...)
+#
+# — the needle is still literally in the guard, no banned symbol appears in it, and the collapse the
+# scan's own docstring warned about ("would work until somebody wrote `is not False`") has happened.
+# For `write_unverified` the report is `None`, `None is not False`, the arm fires, a durable commit
+# line is written for a row nothing confirmed was paid, and the NEXT resume skips it forever.
+#
+# A scan over text is the wrong sensor class for a behaviour. This drives the behaviour instead, over a
+# population DERIVED from the taxonomy rather than listed — `__init_subclass__` makes `landed` total
+# over every subclass, so the set grows by itself.
 
-    1.4b introduced `outcome_of(exc) -> Outcome` and `_row_write_evidence(...)`, and both sit within
-    three lines of these guards. The report's answer is a TRI-STATE and the ledger's arm is a
-    TWO-STATE token where a maybe reads as a no — but `None` is falsy, so routing the arm through the
-    report would "work" until somebody wrote `is not False`, at which point a row that was never paid
-    is skipped forever. `Outcome` deliberately has no `landed` attribute for the same reason; this is
-    the other half, on the two statements that actually write the durable file.
 
-    Named files, and a MISSING one is a failure rather than a smaller scan — a negative asserted about
-    a body that can walk away is how three scans were disarmed at once in 1.5.
+def _ledger_arm_flow(tmp_path, monkeypatch, name):
+    """An approved single-mutating-step write flow with a resume ledger."""
+    import time as _t
+
+    from ultracua.cache import CachedFlow, CachedStep, FlowCache, flow_key
+    from ultracua.locators import LocatorSpec
+
+    monkeypatch.setenv("ULTRACUA_HOME", str(tmp_path / "home"))
+    spec = F.FlowSpec(name=name, goal=f"g-{name}", start_url="http://fixture.invalid/",
+                      mutate=F.MutateSpec(confirm_text_contains="done"))
+    F.save_spec(spec)
+    cache = FlowCache(root=tmp_path / "c")
+    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    cache.put(CachedFlow(key=key, goal=spec.goal, start_url=spec.start_url, url=spec.start_url,
+                         created_ts=_t.time(),
+                         steps=[CachedStep(action="click", intent="pay", mutating=True,
+                                           locator=LocatorSpec(role="button", name="Pay",
+                                                               tag="button"))]))
+    F.approve(spec, cache=cache)
+    return spec, cache
+
+
+# The two RECORD shapes a failing row can hand the arm, and BOTH must be governed by the exception.
+#
+# This axis is what makes the cell able to fail. Its first draft stubbed `replay` to raise and left the
+# `RunRecord` pristine — `attempts=0`, which drives `_row_write_evidence` down its never-ran clause to
+# a plain `False`. Under the mutation this cell exists to catch (`may_have_committed is not False`),
+# `False is not False` is False, the arm does not fire, and the cell passed. MEASURED: 38 passed with
+# the defect present. The instrument suppressed the defect, which is this register's own standing
+# warning applied to the guard written for it.
+#
+# A real failed replay that ATTEMPTED reports `attempts=1, committed=None` — and `None is not False`.
+_RECORD_SHAPES = {
+    # nothing ran: a refusal from replay()'s own pre-flight, before any engine attempt
+    "never_attempted": (0, False),
+    # an attempt ran and could not answer: `write_unverified`, and every raised attempt
+    "attempted_unknown": (1, None),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", sorted(_RECORD_SHAPES))
+@pytest.mark.parametrize("code", sorted(F.REGISTRY))
+async def test_the_ledger_records_a_row_IFF_the_exception_says_the_write_landed(
+    code, shape, tmp_path, monkeypatch
+) -> None:
+    """THE ARM'S PROPERTY, over every class in the taxonomy.
+
+    `ledger.py`'s invariant is "never a false skip of an un-landed write", and the ledger is durable —
+    a line written here makes every future resume of this job skip the row. So the arm must fire on
+    EXACTLY the classes that positively know the write committed, which is exactly the classes
+    declaring `landed = True`. Today that is one (`WriteReadbackError`); the population is derived, so
+    a class added tomorrow is covered without touching this file.
+
+    Driven through the real `run_batch` and a real `RunLedger`, with `replay` raising the class — which
+    is what makes it immune to a guard that merely mentions the right words.
     """
-    import ast
-    import pathlib
+    cls = F.REGISTRY[code]
+    attempts, committed = _RECORD_SHAPES[shape]
+    spec, cache = _ledger_arm_flow(tmp_path, monkeypatch,
+                                   f"arm{abs(hash((code, shape))) % 99999}")
 
-    WANT = {
-        "src/ultracua/flows.py": 'getattr(exc, "landed", False)',
-        "src/ultracua/mcpserver/server.py": 'getattr(exc, "landed", False)',
-    }
-    root = pathlib.Path(__file__).parents[1]
-    for rel, needle in WANT.items():
-        path = root / rel
-        assert path.exists(), f"{rel} is gone — this scan asserts a negative about it"
-        text = path.read_text(encoding="utf-8")
-        tree = ast.parse(text, filename=str(path))
+    async def _boom(*a, **kw):
+        # Populate the record the way a real `replay()` would before raising, because the ARM sits one
+        # statement from a projection OF that record and the whole property is that it ignores it.
+        rec = kw.get("record")
+        if rec is not None:
+            rec.attempts, rec.committed, rec.landed = attempts, committed, committed
+        raise cls(f"{code}: scripted for the arming property")
 
-        # THE ARM'S OWN CONDITION, BY AST — never a substring of the file. The first draft asserted
-        # `needle in text` and a mutation that rewrote the arm to route through the report seam
-        # SURVIVED, because the same text appears in a COMMENT describing the arm. That is the
-        # grep-counts-prose failure `scripts/ratchets.py` was built to escape, re-made in a pin.
-        guards = []
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.If):
-                continue
-            body = ast.unparse(node).replace("'", '"')
-            if "ledger.record(" in body:
-                guards.append(ast.unparse(node.test).replace("'", '"'))
-        assert guards, f"{rel}: no `if` guards a `ledger.record(...)` call — the arming shape is gone"
-        armed_by_exc = [g for g in guards if needle.replace("'", '"') in g]
-        assert armed_by_exc, (
-            f"{rel} no longer arms the ledger by reading `{needle}` in the guard itself. Guards found: "
-            f"{guards}. If the arm reads a REPORT value, `None` is falsy and the row silently stops "
-            f"being recorded — or, worse, an `is not False` records one that was never paid.")
-        for g in guards:
-            assert "_row_write_evidence" not in g and "outcome_of" not in g, (
-                f"{rel}: a `ledger.record(...)` guard now reads 1.4b's report seam — {g}")
-        arms = [n for n in ast.walk(tree)
-                if isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "record"
-                and getattr(getattr(n.func, "value", None), "id", None) == "ledger"]
-        assert arms, f"{rel} no longer calls `ledger.record(...)` — the arming site is gone"
-        # There are TWO shapes and they are not interchangeable: the SUCCESS path records the status
-        # the page reported, the FAILURE path records the exception's own code. The first draft of this
-        # cell demanded the second of BOTH and went red on the success path — which is the cell finding
-        # its own over-reach rather than a defect.
-        shapes = {ast.unparse(c).replace("'", '"') for c in arms}
-        failure_arms = {s for s in shapes if 'getattr(exc, "code", "landed")' in s}
-        assert failure_arms, (
-            f"{rel}: no `ledger.record(...)` takes the exception's own code directly. Shapes found: "
-            f"{sorted(shapes)}. The durable audit trail and the caller must name the same failure, and "
-            f"a REPORT value here would write a tri-state into a two-state audit line.")
-        for s in shapes:
-            assert "_row_write_evidence" not in s and "outcome_of" not in s, (
-                f"{rel}: `ledger.record(...)` now takes a value derived by 1.4b's report seam — {s}. "
-                f"The arm reads the exception; the report projects the record. Two questions.")
+    async def _noop(*a, **kw):
+        return None
 
-    # The report seam must NOT have leaked a `landed` attribute for the arms to reach for.
-    from ultracua.flows import Outcome
-    assert not hasattr(Outcome("c", False, False), "landed"), (
-        "`Outcome` grew a `landed` attribute. It exists WITHOUT one so that the tri-state report value "
-        "cannot reach an arming guard even by accident; `armed` is the same fact under a name that "
-        "does not invite the collapse.")
+    monkeypatch.setattr(F, "replay", _boom)
+    monkeypatch.setattr(F, "_acquire_driver", _noop)
+    monkeypatch.setattr(F, "_release_driver", _noop)
+
+    run = await F.run_batch(spec, [{}], max_rows=1, on_row_error="continue", cache=cache,
+                            resume="job-arm")
+    assert len(run.rows) == 1 and run.rows[0].status == "failed", (
+        f"premise: one failed row, got {[(r.status, r.error) for r in run.rows]}")
+    assert run.rows[0].idempotency_keys, (
+        "premise: the row must have minted a key, or the arm is unreachable and this cell is vacuous")
+
+    from ultracua.ledger import RunLedger
+    ledger = RunLedger.open(cache, F.flow_key(spec.goal, spec.start_url, spec.scope), "job-arm",
+                            spec.scope)
+    try:
+        recorded = ledger.committed()
+    finally:
+        ledger.close()
+
+    if cls.landed:
+        assert recorded, (
+            f"{code} declares `landed = True` and the ledger recorded NOTHING. A committed write left "
+            f"unrecorded is re-fired by every subsequent resume (R3.3).")
+    else:
+        assert not recorded, (
+            f"{code}/{shape} declares `landed = False` — a MAYBE — and the ledger recorded the row "
+            f"anyway: {recorded}. That is a durable false skip: every future resume of this job "
+            f"passes over a "
+            f"row nothing confirmed was paid. `ledger.py`'s invariant is 'never a false skip of an "
+            f"un-landed write', and it is the error direction nothing downstream catches.")

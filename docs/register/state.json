@@ -327,8 +327,14 @@
   },
   {
    "id": "R4.52",
-   "status": "open",
-   "summary": "B1: `BatchRowResult.landed` is the two-state bool the same PR calls a trap, reading `False` on successful write rows and on crashed rows"
+   "status": "fixed",
+   "summary": "B1: `BatchRowResult.landed` is the two-state bool the same PR calls a trap, reading `False` on successful write rows and on crashed rows — FIXED at 0.112.0 (reshape-plan 1.4b): the row PROJECTS `RunRecord.committed` through `_row_write_evidence`, one definition consulted by all eight construction sites. The ok-write row reads True, the resumed rows read True (the durable ledger caused the skip), the crash row reads `raised`/None, and a row that never reached a browser keeps an EARNED False",
+   "pins": [
+    "tests/test_batch_row_evidence_golden.py::test_the_write_evidence_decision_table",
+    "tests/test_batch_row_evidence_golden.py::test_a_row_whose_commit_landed_but_whose_tail_drifted_still_says_yes",
+    "tests/test_batch_row_evidence_golden.py::test_every_construction_site_consults_the_one_write_definition"
+   ],
+   "disposition": "reshape-plan step 1.4b, landed"
   },
   {
    "id": "R4.53",
@@ -399,12 +405,15 @@
   },
   {
    "id": "R4.61",
-   "status": "open",
+   "status": "fixed",
    "severity": "low",
    "class": "b",
-   "summary": "`write_unverified` records `committed=False` while its own message says the commit ACTUATED — `_fail` appends `outcome=\"failed\"`, which is not in `_UNKNOWN_OUTCOMES`, so the fold answers the write question 'no' for the one kind whose whole meaning is 'it fired and cannot be confirmed'. NOT a regression (the pre-sink code did the same), but the sink's stated rule was supposed to close this class and does not, because unanswerability is keyed on the outcome STRING and every failure exit shares one. The human channel is covered (the exception text says to check the target system); the record is not",
-   "disposition": "reshape-plan step 1.4 — it needs a per-kind vocabulary to name an unanswerable failure, which is exactly what 1.4's distinct codes provide. Deliberately NOT taken in 1.5: it is a behaviour change beyond the sink's scope and the two are better argued apart",
-   "blocked_by": "reshape-plan 1.4 (distinct codes)"
+   "summary": "`write_unverified` records `committed=False` while its own message says the commit ACTUATED — `_fail` appends `outcome=\"failed\"`, which is not in `_UNKNOWN_OUTCOMES`, so the fold answers the write question 'no' for the one kind whose whole meaning is 'it fired and cannot be confirmed'. NOT a regression (the pre-sink code did the same), but the sink's stated rule was supposed to close this class and does not, because unanswerability is keyed on the outcome STRING and every failure exit shares one. The human channel is covered (the exception text says to check the target system); the record is not — FIXED at 0.112.0 (reshape-plan 1.4b): `_evidence` keys on the FIELD rather than the outcome STRING, `_UNKNOWN_OUTCOMES` is deleted, and `_AttemptFacts` defaults both write fields to None so an append site that states nothing is UNKNOWN rather than a denial. `write_unverified` records `committed=None`; the two ARMING tokens keep their conservative False",
+   "disposition": "reshape-plan step 1.4b, landed",
+   "pins": [
+    "tests/test_write_question_golden.py::test_the_record_answers_the_write_question_as_the_golden_says",
+    "tests/test_write_question_golden.py::test_the_write_question_is_no_longer_keyed_on_the_OUTCOME_STRING"
+   ]
   },
   {
    "id": "R4.62",
@@ -516,6 +525,14 @@
    "class": "g",
    "summary": "`can_follow_actuation` is a DECLARATION with no sensor, and 1.4a wired two inviolable-#3 properties to derive from it. Two of the twenty-seven declarations were measurably false when the audit checked them BY HAND (`MetaUnreadableError`, `NotLearnedError`), and a third clause in the comment justifying the rest was false too (\"the login pair runs before the flow's own steps\" — `refresh_auth` is called from `_replay_body` AFTER the first attempt). The axis was additionally AMBIGUOUS between \"raised from\" and \"escapes from\", which is what produced all three confusions: the `Login*` classes are raised post-actuation and cannot escape, so their value is right under one reading and wrong under the other. That is R3.7's overloaded token in an axis. Both comments claiming a pin existed have been deleted and the definition narrowed to ESCAPES; what remains missing is the instrument",
    "disposition": "Build an AST reachability sensor: for each class declaring `can_follow_actuation=False`, assert no function raising it is transitively reachable from a call site in `_replay_body` AFTER the first `_attempt_replay`, with a NAMED allowlist for the swallowed cases (the `refresh_auth` call folds its failures into `reason`, so `Login*` belongs on it with that reason). ONCE-ENFORCED: it fails for the 29th class as well as the 28th, which is the argument this slice already made for `__init_subclass__`. Deliberately NOT built at the end of 1.4a — a call-graph sensor written in haste is how this register's fix code earns its ~3x defect density, and the three declarations are correct today under the narrowed definition"
+  },
+  {
+   "id": "R4.75",
+   "status": "open",
+   "severity": "low",
+   "class": "g",
+   "summary": "A structural test cell that reads `src/` BY PATH cannot be scored by `scripts/prove_red.py`, which installs its mutant as a COPY first on `PYTHONPATH`. Such a cell parses PRISTINE source, so a mutation whose only guard is one of them is reported as an unregistered SURVIVOR — 'a hole in the matrix' — when the guard exists and the harness simply cannot reach it. Found by 1.4b's audit; two cells were converted to `inspect.getsource(module)` and the limit is now documented in `prove_red`'s own docstring, but several path-reading pins remain (test_refusal_codes.py's whole derivation, test_boundary_truth's AST scans, and scripts/ratchets.py by design)",
+   "disposition": "NOT a defect in those pins — they are a different sensor class, like the ratchets, and reading the repo tree is correct for them. The defect is that the two instruments cannot tell 'unguarded' from 'unreachable by this harness'. Cheapest real fix: have `prove_red` export the scratch root in the environment and let path-reading cells honour it, so a cell can opt IN to being scored. Deliberately not built inside 1.4b: it touches every structural pin in the repo"
   }
  ]
 }
