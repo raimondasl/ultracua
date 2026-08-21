@@ -142,18 +142,23 @@ def build_record(bench: str, provider: str, reps: int, timestamp: str,
 
 
 def compare_records(baseline: dict, current: dict, *, rate_floor: float = 0.05,
-                    cost_rel: float = 0.25) -> dict:
+                    cost_rel: float = 0.25, gated_rates: "tuple" = _GATED_RATES) -> dict:
     """Compare a current run against a baseline. Returns {ok, findings}.
 
     A success-rate metric regresses only if its mean dropped below the baseline mean by more than the
     larger of `rate_floor` and the baseline's own stdev — i.e. a drop *within the error bars* is noise,
     not a regression. Cost regresses if it rose more than `cost_rel` over the baseline. `speedup` is
     reported but never gated (machine-dependent micro-timing).
+
+    `gated_rates` defaults to this module's own metric names and exists so a record built elsewhere
+    can reuse this noise-awareness without renaming its metrics to match. B3 (`benchmarks/outcomes.py`)
+    passes its record's `gated_metrics`, every one of which it declares higher-is-better — because the
+    clause below regresses on a DROP, so gating a lower-is-better rate would score it backwards.
     """
     findings: list[dict] = []
     bm, cm = baseline.get("metrics", {}), current.get("metrics", {})
 
-    for name in _GATED_RATES:
+    for name in gated_rates:
         if name in bm and name in cm:
             b, c = bm[name], cm[name]
             tol = max(rate_floor, float(b.get("std", 0.0)))
