@@ -12,7 +12,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**39 open**, 30 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**40 open**, 30 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **39 open**, 30 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **40 open**, 30 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -864,6 +864,7 @@ if and only if that branch is ever resumed.
 | R4.71 | open | `not_learned` SURVIVES A COMPLETED RELEARN, so a run that actually ran `learn()` is told the remedy is `flow learn`. The engine's failure `kind` is never updated by the relearn block — the repair attempt's kind is discarded — so `raise _classify_replay_failure(kind)(...)` still resolves the ORIGINAL `"miss"`. Reproduced against the real relearn block via `tests/_fake_engine.py`: `NotLearnedError code='not_learned'` with `learn() calls before the raise: 1` and a message that reads "replay drifted ... suffix-replan failed ... re-learn failed". Population is UNAPPROVED flows only (`--include-unapproved` / unattended self-heal): an approved flow is refused at `_preflight_row` with `relearn_refused` first. NOT a safety defect — 1.4a attached a machine-actionable instruction where there was previously only the generic `replay_error`, and the instruction points the wrong way |
 | R4.72 | open | `not_learned` names a STATE, and its three raise sites need three different next steps — on `unapprove()`, this project's designated ACKNOWLEDGEMENT verb, it prescribes `flow learn`, which drives a browser and an LLM and can actuate a write during discovery. Measured: approve -> "nothing to approve, learn the flow first"; unapprove -> "nothing to unapprove, learn or record the flow first"; run_batch -> "nothing to batch, learn and approve the flow first". Same code, opposite directions. At ecd9af2 all three were the base `replay_error`, so 1.4a attached a machine-actionable instruction where there was none |
 | R4.73 | open | ONE condition, TWO word-order-transposed slugs on two code fields: a recipe stale against its approval is `stale_approval` on `ToolOutcome` (the taxonomy) and `approval_stale` on `SkippedFlow` (mcpserver). Both read `_approval_recipe_stale`. 1.4a's `RESERVED_CODES` FREEZES the duplication rather than resolving it — it reserves `approval_stale` so the taxonomy cannot adopt it, which is correct as a collision guard and leaves the transposition in place. A third near-identical slug, `approval_binding_stale`, now names a DIFFERENT condition (the spec surface moved), so a reader has three similar strings for two conditions |
+| R4.74 | open | `can_follow_actuation` is a DECLARATION with no sensor, and 1.4a wired two inviolable-#3 properties to derive from it. Two of the twenty-seven declarations were measurably false when the audit checked them BY HAND (`MetaUnreadableError`, `NotLearnedError`), and a third clause in the comment justifying the rest was false too ("the login pair runs before the flow's own steps" — `refresh_auth` is called from `_replay_body` AFTER the first attempt). The axis was additionally AMBIGUOUS between "raised from" and "escapes from", which is what produced all three confusions: the `Login*` classes are raised post-actuation and cannot escape, so their value is right under one reading and wrong under the other. That is R3.7's overloaded token in an axis. Both comments claiming a pin existed have been deleted and the definition narrowed to ESCAPES; what remains missing is the instrument |
 <!-- /generated:r4-index -->
 
 

@@ -508,6 +508,14 @@
    "class": "l",
    "summary": "ONE condition, TWO word-order-transposed slugs on two code fields: a recipe stale against its approval is `stale_approval` on `ToolOutcome` (the taxonomy) and `approval_stale` on `SkippedFlow` (mcpserver). Both read `_approval_recipe_stale`. 1.4a's `RESERVED_CODES` FREEZES the duplication rather than resolving it — it reserves `approval_stale` so the taxonomy cannot adopt it, which is correct as a collision guard and leaves the transposition in place. A third near-identical slug, `approval_binding_stale`, now names a DIFFERENT condition (the spec surface moved), so a reader has three similar strings for two conditions",
    "disposition": "Resolving it means renaming a slug on the MCP wire, which is a compatibility change and belongs with 2.2 (B3), where the consumer that buckets on these fields appears. The split of `approval_binding_stale` FROM `stale_approval` is deliberate and argued (tamper-shaped vs ordinary spec edit) and is not what this finding questions"
+  },
+  {
+   "id": "R4.74",
+   "status": "open",
+   "severity": "medium",
+   "class": "g",
+   "summary": "`can_follow_actuation` is a DECLARATION with no sensor, and 1.4a wired two inviolable-#3 properties to derive from it. Two of the twenty-seven declarations were measurably false when the audit checked them BY HAND (`MetaUnreadableError`, `NotLearnedError`), and a third clause in the comment justifying the rest was false too (\"the login pair runs before the flow's own steps\" — `refresh_auth` is called from `_replay_body` AFTER the first attempt). The axis was additionally AMBIGUOUS between \"raised from\" and \"escapes from\", which is what produced all three confusions: the `Login*` classes are raised post-actuation and cannot escape, so their value is right under one reading and wrong under the other. That is R3.7's overloaded token in an axis. Both comments claiming a pin existed have been deleted and the definition narrowed to ESCAPES; what remains missing is the instrument",
+   "disposition": "Build an AST reachability sensor: for each class declaring `can_follow_actuation=False`, assert no function raising it is transitively reachable from a call site in `_replay_body` AFTER the first `_attempt_replay`, with a NAMED allowlist for the swallowed cases (the `refresh_auth` call folds its failures into `reason`, so `Login*` belongs on it with that reason). ONCE-ENFORCED: it fails for the 29th class as well as the 28th, which is the argument this slice already made for `__init_subclass__`. Deliberately NOT built at the end of 1.4a — a call-graph sensor written in haste is how this register's fix code earns its ~3x defect density, and the three declarations are correct today under the narrowed definition"
   }
  ]
 }

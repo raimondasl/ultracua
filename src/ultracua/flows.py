@@ -389,9 +389,28 @@ class FlowReplayError(RuntimeError):
                               ledger reads. Two-state on purpose: `RunRecord.landed` is the
                               tri-state REPORT of the same event, and they are different questions
                               with different consumers.
-      `.can_follow_actuation` can this class be raised from a position where THIS run's write may
-                              already have fired? The positional fact `retryable` and `landed` both
-                              depend on, made explicit so neither can be inherited by accident.
+      `.can_follow_actuation` can an instance of this class ESCAPE `replay()` from a position where
+                              THIS run's write may already have fired? The positional fact `retryable`
+                              and `landed` both depend on, made explicit so neither can be inherited
+                              by accident.
+
+    THE WORD "ESCAPE" IS LOAD-BEARING, and 1.4a's audit spent three findings discovering it. The first
+    draft read "raised from", a DIFFERENT and strictly larger question: the three `Login*` classes ARE
+    raised post-actuation — `refresh_auth` is called from `_replay_body` AFTER the first attempt — and
+    cannot escape, because that call site folds any failure into `reason`. Under "raised from" their
+    `False` is wrong; under "escapes" it is right, and a reader could not tell which was meant. That is
+    R3.7's overloaded `anchor_id=None` wearing an axis: one token, two states, consumer cannot resolve.
+
+    Escaping is the reading that matters, because the flags this axis licenses are only ever read by
+    someone HOLDING the exception — `retryable` tells an autonomous caller to re-run, `landed` arms the
+    dedupe ledger. A class nothing can receive licenses nothing.
+
+    AND IT IS A DECLARATION, NOT A MEASUREMENT. An earlier version of this docstring claimed the
+    positional fact was "pinned in tests/test_refusal_codes.py"; no such pin existed, on either reading.
+    Two of the twenty-seven declarations were measurably false when the audit checked them by hand
+    (`MetaUnreadableError`, `NotLearnedError`), which is what a declaration nobody derives is worth.
+    The sensor is filed as its own slice; until it exists, every `can_follow_actuation=False` is a
+    CLAIM to re-check whenever its raise sites move.
 
     NOT INSTANTIABLE SINCE 1.4. `code="replay_error"` names no remedy, and TWENTY-FOUR refusals shared
     it — a missing env var, an unbounded batch and a stale approval arrived at the MCP wire as one
@@ -607,11 +626,21 @@ class WriteReadbackError(FlowReplayError):
 # actions gets several. That is what makes the vocabulary useful to a benchmark: `refused` sub-buckets
 # derive from the code, and a bucket nobody can act on differently is a bucket nobody needs.
 #
-# EVERY ONE OF THEM IS PRE-ACTUATION. `_preflight_row` and `validate_params` run before the driver is
-# acquired; `run_batch`'s seven precede its pre-flight loop; `approve`/`unapprove` open no browser; the
-# login pair runs before the flow's own steps. So all fifteen are `retryable=False, landed=False,
-# can_follow_actuation=False` — and that is a derived fact, pinned in `tests/test_refusal_codes.py`
-# rather than restated fifteen times here. Nothing new becomes retryable in this slice.
+# NOTHING NEW BECOMES RETRYABLE IN THIS SLICE. All of them are `retryable=False, landed=False`, and
+# every one of them is decided before its own surface can actuate: `_preflight_row` and
+# `validate_params` run before the driver is acquired, `run_batch`'s seven precede its pre-flight loop,
+# and `approve`/`unapprove` open no browser.
+#
+# THE `can_follow_actuation` VALUES BELOW ARE DECLARATIONS, NOT A DERIVED FACT, and an earlier version
+# of this comment said the opposite — "a derived fact, pinned in `tests/test_refusal_codes.py`". No
+# such pin existed. It also offered a fifth clause, "the login pair runs before the flow's own steps",
+# which is FALSE: `refresh_auth` is called from `_replay_body` AFTER the first attempt. Those three
+# classes are still correctly `False`, but for a reason the clause did not give — that call site folds
+# any failure into `reason`, so they cannot ESCAPE. See the base class on why escaping is the question.
+#
+# A comment claiming an instrument that does not exist is worse than no comment: it stops the next
+# reader building one. The sensor is filed; two of the twenty-seven declarations were wrong when the
+# audit checked them by hand.
 
 
 class NotLearnedError(FlowReplayError):

@@ -233,8 +233,15 @@ def test_every_refusal_carries_the_three_machine_readable_fields() -> None:
         assert isinstance(cls.landed, bool), (
             f"{name}.landed must stay a two-state bool — it is the ARMING token the retry-dedupe "
             f"ledger reads, a different question from `RunRecord.landed`'s tri-state REPORT")
-        print(f"    {name:<24} code={cls.code:<18} retryable={cls.retryable!s:<5} "
-              f"landed={cls.landed}")
+        # THE FOURTH AXIS, which this cell did not read at all until 1.4a's audit pointed out that
+        # NOTHING did — while two properties (`test_boundary_truth`'s post-actuation set and
+        # `test_inviolable_properties`'s retryable rule) had just been rewired to DERIVE from it.
+        # A field two invariants depend on and no cell inspects is a field free to be anything.
+        assert isinstance(cls.can_follow_actuation, bool), (
+            f"{name}.can_follow_actuation must be a bool — it is what LICENSES the other two, and a "
+            f"truthy non-bool would read as True to one reader and as a value to another")
+        print(f"    {name:<26} code={cls.code:<22} retryable={cls.retryable!s:<5} "
+              f"landed={cls.landed!s:<5} escapes_post_actuation={cls.can_follow_actuation}")
 
 
 # The ONE argued non-taxonomy raise inside a refusing function: a programmer-error guard on an
