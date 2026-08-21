@@ -144,3 +144,270 @@ def test_the_ok_write_row_contradicts_itself_today() -> None:
     assert row.landed is False, (
         "the ok-write row no longer contradicts itself — if 1.4b did that, DELETE this cell and say so; "
         "it exists only to hold the defect still while the fix is written")
+
+
+# ===================================================================================================
+# THE SAME QUESTION, DRIVEN THROUGH THE REAL `run_batch`.
+#
+# Everything above constructs `BatchRowResult(**kwargs)` by hand, which pins the DATACLASS. That is
+# worth having — it is what proves `None` survives `asdict` into the `--json` wire — but it CANNOT SEE
+# THE CONSTRUCTION SITE, and the construction site is what 1.4b changes.
+#
+# MEASURED, and it is why these cells exist: with `run_batch`'s ok-row mutated to pass `landed=True` —
+# the exact change 1.4b makes — the fifteen cells above reported **15 passed**. A golden that cannot
+# observe the edit it was written for is the third instrument in this programme to watch less than its
+# docstring claimed.
+
+import contextlib  # noqa: E402
+import time  # noqa: E402
+
+import pytest  # noqa: E402
+
+import tests._fake_engine as fe  # noqa: E402
+from ultracua import flows as flows_mod  # noqa: E402
+from ultracua.cache import CachedFlow, CachedStep, FlowCache, flow_key  # noqa: E402
+from ultracua.flows import FlowSpec, MutateSpec, approve, run_batch, save_spec  # noqa: E402
+from ultracua.locators import LocatorSpec  # noqa: E402
+
+
+@contextlib.contextmanager
+def _no_driver(monkeypatch):
+    """`run_batch` holds one Playwright driver across the batch. Patched at the MODULE BINDING, which
+    is the shape `tests/_fake_engine` uses and the only one that reaches `flows.py`'s own reference."""
+    async def _noop(*a, **kw):
+        return None
+    monkeypatch.setattr(flows_mod, "_acquire_driver", _noop)
+    monkeypatch.setattr(flows_mod, "_release_driver", _noop)
+    yield
+
+
+def _write_flow(tmp_path, monkeypatch, *, name, approved=True):
+    monkeypatch.setenv("ULTRACUA_HOME", str(tmp_path / "home"))
+    # NO SLOTS. The first draft declared one and every cell below refused at pre-flight with
+    # `slot_unbound` — a slot must be BOUND to a recorded type/select step, and this recipe has only a
+    # click. Caught by the premise assertions rather than by review: without them all four cells would
+    # have passed over rows that never reached a browser.
+    spec = FlowSpec(name=name, goal=f"g-{name}", start_url="http://fixture.invalid/",
+                    mutate=MutateSpec(confirm_text_contains="done"))
+    save_spec(spec)
+    cache = FlowCache(root=tmp_path / "c")
+    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    cache.put(CachedFlow(key=key, goal=spec.goal, start_url=spec.start_url, url=spec.start_url,
+                         created_ts=time.time(),
+                         steps=[CachedStep(action="click", intent="pay", mutating=True,
+                                           locator=LocatorSpec(role="button", name="Pay",
+                                                               tag="button"))]))
+    if approved:
+        approve(spec, cache=cache)
+    return spec, cache
+
+
+@pytest.mark.asyncio
+async def test_a_confirmed_write_row_no_longer_denies_its_own_commit(tmp_path, monkeypatch) -> None:
+    """R4.52's NAMED GOLDEN: the ok-write row's value, driven rather than constructed.
+
+    Before 1.4b this row carried `data={"status":"confirmed"}` and `landed=False` — one object, two
+    fields, opposite answers, and `landed` is the one a machine reads.
+    """
+    spec, cache = _write_flow(tmp_path, monkeypatch, name="okw")
+    fe.FakeEngine(fe.Attempt(report=fe.report(traces=[fe.trace(0, ok=True)]),
+                             out={"found": True, "write_landed": True})).install(monkeypatch)
+    with _no_driver(monkeypatch):
+        run = await run_batch(spec, [{}], max_rows=1, cache=cache)
+
+    assert len(run.rows) == 1 and run.rows[0].status == "ok", (
+        f"premise: one ok row, got {[(r.status, r.error) for r in run.rows]}")
+    row = run.rows[0]
+    assert row.data["status"] == "confirmed", "premise: the write confirmed"
+    assert row.landed is True, (
+        "the confirmed-write row must not deny its own commit — this is the value R4.52 names")
+
+
+@pytest.mark.asyncio
+async def test_an_unverifiable_write_row_says_UNKNOWN_rather_than_no(tmp_path, monkeypatch) -> None:
+    """R4.61 reaching the ROW. The commit actuated and the page cannot report on it, so the row must
+    not print a denial into a `--json` report an operator acts on."""
+    spec, cache = _write_flow(tmp_path, monkeypatch, name="wu")
+    fe.FakeEngine(fe.Attempt(report=fe.report(traces=[fe.trace(0, ok=True)]),
+                             out={"found": False, "confirm_pre_true": True,
+                                  "error": "the confirm was already true"})).install(monkeypatch)
+    with _no_driver(monkeypatch):
+        run = await run_batch(spec, [{}], max_rows=1, on_row_error="continue", cache=cache)
+
+    row = run.rows[0]
+    assert (row.status, row.code) == ("failed", "write_unverified"), (
+        f"premise: this row failed as write_unverified, got {(row.status, row.code)}")
+    assert row.landed is None, (
+        "a commit that FIRED and cannot be confirmed must read UNKNOWN, not `false` — `false` here is "
+        "a denial an operator would act on")
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_that_never_ran_still_says_NO_rather_than_unknown(
+    tmp_path, monkeypatch
+) -> None:
+    """THE D0 HALF, and without it every cell above is satisfied by nulling everything.
+
+    A row refused before any browser opened has EARNED its `False`. If these read `null` too, the
+    field stops carrying information — `not_approved` becomes indistinguishable from
+    `write_unverified`, which is the one distinction the tri-state exists to make.
+    """
+    spec, cache = _write_flow(tmp_path, monkeypatch, name="na", approved=False)
+    with _no_driver(monkeypatch):
+        run = await run_batch(spec, [{}], max_rows=1, cache=cache)
+
+    assert run.status == "invalid" and run.rows[0].status == "invalid", (
+        f"premise: the batch refused at pre-flight, got {run.status}")
+    row = run.rows[0]
+    assert row.code == "not_approved", f"premise: refused for approval, got {row.code!r}"
+    assert row.landed is False, (
+        "a row that never reached a browser must DENY the commit, not call it unknown")
+
+
+@pytest.mark.asyncio
+async def test_a_crashed_row_carries_a_code_and_an_unknown(tmp_path, monkeypatch) -> None:
+    """The crash row reported `code=""` — indistinguishable in `--json` from the duplicate-row
+    refusal, a different event entirely — and `landed=False` over a POST that may have fired."""
+    spec, cache = _write_flow(tmp_path, monkeypatch, name="crash")
+    fe.FakeEngine(fe.Attempt(raises=RuntimeError("the browser died"))).install(monkeypatch)
+    with _no_driver(monkeypatch):
+        run = await run_batch(spec, [{}], max_rows=1, cache=cache)
+
+    row = run.rows[0]
+    assert row.status == "failed" and "RuntimeError" in (row.error or ""), (
+        f"premise: this row crashed, got {(row.status, row.error)}")
+    assert row.code == "raised", (
+        "a crash must name itself with the SAME word `RunRecord.failure_code` uses for it")
+    assert row.landed is None, "a crash after the POST may have fired denies nothing"
+
+
+# ---------------------------------------------------------------------------------------------------
+# `_row_write_evidence`'s DECISION TABLE, as a unit.
+#
+# The four driven cells above are integration: they prove the sites call this, and they caught two
+# mutants. They also SURVIVED two — the `attempts == 0` lowering clause and the `armed` raising clause
+# — because neither is reachable from the four scenarios they happen to drive. A clause no cell can
+# fail for is a clause that will rot, so the function's own table is asserted here, once, over every
+# input combination it can be handed.
+
+@pytest.mark.parametrize("label,record,status,outcome,ledger,want", [
+    # the two RAISING clauses, which must beat everything below them
+    ("ledger armed it",        None, "resumed", None, True, True),
+    ("the exception armed it", None, "failed",
+     flows_mod.Outcome(code="write_readback", retryable=False, armed=True), False, True),
+    # ...and `armed` beats even a record that denies, because the ledger has already acted on it
+    ("armed beats a denial",   "committed=False,attempts=1", "failed",
+     flows_mod.Outcome(code="write_readback", retryable=False, armed=True), False, True),
+    # the STATUS allowlist, for rows that never called replay()
+    ("never ran: invalid",     None, "invalid", None, False, False),
+    ("never ran: planned",     None, "planned", None, False, False),
+    ("never ran: skipped",     None, "skipped", None, False, False),
+    # QUIET IS AN ALLOWLIST — a status nobody has argued into it is UNKNOWN, not denied
+    ("an unargued status",     None, "some_new_status", None, False, None),
+    # the RECORD answers when this row ran
+    ("record says yes",        "committed=True,attempts=1",  "ok",     None, False, True),
+    ("record says no",         "committed=False,attempts=1", "ok",     None, False, False),
+    ("record cannot say",      "committed=None,attempts=1",  "failed", None, False, None),
+    # THE LOWERING CLAUSE: an unknown from a run where NO engine attempt happened is earned as False
+    ("unknown, nothing ran",   "committed=None,attempts=0",  "failed", None, False, False),
+])
+def test_the_write_evidence_decision_table(label, record, status, outcome, ledger, want) -> None:
+    """Every clause, driven. Its arming is the table itself — delete any clause and a row goes red."""
+    rec = None
+    if record is not None:
+        rec = flows_mod.RunRecord()
+        parts = dict(kv.split("=") for kv in record.split(","))
+        rec.committed = {"True": True, "False": False, "None": None}[parts["committed"]]
+        rec.attempts = int(parts["attempts"])
+    got = flows_mod._row_write_evidence(rec, status, outcome, ledger_says_committed=ledger)
+    assert got is want, f"{label}: got {got!r}, want {want!r}"
+
+
+def test_the_lowering_clause_reads_a_MEASUREMENT_not_a_DECLARATION() -> None:
+    """WHY `attempts == 0` AND NOT `can_follow_actuation`, pinned so the swap is not made back.
+
+    Lowering an unknown to a confident denial is the NARROWING direction — the one nothing downstream
+    catches. The obvious source for it is the exception's own `can_follow_actuation`, which declares
+    whether the class can escape post-actuation. **R4.74 records that this axis has no sensor, and that
+    two of its twenty-eight declarations were measurably wrong when 1.4a's audit checked them by hand.**
+
+    So the clause reads a fact about THIS run instead. Measured, the two agree on today's population;
+    where they would disagree the count is the safer one, because a class wrongly declared
+    `can_follow_actuation=False` and raised after an attempt gets a confident `False` from the
+    declaration and an honest `None` from the count.
+
+    Structural, because the hazard is a future edit that "simplifies" this back to the attribute.
+    """
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(flows_mod._row_write_evidence))
+    read = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+    assert "attempts" in read, "the lowering clause no longer reads `record.attempts`"
+    assert "can_follow_actuation" not in read, (
+        "`_row_write_evidence` now reads `can_follow_actuation` — an axis R4.74 records as having no "
+        "sensor and two known-wrong declarations. It must not decide a write DENIAL.")
+
+    # ...and the measurement really does distinguish the population, or the clause is decoration.
+    rec_ran, rec_didnt = flows_mod.RunRecord(), flows_mod.RunRecord()
+    rec_ran.committed, rec_ran.attempts = None, 1
+    rec_didnt.committed, rec_didnt.attempts = None, 0
+    assert flows_mod._row_write_evidence(rec_ran, "failed") is None
+    assert flows_mod._row_write_evidence(rec_didnt, "failed") is False
+
+
+@pytest.mark.asyncio
+async def test_a_row_whose_commit_landed_but_whose_tail_drifted_still_says_yes(
+    tmp_path, monkeypatch
+) -> None:
+    """THE CELL THAT DECIDES WHICH RECORD FIELD THE ROW PROJECTS, and the only one where the two
+    differ. Its absence let `row_projects_the_arming_token` survive the whole matrix.
+
+    `RunRecord` answers two write questions and they are NOT the same:
+
+      `committed`  did ANYTHING commit?             — the FIRST recipe write ran ok
+      `landed`     may a resume SKIP this whole row? — EVERY recipe write ran ok
+
+    A flow with two mutating steps whose first commits and whose second does not gives
+    `committed=True, landed=False`. The row's published question is the first one, so it must read
+    True. Projecting `landed` would print `false` on a row whose write demonstrably went through —
+    and that row reaches an operator through `--json` beside `cli.py`'s advice to resume the rows that
+    did not commit.
+    """
+    monkeypatch.setenv("ULTRACUA_HOME", str(tmp_path / "home"))
+    spec = FlowSpec(name="tail", goal="g-tail", start_url="http://fixture.invalid/",
+                    mutate=MutateSpec(confirm_text_contains="done"))
+    save_spec(spec)
+    cache = FlowCache(root=tmp_path / "c")
+    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    loc = LocatorSpec(role="button", name="Pay", tag="button")
+    cache.put(CachedFlow(key=key, goal=spec.goal, start_url=spec.start_url, url=spec.start_url,
+                         created_ts=time.time(),
+                         steps=[CachedStep(action="click", intent="pay", mutating=True, locator=loc),
+                                CachedStep(action="click", intent="print receipt", mutating=True,
+                                           locator=loc)]))
+    approve(spec, cache=cache)
+
+    # Step 0 reports ok; step 1 does NOT. `write_landed` is still true — the confirm transitioned.
+    fe.FakeEngine(fe.Attempt(report=fe.report(traces=[fe.trace(0, ok=True), fe.trace(1, ok=False)]),
+                             out={"found": True, "write_landed": True})).install(monkeypatch)
+    rec = flows_mod.RunRecord()
+    with _no_driver(monkeypatch):
+        run = await run_batch(spec, [{}], max_rows=1, cache=cache)
+
+    row = run.rows[0]
+    assert row.status == "ok", f"premise: the row succeeded, got {(row.status, row.error)}"
+    # PREMISE, AND IT IS THE WHOLE POINT: the two record fields must actually disagree here, or this
+    # cell is asserting a distinction it never created.
+    probe = flows_mod.RunRecord()
+    fe.FakeEngine(fe.Attempt(report=fe.report(traces=[fe.trace(0, ok=True), fe.trace(1, ok=False)]),
+                             out={"found": True, "write_landed": True})).install(monkeypatch)
+    await flows_mod.replay(spec, cache=cache, record=probe)
+    assert (probe.committed, probe.landed) == (True, False), (
+        f"premise: this scenario must make the two record fields DISAGREE, got "
+        f"committed={probe.committed!r} landed={probe.landed!r} — without that the cell below cannot "
+        f"tell which one the row projected")
+
+    assert row.landed is True, (
+        "the row must project `committed` (did anything commit), not `landed` (may a resume skip the "
+        "whole row). This write went through; printing `false` for it is the denial R4.52 is about")

@@ -116,7 +116,11 @@ EXPECTED = {
     "miss":             (False, False, False, 1, "not_learned",      False),
     "escalate":         (False, False, False, 1, "escalate",         False),
     "drift":            (False, False, False, 1, "drift",            False),
-    "write_unverified": (False, False, False, 1, "write_unverified", False),
+    # 1.4b: `committed` False -> None. The commit ACTUATED and the page cannot report on it, so the
+    # record says UNKNOWN rather than denying it. `landed` and `exc.landed` stay False, deliberately:
+    # `landed` asks "may a resume SKIP this row" and the arming token asks "may the ledger record it",
+    # and `ledger.py`'s invariant is "never a false skip of an un-landed write".
+    "write_unverified": (False, False, None,  1, "write_unverified", False),
     "write_unreadable": (False, True,  True,  1, "write_readback",   True),
     "shape":            (False, False, False, 1, "shape_drift",      False),
 }
@@ -149,16 +153,17 @@ async def test_the_record_answers_the_write_question_as_the_golden_says(
         f"direction nothing downstream catches.")
 
 
-async def test_the_write_unverified_row_denies_a_commit_its_own_message_asserts(
+async def test_the_write_unverified_row_no_longer_denies_a_commit_it_asserts(
     tmp_path, monkeypatch
 ) -> None:
-    """R4.61 IN ONE CELL, asserted as the DEFECT it is so that fixing it turns this red.
+    """R4.61, CLOSED — and this cell replaces the one that held the defect still.
 
-    The exception says the commit actuated. The record says it did not commit. One run, two surfaces,
-    opposite answers — and the record is the one an operator's tooling reads.
+    The exception says the commit actuated; the record now agrees that it cannot say otherwise. The
+    two write fields answer DIFFERENT questions and keep different values, which is the whole shape:
 
-    Deliberately NOT a property being preserved: the docstring says plainly this holds the defect still
-    while the fix is written, and 1.4b must DELETE this cell rather than update it.
+      `record.committed`  did ANYTHING commit          -> None, because it may have
+      `record.landed`     may a resume SKIP this row   -> False, because not every write is evidenced
+      `exc.landed`        may the LEDGER record it     -> False; a maybe is a no
     """
     seed_kw, attempt = _cases()["write_unverified"]
     spec, cache = _seed(tmp_path, monkeypatch, **seed_kw)
@@ -170,28 +175,47 @@ async def test_the_write_unverified_row_denies_a_commit_its_own_message_asserts(
 
     assert ei.value.code == "write_unverified", "premise: this is the kind under test"
     assert "confirm" in str(ei.value).lower(), "premise: the message is about the confirm, not a drift"
-    assert rec.committed is False, (
-        "the record no longer DENIES the commit — if 1.4b made it None, delete this cell and say so in "
-        "the PR body; it exists only to hold R4.61 still")
-    assert rec.landed is False, "and the same for `landed`"
+    assert rec.committed is None, (
+        "the record must not DENY a commit its own exception says actuated")
+    assert rec.landed is False and ei.value.landed is False, (
+        "...and the two ARMING questions must keep their conservative answers — widening either one "
+        "would let a resume skip a row that may never have been paid")
 
 
 @pytest.mark.asyncio(loop_scope=None)
-async def test_the_two_outcome_allowlists_are_disjoint_views_of_one_string() -> None:
-    """The mechanism behind R4.61, pinned so a candidate fix cannot break the other reader silently.
+async def test_the_write_question_is_no_longer_keyed_on_the_OUTCOME_STRING() -> None:
+    """THE MECHANISM OF R4.61, DISPOSED OF — pinned so the string-keyed shape cannot come back.
 
-    `_ENGINE_OUTCOMES` decides what `record.attempts` COUNTS. `_UNKNOWN_OUTCOMES` decides whether the
-    write question is ANSWERABLE. Both key on the same `outcome` string, so a fix that adds a per-kind
-    outcome (say `"failed_write_unverified"`) removes that attempt from the COUNT as a side effect —
-    an attempt that actuated a commit would report `attempts=0`.
+    `_UNKNOWN_OUTCOMES` listed the outcomes after which the write question was unanswerable, and
+    `_evidence` consulted it. But EVERY failure exit appends the same string, `"failed"`, so one
+    string had to answer for a `write_unverified` and an ordinary drift alike. No per-kind test could
+    have caught that — there was nothing per-kind to look at.
+
+    `_evidence` now keys on the FIELD, and `_AttemptFacts` defaults both write fields to `None`, so an
+    append site that states nothing is UNKNOWN rather than a denial. That is the safe direction by
+    construction rather than by remembering to add a string to a set.
     """
+    import ast
+    import inspect
+
     from ultracua import flows as F
 
-    assert not (F._ENGINE_OUTCOMES & F._UNKNOWN_OUTCOMES) - {"raised"}, (
-        "the two sets overlap somewhere other than `raised`; the interaction below is no longer the "
-        "only one to reason about")
-    assert "failed" in F._ENGINE_OUTCOMES and "failed" not in F._UNKNOWN_OUTCOMES, (
-        "`failed` is what EVERY failure exit appends, and R4.61 is that one string having to answer "
-        "for all of them")
-    print(f"\n  engine outcomes  (counted as attempts): {sorted(F._ENGINE_OUTCOMES)}")
-    print(f"  unknown outcomes (write unanswerable) : {sorted(F._UNKNOWN_OUTCOMES)}")
+    assert not hasattr(F, "_UNKNOWN_OUTCOMES"), (
+        "`_UNKNOWN_OUTCOMES` is back. If the write question is keyed on the outcome string again, "
+        "R4.61 is back with it — every failure exit shares one string.")
+    assert F._ENGINE_OUTCOMES, "the attempts allowlist is gone; `record.attempts` counts nothing"
+
+    # `inspect.getsource` on a METHOD returns it still indented, which `ast.parse` refuses. Dedent it.
+    src = inspect.getsource(F._RecordSink._evidence)
+    read = {n.attr for n in ast.walk(ast.parse(__import__("textwrap").dedent(src)))
+            if isinstance(n, ast.Attribute)}
+    assert "outcome" not in read, (
+        "`_evidence` reads `f.outcome` again — the write question must key on the FIELD, so a fact "
+        "that does not know says so itself instead of being classified by which exit produced it")
+
+    # ...and the safe DEFAULT is what makes a silent append site unknown rather than denied.
+    fields = {f.name: f for f in __import__("dataclasses").fields(F._AttemptFacts)}
+    for name in ("landed", "committed"):
+        assert fields[name].default is None, (
+            f"`_AttemptFacts.{name}` no longer defaults to None. An append site that states nothing "
+            f"would then DENY the write rather than leave it unknown — the narrowing direction.")

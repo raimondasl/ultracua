@@ -36,11 +36,11 @@ def _load(path: Path):
 _BASELINE_CHECKED: dict = {}
 
 
-def _require_a_live_killer_suite(tests: str) -> None:
+def _require_a_live_killer_suite(tests: "list[str]") -> None:
     """Fail loudly if the killer suite does not collect and pass on the UNMUTATED tree.
 
     THE HOLE THIS CLOSES. A mutant is judged "killed" by a NON-ZERO pytest exit code, so a `--tests`
-    path that does not collect — a typo, or two paths crammed into one argv element — makes pytest exit
+    path that does not collect — a typo, or a path that has been renamed — makes pytest exit
     non-zero for every mutant and this script report a PERFECT score. An audit hit exactly that and
     read 17/17 where the honest number was 16/17.
 
@@ -48,13 +48,14 @@ def _require_a_live_killer_suite(tests: str) -> None:
     ERROR, not a survivor"): an instrument reporting the suite as stronger than it is. Checked once per
     process, against the real tree with no mutation applied, so it costs one suite run.
     """
-    if _BASELINE_CHECKED.get(tests):
+    key = tuple(tests)
+    if _BASELINE_CHECKED.get(key):
         return
     env = dict(os.environ)
     for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
         env[k] = ""
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", tests, "-q", "--tb=no", "-p", "no:cacheprovider"],
+        [sys.executable, "-m", "pytest", *tests, "-q", "--tb=no", "-p", "no:cacheprovider"],
         cwd=ROOT, capture_output=True, text=True, env=env)
     if proc.returncode != 0:
         raise SystemExit(
@@ -62,14 +63,22 @@ def _require_a_live_killer_suite(tests: str) -> None:
             f"{proc.returncode}), so every mutant below would be scored 'killed' by a suite that is "
             f"broken or collects nothing. Fix the suite or the --tests path first.\n"
             + (proc.stdout or "")[-2000:] + (proc.stderr or "")[-2000:])
-    _BASELINE_CHECKED[tests] = True
+    _BASELINE_CHECKED[key] = True
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("registry", type=Path)
-    ap.add_argument("--tests", default="tests/test_replay_exit_matrix.py",
-                    help="what to run against each mutant (default: the exit-set matrix)")
+    # A LIST, because the properties these mutants attack no longer live in one file. 1.4b's write
+    # answer is decided in `_replay_body` (the exit matrix's territory) and PROJECTED onto a batch row
+    # (which the exit matrix cannot see), so a single-path killer suite reported four honest cells as
+    # SURVIVORS. Splatted into argv rather than joined, which is the failure the guard below names.
+    ap.add_argument("--tests", nargs="+",
+                    default=["tests/test_replay_exit_matrix.py",
+                             "tests/test_batch_row_evidence_golden.py",
+                             "tests/test_write_question_golden.py"],
+                    help="what to run against each mutant (default: the exit-set matrix + the two "
+                         "1.4b evidence goldens)")
     args = ap.parse_args()
 
     mod = _load(args.registry)
@@ -102,7 +111,7 @@ def main() -> int:
             for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
                 env[k] = ""
             proc = subprocess.run(
-                [sys.executable, "-m", "pytest", args.tests, "-q", "-x", "--tb=no",
+                [sys.executable, "-m", "pytest", *args.tests, "-q", "-x", "--tb=no",
                  "-p", "no:cacheprovider"],
                 cwd=ROOT, capture_output=True, text=True, env=env)
             if proc.returncode != 0:

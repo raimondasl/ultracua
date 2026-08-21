@@ -875,3 +875,77 @@ def test_every_failure_return_in_attempt_replay_goes_through_the_arming_helper()
         "That is R3.3 exactly: a failure exit added below the confirm-transition point without arming "
         "it, so a committed write reports `landed=False`, no ledger line is written, and the operator is "
         "told to resume a row that already paid:\n  " + "\n  ".join(offenders))
+
+
+def test_the_two_ledger_ARMS_read_the_exception_directly_and_nothing_else() -> None:
+    """1.4b's critic clause, made structural: the two arming reads stay BYTE-IDENTICAL.
+
+    1.4b introduced `outcome_of(exc) -> Outcome` and `_row_write_evidence(...)`, and both sit within
+    three lines of these guards. The report's answer is a TRI-STATE and the ledger's arm is a
+    TWO-STATE token where a maybe reads as a no — but `None` is falsy, so routing the arm through the
+    report would "work" until somebody wrote `is not False`, at which point a row that was never paid
+    is skipped forever. `Outcome` deliberately has no `landed` attribute for the same reason; this is
+    the other half, on the two statements that actually write the durable file.
+
+    Named files, and a MISSING one is a failure rather than a smaller scan — a negative asserted about
+    a body that can walk away is how three scans were disarmed at once in 1.5.
+    """
+    import ast
+    import pathlib
+
+    WANT = {
+        "src/ultracua/flows.py": 'getattr(exc, "landed", False)',
+        "src/ultracua/mcpserver/server.py": 'getattr(exc, "landed", False)',
+    }
+    root = pathlib.Path(__file__).parents[1]
+    for rel, needle in WANT.items():
+        path = root / rel
+        assert path.exists(), f"{rel} is gone — this scan asserts a negative about it"
+        text = path.read_text(encoding="utf-8")
+        tree = ast.parse(text, filename=str(path))
+
+        # THE ARM'S OWN CONDITION, BY AST — never a substring of the file. The first draft asserted
+        # `needle in text` and a mutation that rewrote the arm to route through the report seam
+        # SURVIVED, because the same text appears in a COMMENT describing the arm. That is the
+        # grep-counts-prose failure `scripts/ratchets.py` was built to escape, re-made in a pin.
+        guards = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.If):
+                continue
+            body = ast.unparse(node).replace("'", '"')
+            if "ledger.record(" in body:
+                guards.append(ast.unparse(node.test).replace("'", '"'))
+        assert guards, f"{rel}: no `if` guards a `ledger.record(...)` call — the arming shape is gone"
+        armed_by_exc = [g for g in guards if needle.replace("'", '"') in g]
+        assert armed_by_exc, (
+            f"{rel} no longer arms the ledger by reading `{needle}` in the guard itself. Guards found: "
+            f"{guards}. If the arm reads a REPORT value, `None` is falsy and the row silently stops "
+            f"being recorded — or, worse, an `is not False` records one that was never paid.")
+        for g in guards:
+            assert "_row_write_evidence" not in g and "outcome_of" not in g, (
+                f"{rel}: a `ledger.record(...)` guard now reads 1.4b's report seam — {g}")
+        arms = [n for n in ast.walk(tree)
+                if isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "record"
+                and getattr(getattr(n.func, "value", None), "id", None) == "ledger"]
+        assert arms, f"{rel} no longer calls `ledger.record(...)` — the arming site is gone"
+        # There are TWO shapes and they are not interchangeable: the SUCCESS path records the status
+        # the page reported, the FAILURE path records the exception's own code. The first draft of this
+        # cell demanded the second of BOTH and went red on the success path — which is the cell finding
+        # its own over-reach rather than a defect.
+        shapes = {ast.unparse(c).replace("'", '"') for c in arms}
+        failure_arms = {s for s in shapes if 'getattr(exc, "code", "landed")' in s}
+        assert failure_arms, (
+            f"{rel}: no `ledger.record(...)` takes the exception's own code directly. Shapes found: "
+            f"{sorted(shapes)}. The durable audit trail and the caller must name the same failure, and "
+            f"a REPORT value here would write a tri-state into a two-state audit line.")
+        for s in shapes:
+            assert "_row_write_evidence" not in s and "outcome_of" not in s, (
+                f"{rel}: `ledger.record(...)` now takes a value derived by 1.4b's report seam — {s}. "
+                f"The arm reads the exception; the report projects the record. Two questions.")
+
+    # The report seam must NOT have leaked a `landed` attribute for the arms to reach for.
+    from ultracua.flows import Outcome
+    assert not hasattr(Outcome("c", False, False), "landed"), (
+        "`Outcome` grew a `landed` attribute. It exists WITHOUT one so that the tri-state report value "
+        "cannot reach an arming guard even by accident; `armed` is the same fact under a name that "
+        "does not invite the collapse.")
