@@ -524,7 +524,25 @@ server-side oracle + the corpus author's ground truth); a scenario record is an 
   `require_approved=True` for a plain read gets it — and a bench arm that forgot to `approve()`
   would have published its own omission as the benchmark's headline. The plan always said three
   inputs; the first draft used one.
-* **The gate has FOUR channels and channel 0 is coverage.** Measured: 13 of 14 scenarios dying on
+* **A rate is gated on the baseline's WILSON LOWER BOUND, never on `variance.compare_records`.**
+  That function's tolerance is `max(rate_floor, baseline_std)`, which measures noise only when each
+  `per_rep` value is another REP of one benchmark. B3 hands it one value per DIFFERENT scenario, so
+  the sample stdev of a 0/1 vector is a closed form of the mean — `sqrt(p(1-p)·n/(n-1))`, largest
+  exactly where the rate is most interesting. **MEASURED: a 0.700 baseline over ten scenarios yields
+  std 0.483, so a run at 0.300 did not regress** — the gate tolerated a forty-point drop in the
+  headline number. A single pass has no repetition and therefore no noise estimate; what it has is
+  an honest error bar on a proportion, which the record already publishes. `variance.py` is left
+  untouched as a result: an earlier draft added a `gated_rates=` keyword to it, and once B3 stopped
+  delegating that would have been a shared-module change with no consumer.
+* **The corpus is FIXED, so a flipped scenario is a fact — reported by name, and NOT gated.** B3 runs
+  each scenario once, so nothing in it can separate "this flow stopped working" from "this flow is
+  flaky"; gating one flip makes a flaky substrate keep the nightly permanently red, which is how a
+  loud channel gets switched off and takes the inviolable one dark with it. `FLIP_IS_GATED = False`
+  names that decision once. Note the gate's sensitivity is a function of how many scenarios share a
+  rate, not of this channel: the same single flip on a corpus with ONE write scenario takes
+  `write_availability_rate` 1.0 → 0.0 and Wilson's bound on 1/1 is 0.207, so the aggregate catches it.
+  B5's repeated nightly is where a flip itself becomes gateable.
+* **The gate has FIVE channels and channel 0 is coverage.** Measured: 13 of 14 scenarios dying on
   `login_failed` published `availability_rate {mean 1.0, n 1}` with `unscored: 13` and gated GREEN —
   the unscored list was reported and read by nothing. Every unscored row now fails unless its
   `(scenario, reason)` pair is acknowledged. **Not** a `scored_fraction` floor: a floor is a tuning
@@ -548,7 +566,7 @@ The OSError one recurred TWICE more in cells added an hour later, which is what 
 the cell to the harness: `mutate_function` now compiles under a `.py` path registered in `linecache`
 so a mutant has retrievable source, and asserts that before handing it over.
 **When you build an arming matrix here, tally the EXCEPTION TYPES** — a matrix with no
-`AssertionError` behind a cell is a cell that died on the way rather than noticed. Today: 55
+`AssertionError` behind a cell is a cell that died on the way rather than noticed. Today: 59
 AssertionError, 5 `pytest.raises` DID-NOT-RAISE, 2 KeyError, 1 BenchRecordError, zero crashes.
 
 ## The pattern that predicts the next bug

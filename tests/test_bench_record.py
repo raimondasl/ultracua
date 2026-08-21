@@ -242,9 +242,10 @@ def test_a_zero_cost_baseline_that_starts_spending_is_caught_here_and_nowhere_el
     """CHANNEL 2, and the counterexample is asserted in the same cell so the clause cannot be
     deleted as redundant.
 
-    `variance.compare_records` guards its cost clause on `bc > 0`, so a baseline of $0 never
-    regresses however much the current run spends. That is the exact arm this benchmark exists to
-    publish — a 0-LLM replay — so the relative gate is disarmed precisely where it matters.
+    A RELATIVE cost gate is guarded on a positive baseline — `variance.compare_records` writes it as
+    `bc > 0 and cc > bc * (1 + cost_rel)` — so a baseline of $0 never regresses however much the
+    current run spends. That is the exact arm this benchmark exists to publish, a 0-LLM replay, so
+    the relative clause is disarmed precisely where it matters.
     """
     baseline = build([scored("a", outcome=O.OK)])
     assert baseline["cost_usd"] == 0.0
@@ -253,17 +254,17 @@ def test_a_zero_cost_baseline_that_starts_spending_is_caught_here_and_nowhere_el
                             run=a_run("a", per_model={PRICED: (1_000_000, 0, 0, 0, 1)}))])
     assert current["cost_usd"] > 0
 
-    inherited = variance.compare_records(baseline, current,
-                                         gated_rates=tuple(current["gated_metrics"]))
+    # The counterexample, asserted: the inherited relative clause cannot see this.
+    inherited = variance.compare_records(baseline, current)
     cost_finding = [f for f in inherited["findings"] if f["metric"] == "cost_usd"][0]
     assert cost_finding["regressed"] is False, (
-        "variance.compare_records has started gating a zero baseline — this cell's premise moved, "
+        "the relative cost clause has started gating a zero baseline — this cell's premise moved, "
         "and channel 2 in `gate_bench_record` may now be redundant")
 
     g = O.gate_bench_record(current, baseline=baseline)
     assert g["ok"] is False
     assert any(f["channel"] == "cost" and f["regressed"] for f in g["findings"])
-    print(f"baseline $0 -> current ${current['cost_usd']:.4f}: inherited gate says "
+    print(f"baseline $0 -> current ${current['cost_usd']:.4f}: the relative clause says "
           f"regressed={cost_finding['regressed']}, B3's channel says "
           f"{[f['regressed'] for f in g['findings'] if f['channel'] == 'cost']}")
 
@@ -308,20 +309,116 @@ def test_a_clean_run_with_no_baseline_gates_green() -> None:
 # The one change B3 made to an existing module
 # ---------------------------------------------------------------------------------------------
 
-def test_compare_records_default_gating_is_unchanged_for_existing_callers() -> None:
-    """B3 added a keyword to `variance.compare_records`. Its DEFAULT must still be this module's own
-    metric names, or every existing baseline silently stops gating."""
+def test_b3_does_not_delegate_its_rates_and_variance_is_untouched() -> None:
+    """THE CRITICAL THIS SLICE'S AUDIT FOUND, pinned from both sides.
+
+    `variance.compare_records`' tolerance is `max(rate_floor, baseline_std)`. That is noise-awareness
+    only when each `per_rep` value is another REP of one benchmark. B3 hands it one value per
+    DIFFERENT scenario, so the sample stdev of a 0/1 vector is a closed form of the mean —
+    `sqrt(p(1-p)*n/(n-1))` — and the tolerance grows with exactly the spread it is meant to measure.
+
+    The measurement is asserted, not described: a 0.700 baseline over ten scenarios yields a
+    tolerance of 0.483, so a run at 0.300 would not have regressed. The gate tolerated a forty-point
+    drop in the headline number.
+    """
     import inspect
+    import statistics
 
-    sig = inspect.signature(variance.compare_records)
-    assert sig.parameters["gated_rates"].default == variance._GATED_RATES
-    assert variance._GATED_RATES == ("replay_success_rate",)
+    # (a) the arithmetic, from the real aggregate — not a hand-typed number.
+    rates = [1.0] * 7 + [0.0] * 3
+    std = variance.aggregate(rates)["std"]
+    assert std == pytest.approx(statistics.stdev(rates))
+    assert max(0.05, std) > 0.4, f"tolerance {std} — this cell's premise has moved"
+    assert 0.7 - max(0.05, std) < 0.3, (
+        "a 0.300 run would now regress under the inherited tolerance, so the reason B3 does not "
+        "delegate has changed and this cell should be re-derived")
 
+    # (b) B3 does not call it for rates, and does not pass a keyword that no longer exists.
+    # BY AST, not by text. The first draft of this cell searched the source string and failed on
+    # its own docstring, which explains why the delegation was dropped — `scripts/ratchets.py`
+    # exists because grep counts the shape inside COMMENTS, and this is that, inside a pin.
+    tree = ast.parse(textwrap.dedent(inspect.getsource(O._rate_findings)))
+    called = {n.func.attr for n in ast.walk(tree)
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+    assert "compare_records" not in called, f"B3's rate channel delegates again: {sorted(called)}"
+    assert "wilson_ci" in called, (
+        f"B3's rate channel no longer computes an honest error bar; it calls {sorted(called)}")
+    assert "gated_rates" not in inspect.signature(variance.compare_records).parameters, (
+        "the `gated_rates` keyword is back and has no caller — a shared-module change with no "
+        "consumer")
+
+    # (c) and the shared module still gates its OWN metric exactly as before.
     b = {"metrics": {"replay_success_rate": {"mean": 1.0, "std": 0.0}}, "cost_usd": 1.0}
     c = {"metrics": {"replay_success_rate": {"mean": 0.2, "std": 0.0}}, "cost_usd": 1.0}
     out = variance.compare_records(b, c)
     assert any(f["metric"] == "replay_success_rate" and f["regressed"] for f in out["findings"])
-    print(f"default gated_rates={variance._GATED_RATES}; a 1.0->0.2 drop still regresses")
+    print(f"inherited tolerance for a 0.7 corpus = {max(0.05, std):.3f} (would allow 0.300); "
+          f"B3 gates on Wilson instead; variance's own metric still regresses 1.0->0.2")
+
+
+def test_a_rate_regresses_below_the_baselines_wilson_lower_bound() -> None:
+    """The replacement, driven across the boundary so the threshold is measured, not asserted."""
+    def corpus(k, n=10):
+        return [scored(f"s{i}", outcome=O.OK if i < k else O.REFUSED) for i in range(n)]
+
+    base = build(corpus(7))
+    lo, _ = variance.wilson_ci(7, 10)
+    seen = {}
+    for k in (7, 5, 4, 3):
+        g = O.gate_bench_record(build(corpus(k)), baseline=base)
+        f = [x for x in g["findings"] if x.get("metric") == "availability_rate"][0]
+        seen[k / 10] = f["regressed"]
+        assert f["baseline_wilson_lo"] == pytest.approx(lo)
+    assert seen == {0.7: False, 0.5: False, 0.4: False, 0.3: True}, seen
+    assert 0.4 >= lo > 0.3, f"the boundary moved: wilson lo = {lo}"
+    print(f"baseline 0.7 (n=10), Wilson lo {lo:.3f} -> {seen}")
+
+
+def test_a_scenario_that_flipped_is_reported_by_NAME_and_not_gated() -> None:
+    """The corpus is fixed, so a flip is attributable — and B3 runs each scenario ONCE, so nothing
+    here can tell a regression from a flake. Gating on one flip makes a flaky substrate fail the
+    nightly permanently, which is how a loud channel gets switched off wholesale.
+
+    Both halves asserted: the row is named (an operator can act) and `ok` stays True.
+    """
+    base = build([scored(f"r{i}", outcome=O.OK) for i in range(6)] + [scored("c", outcome=O.REFUSED)])
+    cur = build([scored("r0", outcome=O.REFUSED_WRONGLY)]
+                + [scored(f"r{i}", outcome=O.OK) for i in range(1, 6)]
+                + [scored("c", outcome=O.REFUSED)])
+    g = O.gate_bench_record(cur, baseline=base)
+    flips = [f for f in g["findings"] if f["channel"] == "flip"]
+    assert [f["scenario"] for f in flips] == ["r0"], flips
+    assert flips[0]["baseline"] == O.OK and flips[0]["current"] == O.REFUSED_WRONGLY
+    assert all(f["regressed"] is False for f in flips)
+    assert g["ok"] is True, "one flip failed the nightly; a flaky substrate would keep it red"
+    # `c` was already loud in the baseline, so it is not a flip.
+    assert "c" not in [f["scenario"] for f in flips]
+
+    # AND THE RESOLUTION CAVEAT, asserted rather than left to be discovered. The aggregate IS gated,
+    # so a flip in a rate with FEW members still fails: the same single flip on a corpus with one
+    # write scenario takes `write_availability_rate` from 1.0 to 0.0, and Wilson's lower bound on
+    # 1/1 is 0.207. The channel is "reported, not gated"; the gate's sensitivity is a function of
+    # how many scenarios share the rate, not of this channel.
+    tiny_base = build([scored("a", outcome=O.OK), scored("w", outcome=O.TRUE, mutating=True)])
+    tiny_cur = build([scored("a", outcome=O.OK),
+                      scored("w", outcome=O.REFUSED_WRONGLY, mutating=True)])
+    tiny = O.gate_bench_record(tiny_cur, baseline=tiny_base)
+    assert tiny["ok"] is False
+    assert [f["metric"] for f in tiny["findings"]
+            if f["channel"] == "rate" and f["regressed"]] == ["write_availability_rate"]
+
+    print(f"flip reported: {flips[0]['scenario']} {flips[0]['baseline']} -> "
+          f"{flips[0]['current']}, gate ok={g['ok']}; the same flip on a 1-write corpus is caught "
+          f"by the sub-rate instead")
+
+
+def test_a_scenario_that_vanished_from_the_corpus_is_reported_too() -> None:
+    """A row that passed in the baseline and is not in this run at all is not an improvement."""
+    base = build([scored("a", outcome=O.OK), scored("gone", outcome=O.OK)])
+    g = O.gate_bench_record(build([scored("a", outcome=O.OK)]), baseline=base)
+    flips = [f for f in g["findings"] if f["channel"] == "flip"]
+    assert [f["scenario"] for f in flips] == ["gone"] and flips[0]["current"] is None
+    print(f"vanished scenario reported: {flips[0]['scenario']} -> {flips[0]['current']}")
 
 
 def test_the_reserved_vocabulary_is_unreachable_from_the_bench() -> None:

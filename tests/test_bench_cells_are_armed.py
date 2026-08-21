@@ -407,17 +407,17 @@ def test_the_acknowledgement_cell_notices_a_blanket_discharge(monkeypatch) -> No
 
 
 def test_the_zero_cost_channel_notices_its_own_removal(monkeypatch) -> None:
-    mutate_function(monkeypatch, "gate_bench_record",
-                    "        if bc is not None and float(bc) == 0.0 and cc > 0.0:",
-                    "        if False:")
+    mutate_function(monkeypatch, "_cost_findings",
+                    "    if bc == 0.0 and cc > 0.0:",
+                    "    if False:")
     print(assert_red(TR.test_a_zero_cost_baseline_that_starts_spending_is_caught_here_and_nowhere_else))
 
 
 def test_the_zero_cost_channel_notices_itself_becoming_unconditional(monkeypatch) -> None:
     """The other direction: a 0-LLM run against a 0-LLM baseline must still pass."""
-    mutate_function(monkeypatch, "gate_bench_record",
-                    "        if bc is not None and float(bc) == 0.0 and cc > 0.0:",
-                    "        if bc is not None and float(bc) == 0.0:")
+    mutate_function(monkeypatch, "_cost_findings",
+                    "    if bc == 0.0 and cc > 0.0:",
+                    "    if bc == 0.0:")
     print(assert_red(TR.test_a_zero_cost_baseline_that_stays_zero_does_not_fail))
 
 
@@ -428,12 +428,52 @@ def test_the_ordering_cell_notices_an_inviolable_being_buried(monkeypatch) -> No
     print(assert_red(TR.test_the_gate_orders_inviolables_first))
 
 
-def test_the_inherited_gate_cell_notices_the_default_changing(monkeypatch) -> None:
-    """B3 added a keyword to `variance.compare_records`; a changed DEFAULT silently un-gates every
-    existing baseline in the repo."""
+def test_the_non_delegation_pin_notices_the_rate_channel_delegating_again(monkeypatch) -> None:
+    """THE CRITICAL. Restore the inherited tolerance and a 0.700 baseline stops noticing 0.300."""
+    mutate_function(monkeypatch, "_rate_findings",
+                    "        lo, _hi = variance.wilson_ci(round(float(b[\"mean\"]) * n), n)",
+                    "        lo = float(b[\"mean\"]) - max(0.05, float(b.get(\"std\", 0.0)))")
+    print(assert_red(TR.test_a_rate_regresses_below_the_baselines_wilson_lower_bound))
+
+
+def test_the_non_delegation_pin_notices_variance_being_touched_again(monkeypatch) -> None:
+    """The other half: a `gated_rates` keyword back on the shared module with no consumer."""
     from benchmarks import variance
-    monkeypatch.setattr(variance, "_GATED_RATES", ())
-    print(assert_red(TR.test_compare_records_default_gating_is_unchanged_for_existing_callers))
+    import inspect as _i
+
+    def _fake(baseline, current, *, rate_floor=0.05, cost_rel=0.25, gated_rates=()):
+        return {"ok": True, "findings": []}
+    monkeypatch.setattr(variance, "compare_records", _fake)
+    assert "gated_rates" in _i.signature(variance.compare_records).parameters
+    print(assert_red(TR.test_b3_does_not_delegate_its_rates_and_variance_is_untouched))
+
+
+def test_the_flip_channel_notices_its_own_removal(monkeypatch) -> None:
+    mutate_function(monkeypatch, "gate_bench_record",
+                    "        findings.extend(_flip_findings(baseline, record))",
+                    "        pass")
+    print(assert_red(TR.test_a_scenario_that_flipped_is_reported_by_NAME_and_not_gated))
+
+
+def test_the_flip_channel_notices_it_becoming_a_gate(monkeypatch) -> None:
+    """Gating one flip makes a flaky substrate keep the nightly permanently red."""
+    mutate_value(monkeypatch, "FLIP_IS_GATED", True)
+    print(assert_red(TR.test_a_scenario_that_flipped_is_reported_by_NAME_and_not_gated))
+
+
+def test_the_vanished_scenario_cell_notices_the_clause_going_away(monkeypatch) -> None:
+    """Expressed as "vanished rows are never looked at", not as `if False:` on the branch itself.
+
+    The latter falls through to `crow["outcome"]` on a None and dies with a TypeError, which
+    `assert_red` refuses as a kill — correctly, since the cell never ran. A mutation has to state
+    its defect, not merely break something on the way to it.
+    """
+    mutate_function(
+        monkeypatch, "_flip_findings",
+        '    was, now = baseline.get("scenarios", {}), record.get("scenarios", {})',
+        '    now = record.get("scenarios", {})\n'
+        '    was = {k: v for k, v in baseline.get("scenarios", {}).items() if k in now}')
+    print(assert_red(TR.test_a_scenario_that_vanished_from_the_corpus_is_reported_too))
 
 
 def test_a_stale_mutation_is_an_error_not_a_pass(monkeypatch) -> None:
@@ -646,8 +686,8 @@ def test_the_coverage_channel_notices_it_becoming_unacknowledgeable(monkeypatch)
 
 def test_the_channel_order_pin_notices_coverage_burying_an_inviolable(monkeypatch) -> None:
     mutate_function(monkeypatch, "gate_bench_record",
-                    '    _RANK = {"inviolable": 0, "coverage": 1, "cost": 2, "rate": 3}',
-                    '    _RANK = {"inviolable": 9, "coverage": 1, "cost": 2, "rate": 3}')
+                    '    _RANK = {"inviolable": 0, "coverage": 1, "cost": 2, "rate": 3, "flip": 4}',
+                    '    _RANK = {"inviolable": 9, "coverage": 1, "cost": 2, "rate": 3, "flip": 4}')
     print(assert_red(TR.test_the_gate_orders_inviolables_first))
 
 

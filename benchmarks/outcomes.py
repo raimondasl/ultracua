@@ -802,6 +802,13 @@ def build_bench_record(scored: "list[Scored]", *, bench: str, provider: str, tim
     # SCORED subset, so 1.0 over one survivor and 1.0 over fourteen print identically -- and the
     # first is what a systematic harness failure produces. `variance.aggregate` carries `n`, but a
     # reader comparing two runs reads the mean.
+    # PER SCENARIO, because the corpus is FIXED. Two runs of B3 are not two samples from a
+    # population; they are the same fourteen tasks twice, so a scenario that flipped is an
+    # attributable FACT and not sampling noise. Publishing the rows is what lets a reader (and B5)
+    # ask which one moved instead of only how far the mean fell.
+    rec["scenarios"] = {s.truth.name: {"outcome": s.verdict.outcome, "substrate": s.substrate,
+                                       "code": s.verdict.code}
+                        for s in scored}
     rec["scored_scenarios"] = len(live)
     rec["scored_fraction"] = len(live) / len(scored)
     rec["vocabulary_version"] = "b3.1"
@@ -853,8 +860,93 @@ def _substrate_view(scored: "list[Scored]") -> dict:
     return out
 
 
+def _cost_findings(baseline: dict, record: dict, cost_rel: float) -> list:
+    """Two clauses, because the relative one is blind to the arm this benchmark exists to publish."""
+    out: list = []
+    bc, cc = baseline.get("cost_usd", None), float(record.get("cost_usd", 0.0))
+    if bc is None:
+        return out
+    bc = float(bc)
+    if bc == 0.0 and cc > 0.0:
+        out.append({"channel": "cost", "metric": "cost_usd", "regressed": True,
+                    "baseline": 0.0, "current": cc,
+                    "detail": "the baseline spent nothing and this run spent something -- a 0-LLM "
+                              "arm that starts paying is the claim breaking, and a RELATIVE cost "
+                              "gate cannot see it because a percentage of zero is zero."})
+        return out
+    out.append({"channel": "cost", "metric": "cost_usd",
+                "regressed": bc > 0 and cc > bc * (1 + cost_rel),
+                "baseline": bc, "current": cc, "tolerance": bc * cost_rel})
+    return out
+
+
+# Is a single flipped scenario allowed to FAIL the run? No -- see `_flip_findings`. Named once
+# rather than written as a literal at each append, so the decision is one thing to find and one
+# thing to change, and so an arming cell can invert it without a source-level mutation.
+FLIP_IS_GATED = False
+
+
+def _flip_findings(baseline: dict, record: dict) -> list:
+    """Scenarios that were QUIET in the baseline and are not quiet now, reported per row.
+
+    REPORTED, NOT GATED, and the asymmetry is argued rather than convenient. The corpus is fixed, so
+    a flip is attributable -- but B3 runs each scenario ONCE, and with no repetition nothing here
+    can separate "this flow stopped working" from "this flow is flaky". Gating on a single flip
+    makes a flaky substrate fail the nightly permanently, which is how a loud channel gets switched
+    off wholesale and takes the inviolable channel dark with it (R3.9/CLI-1).
+
+    So the aggregate is gated (channel 3) and the rows are printed beside it, which is what an
+    operator actually needs to act. B5's repeated nightly is where a flip becomes gateable, because
+    that is where the repetition to tell the two apart finally exists.
+    """
+    out: list = []
+    was, now = baseline.get("scenarios", {}), record.get("scenarios", {})
+    for name, brow in sorted(was.items()):
+        if brow.get("outcome") not in QUIET_OUTCOMES:
+            continue
+        crow = now.get(name)
+        if crow is None:
+            out.append({"channel": "flip", "regressed": FLIP_IS_GATED, "scenario": name,
+                        "baseline": brow["outcome"], "current": None,
+                        "detail": "this scenario passed in the baseline and is not in this run "
+                                  "at all"})
+        elif crow["outcome"] not in QUIET_OUTCOMES:
+            out.append({"channel": "flip", "regressed": FLIP_IS_GATED, "scenario": name,
+                        "baseline": brow["outcome"], "current": crow["outcome"],
+                        "code": crow.get("code", ""),
+                        "detail": "this scenario passed in the baseline and does not now -- "
+                                  "REPORTED, not gated: one pass per scenario cannot tell a "
+                                  "regression from a flake"})
+    return out
+
+
+def _rate_findings(baseline: dict, record: dict) -> list:
+    """A rate regresses when it falls below the BASELINE's Wilson 95% lower bound.
+
+    `variance.compare_records`' `max(rate_floor, std)` is not usable here -- see the docstring of
+    `gate_bench_record`, and the measurement that says so. Wilson is computed from `(mean, n)`,
+    both of which `variance.aggregate` already puts on every metric, so nothing new is recorded.
+    """
+    from benchmarks import variance
+
+    out: list = []
+    bm, cm = baseline.get("metrics", {}), record.get("metrics", {})
+    for name in record.get("gated_metrics", ()):
+        if name not in bm or name not in cm:
+            continue
+        b, c = bm[name], cm[name]
+        n = int(b.get("n", 0) or 0)
+        if n <= 0:
+            continue
+        lo, _hi = variance.wilson_ci(round(float(b["mean"]) * n), n)
+        out.append({"channel": "rate", "metric": name, "regressed": float(c["mean"]) < lo,
+                    "baseline": b["mean"], "current": c["mean"], "baseline_wilson_lo": lo,
+                    "baseline_n": n})
+    return out
+
+
 def gate_bench_record(record: dict, *, baseline: "Optional[dict]" = None,
-                      acknowledged: "tuple" = ()) -> dict:
+                      acknowledged: "tuple" = (), cost_rel: float = 0.25) -> dict:
     """The verdict on a whole run: `{ok, findings}`. Findings are ordered worst-first.
 
     FOUR CHANNELS, AND THE FIRST ONE CANNOT BE OUT-VOTED.
@@ -877,9 +969,22 @@ def gate_bench_record(record: dict, *, baseline: "Optional[dict]" = None,
          benchmark exists to publish, that is the gate being disarmed exactly where it matters, so
          B3 adds an absolute clause rather than relying on the relative one.
 
-      3. THE RATES, through `variance.compare_records`, which supplies the noise-awareness (a drop
-         inside the baseline's own error bars is not a regression). Only the record's own
-         `gated_metrics` are compared -- all higher-is-better by construction.
+      3. THE RATES, against the baseline's WILSON LOWER BOUND -- not through
+         `variance.compare_records`, and the difference is the whole point.
+
+         That function's tolerance is `max(rate_floor, baseline_std)`, which is noise-awareness only
+         when each `per_rep` value is another REP of one benchmark. B3 hands it one value per
+         DIFFERENT scenario, so the sample stdev of a 0/1 vector is a closed form of the mean --
+         `sqrt(p(1-p)*n/(n-1))`, largest exactly where the rate is most interesting. MEASURED: a
+         baseline of 0.700 over ten scenarios yields std 0.483, so a current run of **0.300 did not
+         regress**. The gate tolerated a forty-point drop in the headline number.
+
+         A single pass over a corpus has no repetition and therefore no noise estimate. What it does
+         have is an honest error bar on a proportion, and the record already publishes one. A rate
+         regresses when it falls below the baseline's Wilson 95% lower bound.
+
+         Only the record's own `gated_metrics` are compared -- all higher-is-better by construction,
+         because the clause regresses on a DROP.
     """
     findings: list = []
     ack = {tuple(a) for a in acknowledged}
@@ -907,23 +1012,10 @@ def gate_bench_record(record: dict, *, baseline: "Optional[dict]" = None,
                          "acknowledged": pair in ack, **row})
 
     if baseline is not None:
-        from benchmarks import variance
+        findings.extend(_cost_findings(baseline, record, cost_rel))
+        findings.extend(_rate_findings(baseline, record))
+        findings.extend(_flip_findings(baseline, record))
 
-        bc = baseline.get("cost_usd", None)
-        cc = float(record.get("cost_usd", 0.0))
-        if bc is not None and float(bc) == 0.0 and cc > 0.0:
-            findings.append({
-                "channel": "cost", "metric": "cost_usd", "regressed": True,
-                "baseline": 0.0, "current": cc,
-                "detail": "the baseline spent nothing and this run spent something -- a 0-LLM arm "
-                          "that starts paying is the claim breaking, and the relative cost gate "
-                          "cannot see it because it is guarded on a positive baseline."})
-
-        cmp = variance.compare_records(baseline, record,
-                                       gated_rates=tuple(record.get("gated_metrics", ())))
-        for f in cmp["findings"]:
-            findings.append({"channel": "rate", **f})
-
-    _RANK = {"inviolable": 0, "coverage": 1, "cost": 2, "rate": 3}
+    _RANK = {"inviolable": 0, "coverage": 1, "cost": 2, "rate": 3, "flip": 4}
     findings.sort(key=lambda f: (_RANK.get(f["channel"], 9), not f.get("regressed")))
     return {"ok": not any(f.get("regressed") for f in findings), "findings": findings}

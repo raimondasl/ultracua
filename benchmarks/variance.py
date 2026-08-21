@@ -142,7 +142,7 @@ def build_record(bench: str, provider: str, reps: int, timestamp: str,
 
 
 def compare_records(baseline: dict, current: dict, *, rate_floor: float = 0.05,
-                    cost_rel: float = 0.25, gated_rates: "tuple" = _GATED_RATES) -> dict:
+                    cost_rel: float = 0.25) -> dict:
     """Compare a current run against a baseline. Returns {ok, findings}.
 
     A success-rate metric regresses only if its mean dropped below the baseline mean by more than the
@@ -150,15 +150,20 @@ def compare_records(baseline: dict, current: dict, *, rate_floor: float = 0.05,
     not a regression. Cost regresses if it rose more than `cost_rel` over the baseline. `speedup` is
     reported but never gated (machine-dependent micro-timing).
 
-    `gated_rates` defaults to this module's own metric names and exists so a record built elsewhere
-    can reuse this noise-awareness without renaming its metrics to match. B3 (`benchmarks/outcomes.py`)
-    passes its record's `gated_metrics`, every one of which it declares higher-is-better — because the
-    clause below regresses on a DROP, so gating a lower-is-better rate would score it backwards.
+    THE TOLERANCE ASSUMES `per_rep` HOLDS REPS OF ONE BENCHMARK, and that assumption is load-bearing
+    rather than incidental. `std` is a measure of run-to-run NOISE only when each value is another
+    attempt at the same thing. Hand it one value per DIFFERENT task and the sample stdev of a 0/1
+    vector is a closed form of the mean — `sqrt(p(1-p)·n/(n-1))`, largest exactly where the rate is
+    most interesting — so the tolerance grows with the spread it is supposed to be measuring.
+    Measured on a 10-scenario corpus: a baseline of 0.700 yields std 0.483, and a current run of
+    **0.300 does not regress**. B3 (`benchmarks/outcomes.py`) therefore does NOT call this function
+    for its rates; it compares against the baseline's Wilson lower bound instead, which is an honest
+    error bar on a proportion measured once. Its record still uses this module's record SHAPE.
     """
     findings: list[dict] = []
     bm, cm = baseline.get("metrics", {}), current.get("metrics", {})
 
-    for name in gated_rates:
+    for name in _GATED_RATES:
         if name in bm and name in cm:
             b, c = bm[name], cm[name]
             tol = max(rate_floor, float(b.get("std", 0.0)))
