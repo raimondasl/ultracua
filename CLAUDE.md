@@ -460,6 +460,66 @@ another skip/refusal class is added — S5 creates one by design:
 Corollary for both: pin the quiet direction as hard as the loud one. "Alert on everything" passes every
 test written for the finding.
 
+## The customer benchmark mints exactly one verdict, in one place (B3, 0.113.0)
+
+`benchmarks/outcomes.py` owns the whole outcome vocabulary — `{ok, wrong_data, refused, over_gated}`
+for reads, `{true, incorrect_target, double, suppressed, refused_correctly, refused_wrongly}` for
+writes — and `benchmarks/customer_bench.py`'s `ScenarioRun` still carries **no `outcome` field**,
+which is a decision rather than a leftover. A verdict is an ADJUDICATION (harness facts + a
+server-side oracle + the corpus author's ground truth); a scenario record is an OBSERVATION.
+`outcomes.Scored` holds the pair. That is B2's `harness_error`-vs-`agent_error` line one level up.
+
+* **`unscored` is a seventh state and it is NOT a verdict.** It is removed from every denominator in
+  both directions, and it is deliberately absent from `QUIET_OUTCOMES` — a gate that read it as a
+  pass would let a run where nothing could be adjudicated report green.
+* **The three inviolables are not a rate.** `wrong_data`/`incorrect_target`/`double`/`suppressed`
+  fail the run absolutely; nineteen passes beside one `double` is not a 95% success. The escape is a
+  published `(scenario, outcome)` allowlist — the shape `drift_bench` already uses — because a loud
+  channel nobody can discharge gets switched off wholesale.
+* **`CODE_FAMILY` is a TOTAL partition of `flows.REGISTRY` with no default**, which is the whole
+  reason 1.4 had to land before B3. `.get(code, PAGE)` here is the defect class the benchmark
+  measures: a bucket that absorbs what nobody classified, with a confident rate reported over it.
+  The twelve MCP-minted codes in `flows.RESERVED_CODES` are deliberately **unclassified**, and what
+  makes that safe is derived rather than asserted: `run_scenario` takes the code from
+  `flows.outcome_of` and nothing else, so the day a bench arm drives the MCP surface,
+  `test_the_reserved_vocabulary_is_unreachable_from_the_bench` fails and somebody classifies them
+  knowing what they mean.
+* **The ordering clause is the design.** A write-safety violation the ORACLE can see is decided
+  BEFORE any unscored reason, because three HARNESS-family codes declare `can_follow_actuation`
+  (`meta_unwritable`, `meta_unreadable`, `not_learned`) — so "the bench misconfigured something" and
+  "the write fired twice" are simultaneously true, and with the excuse first a `double` the server
+  is holding lands in no number anywhere.
+* **`RunRecord` is a cross-check, never an input.** `classify()` does not read one; an AST scan over
+  its own source says so, and its other half asserts `cross_check` still reads the fields — a
+  negative alone is satisfied by deleting the mechanism. `committed=None` never disagrees, which is
+  1.4b's tri-state paying off.
+* **Four refusals rather than four published zeros**: spend at an unpriced model, a router the
+  boundary ledger never watched, a spender that declared its own accounting broken, and a corpus in
+  which nothing was scored (`variance.aggregate([])` renders an empty list as `mean: 0.0`).
+* **`over_gated` requires the recipe**, not just the code. Over-reporting the benchmark's own
+  headline finding is the bench flattering its thesis, so without `GateEvidence.present` the
+  scenario is unscored rather than counted.
+* **Only higher-is-better rates may be gated.** `variance.compare_records` regresses on a DROP, so a
+  gated `over_gated_rate` would pass a run that got worse and fail one that improved. The direction
+  is declared in `RATE_METRICS` and the gated set is DERIVED from it.
+* **`variance.build_record`'s `pass_k`/`pass_rate_wilson95` are renamed on B3's record** to
+  `subset_all_pass`/`availability_wilson95`. Same arithmetic; the borrowed names mean "k consecutive
+  attempts at ONE task", and B3 hands it one value per SCENARIO — so a 14-scenario corpus with one
+  permanent failure would print `pass_k: {"14": 0.0}` beside an availability of 0.93.
+
+**And the instrument note: `scripts/prove_red.py` cannot reach `benchmarks/`** — it installs a
+mutant by putting a copy of `src/` first on `PYTHONPATH`, and pytest puts the repo ROOT at
+`sys.path[0]`, so every mutation of a bench module reports as a SURVIVOR while the guard is fine.
+That is R4.77. The discipline is kept without the file: `tests/test_bench_cells_are_armed.py`
+mutates each function's own source in-process and requires the named guard to go red, with a stale
+find-text an ERROR rather than a pass. **Its first run produced five FALSE verdicts** because
+`assert_red` caught `Exception` and a `pytest.raises` failure is `_pytest.outcomes.Failed`, a
+`BaseException` — the arming harness was reporting its own blind spot as a hole in the suite. Three
+more kills were credited and not earned: an `OSError` from `inspect.getsource` on an exec'd mutant
+(the scan it faced never ran), an `AttributeError` crash, and one kill credited to the wrong guard.
+**When you build an arming matrix here, tally the EXCEPTION TYPES** — a matrix with no
+`AssertionError` behind a cell is a cell that died on the way rather than noticed.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

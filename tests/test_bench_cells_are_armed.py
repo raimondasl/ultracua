@@ -23,6 +23,7 @@ import textwrap
 
 import pytest
 
+from benchmarks import customer_bench as CB
 from benchmarks import outcomes as O
 import tests.test_bench_outcomes as TO
 import tests.test_bench_record as TR
@@ -413,3 +414,55 @@ def test_a_stale_mutation_is_an_error_not_a_pass(monkeypatch) -> None:
     with pytest.raises(AssertionError, match="matches its find-text 0 times"):
         mutate_function(monkeypatch, "family_of", "a line that is not in family_of", "x")
     print("a stale find-text raises rather than silently applying nothing")
+
+
+# ---------------------------------------------------------------------------------------------
+# The reserved vocabulary, and the two renamed statistics
+# ---------------------------------------------------------------------------------------------
+
+def test_the_reachability_pin_notices_the_exemption_being_widened(monkeypatch) -> None:
+    """`NOT_OBSERVABLE_CODES` is an exemption, and an exemption that covers everything is not one."""
+    mutate_value(monkeypatch, "NOT_OBSERVABLE_CODES", frozenset())
+    print(assert_red(TR.test_the_reserved_vocabulary_is_unreachable_from_the_bench))
+
+
+def test_the_reachability_pin_notices_a_code_being_both_classified_and_exempt(monkeypatch) -> None:
+    mutate_value(monkeypatch, "NOT_OBSERVABLE_CODES", O.NOT_OBSERVABLE_CODES | {"drift"})
+    print(assert_red(TR.test_the_reserved_vocabulary_is_unreachable_from_the_bench))
+
+
+def _run_scenario_that_invents_its_own_code(scenario, *, agent_call, reset: bool = True):
+    """A `run_scenario` whose refusal code does NOT come from `flows.outcome_of`.
+
+    This is the edit that makes the twelve unclassified MCP codes reachable — and the moment it
+    lands, leaving them unclassified stops being safe. A real function, not an exec'd mutant,
+    because the pin facing it reads `inspect.getsource`.
+    """
+    run = CB.ScenarioRun(scenario=scenario.name, substrate=scenario.substrate)
+    try:
+        agent_call(scenario, "http://substrate.invalid")
+    except Exception as exc:  # noqa: BLE001
+        run.agent_error_code = getattr(exc, "code", "raised")
+    return run
+
+
+def test_the_reachability_pin_notices_the_code_no_longer_coming_from_outcome_of(monkeypatch) -> None:
+    monkeypatch.setattr(CB, "run_scenario", _run_scenario_that_invents_its_own_code)
+    print(assert_red(TR.test_the_reserved_vocabulary_is_unreachable_from_the_bench))
+
+
+def test_the_naming_pin_notices_the_borrowed_labels_coming_back(monkeypatch) -> None:
+    """`pass_k` over a heterogeneous corpus reads as a reliability curve and is not one."""
+    mutate_function(monkeypatch, "build_bench_record",
+                    '    rec["subset_all_pass"] = rec.pop("pass_k")',
+                    '    rec["subset_all_pass"] = rec["pass_k"]')
+    print(assert_red(TR.test_the_corpus_statistics_are_not_labelled_as_a_reliability_curve))
+
+
+def test_the_naming_pin_notices_the_statistic_being_deleted_instead_of_renamed(monkeypatch) -> None:
+    """The other direction: "remove the misleading name" is satisfied by removing the number, and
+    then the pin above is green over a record that publishes nothing."""
+    mutate_function(monkeypatch, "build_bench_record",
+                    '    rec["subset_all_pass"] = rec.pop("pass_k")',
+                    '    rec.pop("pass_k")\n    rec["subset_all_pass"] = {}')
+    print(assert_red(TR.test_the_corpus_statistics_are_not_labelled_as_a_reliability_curve))

@@ -12,11 +12,17 @@ a REFUSAL, and every refusal cell drives the real builder rather than the predic
 
 from __future__ import annotations
 
+import ast
+import inspect
+import textwrap
+
 import pytest
 
+from benchmarks import customer_bench as CB
 from benchmarks import outcomes as O
 from benchmarks import variance
 from benchmarks.customer_bench import ScenarioRun
+from ultracua import flows
 
 TS = "2026-08-21T00:00:00+00:00"
 PRICED = "claude-haiku-4-5"          # in obs._PRICES, so a cost is knowable
@@ -315,3 +321,79 @@ def test_compare_records_default_gating_is_unchanged_for_existing_callers() -> N
     out = variance.compare_records(b, c)
     assert any(f["metric"] == "replay_success_rate" and f["regressed"] for f in out["findings"])
     print(f"default gated_rates={variance._GATED_RATES}; a 1.0->0.2 drop still regresses")
+
+
+def test_the_reserved_vocabulary_is_unreachable_from_the_bench() -> None:
+    """The twelve MCP-minted codes are NOT classified, and this is what makes that safe.
+
+    They share a FIELD with the refusal taxonomy (`flows.RESERVED_CODES` says so), so a bench arm
+    driving the MCP server would put `write_denied` or `already_done` into `agent_error_code` and
+    `family_of` would raise KeyError through the whole adjudication — losing every other scenario's
+    result, which is the opposite of B2's deliberate "an agent that raises is a RECORDED FACT, not
+    an aborted batch".
+
+    Both halves of the reachability argument are derived here rather than asserted in a comment:
+
+      1. `run_scenario` sets `agent_error_code` from `flows.outcome_of` and from nothing else.
+      2. `outcome_of` returns a `flows.REGISTRY` code or `raised`, for every class in the taxonomy
+         and for a non-`FlowReplayError`.
+
+    The day B4 wires the MCP surface, (1) breaks and somebody classifies the twelve knowing what
+    they mean. Guessing families for them today would be the same defect one level down: a bucket
+    nobody grounded, with a confident number reported over it.
+    """
+    # No overlap, and together they cover every vocabulary that shares the field.
+    assert not (set(O.CODE_FAMILY) & O.NOT_OBSERVABLE_CODES), "a code is both classified and exempt"
+    covered = set(O.CODE_FAMILY) | O.NOT_OBSERVABLE_CODES | {O.CRASH_CODE}
+    field_owners = set(flows.REGISTRY) | set(flows.RESERVED_CODES)
+    assert field_owners <= covered, (
+        f"{sorted(field_owners - covered)} can reach `agent_error_code` and is neither classified "
+        f"nor declared unreachable")
+
+    # (2) — behavioural, over the whole taxonomy.
+    for code, cls in flows.REGISTRY.items():
+        assert O.flows.outcome_of(cls("x")).code == code
+    assert O.flows.outcome_of(ValueError("x")).code == O.CRASH_CODE
+
+    # (1) — structural. The scan is over `run_scenario`'s own source.
+    src = textwrap.dedent(inspect.getsource(CB.run_scenario))
+    assigns = [n for n in ast.walk(ast.parse(src))
+               if isinstance(n, ast.Assign)
+               and any(isinstance(t, ast.Attribute) and t.attr == "agent_error_code"
+                       for t in n.targets)]
+    assert len(assigns) == 1, f"{len(assigns)} sites assign agent_error_code; expected exactly 1"
+    assert isinstance(assigns[0].value, ast.Attribute) and assigns[0].value.attr == "code", (
+        "agent_error_code is no longer taken from an `Outcome.code`")
+    outcome_of_calls = [n for n in ast.walk(ast.parse(src))
+                        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                        and n.func.attr == "outcome_of"]
+    assert len(outcome_of_calls) == 1, "the code no longer comes from flows.outcome_of"
+    print(f"{len(O.NOT_OBSERVABLE_CODES)} reserved codes unclassified and provably unreachable; "
+          f"{len(flows.REGISTRY)} taxonomy codes all round-trip through outcome_of")
+
+
+def test_the_corpus_statistics_are_not_labelled_as_a_reliability_curve() -> None:
+    """`pass_k` means "k consecutive attempts at ONE task all passed". B3 has one value per
+    SCENARIO, so the same arithmetic answers "k distinct scenarios all pass" — and the borrowed name
+    turns a 0.93-availability corpus with one permanent failure into a printed `pass_k: 0.0`.
+
+    Asserted on the RECORD, not on a comment, and both directions: the misleading names must be
+    gone AND the honest ones present, or the rename is satisfied by deleting the statistic.
+    """
+    rec = build([scored(f"s{i}", outcome=O.OK if i < 3 else O.REFUSED) for i in range(4)])
+    for gone in ("pass_k", "pass_rate_wilson95"):
+        assert gone not in rec, f"{gone!r} is still published under a name that means something else"
+    assert rec["subset_all_pass"]["4"] == 0.0 and rec["subset_all_pass"]["1"] == 0.75
+    assert rec["availability_wilson95"]["passes"] == 3
+    assert rec["metrics"]["availability_rate"]["mean"] == 0.75
+    print(f"availability 0.75 published beside subset_all_pass={rec['subset_all_pass']} "
+          f"— same numbers, a name that says what they are")
+
+
+def test_compare_records_reads_neither_renamed_key() -> None:
+    """The rename is free only because nothing gates on them. If that stops being true the rename
+    silently un-gates something, so it is checked rather than remembered."""
+    src = inspect.getsource(variance.compare_records)
+    for key in ("pass_k", "pass_rate_wilson95", "subset_all_pass", "availability_wilson95"):
+        assert key not in src, f"compare_records reads {key!r}; renaming it changed gating"
+    print("compare_records reads neither name — the rename gates nothing differently")

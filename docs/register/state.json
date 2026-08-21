@@ -541,6 +541,16 @@
    "class": "b",
    "summary": "`_row_write_evidence`'s lowering clause reads `record.attempts == 0`, which is a MEASUREMENT on every path the sink writes and a DATACLASS DEFAULT on the one it cannot. `_RecordSink.finish` is total by design — an internal error goes to `record.note` and forces `usage` to unknown — but it leaves the write fields at their defaults (`attempts=0`, `committed=None`), which the clause then reads as 'no engine attempt ran' and lowers to a confident False. One token, two states, and the available sensor (`record.note`) is never consulted: R3.7's `anchor_id=None` shape. MEASURED with `_RecordSink._usage` patched to raise: the confirmed-write row goes True -> False and the `write_unverified` row None -> False, i.e. the 1.4b fix is DISARMED, not inverted — both equal the pre-1.4b values. No natural trigger found; both repros inject the fault",
    "disposition": "NOT taken in 1.4b, and the shape of the fix is why: make 'never measured' EXPRESSIBLE on the record (`RunRecord.attempts: Optional[int] = None`, or `finish()`'s fallback stamping it), which then falls through to `return record.committed` -> None. That is a `RunRecord` contract change affecting every reader, bigger than the defect, and it belongs with whoever next opens that dataclass. Do NOT fix it by having `_row_write_evidence` consult `record.note`: a per-branch patch keyed on a diagnostic string, inside the function whose whole justification is one definition. Pin ONCE-ENFORCED at the record when it lands, never at the row"
+  },
+  {
+   "id": "R4.77",
+   "status": "open",
+   "summary": "`prove_red` structurally cannot mutate `benchmarks/` — pytest puts the repo ROOT at `sys.path[0]`, ahead of the `PYTHONPATH` the mutant is installed on, so every bench mutation reports as a SURVIVOR while the guard is fine; B3's matrix is in-process instead",
+   "severity": "medium",
+   "class": "instrument",
+   "pins": [
+    "tests/test_bench_cells_are_armed.py"
+   ]
   }
  ]
 }

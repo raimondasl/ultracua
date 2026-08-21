@@ -172,6 +172,28 @@ CODE_FAMILY = {
 CRASH_CODE = "raised"
 NO_CODE = ""
 
+# THE OTHER VOCABULARIES ON THE SAME FIELD, AND WHY THEY ARE NOT CLASSIFIED HERE.
+#
+# `flows.RESERVED_CODES` names twelve slugs that `ToolOutcome.code` and `SkippedFlow.code` mint on
+# the MCP surface — `write_denied`, `already_done`, `unknown_tool` and the rest. They share a FIELD
+# with this taxonomy, so a benchmark arm that drove the MCP server instead of `replay()` would put
+# them into `agent_error_code`, and `family_of` would raise KeyError through the whole adjudication.
+#
+# They are NOT classified, and that is a decision rather than an omission. Every family assignment
+# above carries an argument grounded in a raise site; inventing twelve more for a surface no bench
+# path currently drives would be exactly the guess `CODE_FAMILY` exists to refuse — and a guessed
+# family does not crash, it silently publishes a number.
+#
+# What makes the omission SAFE is not this comment. `customer_bench.run_scenario` sets
+# `agent_error_code` from `flows.outcome_of` and from nothing else, and `outcome_of` returns either
+# a `flows.REGISTRY` code or `raised`. Both halves are derived by
+# `test_the_reserved_vocabulary_is_unreachable_from_the_bench` — so the day B4 wires the MCP surface,
+# that cell fails and somebody classifies these twelve knowing what they mean.
+#
+# `replay_error` is here for a different reason and would never be classified: it is the abstract
+# base's poison sentinel, and `FlowReplayError("x")` raises TypeError since 1.4a.
+NOT_OBSERVABLE_CODES = frozenset(flows.RESERVED_CODES) - {CRASH_CODE}
+
 # Families whose refusals are the BENCH's fault and are therefore removed from the score entirely.
 UNSCORED_FAMILIES = frozenset({HARNESS})
 
@@ -647,6 +669,18 @@ def build_bench_record(scored: "list[Scored]", *, bench: str, provider: str, tim
         bench=bench, provider=provider, reps=len(live), timestamp=timestamp,
         per_rep=per_rep, cost_usd=total_cost, success_key="availability_rate")
 
+    # `variance.build_record` computes `pass_k` and `pass_rate_wilson95` over whatever it is handed,
+    # and both NAMES are wrong here. They come from a harness that reps ONE task N times, where
+    # `pass_k` reads as "the chance k consecutive attempts all succeed" — a reliability curve. B3
+    # hands it one value per SCENARIO, so the same arithmetic answers a different question: "pick k
+    # DISTINCT scenarios from this corpus, what is the chance all of them pass". Over a 14-scenario
+    # corpus with one permanent failure that prints `pass_k: {"14": 0.0}`, which beside an
+    # availability of 0.93 reads as the product failing every time.
+    #
+    # The numbers are not wrong; the labels are. Renamed rather than deleted, because the corpus
+    # statistic is worth having — and `compare_records` reads neither, so nothing is lost by it.
+    rec["subset_all_pass"] = rec.pop("pass_k")
+    rec["availability_wilson95"] = rec.pop("pass_rate_wilson95")
     rec["vocabulary_version"] = "b3.1"
     rec["outcomes"] = counts
     rec["gated_metrics"] = [n for n in GATED_RATES if n in per_rep]
