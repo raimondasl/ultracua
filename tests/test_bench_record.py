@@ -31,6 +31,7 @@ PRICED = "claude-haiku-4-5"          # in obs._PRICES, so a cost is knowable
 def a_run(scenario="s", substrate="gitea", *, per_model=None, accounting="observed",
           accounting_failed=False, unobserved=()) -> ScenarioRun:
     r = ScenarioRun(scenario=scenario, substrate=substrate)
+    r.agent_ran = True
     r.per_model = dict(per_model or {})
     r.llm_accounting = accounting
     r.accounting_failed = accounting_failed
@@ -454,3 +455,65 @@ def test_the_cost_denominator_is_published_because_it_is_not_reps() -> None:
     assert rec["cost_scenarios"] != rec["reps"], "this cell no longer drives the case it exists for"
     print(f"cost ${rec['cost_usd']} over {rec['cost_scenarios']} scenarios, "
           f"rates over reps={rec['reps']}")
+
+
+# ---------------------------------------------------------------------------------------------
+# CHANNEL 0 — coverage
+# ---------------------------------------------------------------------------------------------
+
+def test_a_corpus_deleted_by_harness_failures_cannot_gate_green() -> None:
+    """MEASURED before the fix: 13 of 14 scenarios dying on `login_failed` published
+    `availability_rate {mean: 1.0, n: 1}` with `unscored: 13` and gated GREEN.
+
+    The three original channels were inviolable, cost and rates. `record["unscored"]` was reported
+    and read by nothing, so a systematic harness failure deleted the corpus and the one survivor
+    published a perfect score — the same shape as R3.9/CLI-1's third bucket satisfying neither cron
+    channel, one instrument over.
+    """
+    rows = [O.Scored(truth=O.ScenarioTruth(name=f"s{i}"), run=a_run(f"s{i}"),
+                     verdict=O.Verdict(O.UNSCORED, reason="harness_refusal")) for i in range(13)]
+    rows.append(scored("s13", outcome=O.OK))
+    rec = build(rows)
+
+    # The number that lied, still published, still 1.0 — the gate is what changed.
+    assert rec["metrics"]["availability_rate"]["mean"] == 1.0
+    assert rec["metrics"]["availability_rate"]["n"] == 1
+    assert rec["scored_fraction"] == pytest.approx(1 / 14)
+
+    g = O.gate_bench_record(rec)
+    assert g["ok"] is False, "a corpus that measured one scenario of fourteen gated green"
+    assert sum(1 for f in g["findings"] if f["channel"] == "coverage" and f["regressed"]) == 13
+    print(f"availability {rec['metrics']['availability_rate']['mean']} over n="
+          f"{rec['metrics']['availability_rate']['n']}, scored_fraction "
+          f"{rec['scored_fraction']:.2f} -> gate ok={g['ok']}")
+
+
+def test_an_unscored_scenario_can_be_acknowledged_like_an_inviolable_one() -> None:
+    """A channel nobody can discharge gets `|| true`'d and takes the rest dark with it.
+
+    Keyed on the `(scenario, reason)` PAIR — not on the reason alone — so signing for one substrate's
+    known oracle outage does not silence every unscored row in the corpus. And NOT a
+    `scored_fraction >= 0.9` floor: a floor is a tuning constant, and this repo has already refused
+    a fix draft built on one (R3.12).
+    """
+    rows = [scored("fine", outcome=O.OK),
+            O.Scored(truth=O.ScenarioTruth(name="known"), run=a_run("known"),
+                     verdict=O.Verdict(O.UNSCORED, reason="oracle_unavailable"))]
+    rec = build(rows)
+    assert O.gate_bench_record(rec)["ok"] is False
+
+    g = O.gate_bench_record(rec, acknowledged=[("known", "oracle_unavailable")])
+    assert g["ok"] is True
+    assert [f["acknowledged"] for f in g["findings"]] == [True], g["findings"]
+
+    other = O.gate_bench_record(rec, acknowledged=[("someone_else", "oracle_unavailable")])
+    assert other["ok"] is False, "the acknowledgement is keyed on the PAIR, not on the reason"
+    print(f"unscored('known', 'oracle_unavailable') acknowledged -> ok={g['ok']}, still reported; "
+          f"a different scenario's acknowledgement does not discharge it")
+
+
+def test_a_fully_scored_corpus_has_no_coverage_findings() -> None:
+    """The other direction, or channel 0 is satisfied by failing every run."""
+    g = O.gate_bench_record(build([scored("a", outcome=O.OK), scored("b", outcome=O.REFUSED)]))
+    assert g["ok"] is True and g["findings"] == []
+    print("a fully-scored corpus -> no coverage findings")

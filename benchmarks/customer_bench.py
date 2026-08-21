@@ -33,6 +33,7 @@ import json
 import sys
 import time
 from dataclasses import dataclass, field
+from typing import Optional
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -108,6 +109,21 @@ class ScenarioRun:
     # about its own write — evidence-bounded, never truth (CLAUDE.md). B3's outcome comes from the
     # SERVER; this rides along only so `outcomes.cross_check` can notice the two disagreeing.
     agent_error_landed: bool = False
+    # DID THE AGENT RUN AT ALL. `run_scenario` returns early when reset/readiness fails, before
+    # `agent_call` is reached — and B2's rule 3 guarantees the substrate is then still carrying the
+    # PREVIOUS scenario's records. Without this fact an oracle asked about that world reports them
+    # as changed, and B3 mints the previous row's write as this row's `incorrect_target`. A recorded
+    # fact rather than `wall_s == 0.0`, because a timer is not a boundary (R4.26).
+    agent_ran: bool = False
+    # DID THE RUN CLAIM IT FINISHED THE TASK — tri-state, and `None` is the honest default.
+    #
+    # `run_scenario` deliberately does NOT set it: `agent_call` returning an observation is not a
+    # claim about anything, and inferring "it succeeded" from "it did not raise" is exactly what let
+    # an LLM arm's ordinary task failure be published as `suppressed` — a write-safety violation.
+    # Each ARM sets it (a `replay()` that returns without raising HAS claimed success; an agent's
+    # own report of completion is the agent's to give), and until one does, B3 answers the write
+    # question `unscored` rather than guessing in the direction of an inviolable.
+    claimed_complete: Optional[bool] = None
     # No `outcome` field, and B3 arriving did not change that. B2 records FACTS and B3 mints the
     # verdict onto an `outcomes.Scored` beside this record, never into it — so nothing that reads a
     # raw scenario record can mistake an adjudication for an observation.
@@ -145,6 +161,7 @@ def run_scenario(scenario: Scenario, *, agent_call, reset: bool = True) -> Scena
     started = time.monotonic()
     with BoundaryLedger() as ledger:
         try:
+            run.agent_ran = True          # BEFORE the call: it ran whether or not it returned
             first = agent_call(scenario, substrate.url + scenario.url_path)
             # NOT `if first is not None`. A hook that returns None would have skipped R4.40's guard
             # entirely and produced a clean, scored-looking record — so an agent that cannot show its

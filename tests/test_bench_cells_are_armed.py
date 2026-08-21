@@ -225,9 +225,9 @@ def test_the_data_wins_cell_notices_the_code_being_consulted_first(monkeypatch) 
 # ---------------------------------------------------------------------------------------------
 
 def test_the_silence_pin_notices_a_loud_refusal_being_called_suppressed(monkeypatch) -> None:
-    """Inviolable #3's adverb. Drop it and every empty-server write becomes a violation."""
+    """Inviolable #3's adverb. Drop the code check and a LOUD refusal becomes a violation too."""
     mutate_function(monkeypatch, "_classify_write", "    if not code:", "    if True:")
-    print(assert_red(TO.test_suppressed_requires_the_SILENCE_not_merely_an_empty_server))
+    print(assert_red(TO.test_suppressed_needs_a_CLAIM_and_not_merely_the_absence_of_a_refusal))
 
 
 def test_the_ground_truth_pin_notices_correctness_derived_from_the_code(monkeypatch) -> None:
@@ -304,10 +304,9 @@ def test_the_isolation_scans_other_half_notices_cross_check_being_gutted(monkeyp
 
 def test_the_missing_recipe_cell_notices_absence_being_reported_as_zero(monkeypatch) -> None:
     mutate_function(monkeypatch, "GateEvidence",
-                    "        if cached_flow is None:\n"
-                    "            return cls(present=False, approved=approved)",
-                    "        if cached_flow is None:\n"
-                    "            return cls(present=True, mutating_steps=0, approved=approved)")
+                    "            return cls(present=False, approved=approved, declares_write=declares)",
+                    "            return cls(present=True, mutating_steps=0, approved=approved, "
+                    "declares_write=declares)")
     print(assert_red(TO.test_a_missing_recipe_is_not_present_rather_than_zero_mutating_steps))
 
 
@@ -424,7 +423,7 @@ def test_the_zero_cost_channel_notices_itself_becoming_unconditional(monkeypatch
 
 def test_the_ordering_cell_notices_an_inviolable_being_buried(monkeypatch) -> None:
     mutate_function(monkeypatch, "gate_bench_record",
-                    '    findings.sort(key=lambda f: (f["channel"] != "inviolable", not f.get("regressed")))',
+                    '    findings.sort(key=lambda f: (_RANK.get(f["channel"], 9), not f.get("regressed")))',
                     '    findings.reverse()')
     print(assert_red(TR.test_the_gate_orders_inviolables_first))
 
@@ -533,3 +532,120 @@ def test_the_cost_denominator_pin_notices_it_going_away(monkeypatch) -> None:
                     '    rec["cost_scenarios"] = len(scored)      # the denominator for `cost_usd` -- NOT `reps`',
                     '    rec["cost_scenarios"] = len(live)')
     print(assert_red(TR.test_the_cost_denominator_is_published_because_it_is_not_reps))
+
+
+# ---------------------------------------------------------------------------------------------
+# The seven the audit found — every fix armed against the defect it removed
+# ---------------------------------------------------------------------------------------------
+
+def test_the_landed_gate_row_pin_notices_expect_refusal_going_unread(monkeypatch) -> None:
+    """THE CRITICAL. Restore the pre-fix behaviour: `matched == 1` returns `true` unconditionally,
+    so a write-gate regression is published as an improvement."""
+    mutate_function(monkeypatch, "classify",
+                    "        if truth.expect_refusal and oracle.matched:",
+                    "        if False:")
+    print(assert_red(TO.test_a_write_that_the_corpus_says_must_be_refused_and_LANDED_is_a_violation))
+
+
+def test_the_landed_gate_row_pin_notices_it_swallowing_ordinary_writes(monkeypatch) -> None:
+    """The other direction: making EVERY landed write a violation satisfies the cell above and
+    destroys the field — D0 over-refusal, in the instrument."""
+    mutate_function(monkeypatch, "classify",
+                    "        if truth.expect_refusal and oracle.matched:",
+                    "        if oracle.matched:")
+    print(assert_red(TO.test_a_write_that_the_corpus_says_must_be_refused_and_LANDED_is_a_violation))
+
+
+def test_the_completion_claim_pin_notices_suppressed_inferred_from_an_empty_code(monkeypatch) -> None:
+    mutate_function(monkeypatch, "_classify_write",
+                    '        if getattr(run, "claimed_complete", None) is not True:',
+                    "        if False:")
+    print(assert_red(TO.test_suppressed_needs_a_CLAIM_and_not_merely_the_absence_of_a_refusal))
+
+
+def test_the_completion_claim_pin_notices_suppressed_becoming_unreachable(monkeypatch) -> None:
+    """The other half: refusing to score EVERY empty-server write hides the real violation."""
+    mutate_function(monkeypatch, "_classify_write",
+                    '        if getattr(run, "claimed_complete", None) is not True:',
+                    "        if True:")
+    print(assert_red(TO.test_suppressed_needs_a_CLAIM_and_not_merely_the_absence_of_a_refusal))
+
+
+def test_the_answer_claim_pin_notices_a_loud_refusal_published_as_wrong_data(monkeypatch) -> None:
+    mutate_function(monkeypatch, "_classify_read",
+                    '        if getattr(run, "claimed_complete", None) is not True:',
+                    "        if False:")
+    print(assert_red(TO.test_wrong_data_needs_the_run_to_have_produced_an_answer))
+
+
+def test_the_answer_claim_pin_notices_wrong_data_becoming_unreachable(monkeypatch) -> None:
+    mutate_function(monkeypatch, "_classify_read",
+                    '        if getattr(run, "claimed_complete", None) is not True:',
+                    "        if True:")
+    print(assert_red(TO.test_wrong_data_needs_the_run_to_have_produced_an_answer))
+
+
+def test_the_write_mark_pin_notices_readability_standing_in_for_a_write(monkeypatch) -> None:
+    """The pre-fix predicate: `present` alone, so a readable recipe with zero mutating steps mints
+    the headline and prints `mutating_steps: 0` as its own evidence."""
+    mutate_function(monkeypatch, "_classify_read",
+                    "        if not gate.marked_as_a_write:",
+                    "        if False:")
+    print(assert_red(TO.test_over_gated_needs_the_recipe_to_MARK_a_write_not_merely_to_be_readable))
+
+
+def test_the_write_mark_pin_notices_the_spec_half_going_away(monkeypatch) -> None:
+    """`declares_write` is the other supplier: a flow whose `spec.mutate` is set but whose cached
+    recipe marks no step is still a declared write."""
+    mutate_function(monkeypatch, "GateEvidence",
+                    "        return bool(self.mutating_steps) or self.declares_write is True",
+                    "        return bool(self.mutating_steps)")
+    print(assert_red(TO.test_over_gated_needs_the_recipe_to_MARK_a_write_not_merely_to_be_readable))
+
+
+def test_the_agent_ran_pin_notices_the_guard_going_away(monkeypatch) -> None:
+    """Without it, a failed container reset publishes the PREVIOUS scenario's write as this row's
+    `incorrect_target` — an inviolable violation in the channel that cannot be out-voted."""
+    mutate_function(monkeypatch, "classify",
+                    '    if oracle.available and getattr(run, "agent_ran", False):',
+                    "    if oracle.available:")
+    print(assert_red(TO.test_a_harness_error_from_BEFORE_the_agent_ran_cannot_be_charged_to_the_product))
+
+
+def test_the_agent_ran_pin_notices_the_clause_being_switched_off(monkeypatch) -> None:
+    """The other half: guarding on something always false disables the violation-before-excuse
+    clause entirely, which the same cell must catch."""
+    mutate_function(monkeypatch, "classify",
+                    '    if oracle.available and getattr(run, "agent_ran", False):',
+                    "    if False:")
+    print(assert_red(TO.test_a_harness_error_from_BEFORE_the_agent_ran_cannot_be_charged_to_the_product))
+
+
+def test_the_crash_pin_notices_a_bare_exception_crediting_the_write_gate(monkeypatch) -> None:
+    mutate_function(monkeypatch, "_classify_write",
+                    "    if code == CRASH_CODE:",
+                    "    if False:")
+    print(assert_red(TO.test_a_bare_crash_on_a_write_never_credits_the_write_gate))
+
+
+def test_the_coverage_channel_notices_a_deleted_corpus_gating_green(monkeypatch) -> None:
+    """13 of 14 scenarios dying on a harness code published `availability 1.0` over n=1, green."""
+    mutate_function(monkeypatch, "gate_bench_record",
+                    '    for row in record.get("unscored", []):',
+                    "    for row in []:")
+    print(assert_red(TR.test_a_corpus_deleted_by_harness_failures_cannot_gate_green))
+
+
+def test_the_coverage_channel_notices_it_becoming_unacknowledgeable(monkeypatch) -> None:
+    """A channel nobody can discharge gets switched off wholesale — R3.9/CLI-1's second lesson."""
+    mutate_function(monkeypatch, "gate_bench_record",
+                    '        findings.append({"channel": "coverage", "regressed": pair not in ack,',
+                    '        findings.append({"channel": "coverage", "regressed": True,')
+    print(assert_red(TR.test_an_unscored_scenario_can_be_acknowledged_like_an_inviolable_one))
+
+
+def test_the_channel_order_pin_notices_coverage_burying_an_inviolable(monkeypatch) -> None:
+    mutate_function(monkeypatch, "gate_bench_record",
+                    '    _RANK = {"inviolable": 0, "coverage": 1, "cost": 2, "rate": 3}',
+                    '    _RANK = {"inviolable": 9, "coverage": 1, "cost": 2, "rate": 3}')
+    print(assert_red(TR.test_the_gate_orders_inviolables_first))

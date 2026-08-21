@@ -371,9 +371,39 @@ def test_adjudicate_mints_the_verdict_BEFORE_it_looks_at_the_record(substrate) -
         ok, committed, failure_code = True, True, ""
 
     run = CB.run_scenario(SCEN, agent_call=lambda s, url: _Obs(40))
+    # The ARM's claim, which `run_scenario` deliberately does not infer. Without it the write
+    # question is unanswerable and there is no verdict for the record to disagree with.
+    run.claimed_complete = True
     s = O.adjudicate(O.ScenarioTruth(name=run.scenario, mutating=True), run, O.Oracle(),
                      record=_Rec())
     assert s.verdict.outcome == O.SUPPRESSED, s.verdict
     assert len(s.disagreements) == 2, s.disagreements
     print(f"record says ok/committed; server holds nothing -> verdict {s.verdict.outcome}, "
           f"{len(s.disagreements)} disagreement(s) {[d['field'] for d in s.disagreements]}")
+
+
+def test_run_scenario_records_that_the_agent_ran_and_claims_nothing_for_it(substrate) -> None:
+    """Two facts B3 needs and one of them `run_scenario` must NOT invent.
+
+    `agent_ran` it can know — it is set immediately before `agent_call`. `claimed_complete` it
+    cannot: an `agent_call` that returns an observation has not claimed the task is done, and
+    inferring success from "it did not raise" is what let an ordinary agent failure be published as
+    a write-safety violation. Each arm sets it; the harness leaves it None.
+    """
+    ok = CB.run_scenario(SCEN, agent_call=lambda s, url: _Obs(40))
+    assert ok.agent_ran is True
+    assert ok.claimed_complete is None, "the harness inferred a completion claim it cannot know"
+
+    def boom(scenario, url):
+        raise flows.DriftError("drifted")
+
+    raised = CB.run_scenario(SCEN, agent_call=boom)
+    assert raised.agent_ran is True, "the agent ran; it just did not finish"
+
+    substrate.fail_reset = True
+    never = CB.run_scenario(SCEN, agent_call=lambda s, url: _Obs(40))
+    assert never.agent_ran is False, (
+        "a scenario abandoned before `agent_call` reports the agent as having run, so an oracle's "
+        "view of the un-reset substrate is charged to this row")
+    print(f"ok={ok.agent_ran} raised={raised.agent_ran} never-ran={never.agent_ran}; "
+          f"claimed_complete stays {ok.claimed_complete!r}")

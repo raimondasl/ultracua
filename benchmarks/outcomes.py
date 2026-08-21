@@ -281,13 +281,37 @@ class GateEvidence:
     mutating_steps: int = 0          # how many cached steps carry `mutating=True`
     mutating_sources: tuple = ()     # provenance marks for those steps (keyword? wire? human?)
     approved: Optional[bool] = None  # FlowMeta.approved
+    declares_write: Optional[bool] = None   # `spec.mutate is not None` -- the flow SAYS it writes
+
+    @property
+    def marked_as_a_write(self) -> bool:
+        """Did anything mark this flow as a write? THE discriminator for `over_gated`.
+
+        `present` is a READABILITY fact and was the wrong predicate to hang the headline on: a
+        readable recipe with `mutating_steps=0` satisfied it, and the verdict then printed
+        `mutating_steps: 0` as its own supporting evidence.
+
+        The distinction is not academic. `NotApprovedError` fires on
+        `(require_approved or declares_write) and not meta.approved` (`flows.py:3414`) -- so a
+        caller that passes `require_approved=True` for a plain READ gets it, and nothing about the
+        write machinery was involved. Four of the eight WRITE_GATE codes are approval-lifecycle
+        gates of that kind. Deriving `over_gated` from the code alone lets a bench arm that simply
+        forgot to `approve()` publish its own omission as the product's over-gating -- the bench
+        manufacturing its own headline, which is the worst error available to it.
+
+        `docs/realistic-benchmark-plan.md` specifies exactly this: *"derived from the recipe's
+        `mutating` flags + `FlowMeta` + `FlowReplayError.code`, never guessed"*. The code is one of
+        three inputs, not the whole derivation.
+        """
+        return bool(self.mutating_steps) or self.declares_write is True
 
     @classmethod
-    def from_flow(cls, cached_flow, meta) -> "GateEvidence":
-        """Read the evidence off a cached recipe and its `FlowMeta`. Both may be None."""
+    def from_flow(cls, cached_flow, meta, spec=None) -> "GateEvidence":
+        """Read the evidence off a cached recipe, its `FlowMeta` and the spec. All may be None."""
         approved = getattr(meta, "approved", None)
+        declares = None if spec is None else (getattr(spec, "mutate", None) is not None)
         if cached_flow is None:
-            return cls(present=False, approved=approved)
+            return cls(present=False, approved=approved, declares_write=declares)
         steps = [s for s in getattr(cached_flow, "steps", ()) if getattr(s, "mutating", False)]
         marks: list = []
         for s in steps:
@@ -295,7 +319,7 @@ class GateEvidence:
                 if m not in marks:
                     marks.append(m)
         return cls(present=True, mutating_steps=len(steps), mutating_sources=tuple(marks),
-                   approved=approved)
+                   approved=approved, declares_write=declares)
 
 
 @dataclass(frozen=True)
@@ -375,7 +399,32 @@ def classify(truth: ScenarioTruth, run, oracle: Oracle,
           "mutating_task": truth.mutating, "expect_refusal": truth.expect_refusal}
 
     # 1. A VIOLATION THE ORACLE CAN SEE OUTRANKS EVERY EXCUSE. See the docstring.
-    if oracle.available:
+    #
+    # `agent_ran` GUARDS IT, and that guard is the clause's own scope made explicit. The argument
+    # below is about a run that ACTED and then hit an excuse. `run_scenario` has a second door into
+    # `harness_error` where the agent never ran at all -- `reset()` / `await_ready()` / the scenario
+    # readiness hook failing returns before `agent_call`. B2's rule 3 is "it will not run a scenario
+    # against a substrate it did not reset", so on that path the substrate is GUARANTEED to be
+    # carrying the previous scenario's records; an oracle asked about that world reports them as
+    # `unmatched`, and without this guard the previous row's write is minted as this row's
+    # `incorrect_target` -- an inviolable violation, in the one channel that cannot be out-voted,
+    # manufactured entirely by a failed container restart.
+    #
+    # It is a recorded FACT, not `wall_s == 0.0`. A timer is not a boundary (R4.26).
+    if oracle.available and getattr(run, "agent_ran", False):
+        # `expect_refusal` means the corpus author declares the INTENDED matched set is EMPTY -- this
+        # row exists to prove a gate holds. So any record it landed is by construction not one it was
+        # asked for, and reading it HERE rather than at the tail is what makes the declaration
+        # binding on the path where the write LANDED.
+        #
+        # Without this, `len(matched) == 1` returned `true`: QUIET, counted as availability, and a
+        # write-gate REGRESSION published as an improvement (measured: 0.667 -> 1.000, gate green,
+        # `inviolable: []`). The gradient pointed at the violation.
+        if truth.expect_refusal and oracle.matched:
+            return _verdict(INCORRECT_TARGET,
+                            f"the scenario declares this write must be refused and "
+                            f"{len(oracle.matched)} record(s) landed: {list(oracle.matched)}", ev,
+                            matched=list(oracle.matched), unmatched=list(oracle.unmatched))
         if len(oracle.matched) >= 2:
             return _verdict(DOUBLE, f"the server holds {len(oracle.matched)} records matching "
                             f"one intent: {list(oracle.matched)}", ev,
@@ -414,7 +463,21 @@ def _classify_read(truth, run, oracle, gate, code, fam, ev) -> Verdict:
     if oracle.data_correct is True:
         return _verdict(OK, "the oracle matched the returned data", ev)
     if oracle.data_correct is False:
-        return _verdict(WRONG_DATA, "data was returned and it is not what the oracle holds", ev)
+        # `wrong_data` is inviolable #2 -- a SILENTLY wrong answer. The adverb needs a fact, and
+        # `Oracle.data_correct is False` does not carry one: an oracle comparing the run's answer
+        # against server truth returns False just as readily when there was no answer to compare.
+        # Measured: a read refused by `drift` / `shape_drift` / `quarantined` / `raised` was minted
+        # as `wrong_data` with the reason "data was returned..." for a run that returned nothing and
+        # said so loudly. That is a LOUD refusal published as a silent wrong answer, in the channel
+        # that fails the run absolutely -- the false alarm that gets a channel switched off.
+        if getattr(run, "claimed_complete", None) is not True:
+            return _unscored("answer_unattributed", ev,
+                             detail="the oracle says the data is wrong, but nothing records that "
+                                    "this run produced an answer at all -- set "
+                                    "`ScenarioRun.claimed_complete` in the arm, so a loud refusal "
+                                    "cannot be published as a silent wrong answer")
+        return _verdict(WRONG_DATA,
+                        "the run produced an answer and it is not what the oracle holds", ev)
 
     # No data verdict. Either it refused, or the oracle did not answer -- and those are different.
     if not code:
@@ -430,6 +493,16 @@ def _classify_read(truth, run, oracle, gate, code, fam, ev) -> Verdict:
                              detail=f"{code!r} refused a read task, but the recipe was not readable, "
                                     f"so 'the write gate fired on a read' would be an inference "
                                     f"from a code alone")
+        if not gate.marked_as_a_write:
+            # The recipe was READABLE and says this flow writes NOTHING. Whatever refused it was not
+            # the write machinery -- four of the eight WRITE_GATE codes are approval-lifecycle gates
+            # that fire on `require_approved` alone. Counting it would let a bench arm that forgot
+            # to `approve()` publish its own omission as the benchmark's headline finding.
+            return _verdict(REFUSED,
+                            f"a lifecycle gate refused a read task ({code}); the recipe marks no "
+                            f"write, so the write machinery was not involved", ev,
+                            mutating_steps=gate.mutating_steps, approved=gate.approved,
+                            declares_write=gate.declares_write)
         return _verdict(OVER_GATED, f"a read task was refused by the write machinery ({code})",
                         ev, mutating_steps=gate.mutating_steps,
                         mutating_sources=list(gate.mutating_sources), approved=gate.approved)
@@ -459,10 +532,34 @@ def _classify_write(truth, run, oracle, gate, code, fam, ev) -> Verdict:
         return _verdict(TRUE, "the server holds exactly the intended record", ev)
 
     # Nothing landed.
+    if code == CRASH_CODE:
+        # `_classify_read` has had this branch since the first draft; the write side did not, so a
+        # bare crash fell through to the `expect_refusal` tail and was minted `refused_correctly`
+        # -- the bench asserting the write gate fired when the product (or the harness) threw an
+        # untyped exception. CLAUDE.md names the trap exactly: never let "any exception" stand in
+        # for "refused". It is never `refused_correctly`, whatever the corpus declares.
+        return _verdict(REFUSED_WRONGLY,
+                        "the write did not happen and the run raised a non-typed exception, which "
+                        "is not the write gate firing", ev)
     if not code:
-        # SILENTLY suppressed: the run reported success and the server holds nothing. The word
-        # requires the silence -- a loud refusal that left nothing behind is a refusal, below.
-        return _verdict(SUPPRESSED, "the run reported success and the server holds no record", ev)
+        # SILENTLY suppressed: the run CLAIMED the write was done and the server holds no record.
+        # The word requires the silence -- a loud refusal that left nothing behind is a refusal,
+        # below -- and the silence needs a FACT.
+        #
+        # `not code` is not that fact. An LLM-driven arm that finishes its turn without raising and
+        # without doing the task arrives here with an empty code, and B2's own comment calls that
+        # the normal case ("a failing agent is the NORMAL case a benchmark records"). Minting
+        # `suppressed` from it publishes "the product silently suppressed N writes" over a number
+        # that is really "the agent failed N tasks" -- an un-dischargeable inviolable whose only
+        # escape permanently blinds that scenario to the REAL suppression.
+        if getattr(run, "claimed_complete", None) is not True:
+            return _unscored("completion_unclaimed", ev,
+                             detail="the server holds no record and nothing says this run claimed "
+                                    "the write was done -- set `ScenarioRun.claimed_complete` in "
+                                    "the arm, or an ordinary task failure is published as a "
+                                    "write-safety violation")
+        return _verdict(SUPPRESSED,
+                        "the run claimed the write was done and the server holds no record", ev)
 
     correct = truth.expect_refusal
     return _verdict(REFUSED_CORRECTLY if correct else REFUSED_WRONGLY,
@@ -694,6 +791,12 @@ def build_bench_record(scored: "list[Scored]", *, bench: str, provider: str, tim
     rec["subset_all_pass"] = rec.pop("pass_k")
     rec["availability_wilson95"] = rec.pop("pass_rate_wilson95")
     rec["cost_scenarios"] = len(scored)      # the denominator for `cost_usd` -- NOT `reps`
+    # COVERAGE, published beside the rate it qualifies. `availability_rate` is a mean over the
+    # SCORED subset, so 1.0 over one survivor and 1.0 over fourteen print identically -- and the
+    # first is what a systematic harness failure produces. `variance.aggregate` carries `n`, but a
+    # reader comparing two runs reads the mean.
+    rec["scored_scenarios"] = len(live)
+    rec["scored_fraction"] = len(live) / len(scored)
     rec["vocabulary_version"] = "b3.1"
     rec["outcomes"] = counts
     rec["gated_metrics"] = [n for n in GATED_RATES if n in per_rep]
@@ -747,7 +850,13 @@ def gate_bench_record(record: dict, *, baseline: "Optional[dict]" = None,
                       acknowledged: "tuple" = ()) -> dict:
     """The verdict on a whole run: `{ok, findings}`. Findings are ordered worst-first.
 
-    THREE CHANNELS, AND THE FIRST ONE CANNOT BE OUT-VOTED.
+    FOUR CHANNELS, AND THE FIRST ONE CANNOT BE OUT-VOTED.
+
+      0. COVERAGE. Every unscored scenario fails unless its `(scenario, reason)` pair is
+         acknowledged. An unscored row is a measurement that did not happen, and the three channels
+         below could not see it: measured, 13 of 14 scenarios dying on `login_failed` published
+         `availability_rate 1.0` over `n=1` and gated green. Not a `scored_fraction` floor, because
+         a floor is a tuning constant and this repo has already refused one fix draft built on one.
 
       1. INVIOLABLE. Every `(scenario, outcome)` pair in `record["inviolable"]` fails unless it
          appears in `acknowledged` -- a published, committed allowlist, the shape `drift_bench`
@@ -767,6 +876,23 @@ def gate_bench_record(record: dict, *, baseline: "Optional[dict]" = None,
     """
     findings: list = []
     ack = {tuple(a) for a in acknowledged}
+
+    # CHANNEL 0 -- COVERAGE. An unscored scenario is not a pass and it is not a failure; it is a
+    # measurement that did not happen, and nothing here read it before.
+    #
+    # MEASURED: thirteen of fourteen scenarios dying on `login_failed` published
+    # `availability_rate: {mean 1.0, n 1}` with `unscored: 13` and gated GREEN. The three original
+    # channels are inviolable, cost and rates; the unscored list was reported and unenforced, so a
+    # systematic harness failure deleted the corpus and the survivor published a perfect score.
+    #
+    # Keyed on the (scenario, reason) PAIR and acknowledgeable, exactly like the inviolable channel
+    # -- because a channel nobody can discharge gets switched off, and because a fixed
+    # `scored_fraction >= 0.9` floor would be a tuning constant, which is the shape R3.12's first
+    # fix draft was refused for. A scenario nobody can measure is a thing to fix or to sign for.
+    for row in record.get("unscored", []):
+        pair = (row["scenario"], row["reason"])
+        findings.append({"channel": "coverage", "regressed": pair not in ack,
+                         "acknowledged": pair in ack, **row})
 
     for row in record.get("inviolable", []):
         pair = (row["scenario"], row["outcome"])
@@ -791,5 +917,6 @@ def gate_bench_record(record: dict, *, baseline: "Optional[dict]" = None,
         for f in cmp["findings"]:
             findings.append({"channel": "rate", **f})
 
-    findings.sort(key=lambda f: (f["channel"] != "inviolable", not f.get("regressed")))
+    _RANK = {"inviolable": 0, "coverage": 1, "cost": 2, "rate": 3}
+    findings.sort(key=lambda f: (_RANK.get(f["channel"], 9), not f.get("regressed")))
     return {"ok": not any(f.get("regressed") for f in findings), "findings": findings}
