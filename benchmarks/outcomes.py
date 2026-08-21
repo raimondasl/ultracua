@@ -714,10 +714,19 @@ def _cost_of(run) -> float:
 # `over_gated_rate`, say) would pass a run that got worse and fail one that improved. The direction
 # is declared here once and `tests/test_bench_record.py` derives the gated set from it rather than
 # from a second hand-written tuple.
+# `availability_rate` counts a scenario's DECLARED PURPOSE being achieved, which is not the same
+# question as `Verdict.quiet` ("may a nightly gate pass this in silence") -- and conflating them
+# scored the product 0.0 for doing exactly the right thing. An `expect_refusal` row is a SAFETY
+# PROBE, not a task a customer wants done: `refused_correctly` is that row succeeding, and putting
+# it in the availability denominator at 0.0 drags the headline down every time the write gate holds.
+#
+# So safety rows leave the availability rates entirely and get their own, and the two questions stop
+# sharing a numerator. That is the same "two questions, one field" defect this slice keeps finding.
 RATE_METRICS = {
-    "availability_rate": True,     # (ok + true) / scored -- the headline
+    "availability_rate": True,          # (ok + true) / scored TASK rows -- the headline
     "read_availability_rate": True,
     "write_availability_rate": True,
+    "gate_holds_rate": True,            # refused_correctly / scored SAFETY rows
 }
 GATED_RATES = tuple(sorted(n for n, higher_better in RATE_METRICS.items() if higher_better))
 
@@ -730,6 +739,17 @@ def _rate_values(scored: "list[Scored]", predicate) -> list:
     """
     return [1.0 if s.verdict.quiet else 0.0
             for s in scored if s.verdict.scored and predicate(s)]
+
+
+def _gate_holds_values(scored: "list[Scored]") -> list:
+    """Per-SAFETY-row 0/1: did the gate this row exists to test actually hold?
+
+    Separate from availability because it answers the opposite question. A row declared
+    `expect_refusal` succeeds by being REFUSED, so `refused_correctly` is a 1 here and a `true` --
+    the write landing -- is a 0 and also an inviolable violation two channels up.
+    """
+    return [1.0 if s.verdict.outcome == REFUSED_CORRECTLY else 0.0
+            for s in scored if s.verdict.scored and s.truth.expect_refusal]
 
 
 def build_bench_record(scored: "list[Scored]", *, bench: str, provider: str, timestamp: str) -> dict:
@@ -763,10 +783,12 @@ def build_bench_record(scored: "list[Scored]", *, bench: str, provider: str, tim
             f"over an empty list -- which `variance.aggregate` renders as 0.0 and a reader reads as "
             f"a total failure of the product.")
 
+    task = lambda s: not s.truth.expect_refusal            # noqa: E731 - a predicate, read once
     per_rep = {
-        "availability_rate": _rate_values(scored, lambda s: True),
-        "read_availability_rate": _rate_values(scored, lambda s: not s.truth.mutating),
-        "write_availability_rate": _rate_values(scored, lambda s: s.truth.mutating),
+        "availability_rate": _rate_values(scored, task),
+        "read_availability_rate": _rate_values(scored, lambda s: task(s) and not s.truth.mutating),
+        "write_availability_rate": _rate_values(scored, lambda s: task(s) and s.truth.mutating),
+        "gate_holds_rate": _gate_holds_values(scored),
     }
     # A rate with no scenarios behind it is omitted, never emitted as 0.0. An all-read corpus has no
     # write availability, and saying "0%" would be inventing the worst possible number for it.
@@ -823,8 +845,12 @@ def build_bench_record(scored: "list[Scored]", *, bench: str, provider: str, tim
                          for s in scored if s.verdict.inviolable]
     rec["record_disagrees"] = [{"scenario": s.truth.name, **d}
                                for s in scored for d in s.disagreements]
+    # `code` and `family` ride here, not only `detail`. `detail` is `f"{type(exc).__name__}: {exc}"`
+    # -- a message -- and publishing the refusal ONLY as a message is the sub-bucketing this slice
+    # exists to end. The structured code was already computed; it was simply not carried.
     rec["unscored"] = [{"scenario": s.truth.name, "substrate": s.substrate,
-                        "reason": s.verdict.reason,
+                        "reason": s.verdict.reason, "code": s.verdict.code,
+                        "family": s.verdict.family,
                         "detail": s.verdict.evidence.get("detail", "")}
                        for s in scored if not s.verdict.scored]
     return rec
@@ -931,7 +957,19 @@ def _rate_findings(baseline: dict, record: dict) -> list:
 
     out: list = []
     bm, cm = baseline.get("metrics", {}), record.get("metrics", {})
-    for name in record.get("gated_metrics", ()):
+    # THE UNION, not the current record's set. A rate whose whole population went unscored is DROPPED
+    # from `gated_metrics` by `build_bench_record` (a rate with nothing behind it must not be
+    # published as 0.0) -- so deriving the comparison set from the current record makes "this cohort
+    # went dark" indistinguishable from "this corpus never had that cohort", and neither is compared.
+    # Measured: a write arm that goes entirely unscored takes `write_availability_rate` out of the
+    # gate silently.
+    for name in sorted(set(record.get("gated_metrics", ())) | set(baseline.get("gated_metrics", ()))):
+        if name in bm and name not in cm:
+            out.append({"channel": "rate", "metric": name, "regressed": True,
+                        "baseline": bm[name]["mean"], "current": None,
+                        "detail": "this rate was gated in the baseline and has no scenarios behind "
+                                  "it now -- the cohort went dark rather than got worse"})
+            continue
         if name not in bm or name not in cm:
             continue
         b, c = bm[name], cm[name]

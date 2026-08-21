@@ -542,6 +542,19 @@ server-side oracle + the corpus author's ground truth); a scenario record is an 
   rate, not of this channel: the same single flip on a corpus with ONE write scenario takes
   `write_availability_rate` 1.0 → 0.0 and Wilson's bound on 1/1 is 0.207, so the aggregate catches it.
   B5's repeated nightly is where a flip itself becomes gateable.
+* **`availability_rate` counts a scenario's DECLARED PURPOSE, which is not `Verdict.quiet`.** They
+  were the same predicate, so `refused_correctly` — the product doing exactly the right thing on a
+  row written to prove a write gate holds — scored **0.0 on the headline**. An `expect_refusal` row
+  is a safety probe, not a task a customer wants done: it leaves the availability rates entirely and
+  gets `gate_holds_rate`, where being refused is the 1. Two questions, one numerator — the shape this
+  slice kept finding.
+* **`CODE_FAMILY`'s ASSIGNMENT is a committed table, not just its totality.** `UNSCORED_FAMILIES`
+  deletes a scenario from every denominator, so a code moved into HARNESS does not produce a wrong
+  number — it produces a MISSING one and the mean goes UP. Measured by sweeping all 28 assignments:
+  13 were caught by other cells and **two were not** — `escalate` (the commonest way a 0-LLM replay
+  arm fails) and `auth_expired`, which between them lifted availability 78.6% → 100% with every cell
+  green. Two cross-axis properties are DERIVED beside the table: `WRITE_GATE ⇒ can_follow_actuation
+  is False`, and `landed is True ⇒ POST_ACTUATION`.
 * **The gate has FIVE channels and channel 0 is coverage.** Measured: 13 of 14 scenarios dying on
   `login_failed` published `availability_rate {mean 1.0, n 1}` with `unscored: 13` and gated GREEN —
   the unscored list was reported and read by nothing. Every unscored row now fails unless its
@@ -566,7 +579,7 @@ The OSError one recurred TWICE more in cells added an hour later, which is what 
 the cell to the harness: `mutate_function` now compiles under a `.py` path registered in `linecache`
 so a mutant has retrievable source, and asserts that before handing it over.
 **When you build an arming matrix here, tally the EXCEPTION TYPES** — a matrix with no
-`AssertionError` behind a cell is a cell that died on the way rather than noticed. Today: 59
+`AssertionError` behind a cell is a cell that died on the way rather than noticed. Today: 67
 AssertionError, 5 `pytest.raises` DID-NOT-RAISE, 2 KeyError, 1 BenchRecordError, zero crashes.
 
 ## The pattern that predicts the next bug

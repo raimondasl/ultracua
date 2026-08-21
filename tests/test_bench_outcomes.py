@@ -113,9 +113,18 @@ def test_family_of_raises_rather_than_defaulting() -> None:
 def test_the_quiet_set_is_an_allowlist_and_unscored_is_not_in_it() -> None:
     """R3.9/CLI-1, applied to a benchmark. Quiet is enumerated; loud is the complement.
 
-    `unscored` NOT being quiet is the clause worth an assertion of its own: an unscored scenario is
-    removed from every denominator, and a nightly gate that treated it as a pass would let a
-    substrate that never came up report as a clean run.
+    THE HAZARD THIS DOCSTRING USED TO NAME WAS UNREACHABLE, and saying so is the point. It claimed
+    that `unscored` in the quiet set "would let a substrate that never came up report as a clean
+    run". Measured: adding `UNSCORED` to `QUIET_OUTCOMES` changes no number anywhere, because every
+    consumer of `Verdict.quiet` filters on `.scored` FIRST — 121 of 121 other cells still passed
+    under that mutation, and the only kill was this cell's own literal restatement. A guard whose
+    stated hazard cannot happen is a tautology-checker wearing a behavioural claim.
+
+    The real hazard was a corpus that SHRANK, and it is `gate_bench_record`'s channel 0 that closes
+    it, not this constant. What this cell legitimately pins is the TABLE: a member added here is a
+    deliberate decision to stop looking at something, reviewed in the diff. The behavioural half is
+    `test_a_loud_outcome_is_never_counted_as_available`, and the arming cell mutates a member whose
+    membership actually moves a number.
     """
     assert O.QUIET_OUTCOMES == {O.OK, O.TRUE}, (
         f"the quiet allowlist grew to {sorted(O.QUIET_OUTCOMES)} — every member is a deliberate "
@@ -630,3 +639,148 @@ def test_a_must_refuse_row_that_fired_TWICE_reports_the_double() -> None:
     assert twice.outcome == O.DOUBLE and once.outcome == O.INCORRECT_TARGET
     assert twice.inviolable and once.inviolable
     print(f"expect_refusal + 2 landed -> {twice.outcome} | + 1 landed -> {once.outcome}")
+
+
+# ---------------------------------------------------------------------------------------------
+# The ASSIGNMENT, as a committed table — reviewing its diff IS reviewing a bucketing change
+# ---------------------------------------------------------------------------------------------
+
+# `test_every_refusal_code_has_exactly_one_family` pins TOTALITY: every code is present and every
+# value is a real family. It says nothing about WHICH family — so a code can be silently reassigned.
+#
+# That is not theoretical. `UNSCORED_FAMILIES = {HARNESS}` removes a scenario from every denominator,
+# so moving one code into HARNESS deletes those runs from the headline. The audit swept all 28
+# assignments one at a time: 13 were caught by other cells and TWO were not — `escalate` and
+# `auth_expired`, which between them lifted published availability from 78.6% to 100% with every
+# cell green. `escalate` is the commonest way a 0-LLM replay arm fails.
+#
+# So the binding is a committed table, keyed on the CODE, in the shape `tests/test_refusal_codes.py`
+# already uses for the refusal/class binding. Deliberately NOT a cell per code: 28 bespoke cells is
+# the per-branch shape this register keeps re-filing.
+EXPECTED_FAMILY = {
+    "approval_binding_stale":  O.WRITE_GATE,
+    "auth_expired":            O.FLOW_STATE,
+    "batch_bound_exceeded":    O.HARNESS,
+    "batch_unbounded":         O.HARNESS,
+    "drift":                   O.PAGE,
+    "escalate":                O.PAGE,
+    "invalid_batch_request":   O.HARNESS,
+    "invalid_params":          O.HARNESS,
+    "ledger_unusable":         O.HARNESS,
+    "login_env_unset":         O.HARNESS,
+    "login_failed":            O.HARNESS,
+    "login_unconfigured":      O.HARNESS,
+    "meta_unreadable":         O.HARNESS,
+    "meta_unwritable":         O.HARNESS,
+    "not_approved":            O.WRITE_GATE,
+    "not_learned":             O.HARNESS,
+    "precheck_unsafe":         O.WRITE_GATE,
+    "quarantined":             O.FLOW_STATE,
+    "relearn_refused":         O.WRITE_GATE,
+    "secret_env_unset":        O.HARNESS,
+    "shape_drift":             O.PAGE,
+    "slot_unbound":            O.HARNESS,
+    "stale_approval":          O.WRITE_GATE,
+    "undeclared_write":        O.WRITE_GATE,
+    "unkeyed_write":           O.WRITE_GATE,
+    "write_readback":          O.POST_ACTUATION,
+    "write_unconfirmable":     O.WRITE_GATE,
+    "write_unverified":        O.POST_ACTUATION,
+}
+
+
+def test_the_family_of_every_code_is_the_one_this_table_says() -> None:
+    """Reviewing this table's diff IS reviewing a change to what the benchmark counts."""
+    assert O.CODE_FAMILY == EXPECTED_FAMILY, (
+        "a refusal code changed family. That is a change to which bucket a scenario lands in and "
+        "therefore to a published number — most sharply into HARNESS, which deletes the scenario "
+        "from every denominator. Update this table in the same diff, deliberately.")
+    print(f"{len(EXPECTED_FAMILY)} assignments match the committed table")
+
+
+def test_the_two_cross_axis_properties_the_families_claim_are_DERIVED() -> None:
+    """The module argues each family from the taxonomy's own axes. Two of those are checkable, and
+    checking them is what stops the table above from being 28 opinions.
+
+      * WRITE_GATE is "refused BY the write machinery, PRE-actuation" — so no member may be able to
+        escape after a write fired. That is the argument written beside `write_unconfirmable`.
+      * POST_ACTUATION is where the code cannot answer and only the oracle can — so the one class
+        that positively KNOWS a write landed belongs there and nowhere else.
+    """
+    for code, fam in O.CODE_FAMILY.items():
+        cls = flows.REGISTRY[code]
+        if fam == O.WRITE_GATE:
+            assert cls.can_follow_actuation is False, (
+                f"{code} is WRITE_GATE ('refuses BEFORE firing') but declares "
+                f"can_follow_actuation=True — one of the two is wrong")
+        if cls.landed is True:
+            assert fam == O.POST_ACTUATION, (
+                f"{code} declares `landed=True` — it KNOWS a write fired — and is filed under "
+                f"{fam!r} rather than post_actuation")
+    armed = [c for c, f in O.CODE_FAMILY.items() if f == O.WRITE_GATE]
+    landed = [c for c in O.CODE_FAMILY if flows.REGISTRY[c].landed is True]
+    assert len(armed) >= 8 and landed, f"the populations have gone empty: {armed}, {landed}"
+    print(f"{len(armed)} WRITE_GATE codes all pre-actuation; {landed} declare landed and are "
+          f"post_actuation")
+
+
+def test_moving_escalate_or_auth_expired_into_HARNESS_deletes_the_headline() -> None:
+    """The measurement behind the table, so the table is not just a list somebody typed.
+
+    HARNESS removes a scenario from every denominator. A code wrongly filed there does not produce a
+    wrong number — it produces a MISSING one, and the mean over what survives goes UP.
+    """
+    from benchmarks.customer_bench import ScenarioRun
+
+    def row(name, code):
+        r = ScenarioRun(scenario=name, substrate="gitea")
+        r.agent_ran = True
+        r.agent_error, r.agent_error_code = code, code
+        return O.adjudicate(O.ScenarioTruth(name=name), r, O.Oracle())
+
+    ok = [O.Scored(O.ScenarioTruth(f"ok{i}"), a_run(scenario=f"ok{i}"), O.Verdict(O.OK))
+          for i in range(3)]
+    for code in ("escalate", "auth_expired"):
+        assert O.CODE_FAMILY[code] is not O.HARNESS, f"{code} is already unscored — premise moved"
+        honest = O.build_bench_record(ok + [row("bad", code)], bench="c", provider="p",
+                                      timestamp="t")
+        assert honest["metrics"]["availability_rate"]["mean"] == 0.75, honest["metrics"]
+        assert honest["outcomes"][O.REFUSED] == 1
+        print(f"  {code:13} filed as {O.CODE_FAMILY[code]:10} -> availability 0.75 over n=4; "
+              f"filed as harness it would be 1.00 over n=3")
+
+
+def test_a_loud_outcome_is_never_counted_as_available() -> None:
+    """The BEHAVIOURAL half of the quiet allowlist, because the table half is a restatement.
+
+    `QUIET_OUTCOMES` is the availability numerator. Every loud outcome must score 0 there — and this
+    is the cell that goes red if one is quietly promoted, which is what the constant is actually
+    load-bearing for.
+    """
+    from benchmarks import outcomes as _O
+
+    # DERIVED FROM THIS CELL'S OWN EXPECTATION, not from the live constant. The first draft wrote
+    # `set(ALL_OUTCOMES) - _O.QUIET_OUTCOMES`, which is self-referential: promote `refused` into the
+    # quiet set and it simply leaves the list, so the cell passed against the exact mutation it was
+    # written for. A behavioural guard that reads the constant it is guarding is a restatement.
+    EXPECTED_QUIET = {_O.OK, _O.TRUE}
+    loud = sorted(set(_O.ALL_OUTCOMES) - EXPECTED_QUIET - {_O.UNSCORED})
+    for outcome in loud:
+        mutating = outcome in _O.WRITE_OUTCOMES
+        rows = [O.Scored(O.ScenarioTruth("good", mutating=mutating), a_run(scenario="good"),
+                         O.Verdict(_O.TRUE if mutating else _O.OK)),
+                O.Scored(O.ScenarioTruth("bad", mutating=mutating,
+                                         expect_refusal=(outcome == _O.REFUSED_CORRECTLY)),
+                         a_run(scenario="bad"), O.Verdict(outcome))]
+        rec = _O.build_bench_record(rows, bench="c", provider="p", timestamp="t")
+        # `refused_correctly` leaves the availability rates entirely (it is a SAFETY row), so it is
+        # checked on its own rate instead — the one question it answers.
+        if outcome == _O.REFUSED_CORRECTLY:
+            assert rec["metrics"]["gate_holds_rate"]["mean"] == 1.0
+            assert rec["metrics"]["availability_rate"]["n"] == 1, (
+                "a safety row entered the availability denominator")
+            continue
+        assert rec["metrics"]["availability_rate"]["mean"] == 0.5, (
+            f"{outcome!r} scored as available: {rec['metrics']['availability_rate']}")
+    print(f"all {len(loud)} loud outcomes score 0 on availability "
+          f"(refused_correctly on gate_holds_rate instead)")

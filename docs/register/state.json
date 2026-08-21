@@ -555,7 +555,7 @@
   {
    "id": "R4.78",
    "status": "open",
-   "summary": "`outcomes.cross_check` has no supplier, so `record_disagrees` is structurally always empty. `adjudicate(record=)` is only ever passed a stand-in from tests; `run_scenario` catches an EXCEPTION, not a `RunRecord`, and nothing in `benchmarks/` calls `replay(record=...)`. So RULE 5's cross-check — the one thing that would catch the product's report disagreeing with the server, including the dangerous 'the write landed and the caller was told it did not' — produces no findings on a real run. B3 owns the contract and B4 owns the arm that must supply it; filed so the wiring cannot be forgotten when the corpus lands",
+   "summary": "`outcomes.cross_check` has no supplier, so `record_disagrees` is structurally always empty. `adjudicate(record=)` is only ever passed a stand-in from tests; `run_scenario` catches an EXCEPTION, not a `RunRecord`, and nothing in `benchmarks/` calls `replay(record=...)`. So RULE 5's cross-check — the one thing that would catch the product's report disagreeing with the server, including the dangerous 'the write landed and the caller was told it did not' — produces no findings on a real run. B3 owns the contract and B4 owns the arm that must supply it; filed so the wiring cannot be forgotten when the corpus lands. The SAME gap covers `GateEvidence`: nothing outside tests constructs one, and `run_scenario` has no seam to supply it, so `gate=None` is the state of the world and every WRITE_GATE refusal on a read is unscored(`gate_unexplainable`) rather than the headline `over_gated`. Both are B4 arm wiring against a contract B3 fixed",
    "severity": "medium",
    "class": "benchmark"
   },

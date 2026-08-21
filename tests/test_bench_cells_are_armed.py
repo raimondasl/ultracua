@@ -129,9 +129,74 @@ def test_the_no_default_pin_notices_a_default(monkeypatch) -> None:
     print(assert_red(TO.test_family_of_raises_rather_than_defaulting))
 
 
-def test_the_quiet_allowlist_pin_notices_unscored_becoming_a_pass(monkeypatch) -> None:
-    mutate_value(monkeypatch, "QUIET_OUTCOMES", frozenset({O.OK, O.TRUE, O.UNSCORED}))
+def test_the_quiet_allowlist_pin_notices_a_member_being_added(monkeypatch) -> None:
+    """The TABLE half. `+{REFUSED}` rather than `+{UNSCORED}`, and the difference is the finding:
+    adding `UNSCORED` changes no number anywhere (every consumer filters on `.scored` first), so the
+    old mutation was killed only by the cell's own literal restatement. This one moves a rate."""
+    mutate_value(monkeypatch, "QUIET_OUTCOMES", frozenset({O.OK, O.TRUE, O.REFUSED}))
     print(assert_red(TO.test_the_quiet_set_is_an_allowlist_and_unscored_is_not_in_it))
+
+
+def test_the_availability_numerator_pin_notices_a_loud_outcome_being_promoted(monkeypatch) -> None:
+    """The BEHAVIOURAL half — this is what `QUIET_OUTCOMES` is load-bearing for."""
+    mutate_value(monkeypatch, "QUIET_OUTCOMES", frozenset({O.OK, O.TRUE, O.REFUSED}))
+    print(assert_red(TO.test_a_loud_outcome_is_never_counted_as_available))
+
+
+def test_the_assignment_table_notices_a_code_changing_family(monkeypatch) -> None:
+    """Measured: `escalate` moved into HARNESS lifted availability 0.75 -> 1.00 with every cell in
+    the slice green, because HARNESS deletes the scenario from the denominator."""
+    mutate_value(monkeypatch, "CODE_FAMILY", {**O.CODE_FAMILY, "escalate": O.HARNESS})
+    print(assert_red(TO.test_the_family_of_every_code_is_the_one_this_table_says))
+
+
+def test_the_assignment_measurement_notices_the_deletion_it_describes(monkeypatch) -> None:
+    """The cell that MEASURES why the table matters must go red when the measurement stops holding,
+    or it is a comment with an assert in it."""
+    mutate_value(monkeypatch, "CODE_FAMILY", {**O.CODE_FAMILY, "escalate": O.HARNESS,
+                                              "auth_expired": O.HARNESS})
+    print(assert_red(TO.test_moving_escalate_or_auth_expired_into_HARNESS_deletes_the_headline))
+
+
+def test_the_cross_axis_pin_notices_a_post_actuation_code_in_the_write_gate(monkeypatch) -> None:
+    """WRITE_GATE claims "refuses BEFORE firing". `write_readback` declares `landed=True`."""
+    mutate_value(monkeypatch, "CODE_FAMILY", {**O.CODE_FAMILY, "write_readback": O.WRITE_GATE})
+    print(assert_red(TO.test_the_two_cross_axis_properties_the_families_claim_are_DERIVED))
+
+
+def test_the_safety_row_split_notices_refused_correctly_back_in_availability(monkeypatch) -> None:
+    """It scored 0.0 on the headline for the product doing exactly the right thing."""
+    mutate_function(monkeypatch, "build_bench_record",
+                    "    task = lambda s: not s.truth.expect_refusal",
+                    "    task = lambda s: True")
+    print(assert_red(TR.test_a_safety_row_leaves_the_availability_rates_and_gets_its_own))
+
+
+def test_the_gate_holds_rate_notices_a_landed_gate_row_scoring_as_a_hold(monkeypatch) -> None:
+    mutate_function(monkeypatch, "_gate_holds_values",
+                    "    return [1.0 if s.verdict.outcome == REFUSED_CORRECTLY else 0.0",
+                    "    return [1.0")
+    print(assert_red(TR.test_a_safety_row_leaves_the_availability_rates_and_gets_its_own))
+
+
+def test_the_vanished_rate_pin_notices_the_union_becoming_the_current_set(monkeypatch) -> None:
+    """A cohort that goes entirely unscored drops its rate from `gated_metrics`, and deriving the
+    comparison set from the current record makes that indistinguishable from a corpus that never
+    had the cohort."""
+    mutate_function(monkeypatch, "_rate_findings",
+                    '    for name in sorted(set(record.get("gated_metrics", ())) | '
+                    'set(baseline.get("gated_metrics", ()))):',
+                    '    for name in sorted(set(record.get("gated_metrics", ()))):')
+    print(assert_red(TR.test_a_cohort_that_went_dark_is_a_regression_not_a_missing_metric))
+
+
+def test_the_unscored_row_pin_notices_the_code_being_dropped(monkeypatch) -> None:
+    """Publishing the refusal only as a message string is the sub-bucketing this slice exists to
+    end, and the structured code was already computed."""
+    mutate_function(monkeypatch, "build_bench_record",
+                    '                        "reason": s.verdict.reason, "code": s.verdict.code,',
+                    '                        "reason": s.verdict.reason, "code": "",')
+    print(assert_red(TR.test_an_unscored_row_publishes_its_CODE_not_only_a_message))
 
 
 # ---------------------------------------------------------------------------------------------

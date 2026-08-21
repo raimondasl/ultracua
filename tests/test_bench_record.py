@@ -614,3 +614,80 @@ def test_a_fully_scored_corpus_has_no_coverage_findings() -> None:
     g = O.gate_bench_record(build([scored("a", outcome=O.OK), scored("b", outcome=O.REFUSED)]))
     assert g["ok"] is True and g["findings"] == []
     print("a fully-scored corpus -> no coverage findings")
+
+
+def test_a_safety_row_leaves_the_availability_rates_and_gets_its_own() -> None:
+    """`Verdict.quiet` answers "may a nightly gate pass this in silence". The availability numerator
+    needs a different question: "did this scenario achieve its declared purpose".
+
+    They were the same predicate, so `refused_correctly` — the product doing exactly the right thing
+    on a row written to prove a write gate holds — scored **0.0** on the headline. An
+    `expect_refusal` row is a SAFETY PROBE, not a task a customer wants done, so it leaves the
+    availability rates entirely and gets `gate_holds_rate`, where being refused is the 1.
+    """
+    def rows(gate_outcome):
+        return [scored("r1", outcome=O.OK), scored("r2", outcome=O.OK),
+                scored("w1", outcome=O.TRUE, mutating=True),
+                O.Scored(truth=O.ScenarioTruth("g1", mutating=True, expect_refusal=True),
+                         run=a_run("g1"), verdict=O.Verdict(gate_outcome))]
+
+    held = build(rows(O.REFUSED_CORRECTLY))
+    assert held["metrics"]["availability_rate"]["mean"] == 1.0, (
+        "the product did everything right and the headline is below 1.0")
+    assert held["metrics"]["availability_rate"]["n"] == 3, "the safety row entered the denominator"
+    assert held["metrics"]["gate_holds_rate"] == {"mean": 1.0, "std": 0.0, "min": 1.0, "max": 1.0,
+                                                  "n": 1}
+
+    broke = build(rows(O.INCORRECT_TARGET))
+    assert broke["metrics"]["availability_rate"]["mean"] == 1.0, (
+        "a write-gate failure moved the AVAILABILITY number; those are different questions")
+    assert broke["metrics"]["gate_holds_rate"]["mean"] == 0.0
+    assert len(broke["inviolable"]) == 1 and O.gate_bench_record(broke)["ok"] is False
+    print(f"gate holds -> availability {held['metrics']['availability_rate']['mean']} / "
+          f"gate_holds {held['metrics']['gate_holds_rate']['mean']}; gate breaks -> "
+          f"{broke['metrics']['availability_rate']['mean']} / "
+          f"{broke['metrics']['gate_holds_rate']['mean']}, gate ok=False")
+
+
+def test_a_cohort_that_went_dark_is_a_regression_not_a_missing_metric() -> None:
+    """A rate with no scenarios behind it is DROPPED from `gated_metrics` — correctly, because
+    publishing 0.0 for something never attempted is the fabricated zero this module refuses.
+
+    But deriving the comparison set from the CURRENT record then makes "this cohort went dark"
+    indistinguishable from "this corpus never had that cohort", and neither is compared. Measured
+    before the fix: a write arm going entirely unscored took `write_availability_rate` out of the
+    gate in silence, and the headline went UP because the failures left the denominator.
+    """
+    base = build([scored("r1", outcome=O.OK), scored("w1", outcome=O.TRUE, mutating=True),
+                  scored("w2", outcome=O.TRUE, mutating=True)])
+    assert "write_availability_rate" in base["gated_metrics"]
+
+    dark = build([scored("r1", outcome=O.OK)]
+                 + [O.Scored(truth=O.ScenarioTruth(f"w{i}", mutating=True), run=a_run(f"w{i}"),
+                             verdict=O.Verdict(O.UNSCORED, reason="harness_refusal"))
+                    for i in (1, 2)])
+    assert "write_availability_rate" not in dark["gated_metrics"], "premise moved"
+    assert dark["metrics"]["availability_rate"]["mean"] == 1.0, (
+        "the headline should still read 1.0 — that is what makes this dangerous")
+
+    g = O.gate_bench_record(dark, baseline=base)
+    vanished = [f for f in g["findings"]
+                if f.get("metric") == "write_availability_rate" and f["regressed"]]
+    assert vanished and vanished[0]["current"] is None, g["findings"]
+    assert g["ok"] is False
+    print(f"write arm dark: headline still {dark['metrics']['availability_rate']['mean']}, "
+          f"but write_availability_rate {vanished[0]['baseline']} -> None is a regression")
+
+
+def test_an_unscored_row_publishes_its_CODE_not_only_a_message() -> None:
+    """`detail` is `f"{type(exc).__name__}: {exc}"`. Publishing the refusal only as that string is
+    the "sub-buckets from message labels" `reshape-plan.md` 2.2 forbids — and the structured code
+    was already computed, it was simply not carried onto the row."""
+    run = a_run("s")
+    run.agent_error_code, run.agent_error = "login_failed", "LoginFailedError: bad password"
+    v = O.classify(O.ScenarioTruth(name="s"), run, O.Oracle())
+    rec = build([scored("ok", outcome=O.OK), O.Scored(O.ScenarioTruth("s"), run, v)])
+    row = rec["unscored"][0]
+    assert row["code"] == "login_failed" and row["family"] == O.HARNESS, row
+    assert row["reason"] == "harness_refusal"
+    print(f"unscored row: {row}")
