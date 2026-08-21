@@ -43,8 +43,39 @@ from benchmarks.shop_flow import GOAL, STEPS, SUCCESS_TEXT, index_url  # noqa: F
 _GATED_RATES = ("replay_success_rate",)
 
 
-def _cost(report) -> float:
-    return float((report.extra.get("usage") or {}).get("cost_usd") or 0.0)
+def _cost(report) -> "Optional[float]":
+    """This report's spend, or None for UNKNOWN. Never 0.0 standing in for an unknown (1.3).
+
+    `or 0.0` collapsed three different things into free: a run that genuinely spent nothing, a run
+    whose spend could not be PRICED, and a run that could not see one of its own LLM paths. The
+    first is a measurement; the other two are `obs.py` reporting an honest unknown, and summing them
+    as zero is what turns an honest instrument into a confident wrong number one function later.
+    """
+    usage = report.extra.get("usage") or {}
+    if "cost_usd" not in usage:
+        return None                      # nobody looked — the pre-B1 shrug, still possible off-path
+    cost = usage["cost_usd"]
+    return None if cost is None else float(cost)
+
+
+def _sum_cost(xs) -> "Optional[float]":
+    """UNKNOWN IS ABSORBING. One rep whose cost is unknown makes the total unknown.
+
+    The alternative — sum what is known and report it as the total — is strictly worse than saying
+    nothing, because the number looks complete. This is `UsageTotals.cost_usd`'s own rule (any
+    unpriced spend makes the whole bill None) applied one level up.
+    """
+    total = 0.0
+    for x in xs:
+        if x is None:
+            return None
+        total += x
+    return total
+
+
+def _money(x) -> str:
+    """`$0.0000` is a claim; `UNKNOWN` is a shrug. A formatter is where they must stay apart."""
+    return "UNKNOWN" if x is None else f"${x:.4f}"
 
 
 # --- pure, testable aggregation / record / compare --------------------------------------------
@@ -128,7 +159,9 @@ def build_record(bench: str, provider: str, reps: int, timestamp: str,
         "provider": provider,
         "reps": reps,
         "timestamp": timestamp,
-        "cost_usd": round(float(cost_usd), 6),
+        # None survives to the record. `float(None)` would raise, which is at least loud — but a
+        # caller that "fixed" it with `or 0.0` is the defect this whole step exists to remove.
+        "cost_usd": None if cost_usd is None else round(float(cost_usd), 6),
         "metrics": {name: aggregate(vals) for name, vals in per_rep.items()},
     }
     rates = per_rep.get(success_key, [])
@@ -173,12 +206,25 @@ def compare_records(baseline: dict, current: dict, *, rate_floor: float = 0.05,
                 "baseline": b["mean"], "current": c["mean"], "tolerance": tol,
             })
 
-    bc, cc = float(baseline.get("cost_usd", 0.0)), float(current.get("cost_usd", 0.0))
-    findings.append({
-        "metric": "cost_usd", "gated": True,
-        "regressed": bc > 0 and cc > bc * (1 + cost_rel),
-        "baseline": bc, "current": cc, "tolerance": bc * cost_rel,
-    })
+    bc, cc = baseline.get("cost_usd"), current.get("cost_usd")
+    if cc is None:
+        # A run that cannot account for its own spend has not proved anything about cost, and the
+        # gate's job is to be loud about that rather than to compare it against nothing.
+        findings.append({"metric": "cost_usd", "gated": True, "regressed": True,
+                         "baseline": bc, "current": None,
+                         "detail": "this run could not account for its own spend"})
+    elif bc is None:
+        findings.append({"metric": "cost_usd", "gated": True, "regressed": False,
+                         "baseline": None, "current": float(cc),
+                         "detail": "the baseline's cost is unknown, so there is nothing to compare "
+                                   "against — re-record it rather than reading this as a pass"})
+    else:
+        bc, cc = float(bc), float(cc)
+        findings.append({
+            "metric": "cost_usd", "gated": True,
+            "regressed": bc > 0 and cc > bc * (1 + cost_rel),
+            "baseline": bc, "current": cc, "tolerance": bc * cost_rel,
+        })
 
     if "speedup" in bm and "speedup" in cm:  # informational only
         findings.append({
@@ -215,12 +261,12 @@ async def run_demo(provider_name: str, reps: int, samples: int = 1, reflect: boo
             r = await _demo_rep(provider_name, Path(td) / f"rep{i}", samples, reflect)
             results.append(r)
             print(f"  rep {i + 1}/{reps}: replay_ok={r['ok']} speedup={r['speedup']:.1f}x "
-                  f"learn={r['learn_ms']:.0f}ms replay={r['replay_ms']:.0f}ms ${r['cost']:.4f}")
+                  f"learn={r['learn_ms']:.0f}ms replay={r['replay_ms']:.0f}ms {_money(r['cost'])}")
     record = build_record(
         "demo", provider_name, reps, _now_iso(),
         {"replay_success_rate": [1.0 if r["ok"] else 0.0 for r in results],
          "speedup": [r["speedup"] for r in results if r["ok"]]},
-        cost_usd=sum(r["cost"] for r in results),
+        cost_usd=_sum_cost(r["cost"] for r in results),
         first_fail=[r["first_fail"] for r in results],
     )
     record["samples"], record["reflect"] = samples, reflect
@@ -228,7 +274,7 @@ async def run_demo(provider_name: str, reps: int, samples: int = 1, reflect: boo
     print(f"\n== demo-shop, {reps} reps ==")
     print(f"replay success:  {int(sr['mean'] * reps + 0.5)}/{reps}  (rate {sr['mean']:.2f})")
     print(f"speedup:         mean {sp['mean']:.1f}x +/- {sp['std']:.1f}  (min {sp['min']:.1f}x, max {sp['max']:.1f}x)")
-    print(f"total LLM cost:  ~${record['cost_usd']:.4f}")
+    print(f"total LLM cost:  ~{_money(record['cost_usd'])}")
     _print_reliability(record)
     return record
 
@@ -248,29 +294,33 @@ async def run_miniwob(provider_name: str, reps: int, all_tasks: bool, seed: int,
         with tempfile.TemporaryDirectory() as td:
             for i in range(reps):
                 cache = FlowCache(root=Path(td) / f"rep{i}")
-                ok, cost = 0, 0.0
+                ok, per_task = 0, []
                 for task in tasks:
                     _instr, learn, replay = await _run_task(base, cache, task, provider_name, seed,
                                                             samples, reflect)
                     if _raw(replay) > 0:
                         ok += 1
-                    cost += _cost(learn)
+                    per_task.append(_cost(learn))
+                # Collected then summed, rather than `cost += _cost(...)`: `+=` cannot carry an
+                # unknown, so the accumulator forces a zero at exactly the moment the answer is that
+                # nobody knows.
+                cost = _sum_cost(per_task)
                 fracs.append(ok / len(tasks))
                 costs.append(cost)
                 print(f"  rep {i + 1}/{reps}: replay success {ok}/{len(tasks)} "
-                      f"({ok / len(tasks) * 100:.0f}%)  ${cost:.4f}")
+                      f"({ok / len(tasks) * 100:.0f}%)  {_money(cost)}")
     finally:
         server.stop()
     record = build_record(
         "miniwob", provider_name, reps, _now_iso(),
-        {"replay_success_rate": fracs}, cost_usd=sum(costs),
+        {"replay_success_rate": fracs}, cost_usd=_sum_cost(costs),
     )
     record["samples"], record["reflect"] = samples, reflect
     sr = record["metrics"]["replay_success_rate"]
     print(f"\n== miniwob ({len(tasks)} tasks), {reps} reps ==")
     print(f"replay success rate: mean {sr['mean'] * 100:.0f}% +/- {sr['std'] * 100:.0f}%  "
           f"(min {sr['min'] * 100:.0f}%, max {sr['max'] * 100:.0f}%)")
-    print(f"total LLM cost:      ~${record['cost_usd']:.4f}")
+    print(f"total LLM cost:      ~{_money(record['cost_usd'])}")
     _print_reliability(record)
     return record
 

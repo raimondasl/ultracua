@@ -96,12 +96,54 @@ class UsageTotals:
     # model -> (input, output, cache_read, cache_write, calls). Keyed by what the RESPONSE said
     # served the request, so an escalation is priced at the strong tier and the rest is not.
     per_model: dict = field(default_factory=dict)
-    # Set by a spender that tried to record its own usage and could not (see `vision.py`). It rides
-    # HERE rather than on the spending object because `RouterWatch` must never probe a foreign
+    # HOW MANY TIMES a spender tried to record its own usage and could not (see `vision.py`). It
+    # rides HERE rather than on the spending object because `RouterWatch` must never probe a foreign
     # attribute: `test_a_navigate_only_replay_never_reaches_a_provider` hands replay a provider that
     # raises on any attribute access it does not explicitly permit, and inviolable #1 is exactly
     # that — a replay does not poke at a provider. Reading a field of our own dataclass is safe.
-    accounting_failed: bool = False
+    #
+    # A COUNTER, NOT A FLAG, AND THAT IS THE WHOLE OF R4.53's SECOND HALF. Every other field here is
+    # monotonic and made run-scoped by `since()`; this one was a sticky bool, so a single failure
+    # answered "did accounting fail during THIS run?" with yes forever after. A watch built for a
+    # later run over the same owner reported `observed=False` having seen nothing go wrong — and a
+    # bool cannot be deltaed out of that, because two consecutive failures leave it True both times.
+    # Counting is what makes the question answerable per run.
+    accounting_failures: int = 0
+
+    @property
+    def accounting_failed(self) -> bool:
+        """READ-ONLY. Every existing reader keeps working; the four writers say `+= 1` instead.
+
+        Deliberately not a settable property that translates `= True` into `+= 1`: one token
+        meaning two things is the shape this register keeps re-filing, and a writer that means
+        "another failure" should have to say so.
+        """
+        return self.accounting_failures > 0
+
+    @staticmethod
+    def cannot_spend() -> "UsageTotals":
+        """THE DECLARATION A KEY-LESS OWNER MAKES: an accounting object that will never grow.
+
+        `RouterWatch` classifies an owner by whether a `UsageTotals` is reachable at
+        `owner.router.totals` or `owner.totals`. Before 1.3 that was a two-way split — watched, or
+        an unwatched SPENDER — and every key-less teacher (`ScriptedProvider`, `MockProvider`,
+        `MockGrounding`, the oracle teacher) landed in the second bucket. Measured:
+        `UsageTotals.observe(ScriptedProvider([]))` reported `cost_usd: None,
+        unobserved_llm_path: True`, over the entire population the key-less suite and `drift_bench`
+        are built from, while `flow.py`'s own comment said the opposite — "a key-less learn
+        (scripted teacher, no router) must SAY it spent nothing rather than stay silent about it".
+
+        The third state is declared, not inferred, and it is declared THROUGH THE SAME ATTRIBUTE the
+        watch already reads. That is not a stylistic choice: commit `00888b4` added a `spends`-style
+        probe on the owner and tripped inviolable #1's tripwire, because a replay does not poke at a
+        provider. An owner that exposes an empty `UsageTotals` is saying "I account for myself, and
+        the answer is zero" — which is a fact about itself, offered, not extracted.
+
+        So the absence of a `UsageTotals` now means exactly one thing: an owner that could spend and
+        is not being watched. `tests/test_run_record.py`'s `_Spender` is that residual, and it must
+        stay unobserved.
+        """
+        return UsageTotals()
 
     def add(self, usage, model: str = "") -> None:
         """Accumulate one response's Usage (duck-typed; tolerant of None / missing fields)."""
@@ -120,9 +162,12 @@ class UsageTotals:
         self.per_model[model] = (prev[0] + i, prev[1] + o, prev[2] + cr, prev[3] + cw, prev[4] + 1)
 
     def snapshot(self) -> tuple:
-        # The 6th element is additive: every existing reader indexes [0:5] positionally.
+        # Elements 6 and 7 are additive: every existing reader indexes [0:5] positionally, and both
+        # later ones are read behind a length guard. A snapshot is opaque to every caller outside
+        # this class — they take one and hand it back to `since()` — so growing it is safe.
         return (self.input_tokens, self.output_tokens, self.cache_read_tokens,
-                self.cache_write_tokens, self.calls, dict(self.per_model))
+                self.cache_write_tokens, self.calls, dict(self.per_model),
+                self.accounting_failures)
 
     def since(self, snap: tuple) -> "UsageTotals":
         """A delta UsageTotals = self minus an earlier snapshot() (for per-run scoping)."""
@@ -137,7 +182,10 @@ class UsageTotals:
             input_tokens=self.input_tokens - snap[0], output_tokens=self.output_tokens - snap[1],
             cache_read_tokens=self.cache_read_tokens - snap[2],
             cache_write_tokens=self.cache_write_tokens - snap[3], calls=self.calls - snap[4],
-            per_model=delta, accounting_failed=self.accounting_failed,
+            per_model=delta,
+            # DELTA, not the running total: a delta describing one run must not carry a failure
+            # that happened in an earlier one.
+            accounting_failures=self.accounting_failures - (snap[6] if len(snap) > 6 else 0),
         )
 
     def unpriced_calls(self, fallback_model: str = "") -> int:
@@ -223,6 +271,23 @@ class RouterWatch:
     was never observed would be a CONFIDENT WRONG NUMBER, which is worse than the absent key this
     replaced — so an unobserved path yields `observed=False` and the caller reports unknown, not
     zero. Only a run that could see every router it could have used is allowed to claim zero.
+
+    THREE STATES IN THE WORLD, TWO IN THE REPORT (1.3). An owner is either
+
+      * WATCHED — a `UsageTotals` is reachable at `owner.router.totals` or `owner.totals`, and its
+        delta is this run's spend;
+      * CANNOT SPEND — it declares an empty `UsageTotals` via `UsageTotals.cannot_spend()`, so it
+        is watched and contributes a real zero. That is the key-less teacher population;
+      * an UNWATCHED SPENDER — no `UsageTotals` anywhere, so nothing here can say what it spent.
+
+    Only the third makes the run unobserved. Before 1.3 the second and third were the same bucket,
+    which meant every key-less run in the suite and in `drift_bench` reported cost UNKNOWN (R4.53).
+    Two of those states report identically on purpose: a declared zero and a measured zero are both
+    zero, and inventing a third word for the report would be a distinction with no consumer.
+
+    THE DECLARATION IS OFFERED, NEVER EXTRACTED. Exactly two attributes are read off an owner,
+    `router` and `totals`, and that is the entire contract — see `UsageTotals.cannot_spend` for why
+    a probe for anything else is forbidden rather than merely discouraged.
     """
 
     def __init__(self, owners) -> None:
@@ -235,8 +300,10 @@ class RouterWatch:
             r = getattr(o, "router", o)
             t = getattr(r, "totals", None)
             if not isinstance(t, UsageTotals):
-                # An owner that could spend but exposes no totals (e.g. the vision grounding
-                # object, which drives the SDK directly). Do not silently drop it.
+                # An owner that could spend but exposes no totals. The population is now exactly
+                # that — a key-less owner declares `UsageTotals.cannot_spend()` and lands above —
+                # so this branch no longer swallows every scripted teacher along with the vision
+                # grounding object it was written for. Do not silently drop it.
                 self._unobserved = True
                 continue
             if id(t) in seen:
@@ -252,13 +319,22 @@ class RouterWatch:
     def observed(self) -> bool:
         """Evaluated on READ, never latched at construction.
 
-        The first two attempts at this got the timing wrong in the same way: a spender sets
-        `accounting_failed` while the run is happening (`vision.py`, inside `decide()`), and the
+        The first two attempts at this got the timing wrong in the same way: a spender records an
+        accounting failure while the run is happening (`vision.py`, inside `decide()`), and the
         watch is built before the run starts. A check in `__init__` therefore could not fire, so
         the guard was inert while its commit message claimed it had a caller. Anything that can
         become true mid-run must be asked for at report time.
+
+        AND IT IS THE DELTA, NOT THE RUNNING TOTAL (R4.53). Reading the absolute count answers "has
+        accounting EVER failed on this object", which is a different question and a sticky one: a
+        caller that reuses a grounding or a provider across runs got `observed=False` for the rest
+        of the process on the strength of one earlier failure. `since()` is what makes every other
+        field on `UsageTotals` run-scoped; this now reads the same way.
         """
-        return not (self._unobserved or any(t.accounting_failed for t, _ in self._pairs))
+        if self._unobserved:
+            return False
+        return not any(t.accounting_failures > (snap[6] if len(snap) > 6 else 0)
+                       for t, snap in self._pairs)
 
     def delta(self) -> UsageTotals:
         out = UsageTotals()

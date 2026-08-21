@@ -397,6 +397,19 @@ def test_prove_reds_killer_suite_is_browser_free() -> None:
                     legs = [e.value for e in kw.value.elts if isinstance(e, ast.Constant)]
     assert legs, "could not derive `--tests`'s default from prove_red.py — this cell is inert"
 
+    # AND EVERY `--tests` THE WORKFLOW PASSES EXPLICITLY. The default is only half the exposure:
+    # 1.3 added a second `red-proof` invocation with its own killer suite, which this scan could not
+    # see, so the hazard it was written for would have come back through a door beside it.
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8").split()
+    if "--tests" in ci:
+        i = ci.index("--tests") + 1
+        while i < len(ci) and ci[i].endswith(".py"):
+            legs.append(ci[i])
+            i += 1
+    assert any(leg.endswith("test_cannot_spend.py") for leg in legs), (
+        "the workflow's explicit `--tests` legs were not picked up, so this cell covers less than "
+        "it says — check that the `red-proof` job still spells them out on one line")
+
     offenders = {}
     for leg in legs:
         assert (ROOT / leg).exists(), f"killer-suite leg {leg} does not exist"

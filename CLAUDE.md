@@ -460,6 +460,56 @@ another skip/refusal class is added — S5 creates one by design:
 Corollary for both: pin the quiet direction as hard as the loud one. "Alert on everything" passes every
 test written for the finding.
 
+## "It spent nothing" and "nobody was watching" are different answers (1.3, 0.114.0)
+
+`RouterWatch` classifies each owner of a run by whether a `UsageTotals` is reachable at
+`owner.router.totals` or `owner.totals` — and those two attributes are the ENTIRE contract. There are
+**three states in the world and two in the report**:
+
+* **watched** — a real router, and its delta is this run's spend;
+* **cannot spend** — the owner declares `UsageTotals.cannot_spend()`, an accounting object that will
+  never grow, and contributes a real zero. That is every key-less teacher: `ScriptedProvider`,
+  `MockProvider`, `MockGrounding`, the bench's `OracleProvider`;
+* **an unwatched spender** — no totals anywhere, so the run reports cost UNKNOWN.
+
+Before 1.3 the last two were one bucket, so the whole population the key-less suite and `drift_bench`
+are built from reported `cost_usd: None, unobserved_llm_path: True` while `flow.py`'s own comment said
+the opposite. A declared zero and a measured zero report IDENTICALLY on purpose — a third word in the
+record would be a distinction with no consumer.
+
+* **The declaration is offered, never extracted.** Commit `00888b4` added a `getattr(o,
+  "accounting_failed", False)` probe on the owner and tripped inviolable #1's tripwire, because
+  `_Exploding` raises on any attribute but `router` and a replay does not POKE at a provider. So the
+  third state is declared through an attribute the watch already reads, and
+  `test_classifying_an_owner_touches_only_router_and_totals` derives the permitted set — `{router,
+  totals}`, named, because a scan asserting "few attributes" would pass a probe for the wrong one.
+* **`_Spender` is the residual and must stay unobserved.** Without that control the fix is "always say
+  zero", which is the confident wrong number the tri-state exists to prevent, reached from the other
+  side.
+* **`accounting_failures` is a COUNTER, not a flag, and that is the whole of the second half.** Every
+  other field on `UsageTotals` is monotonic and made run-scoped by `since()`; this one was a sticky
+  bool, so a watch built for a LATER run reported `observed=False` having seen nothing go wrong. **A
+  bool cannot be deltaed out of that** — two consecutive failures leave it True both times, so there
+  is no transition to see. `accounting_failed` survives as a read-only property (every reader
+  unchanged); the four writers say `+= 1` deliberately, because a settable property translating
+  `= True` into `+= 1` is one token meaning two things.
+* **`or 0.0` in a reader undoes all of it.** `variance._cost` and `drift_bench`'s total both collapsed
+  unknown into free. `drift_bench`'s was wrong in BOTH directions at once — `sum(x or 0.0) or None`
+  also turned a genuine total of exactly zero, which is what a key-less run produces, back into
+  "unknown". Unknown is now ABSORBING in both, and a real zero is a real zero.
+* **Two early returns carried no accounting at all.** `flow.py`'s escalate paths built their
+  `FlowReport` before the line every other exit passes through, so an escalated run reported no usage
+  and every reader rendered it UNKNOWN. Measured end to end: `drift_bench` went from `cost_usd: null`
+  over 370 key-less rows to `0.0` over 370, via an intermediate state — 368 zeros and 2 unknowns —
+  that is what made the remaining hole obvious. A guarantee with the words "always populated" in it is
+  worth checking at every early return.
+
+**And one instrument lesson, caught in the act.** `test_every_escalate_report_carries_its_usage` first
+read `flow.py` from `src/` BY PATH, and its registered mutation was reported as a SURVIVOR while the
+guard was perfectly fine — `prove_red` installs its mutant as a copy on `PYTHONPATH`, so a
+path-reading cell parses pristine source. That is R4.75 happening live. `inspect.getsource(module)` is
+the fix, and it is already written in `prove_red`'s own docstring.
+
 ## The customer benchmark mints exactly one verdict, in one place (B3, 0.113.0)
 
 `benchmarks/outcomes.py` owns the whole outcome vocabulary — `{ok, wrong_data, refused, over_gated}`

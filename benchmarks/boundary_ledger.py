@@ -206,7 +206,7 @@ class BoundaryLedger:
             total.cache_read_tokens += t.cache_read_tokens
             total.cache_write_tokens += t.cache_write_tokens
             total.calls += t.calls
-            total.accounting_failed = total.accounting_failed or t.accounting_failed
+            total.accounting_failures += t.accounting_failures
             for model, row in t.per_model.items():
                 prev = total.per_model.get(model, (0, 0, 0, 0, 0))
                 total.per_model[model] = tuple(a + b for a, b in zip(prev, row))

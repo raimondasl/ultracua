@@ -214,6 +214,20 @@ KNOWN_NO_DIGEST_MOVE = (
 # ---------------------------------------------------------------------------------------------------
 # Row construction
 # ---------------------------------------------------------------------------------------------------
+def _sum_cost(xs):
+    """UNKNOWN IS ABSORBING, and a real zero is a real zero.
+
+    See `benchmarks/variance._sum_cost` — the same rule, and the same reason: summing an
+    unknown as free produces a number that looks complete and is not.
+    """
+    total = 0.0
+    for x in xs:
+        if x is None:
+            return None
+        total += float(x)
+    return round(total, 6)
+
+
 def build_corpus(seed: int, per_k: int = 3, only: Optional[str] = None) -> list:
     """Every row to run, deterministically. A row is a dict; `js` is its composed mutation."""
     rows: list = []
@@ -648,7 +662,11 @@ def _score(rows: list, *, provider_name: str, seed: int, per_k: int, lint: list,
         if rep_replan else 0.0,
         "mechanism_recovered": mech_recovered,
         "mechanism_ladder_rate": round(mech_recovered / len(rep_elig), 4) if rep_elig else 0.0,
-        "cost_usd": round(sum(r["cost_usd"] or 0.0 for r in rows), 6) or None,
+        # `sum(x or 0.0) or None` was wrong in BOTH directions at once: an unknown row summed as
+        # free, and a genuine total of exactly zero — which is what a key-less bench run produces —
+        # came back as None because 0.0 is falsy. So the one number this bench can state with
+        # certainty was published as "unknown". Absorbing sum, and zero means zero (1.3).
+        "cost_usd": _sum_cost(r["cost_usd"] for r in rows),
 
         "silent_wrong": len(wrong), "wrong_rows": sorted(set(wrong)),
         "known_wrong_binds": [list(k) for k in KNOWN_WRONG_BINDS],

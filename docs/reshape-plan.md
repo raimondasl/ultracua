@@ -698,7 +698,7 @@ failure §13 exists to correct.
 | 2 | **2.1 — B2** | unblocked since day one and never started; zero `src/`, therefore zero audit burden; it is the goal | none |
 | 3 | **1.4 — distinct codes** *(1.4a done, 0.111.0)* | the ONE Phase-1 step B3 waits on. Scope shrank: R4.49 is already closed. **SPLIT IN TWO**: 1.4a is the VOCABULARY (15 classes, 24 sites re-classed, the ratchet, no behaviour change but the codes); 1.4b is the READERS (`outcome_of`, R4.52's tri-state, R4.61). Different blast radii — one changes what a refusal is CALLED, the other what a record MEANS — so the plan's two audits aim at two diffs rather than one | 2 |
 | 4 | **2.2 — B3** *(done, 0.113.0)* | unblocked by 1.4, and it consumed 1.4b's seam directly: `ScenarioRun` records the refusal through `outcome_of` rather than stringifying it, and `CODE_FAMILY` is a TOTAL partition of `flows.REGISTRY` so a code minted later fails the suite instead of falling into a default | 1 |
-| 5 | **1.3 — cannot-spend** | completes the accounting story B3 consumes; small, one audit | 1 |
+| 5 | **1.3 — cannot-spend** *(done, 0.114.0)* | completed the accounting story B3 consumes. The third state is DECLARED via `UsageTotals.cannot_spend()` rather than probed, and `accounting_failed` became a run-scoped COUNTER — a sticky bool cannot be deltaed, because two consecutive failures leave it True both times. Measured end to end: `drift_bench` now states its own total as a real `0.0` where it published `null` | 1 |
 | 6 | **0.4b + 1.1** | 1.1's own pin is RED-in-CI | 1 |
 | 7 | **1.6 -> 1.7 -> 1.8** | unchanged; 1.6 is the largest ratchet consumer, 1.8 moves every call site and stays last | 2 / 0 / 1 |
 
