@@ -1,0 +1,40 @@
+{
+ "_comment": "CAPTURED ON THE PRE-1.8 TREE and asserted after, which is the whole point: 1.8 moves every engine call site and a DROPPED HOOK IS SILENT. `learn_capped` is a learn stopped by max_steps -- without it the `verifier` row is all zeros and pins nothing. Regenerate only once the diff has been read: a count that moved is a caller's callback that stopped firing.",
+ "counts": {
+  "learn": {
+   "on_step": 5,
+   "prepare": 1,
+   "finalize": 1,
+   "pre_write": 0,
+   "verifier": 0
+  },
+  "learn_capped": {
+   "on_step": 2,
+   "prepare": 1,
+   "finalize": 1,
+   "pre_write": 0,
+   "verifier": 1
+  },
+  "auto": {
+   "on_step": 4,
+   "prepare": 1,
+   "finalize": 1,
+   "pre_write": 1,
+   "verifier": 0
+  },
+  "replay": {
+   "on_step": 4,
+   "prepare": 1,
+   "finalize": 1,
+   "pre_write": 1,
+   "verifier": 0
+  },
+  "repair": {
+   "on_step": 4,
+   "prepare": 1,
+   "finalize": 1,
+   "pre_write": 1,
+   "verifier": 0
+  }
+ }
+}
