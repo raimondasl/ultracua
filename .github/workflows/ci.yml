@@ -92,6 +92,16 @@ jobs:
           tests/mutations/cannot_spend.py
           --tests tests/test_cannot_spend.py tests/test_run_record.py tests/test_obs.py
 
+      # A THIRD registry, same reasoning as the second. These mis-key the engine chain's internal
+      # forwards, and three of the seven are TYPE-SILENT swaps the arity pin is fully satisfied by --
+      # which is the whole reason step 1.1 shipped a forwarding sensor beside the arity one.
+      - name: Apply every keyword-only-chain mutation
+        timeout-minutes: 10
+        run: >
+          uv run --group bench --group providers --group mcp python scripts/prove_red.py
+          tests/mutations/keyword_only_chain.py
+          --tests tests/test_engine_chain_is_keyword_only.py
+
   # RED-IN-CI (reshape-plan 0.4b). "Verify a regression test fails against the old code" has been in
   # CLAUDE.md since round 1 and has caught several no-op fixes BY HAND. This is the hand-check as a job:
   # difference this branch's pytest collection against the base's, run the NEW ids twice -- once against

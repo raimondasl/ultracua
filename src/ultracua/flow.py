@@ -179,10 +179,12 @@ async def run_cached(
         # NO fall-through to a full re-author — the caller owns whole-flow relearn (and its metadata).
         heal_provider = provider if mode in ("auto", "repair") else None
         report = await _replay(
-            url, key, cached, cache, heal_provider, headless, on_step,
-            prepare, finalize, goal, governor, scope, browser, record_har_path, extra_headers,
-            storage_state, window_size=window_size, params=params, dry_run=dry_run,
-            pre_write=pre_write, redact=redact, aux_routers=aux_routers,
+            url, key=key, flow=cached, cache=cache, provider=heal_provider, headless=headless,
+            on_step=on_step, prepare=prepare, finalize=finalize, goal=goal, governor=governor,
+            scope=scope, browser=browser, record_har_path=record_har_path,
+            extra_headers=extra_headers, storage_state=storage_state, window_size=window_size,
+            params=params, dry_run=dry_run, pre_write=pre_write, redact=redact,
+            aux_routers=aux_routers,
         )
         if report.success or mode in ("replay", "repair") or report.mode == "escalate":
             return report
@@ -214,16 +216,20 @@ async def run_cached(
         return FlowReport(mode="miss", success=False, note="learn requires a provider or grounding")
     if samples and samples > 1:  # best-of-N: re-author up to N times, keep the first verified sample
         return await _learn_n(
-            url, goal, key, provider, cache, max_steps, headless, on_step,
-            prepare, finalize, governor, scope, browser, verifier, grounding,
-            record_har_path, extra_headers, storage_state, verify_replay, samples, reflect,
-            window_size=window_size, redact=redact, aux_routers=aux_routers,
+            url, goal=goal, key=key, provider=provider, cache=cache, max_steps=max_steps,
+            headless=headless, on_step=on_step, prepare=prepare, finalize=finalize,
+            governor=governor, scope=scope, browser=browser, verifier=verifier,
+            grounding=grounding, record_har_path=record_har_path, extra_headers=extra_headers,
+            storage_state=storage_state, verify_replay=verify_replay, samples=samples,
+            reflect=reflect, window_size=window_size, redact=redact, aux_routers=aux_routers,
         )
     return await _learn(
-        url, goal, key, provider, cache, max_steps, headless, on_step,
-        prepare, finalize, governor, scope, browser, verifier, grounding,
-        record_har_path, extra_headers, storage_state, verify_replay,
-        window_size=window_size, redact=redact, aux_routers=aux_routers,
+        url, goal=goal, key=key, provider=provider, cache=cache, max_steps=max_steps,
+        headless=headless, on_step=on_step, prepare=prepare, finalize=finalize, governor=governor,
+        scope=scope, browser=browser, verifier=verifier, grounding=grounding,
+        record_har_path=record_har_path, extra_headers=extra_headers, storage_state=storage_state,
+        verify_replay=verify_replay, window_size=window_size, redact=redact,
+        aux_routers=aux_routers,
     )
 
 
@@ -302,7 +308,7 @@ def _write_owner(act_open: bool, cur_i: int, live_tails: "set[int]") -> int:
 
 
 async def _author_steps(
-    session: BrowserSession, goal: str, provider: Optional[Provider], governor: PacingGovernor,
+    session: BrowserSession, *, goal: str, provider: Optional[Provider], governor: PacingGovernor,
     max_steps: int, on_step: Optional[OnStep] = None, grounding: Optional[Any] = None,
     block_mutations: bool = False,
 ) -> "tuple[list[CachedStep], bool, int, list[StepTrace], bool, bool]":
@@ -738,7 +744,7 @@ async def _author_steps(
 
 
 async def _verify_by_replay(
-    url: str, key: str, candidate: CachedFlow, cache: FlowCache, headless: Optional[bool],
+    url: str, *, key: str, candidate: CachedFlow, cache: FlowCache, headless: Optional[bool],
     prepare: Optional[Prepare], governor: PacingGovernor, scope: str, browser: Optional[Any],
     extra_headers: Optional[dict], storage_state: Optional[str],
 ) -> bool:
@@ -749,15 +755,28 @@ async def _verify_by_replay(
     looked solved in-session but whose cached locators don't survive a fresh load. The caller skips this
     for write flows (re-firing a mutating step would double-submit).
     """
+    # THE FOUR `None`s ARE NOW NAMED, which is the concrete thing step 1.1 buys on this line. They
+    # used to sit at positions 5, 7, 9 and 14 of a sixteen-argument positional call, and swapping any
+    # two of them is type-silent: `provider`, `on_step`, `finalize` and `record_har_path` all accept
+    # None and three of the four accept a callable. Nothing in the type system, the suite or a
+    # reviewer's eye separates the right order from a wrong one there.
     report = await _replay(
-        url, key, candidate, cache, None, headless, None, prepare, None, candidate.goal,
-        governor, scope, browser, None, extra_headers, storage_state,
+        url, key=key, flow=candidate, cache=cache,
+        provider=None,          # 0-LLM: no heal, no replan (see the docstring)
+        headless=headless,
+        on_step=None,           # the caller's progress callback is not this verification's business
+        prepare=prepare,
+        finalize=None,          # no extraction, so this costs no paid call
+        goal=candidate.goal, governor=governor, scope=scope, browser=browser,
+        record_har_path=None,   # a verification run is not the caller's recorded artefact
+        extra_headers=extra_headers, storage_state=storage_state,
     )
     return report.success
 
 
 async def _learn(
     url: str,
+    *,
     goal: str,
     key: str,
     provider: Provider,
@@ -839,7 +858,8 @@ async def _learn(
             author_goal = goal + "\n\nLESSONS FROM PRIOR FAILED ATTEMPTS (do not repeat these mistakes):\n" + \
                 "\n".join(f"- {r}" for r in reflections)
         steps, success, llm, step_traces, performed_write, write_unattributed = await _author_steps(
-            session, author_goal, provider, governor, max_steps, on_step=on_step, grounding=grounding,
+            session, goal=author_goal, provider=provider, governor=governor, max_steps=max_steps,
+            on_step=on_step, grounding=grounding,
         )
         traces.extend(step_traces)
 
@@ -903,8 +923,11 @@ async def _learn(
             # keys off `performed_write` (a write fired on the wire), NOT the recipe's `mutating` flags,
             # which miss Enter-submits and formless JS POSTs.
             if verify_replay and not performed_write:
-                if await _verify_by_replay(url, key, candidate, cache, headless, prepare, governor,
-                                           scope, browser, extra_headers, storage_state):
+                if await _verify_by_replay(url, key=key, candidate=candidate, cache=cache,
+                                           headless=headless, prepare=prepare, governor=governor,
+                                           scope=scope, browser=browser,
+                                           extra_headers=extra_headers,
+                                           storage_state=storage_state):
                     cache.put(candidate)
                     extra["verify"] = "passed"
                     cached_here = True
@@ -987,7 +1010,7 @@ async def _reflect(provider: Provider, goal: str, report: FlowReport) -> Optiona
 
 
 async def _learn_n(
-    url: str, goal: str, key: str, provider: Provider, cache: FlowCache, max_steps: Optional[int],
+    url: str, *, goal: str, key: str, provider: Provider, cache: FlowCache, max_steps: Optional[int],
     headless: Optional[bool], on_step: Optional[OnStep], prepare: Optional[Prepare],
     finalize: Optional[Finalize], governor: PacingGovernor, scope: str, browser: Optional[Any] = None,
     verifier: Optional[Verifier] = None, grounding: Optional[Any] = None,
@@ -1020,10 +1043,13 @@ async def _learn_n(
         used = attempt + 1
         try:
             last = await _learn(
-                url, goal, key, provider, cache, max_steps, headless, on_step, prepare, finalize,
-                governor, scope, browser, verifier, grounding, record_har_path, extra_headers,
-                storage_state, verify_replay, reflections or None, window_size, redact,
-                aux_routers,
+                url, goal=goal, key=key, provider=provider, cache=cache, max_steps=max_steps,
+                headless=headless, on_step=on_step, prepare=prepare, finalize=finalize,
+                governor=governor, scope=scope, browser=browser, verifier=verifier,
+                grounding=grounding, record_har_path=record_har_path, extra_headers=extra_headers,
+                storage_state=storage_state, verify_replay=verify_replay,
+                reflections=reflections or None, window_size=window_size, redact=redact,
+                aux_routers=aux_routers,
             )
         except Exception:  # an attempt that raised mid-way may have fired a write — never silently retry
             _log.warning("best-of-N: attempt %d raised — stopping (a write may have fired)", used)
@@ -1052,6 +1078,7 @@ async def _learn_n(
 
 async def _replay(
     url: str,
+    *,
     key: str,
     flow: CachedFlow,
     cache: FlowCache,
@@ -1137,8 +1164,8 @@ async def _replay(
                 await pre_write(session)
                 pre_write = None
             ok, note, did_heal = await _replay_step(
-                session, step, provider, tr, goal, governor, scope, i, params=params,
-                dry_run=dry_run,
+                session, step, provider=provider, tr=tr, goal=goal, governor=governor, scope=scope,
+                idx=i, params=params, dry_run=dry_run,
             )
             if dry_run is not None and getattr(dry_run, 'aborted', False):
                 # A safety abort OUTRANKS the step result: a step can look fine while the arbiter
@@ -1204,7 +1231,8 @@ async def _replay(
                     )
                     (new_steps, authored_ok, replan_llm, replan_traces, _replan_wrote,
                      _replan_unattr) = await _author_steps(
-                        session, goal, provider, governor, settings.max_steps, on_step=on_step,
+                        session, goal=goal, provider=provider, governor=governor,
+                        max_steps=settings.max_steps, on_step=on_step,
                         block_mutations=True,  # a replay-repair must never perform a NEW write
                     )
                     llm += replan_llm
@@ -1294,6 +1322,7 @@ def _select_values(text: Optional[str]):
 async def _replay_step(
     session: BrowserSession,
     step: CachedStep,
+    *,
     provider: Optional[Provider],
     tr: StepTrace,
     goal: str,
