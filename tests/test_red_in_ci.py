@@ -268,15 +268,43 @@ def test_the_node_id_round_trip_holds_against_a_real_pytest_run(tmp_path: Path) 
     }, got
 
 
+def test_an_unimportable_module_reports_ERROR_for_its_ids_against_real_pytest(tmp_path: Path) -> None:
+    """THE SHAPE, TAKEN FROM PYTEST RATHER THAN INVENTED. The cell below this one used a hand-written
+    fixture asserting `name="tests/test_y.py"` for a collection error. Pytest actually writes the
+    DOTTED MODULE PATH with no extension (`sub.test_broken`), so every id in an unimportable module
+    came back `missing` instead of `error` — measured on a real run of this job, 44 of 44.
+
+    That is this file's own lesson (`test_the_node_id_round_trip_holds_against_a_real_pytest_run`)
+    ignored one cell over: a format is worth asserting only against the thing that produces it.
+    """
+    import subprocess
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "test_broken.py").write_text(
+        "from ultracua.flows import DoesNotExistAnywhere\ndef test_a(): pass\n", encoding="utf-8")
+    junit = tmp_path / "j.xml"
+    subprocess.run([sys.executable, "-m", "pytest", "sub/test_broken.py::test_a", "-q", "--tb=no",
+                    "-p", "no:cacheprovider", f"--junitxml={junit}"],
+                   cwd=tmp_path, capture_output=True, text=True)
+    got = R.parse_junit(junit, ["sub/test_broken.py::test_a"])
+    assert got == {"sub/test_broken.py::test_a": "error"}, (
+        f"{got} — an id whose module could not be imported must be `error` (inconclusive: ship a "
+        f"registered mutation), never `missing` (which says this harness asked for something that "
+        f"does not exist and sends the reader to debug the harness).")
+
+
 def test_a_collection_error_is_an_error_and_a_failure_is_a_failure(tmp_path: Path) -> None:
     """They exit pytest the same way and mean opposite things here. A `<failure>` is the evidence
-    this job wants; an `<error>` is a test that never ran."""
+    this job wants; an `<error>` is a test that never ran.
+
+    Hand-authored XML, deliberately, and ONLY for the per-outcome mapping — the cell above owns the
+    collection-error SHAPE, against real pytest, because that is the half a fixture got wrong.
+    """
     junit = tmp_path / "j.xml"
     junit.write_text(
         '<testsuites><testsuite>'
         '<testcase classname="tests.test_x" name="test_a"><failure>boom</failure></testcase>'
         '<testcase classname="tests.test_x" name="test_b"><skipped/></testcase>'
-        '<testcase classname="" name="tests/test_y.py"><error>ImportError</error></testcase>'
+        '<testcase classname="" name="tests.test_y"><error>ImportError</error></testcase>'
         '</testsuite></testsuites>', encoding="utf-8")
     got = R.parse_junit(junit, ["tests/test_x.py::test_a", "tests/test_x.py::test_b",
                                 "tests/test_y.py::test_c", "tests/test_z.py::test_d"])
@@ -298,7 +326,7 @@ def test_a_collection_error_reaches_only_its_OWN_files_ids() -> None:
     junit = Path(tempfile.mkdtemp()) / "j.xml"
     junit.write_text(
         '<testsuites><testsuite>'
-        '<testcase classname="" name="other/tests/test_a.py"><error>ImportError</error></testcase>'
+        '<testcase classname="" name="other.tests.test_a"><error>ImportError</error></testcase>'
         '</testsuite></testsuites>', encoding="utf-8")
     got = R.parse_junit(junit, ["tests/test_a.py::t", "other/tests/test_a.py::t",
                                 "tests/test_ab.py::t"])

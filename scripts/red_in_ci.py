@@ -333,10 +333,17 @@ def parse_junit(path: Path, ids: "list[str]") -> dict:
                 kind = "failed"
             elif case.find("skipped") is not None:
                 kind = "skipped"
-            # A COLLECTION error has no test name to hang on: pytest emits the file path as the
-            # classname. Remember the file so its ids can be told from `missing`.
+            # A COLLECTION error has no test to hang on, so pytest puts the collector in `name` and
+            # leaves `classname` EMPTY. `name` is the DOTTED MODULE PATH with no extension --
+            # `tests.test_write_class`, not `tests/test_write_class.py`. The first version of this
+            # guessed the latter, from a hand-written fixture rather than from pytest, and every id in
+            # an unimportable module came back `missing` instead of `error`: measured on a real run,
+            # 44 of 44. Both spellings are recorded, because a conftest-level error reports
+            # differently again and the cost of accepting one form too many is nil.
             if kind == "error" and not cls.strip():
-                errored_files.add(name.replace("\\", "/"))
+                raw = name.replace("\\", "/")
+                errored_files.add(raw)
+                errored_files.add(raw.replace(".", "/") + ".py")
             out[_node_id(cls, name)] = kind
     resolved = {}
     for i in ids:
