@@ -1679,10 +1679,9 @@ def _make_pre_write(spec: FlowSpec, out: dict):
 
     Handed to `run_cached(pre_write=...)`, which calls it once, immediately before the run's FIRST write
     actuates. `_make_finalize` then requires an absent->present TRANSITION rather than mere presence."""
-    if not spec.write.declares_confirm:
+    if not spec.write.declares_confirm:       # ... which implies `spec.mutate is not None`
         return None
     m = spec.mutate
-    assert m is not None                      # `declares_confirm` implies it; stated for the reader
 
     async def _pre(session) -> None:
         out["_pre_confirm"] = await condition_present(
@@ -3451,7 +3450,7 @@ def _preflight_row(
     # where the declaration-only version of it used to sit, so a DECLARED write still reports its missing
     # confirm check first (the more actionable of the two) and still reports an unkeyable commit second.
     # Widening a guard should not silently reshuffle the messages of the population it already covered.
-    if declares_write and not spec.mutate.has_confirm():
+    if declares_write and not spec.write.declares_confirm:
         raise WriteUnconfirmableError(
             f"{spec.name!r}: a write flow needs a confirm check — set "
             f"mutate.confirm_selector / confirm_text_contains / confirm_url_contains")
@@ -3567,7 +3566,7 @@ def _preflight_row(
     # PRECHECK SAFETY: the one-shot idempotency precheck (`mutate.precheck_*`) probes a FIXED url/marker with
     # NO row awareness. On a PARAMETERIZED write a generic end-state left by one row would make a DIFFERENT
     # row's write skip as "already-done" — a silently suppressed write. Its retry-safety is the row-keyed key.
-    if declares_write and parameterizing and spec.mutate.has_precheck():
+    if declares_write and parameterizing and spec.write.declares_precheck:
         raise PrecheckUnsafeError(
             f"{spec.name!r}: a parameterized write can't use a one-shot precheck (mutate.precheck_*) — the "
             f"precheck is row-blind and could skip a distinct row's write as already-done. Remove the precheck "
@@ -5216,7 +5215,7 @@ async def record(
     pre_state: dict = {}
 
     async def _probe_confirm(session) -> None:
-        if declared_write and spec.mutate.has_confirm():
+        if spec.write.declares_confirm:
             m = spec.mutate
             pre_state["confirm"] = await condition_present(
                 session.page, selector=m.confirm_selector, text_contains=m.confirm_text_contains,
@@ -5269,7 +5268,7 @@ async def record(
         # flow is routed through approval + the mutation gate + idempotency exactly like a learned write.
         # We do NOT verify-by-replay — re-firing a mutating step would double-submit; a recorded write is
         # verified by the human watching their own demo plus the approval gate, not an automated replay.
-        if not spec.mutate.has_confirm():
+        if not spec.write.declares_confirm:
             cache.delete(key)
             return RecordResult(spec, cached=False, reproduced=False, performed_write=wire_write,
                                 is_write=True, steps=list(flow.steps),

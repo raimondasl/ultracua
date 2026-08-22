@@ -154,6 +154,75 @@ def test_a_recipe_question_cannot_be_asked_of_the_declaration_object() -> None:
     print(f"recipe questions:      {[f.__name__ for f in (is_write_flow, recipe_write_count, recipe_has_multiple_writes)]}")
 
 
+# The three `MutateSpec` methods that ANSWER A CLASSIFICATION QUESTION rather than return data.
+# Every one of them is a named question on `WriteClass`, so a call to one outside the constructor is
+# the raw predicate wearing a different hat.
+CLASSIFYING_METHODS = ("has_confirm", "has_precheck", "is_multiwrite")
+
+
+def _raw_classification_calls(tree: ast.AST) -> list:
+    """Calls to a classification method on a MutateSpec, by receiver rather than by method name.
+
+    THE RECEIVER TEST IS LOAD-BEARING IN BOTH DIRECTIONS. `StepConfirm` has its own `has_confirm()`
+    — a per-write barrier answering about ITSELF, which is not a flow-level classification and must
+    not be flagged; the first draft matched on the method name alone and reported it. And a site can
+    evade a receiver test by binding first (`m = spec.mutate; m.has_confirm()`), so names bound from
+    `<x>.mutate` inside the same function count as the same receiver.
+    """
+    out = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
+            continue
+        aliases = {t.id for n in ast.walk(fn) if isinstance(n, ast.Assign)
+                   for t in n.targets
+                   if isinstance(t, ast.Name) and isinstance(n.value, ast.Attribute)
+                   and n.value.attr == "mutate"}
+        for n in ast.walk(fn):
+            if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                    and n.func.attr in CLASSIFYING_METHODS):
+                continue
+            recv = n.func.value
+            is_mutate = ((isinstance(recv, ast.Attribute) and recv.attr == "mutate")
+                         or (isinstance(recv, ast.Name) and recv.id in aliases))
+            if is_mutate:
+                out.append((n.lineno, ast.unparse(n)))
+    return sorted(set(out))
+
+
+def test_a_classification_question_is_never_asked_through_a_raw_dereference() -> None:
+    """THE CLASS, not the instances that prompted it.
+
+    `scripts/ratchets.py` counts `<x>.mutate is (not) None` and nothing else, so a site asking
+    `spec.mutate.has_confirm()` behind a `declares_write` local was invisible to it. A ratchet-clean
+    tree still had FOUR of them, and this scan found them on its first run — two in `_preflight_row`
+    and two in `record`, all four verified equivalent against their enclosing guard before conversion.
+    """
+    offenders = [f"{mod.__name__}:{ln}  {src}" for mod in MODULES
+                 for ln, src in _raw_classification_calls(ast.parse(inspect.getsource(mod)))]
+    assert not offenders, (
+        "a classification question is asked through a raw dereference rather than through "
+        f"`spec.write`:\n  " + "\n  ".join(offenders) +
+        "\nEvery one of these is already a named question on WriteClass.")
+    print(f"the {len(CLASSIFYING_METHODS)} classification questions are asked in ONE place")
+
+
+@pytest.mark.parametrize("src,expect", [
+    ("def f(spec):\n    return spec.mutate.has_confirm()", 1),
+    ("def f(spec):\n    m = spec.mutate\n    return m.is_multiwrite()", 1),
+    ("def f(spec):\n    return spec.mutate.has_precheck() and spec.mutate.has_confirm()", 2),
+    # NOT flagged: a per-write barrier answering about itself, and a named question.
+    ("def f(sc):\n    return sc.has_confirm()", 0),
+    ("def f(spec):\n    return spec.write.declares_confirm", 0),
+    ("def f(spec):\n    return spec.mutate.step_confirms", 0),
+], ids=["direct", "via an alias", "two on one line", "a StepConfirm is not a MutateSpec",
+        "the named question", "reading data is not asking"])
+def test_the_scan_can_tell_a_classification_from_a_lookalike(src: str, expect: int) -> None:
+    """The scan is the only thing standing between this slice and a fifth missed site, so it gets its
+    own cells rather than resting on 'it found four'. A scan that reports zero over the real tree is
+    indistinguishable from a broken one until you show it a tree that has them."""
+    assert len(_raw_classification_calls(ast.parse(src))) == expect, ast.dump(ast.parse(src))
+
+
 def _flow(*mutating: bool) -> CachedFlow:
     return CachedFlow(key="k", goal="g", start_url="u", created_ts=0.0,
                       steps=[CachedStep(intent=f"s{i}", action="click", mutating=m)
@@ -265,14 +334,23 @@ CONVERSIONS = {
         "_make_pre_write": {"declares_confirm": 1},           # no confirm -> no pre-write probe at all
         "_one_guarded": {"declares_write": 1},                # run_all: an undeclared write is skipped
         "_precheck_done": {"declares_precheck": 1},
-        "_preflight_row": {"declares_write": 1},
+        "_probe_confirm": {"declares_confirm": 1},            # record(): the pre-demo confirm probe
+        # THREE, and the two beyond `declares_write` are the ones the ratchet could not see: they
+        # were `spec.mutate.has_confirm()` / `.has_precheck()` guarded by a `declares_write` local,
+        # which is a named question asked through a raw dereference. The ratchet counts only the
+        # `is (not) None` comparison, so a ratchet-clean tree still had them — found by reading, not
+        # by the instrument.
+        "_preflight_row": {"declares_write": 1, "declares_confirm": 1, "declares_precheck": 1},
         "_replay_body": {"declares_write": 1},
         "dry_run": {"declares_precheck": 1},                  # ... reports `precheck_skipped`
         "is_write_flow": {"declares_write": 1},               # THE wire-or-declaration predicate
         "learn": {"declares_write": 1},                       # never multi-sample a declared write
         "mark_step": {"declares_write": 1},
         "preflight_keys": {"declares_write": 1},
-        "record": {"declares_write": 1},                      # read flows only get seeded contracts
+        # A declared write with no confirm barrier is refused at record time, and that guard was
+        # asking `spec.mutate.has_confirm()` inside an `if declared_write:` block — invisible to the
+        # ratchet, found by the classification scan below.
+        "record": {"declares_write": 1, "declares_confirm": 1},
         "run_batch": {"declares_write": 1},
         "save_spec": {"declares_barriers": 1},                # serialize step_confirms explicitly
     },
