@@ -12,7 +12,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**45 open**, 33 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**46 open**, 34 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **45 open**, 33 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **46 open**, 34 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -873,6 +873,8 @@ if and only if that branch is ever resumed.
 | R4.80 | open | `variance.compare_records` is the only remaining reader whose cost clause could not be scored by `prove_red` (R4.77: it lives in `benchmarks/`), and its new unknown-cost branches are pinned only by in-process arming. Filed as a pointer rather than a defect: the guards exist and are proved red, but by a weaker instrument than the `src/` half of the same slice |
 | R4.81 | open | `flows.py:219` states the contract that `usage` is ALWAYS populated and always carries `cost_usd`, and FOUR `mode="miss"` early returns in `run_cached` still do not — `flow.py:174` (dry-run misuse), `:192` (no cached flow), `:210` (a terminal refusal) and `:214` (learn without a provider). 1.3 closed the two `escalate` returns for the same reason and left these, deliberately. MEASURED: all four fire after only `cache.get(key)` and a log line — no provider is built and no browser opens — so a literal zero would be SUPPORTABLE there, and the reachable harm is real: a `variance` rep whose learn returns `miss` makes the whole run's cost unknown under the absorbing sum, for a run in which nothing was spent. THE COUNTEREXAMPLE THAT MAKES THIS A SLICE RATHER THAN A FOOTNOTE is `flow.py:1048`, best-of-N's exhausted return: the loop above it MAY have spent, so populating that one with a literal zero would be a confident wrong number. The rule is not 'always populate usage' but 'populate it with what you can support', and a fix that does not distinguish the two makes the accounting worse |
 | R4.82 | open | 0.4b's RED-in-CI sensor is ID-LEVEL, so a `src/` change guarded by editing an EXISTING cell's BODY is not adjudicated at all: no new node id appears, `new_ids` is empty, and the verdict is the quiet `no_new_tests`. That is a real hole in the new gate - a src-touching PR with no new guard passes it - and it is NOT over-gated deliberately: making it loud would fire on every such PR with nothing to acknowledge it (1.3 modified `test_ratchets.py` in exactly this shape and added no id for it), which is the D0 refusal shape wearing a CI hat. A parametrize CELL added to an existing table IS a new id and is covered. What would close it is a second derivation with a different sensor class - diffing the set of test FUNCTIONS whose body changed, and running those too - which is more diff parsing than 0.4b was worth before the id-level version had been measured on real PRs. The verdict's own detail string states the residual so a reader of a green run knows what was not asked |
+| R4.83 | fixed | The daemon's `run` method read `if params.get("grounding") == "anthropic"` — an equality test against ONE literal, with `grounding = None` as the fall-through. So a typo, or a backend that does not exist yet, disabled grounding entirely: the caller asked for it, the run proceeded without it, and nothing said so. Inviolable #2 in one operator. Found by 1.7 while adding the closed-set validation the plan asked for on `mode`/`provider`; `grounding` was the third one in the same shape and the only one that was silent. FIXED at 0.117.0 — `GROUNDINGS` is a set and an out-of-set value is refused with a reason. Both directions are armed (`tests/mutations/door_policy.py`), because a validator that refuses EVERYTHING satisfies every 'is it refused?' cell and takes the daemon offline |
+| R4.84 | open | THREE DOORS CAN RE-PERFORM A WRITE BY RE-AUTHORING A FLOW, and they are exactly the three with no flow-level gates: `cli_root`, `daemon_run` and `run_many`. In `mode="auto"` a replay that fails irrecoverably falls through to a full re-author (`flow.run_cached`'s "auto-mode replay failed irrecoverably -> fall through to a fresh learn run"), and re-authoring a write flow performs the write again. The gated doors cannot: `flows.replay` reaches only `replay`/`repair`, neither of which falls through. The one gated door that can is `flows.learn`, where a write fires ONCE by design and R3.13's terminal refusal bounds runs 2..N. MEASURED and printed by `tests/test_door_policy.py::test_the_printed_policy_table` at 0.117.0 |
 <!-- /generated:r4-index -->
 
 
@@ -5409,3 +5411,77 @@ second one. Measure a few real runs first.
 **Sibling:** [[R4.75]], which is the same class one instrument over — a structural cell that reads
 `src/` BY PATH is invisible to `prove_red` AND, since 0.4b, to `red_in_ci`, because both swap `src/` on
 `PYTHONPATH` and neither can reach a file read off disk. Nine such sites survive across six files.
+
+---
+
+## R4.83 — the daemon's `grounding` was an equality test, so a typo ran without grounding
+
+**Found and FIXED at 0.117.0, by step 1.7.** The plan asked that door to validate `mode` and
+`provider` against closed sets. `grounding` was the third parameter in the same shape, and the only
+one that failed *silently*:
+
+```python
+grounding = None
+if params.get("grounding") == "anthropic":
+    grounding = AnthropicGrounding()
+```
+
+Any other value — `"anthropicc"`, `""`, a backend that does not exist yet — takes the fall-through.
+The run then proceeds with **no grounding at all**, succeeds or fails on its own merits, and reports
+nothing about the thing the caller asked for and did not get. That is inviolable #2 ("never silently
+return or act WRONG — fail LOUD") reached through one operator.
+
+`mode` and `provider` were never silent — `run_cached` has refused an unknown mode since R4.31 and
+`get_provider` raises on an unknown name. What they had was an ORDER problem, which 1.7 also fixed:
+both refused at the far end of `_run`, after `get_provider` had built a real Router and
+`AnthropicGrounding()` an SDK client, so a request that was never going to run paid for two live
+clients first.
+
+**Both directions are armed**, and the second is the one that is easy to forget: a validator that
+refuses *everything* satisfies every "is it refused?" cell anybody writes, and takes the daemon
+offline. `tests/mutations/door_policy.py` carries `the_validator_refuses_everything` for exactly
+that, and `test_the_daemon_permits_every_in_set_value` is what kills it.
+
+---
+
+## R4.84 — three doors can re-perform a write, and they are the three with no gates
+
+**Measured and printed at 0.117.0. Recorded rather than changed.**
+
+`flow.run_cached` in `mode="auto"` falls through to a full re-author when a cached replay fails
+irrecoverably — and re-authoring a write flow **performs the write again**. The branch is one line:
+
+```python
+if report.success or mode in ("replay", "repair") or report.mode == "escalate":
+    return report
+# auto-mode replay failed irrecoverably -> fall through to a fresh learn run.
+```
+
+`tests/test_door_policy.py` derives which modes each of the eight doors can reach, and derives the
+consequence rather than typing it:
+
+| door | flow gates | re-authors a write |
+|---|---|---|
+| `cli_root` | no | **YES** |
+| `daemon_run` | no | **YES** |
+| `run_many` | no | **YES** |
+| `flows_learn` | yes | **YES** (by design) |
+| `flows_replay` / `mcp_tool` | yes | no |
+| `flows_dry_run` / `flows_record` | yes | no |
+
+The three that can are exactly the three with no approval gate, no write gate and no idempotency
+key. `flows_learn` can too, and that one is bounded: a write fires once during discovery — which is
+*how* a write flow is discovered — and R3.13's terminal refusal stops runs 2..N.
+
+**Why this is recorded and not closed.** Closing it means adding a refusal, and `reshape-plan`'s
+standing rule is that a migration step adds none. It is also the D0 shape wearing a door-policy hat:
+the only write signal available *before acting* at these doors is `safety.MUTATING_KEYWORDS`,
+measured at 28% false positives on ordinary read controls, so a refusal keyed on it would break a
+large population of working reads whose only remedy is a write-completion signal a read cannot
+produce. The raw doors have no `FlowSpec`, so there is no declaration to key on either.
+
+What 1.7 buys is smaller and real: the decision is now a printed row somebody can point at, with the
+branch it rests on pinned, instead of a fall-through nobody had read. A proper fix wants a door-level
+`Policy` object the engine **consults** rather than one a test describes — Phase 3 territory, and it
+should arrive with the door that most wants it (the daemon, whose own docstring already says it
+bypasses everything `flows.replay()` enforces).

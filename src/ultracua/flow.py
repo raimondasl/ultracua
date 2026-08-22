@@ -92,7 +92,7 @@ class FlowReport:
 # signature comment and the body had already drifted apart: the comment said "auto" | "learn" | "replay"
 # while the body also accepted "repair" (replay WITH the heal provider). A caller reading the signature
 # could not know "repair" existed, and a caller mistyping any of them got a silent re-author (R4.31).
-_MODES = frozenset({"auto", "learn", "replay", "repair"})
+MODES = frozenset({"auto", "learn", "replay", "repair"})
 
 
 async def run_cached(
@@ -100,7 +100,7 @@ async def run_cached(
     goal: str,
     provider: Optional[Provider] = None,
     cache: Optional[FlowCache] = None,
-    mode: str = "auto",  # one of `_MODES` above — validated, never guessed at (R4.31)
+    mode: str = "auto",  # one of `MODES` above — validated, never guessed at (R4.31)
     max_steps: Optional[int] = None,
     headless: Optional[bool] = None,
     scope: str = "default",
@@ -158,9 +158,9 @@ async def run_cached(
     # REFUSE POSITIVELY rather than degrade to the safest mode. "Unknown -> treat as replay" would be
     # this file's own worst habit: guessing what the caller meant is exactly how the fall-through read
     # as harmless. A caller that mistypes a mode has a bug, and the fastest way to tell them is loudly.
-    if mode not in _MODES:
+    if mode not in MODES:
         raise ValueError(
-            f"unknown mode {mode!r} — expected one of {sorted(_MODES)}. Refusing rather than guessing: "
+            f"unknown mode {mode!r} — expected one of {sorted(MODES)}. Refusing rather than guessing: "
             f"this used to fall through to a full re-author, which re-performs a cached flow's write.")
     governor = governor or PacingGovernor()
     key = flow_key(goal, url, scope)

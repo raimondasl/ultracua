@@ -31,9 +31,9 @@ from typing import Any
 
 from .. import __version__
 from ..cache import FlowCache, flow_key
-from ..flow import run_cached
+from ..flow import MODES, run_cached
 from ..obs import get_logger
-from ..providers import get_provider
+from ..providers import PROVIDERS, get_provider
 
 _log = get_logger("daemon")
 
@@ -43,7 +43,42 @@ def _cache(params: dict) -> FlowCache:
     return FlowCache(root=root) if root else FlowCache()
 
 
+# THE CLOSED SET OF GROUNDING BACKENDS this door accepts. `MODES` and `PROVIDERS` come from the
+# modules that define them; this one has nowhere else to live yet, because `vision` exposes one
+# class rather than a registry. When a second grounding backend lands, this moves there.
+GROUNDINGS = frozenset({"anthropic"})
+
+
+def _validate_run(params: dict) -> None:
+    """Refuse an out-of-set `mode`/`provider`/`grounding` BEFORE the engine, and before any client.
+
+    ORDER IS THE POINT, not the checking. `run_cached` has refused an unknown mode since R4.31 — but
+    it refuses at the END of this function, after `get_provider` has built a real Router and
+    `AnthropicGrounding()` an SDK client. So a request that was never going to run paid for two
+    live clients first. Everything here is a pure string comparison against a set the defining
+    module owns.
+
+    `grounding` is in here for a DIFFERENT reason, and it is the one that was silently wrong: the
+    old line read `if params.get("grounding") == "anthropic"`, so any other value — a typo, a
+    backend that does not exist yet — fell through to `grounding = None` and the run proceeded with
+    no grounding at all. The caller asked for something, did not get it, and was told nothing. That
+    is inviolable #2, and an equality test against one literal is how it happens.
+    """
+    mode = params.get("mode", "auto")
+    if mode not in MODES:
+        raise ValueError(f"unknown mode {mode!r} — expected one of {sorted(MODES)}")
+    provider = params.get("provider")
+    if provider is not None and provider not in PROVIDERS:
+        raise ValueError(f"unknown provider {provider!r} — expected one of {sorted(PROVIDERS)}")
+    grounding = params.get("grounding")
+    if grounding is not None and grounding not in GROUNDINGS:
+        raise ValueError(
+            f"unknown grounding {grounding!r} — expected one of {sorted(GROUNDINGS)}. Refusing "
+            f"rather than running WITHOUT grounding, which is what this used to do silently")
+
+
 async def _run(params: dict) -> dict:
+    _validate_run(params)
     provider = get_provider(params["provider"]) if params.get("provider") else None
     grounding = None
     if params.get("grounding") == "anthropic":

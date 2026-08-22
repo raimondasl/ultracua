@@ -269,6 +269,31 @@ Violating any of these is a blocking defect, not a trade-off:
     own `has_confirm()` (a barrier answering about itself, which must NOT be flagged), and
     `m = spec.mutate; m.has_confirm()` evades a naive receiver test.
 
+- **Eight DOORS reach the engine, and they do not permit the same things (1.7, 0.117.0).**
+  `tests/test_door_policy.py` prints and commits what each caller of `flow.run_cached` may do. The
+  door SET is derived from the source, so a ninth cannot be quietly absent.
+  * **The column it exists for is `may_reauthor_a_write`, and it is DERIVED, never typed.** In
+    `mode="auto"` a replay that fails irrecoverably falls through to a full re-author, and
+    re-authoring a write flow PERFORMS THE WRITE AGAIN. Measured: **`cli_root`, `daemon_run` and
+    `run_many` can reach it, and they are exactly the three doors with no flow-level gates** — no
+    approval, no write gate, no idempotency key. The one gated door that can is `flows_learn`, where
+    a write fires once by design and R3.13's terminal refusal bounds runs 2..N. Recorded as R4.84
+    rather than changed: closing it is a refusal, and the plan forbids adding one as a migration
+    side effect.
+  * The whole table rests on ONE branch (`if report.success or mode in ("replay", "repair") or
+    report.mode == "escalate"`), which is pinned — widen it and every `no` in that column is wrong.
+  * **A liveness corpus is the other half** (`tests/test_door_liveness.py`, separate file because it
+    launches a browser and `red-proof` installs none). Without it the table is satisfied by a
+    codebase where every door refuses everything.
+  * **The daemon refuses an out-of-set `mode`/`provider`/`grounding` BEFORE building anything.**
+    The checking already existed — `run_cached` has refused an unknown mode since R4.31 — but at the
+    far END, after `get_provider` built a real Router and `AnthropicGrounding()` an SDK client. And
+    `grounding` was not checked at all: `if params.get("grounding") == "anthropic"` turned every
+    other value into `None`, so the caller asked for grounding, ran without it, and was told nothing
+    (inviolable #2, in one operator). `MODES` and `PROVIDERS` are imported from the modules that
+    define them — two lists of the permitted values is how one silently stops permitting what the
+    other does.
+
 - **Do not sed a file that is 40% prose ABOUT the shape you are removing.** Measured at 1.6: a
   blanket substitution across `flows.py` rewrote **ten comment and docstring lines**, including
   `_auth_retry_allowed`'s explanation of R3.5 — which then read as if the NEW named question were
