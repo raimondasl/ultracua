@@ -21,13 +21,12 @@
    "disposition": "reshape-plan 1.1 — keyword-only chain"
   },
   "flow_key_transcriptions": {
-   "total": 25,
+   "total": 2,
    "by_file": {
-    "src/ultracua/cli.py": 8,
-    "src/ultracua/flows.py": 15,
-    "src/ultracua/mcpserver/server.py": 2
+    "src/ultracua/cli.py": 1,
+    "src/ultracua/flows.py": 1
    },
-   "disposition": "reshape-plan 1.6 — FlowSpec.key"
+   "disposition": "reshape-plan 1.6 — FlowSpec.key (landed 25 -> 2, and 2 is the FLOOR, not a residue: one is `FlowSpec.key`'s own body — the site every other one now funnels into — and one is `cli.py`'s raw `ultracua <url> <goal>` entry point, whose argparse Namespace has `url` rather than `start_url` and is not a FlowSpec at all. Neither can go without inventing a spec the caller never made"
   },
   "run_record_write_sites": {
    "total": 0,
@@ -35,13 +34,9 @@
    "disposition": "reshape-plan 1.5 — THE SINK (landed; the invariant is now CONTAINMENT, so the only acceptable value is 0)"
   },
   "spec_mutate_raw": {
-   "total": 27,
-   "by_file": {
-    "src/ultracua/cli.py": 3,
-    "src/ultracua/flows.py": 20,
-    "src/ultracua/mcpserver/server.py": 4
-   },
-   "disposition": "reshape-plan 1.6 — WriteClass named questions"
+   "total": 0,
+   "by_file": {},
+   "disposition": "reshape-plan 1.6 — WriteClass named questions (landed; the invariant is now CONTAINMENT inside `WriteClass.of`, so the only acceptable value is 0)"
   }
  }
 }

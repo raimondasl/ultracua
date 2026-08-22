@@ -238,12 +238,53 @@ Violating any of these is a blocking defect, not a trade-off:
     reads `src/` by path, so under `prove_red` it parses the pristine tree and cannot contribute a
     kill; the test reads `inspect.getsource(flow_mod)` and does. Collapsing them would disarm one.
 
+- **The write question has a NAME, and the key has one place (1.6, 0.116.0).** `spec.mutate is not
+  None` was written out at 27 sites across three modules and `flow_key(spec.goal, spec.start_url,
+  spec.scope)` at 24. Nothing was wrong with any of them — that is the point: 27 chances to ask the
+  DECLARATION question where the RECIPE question was meant, and 24 chances to reorder two of three
+  `str` arguments and key a flow to somebody else's cache entry.
+  * **The split is structural, not a naming convention.** A declaration question is an ATTRIBUTE of
+    the spec (`spec.write.declares_write/_confirm/_precheck/_barriers/_multiple_barriers`); a recipe
+    question is a FUNCTION you must hand the recipe to (`is_write_flow`, `recipe_write_count`,
+    `recipe_has_multiple_writes`). **You cannot ask a recipe question of `WriteClass` because it does
+    not hold one** — which is what makes R3.5 unaskable rather than merely discouraged. An UNDECLARED
+    write (nothing declared, a cached step carrying `mutating=True`) is a write in FACT and not in
+    DECLARATION, and `_auth_retry_allowed` keeps both, in separate arms with different remedies.
+  * **`spec.write` is computed per access and must stay that way.** `cli.py`'s `flow set-mutate`
+    assigns `spec.mutate` after construction, so a `cached_property` would answer with the OLD
+    declaration for the rest of the process.
+  * **The evidence is a DIFFERENTIAL, because a rename is exactly where a semantic change hides.**
+    4410 cells against `main` — `is_write_flow` (90), `_auth_retry_allowed` (1440) and
+    `_preflight_row` (2880, reaching 8 distinct exception classes) over every input shape that can
+    change an answer — **0 differing**. That evidence dies at merge, so the `_auth_retry_allowed`
+    half is now committed as `tests/goldens/auth_retry_truth.json`: **a diff there is a change to
+    what may be RE-DRIVEN after an auth refresh**, which is inviolable #3, and gets reviewed cell by
+    cell. `_preflight_row` got no golden on purpose — its refusals are already bound by
+    `test_refusal_codes.py`.
+  * **A RATCHET COUNTS ONE SHAPE, and the other spellings walk free.** The ratchet reads
+    `<x>.mutate is (not) None`; a site asking `spec.mutate.has_confirm()` behind a `declares_write`
+    local is the same question in different clothes, and **the tree was ratchet-clean at 0 with FOUR
+    of them still in it**. Closed as a class by a scan over the three `MutateSpec` methods that answer
+    a classification — and note both directions of that scan are load-bearing: `StepConfirm` has its
+    own `has_confirm()` (a barrier answering about itself, which must NOT be flagged), and
+    `m = spec.mutate; m.has_confirm()` evades a naive receiver test.
+
+- **Do not sed a file that is 40% prose ABOUT the shape you are removing.** Measured at 1.6: a
+  blanket substitution across `flows.py` rewrote **ten comment and docstring lines**, including
+  `_auth_retry_allowed`'s explanation of R3.5 — which then read as if the NEW named question were
+  the wrong one, the exact opposite of what it means. **The AST ratchet reported a clean 0 and was
+  right about the code and blind to all of it.** Restore prose by checking the reverted line is
+  byte-identical to one that really existed in `HEAD`; anything left over is prose this slice wrote
+  and must be fixed by hand.
+
 - **Six shapes may only ever SHRINK — the ratchets.** `python scripts/ratchets.py` counts them by AST
   (`--print` for every site, `--update` to re-seed) and `test_every_ratchet_holds` runs it in the fast
-  tier. Today: `spec_mutate_raw` 27, `flow_key_transcriptions` 25, `cli_system_exit` 34,
-  `engine_positional_params` **7** (98 until 1.1; 7 is its END STATE, one subject per call, not a
-  number still coming down), and **two at ZERO** — `run_record_write_sites` (1.5) and
-  `bare_flow_replay_error` (1.4) — each tagged with the Phase-1 step that removes it. **A shrink FAILS
+  tier. Today: `cli_system_exit` 34; `flow_key_transcriptions` **2** (25 until 1.6, and 2 is the
+  FLOOR — `FlowSpec.key`'s own body plus the raw `ultracua <url> <goal>` CLI, whose argparse Namespace
+  has `url` rather than `start_url` and is not a FlowSpec at all); `engine_positional_params` **7**
+  (98 until 1.1; 7 is its END STATE, one subject per call, not a number still coming down); and
+  **three at ZERO** — `run_record_write_sites` (1.5), `bare_flow_replay_error` (1.4) and
+  `spec_mutate_raw` (1.6) — each tagged with the Phase-1 step that removed it. **A shrink FAILS
   too**, asking for `--update`: a ratchet that tolerates progress silently stops ratcheting, and the
   next regression is measured against the old, looser number. A derivation that matches NOTHING fails
   with its own message, the rule `prove_red` already applies to a stale mutation. **A ratchet whose end

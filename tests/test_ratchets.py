@@ -133,6 +133,11 @@ LIVENESS_GUTS = {
     # family. Leaving one behind leaves `sub` non-empty and the assert never fires.
     "bare_flow_replay_error": (r"raise (?=[A-Z])(\w*Error)\(", r"raise _Gone_\1(", 12,
                                "no `raise <FlowReplayError subclass>"),
+    # The five comparisons inside `WriteClass.of` are the whole liveness half. `\bmutate is` on a word
+    # boundary so `spec.write.declares_write` is untouched and so the prose in the surrounding
+    # docstrings — which necessarily quotes the shape it replaced — is irrelevant either way (the
+    # derivation is AST-based and never saw it).
+    "spec_mutate_raw": (r"\bmutate is (not )?None", "_gone_is_gone", 5, "matches NOTHING inside"),
 }
 
 

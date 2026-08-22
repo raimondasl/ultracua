@@ -156,7 +156,7 @@ def _warn_if_shape_baseline_kept(spec, data, *, had_data: bool = True) -> None:
         return                                     # the replay gate would accept it — stay quiet
     # A WRITE flow must NEVER be told to re-learn: re-authoring would actuate the write again. Its safe
     # authoring path is the recorder (gated + wire-attributed + approval-gated).
-    redo = (f"ultracua flow record --name {spec.name} ..." if spec.mutate is not None
+    redo = (f"ultracua flow record --name {spec.name} ..." if spec.write.declares_write
             else f"ultracua flow learn --name {spec.name} ...")
     detail = (f"this run's shape is {fresh}, so replay will STILL fail loud on shape drift"
               if fresh is not None else
@@ -180,7 +180,7 @@ async def _flow_learn(args: argparse.Namespace) -> None:
         login=login, mutate=mutate, pin_read=args.pin_read, headless=(False if args.headed else None),
     )
     if args.fresh:
-        FlowCache().delete(flow_key(spec.goal, spec.start_url, spec.scope))
+        FlowCache().delete(spec.key)
     save_spec(spec)
     res = await learn(spec, provider_name=args.provider, samples=args.samples)
     print(f"flow {spec.name!r}: cached={res.cached} found={res.found} ({len(res.steps)} step(s))")
@@ -302,7 +302,7 @@ def _flow_approve(args: argparse.Namespace) -> None:
     # the BEFORE state so we can say which of them this approval actually moved: silently re-blessing a widened
     # slot domain (or a loosened contract) as a side effect of blessing a recipe is how a gate gets defeated by
     # the very command meant to enforce it.
-    before = _load_meta(FlowCache(), flow_key(spec.goal, spec.start_url, spec.scope))
+    before = _load_meta(FlowCache(), spec.key)
     also = []
     if before.approved and _slots_hash(spec) != before.slots_hash:
         also.append("its SLOT SCHEMA (a changed/widened slot domain — check `flow inspect --name "
@@ -411,7 +411,7 @@ def _flow_approve_all(args: argparse.Namespace) -> None:
         except Exception as exc:  # noqa: BLE001 — one unreadable spec must not block the migration
             skipped.append((name, f"unreadable spec: {exc}"))
             continue
-        key = flow_key(spec.goal, spec.start_url, spec.scope)
+        key = spec.key
         try:
             cached = cache.get(key)
         except CacheUnreadableError as exc:
@@ -520,7 +520,7 @@ def _flow_inspect(args: argparse.Namespace) -> None:
 
     spec = load_spec(args.name)
     print(json.dumps(asdict(spec), indent=2))
-    cached = FlowCache().get(flow_key(spec.goal, spec.start_url, spec.scope))
+    cached = FlowCache().get(spec.key)
     if cached:
         # Every `stale_approval` refusal sends the operator here to decide whether to re-approve, so this must
         # show what the approval digest actually BINDS — the target, the typed text, the slot, the mutating
@@ -598,7 +598,7 @@ def _audit_advisories(name: str) -> Optional[int]:
         from .flows import _load_meta, load_spec
 
         spec = load_spec(name)
-        meta = _load_meta(FlowCache(), flow_key(spec.goal, spec.start_url, spec.scope))
+        meta = _load_meta(FlowCache(), spec.key)
         return int(getattr(meta, "audit_advisories", 0) or 0)
     except Exception:  # noqa: BLE001 - a status line must never break `flow status`
         # CLI-5: None, not 0. The habituation counter this exists to surface would otherwise read CLEAN
@@ -737,7 +737,7 @@ def _flow_audit(args: argparse.Namespace) -> None:
         # and the message that used to print here was "a corroborated finding can now QUARANTINE this
         # flow" about a flow whose whole guarantee is that nothing here can reach it. Turning it OFF is
         # always allowed: that direction only ever removes capability.
-        if args.set_mode != "off" and spec.mutate is not None:
+        if args.set_mode != "off" and spec.write.declares_write:
             raise SystemExit(
                 f"{spec.name!r} declares a write — the H9 judge never captures or judges a write flow, so "
                 f"arming it here would promise something that cannot happen. Its value gates are the "
@@ -758,7 +758,7 @@ def _flow_audit(args: argparse.Namespace) -> None:
                                    verb="flow audit --purge"):
             purged += 1
             spec = load_spec(name)
-            audit_purge(cache, flow_key(spec.goal, spec.start_url, spec.scope))
+            audit_purge(cache, spec.key)
         print(f"purged the audit artifact store for {purged} flow(s)")
         return
 
@@ -766,7 +766,7 @@ def _flow_audit(args: argparse.Namespace) -> None:
         for name in _resolve_fleet(names, allow_empty=getattr(args, "allow_empty", False),
                                    verb="flow audit --list"):
             spec = load_spec(name)
-            key = flow_key(spec.goal, spec.start_url, spec.scope)
+            key = spec.key
             arts = load_artifacts(cache, key)
             if not arts:
                 continue
@@ -931,7 +931,7 @@ def _flow_run_batch(args: argparse.Namespace) -> None:
     # Resume: reuse the operator's --resume id; else, on a COMMITTED WRITE batch, auto-mint one so even the
     # FIRST run is resumable (the unplanned-crash case) and print it as the resume contract.
     resume = args.resume
-    if resume is None and args.commit and spec.mutate is not None:
+    if resume is None and args.commit and spec.write.declares_write:
         resume = RunLedger.mint_job_id()
         print(f"batch job {resume} — re-run with `--resume {resume}` to resume (skips committed rows)\n")
     try:

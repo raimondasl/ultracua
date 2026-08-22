@@ -268,15 +268,43 @@ def test_the_node_id_round_trip_holds_against_a_real_pytest_run(tmp_path: Path) 
     }, got
 
 
+def test_an_unimportable_module_reports_ERROR_for_its_ids_against_real_pytest(tmp_path: Path) -> None:
+    """THE SHAPE, TAKEN FROM PYTEST RATHER THAN INVENTED. The cell below this one used a hand-written
+    fixture asserting `name="tests/test_y.py"` for a collection error. Pytest actually writes the
+    DOTTED MODULE PATH with no extension (`sub.test_broken`), so every id in an unimportable module
+    came back `missing` instead of `error` — measured on a real run of this job, 44 of 44.
+
+    That is this file's own lesson (`test_the_node_id_round_trip_holds_against_a_real_pytest_run`)
+    ignored one cell over: a format is worth asserting only against the thing that produces it.
+    """
+    import subprocess
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "test_broken.py").write_text(
+        "from ultracua.flows import DoesNotExistAnywhere\ndef test_a(): pass\n", encoding="utf-8")
+    junit = tmp_path / "j.xml"
+    subprocess.run([sys.executable, "-m", "pytest", "sub/test_broken.py::test_a", "-q", "--tb=no",
+                    "-p", "no:cacheprovider", f"--junitxml={junit}"],
+                   cwd=tmp_path, capture_output=True, text=True)
+    got = R.parse_junit(junit, ["sub/test_broken.py::test_a"])
+    assert got == {"sub/test_broken.py::test_a": "error"}, (
+        f"{got} — an id whose module could not be imported must be `error` (inconclusive: ship a "
+        f"registered mutation), never `missing` (which says this harness asked for something that "
+        f"does not exist and sends the reader to debug the harness).")
+
+
 def test_a_collection_error_is_an_error_and_a_failure_is_a_failure(tmp_path: Path) -> None:
     """They exit pytest the same way and mean opposite things here. A `<failure>` is the evidence
-    this job wants; an `<error>` is a test that never ran."""
+    this job wants; an `<error>` is a test that never ran.
+
+    Hand-authored XML, deliberately, and ONLY for the per-outcome mapping — the cell above owns the
+    collection-error SHAPE, against real pytest, because that is the half a fixture got wrong.
+    """
     junit = tmp_path / "j.xml"
     junit.write_text(
         '<testsuites><testsuite>'
         '<testcase classname="tests.test_x" name="test_a"><failure>boom</failure></testcase>'
         '<testcase classname="tests.test_x" name="test_b"><skipped/></testcase>'
-        '<testcase classname="" name="tests/test_y.py"><error>ImportError</error></testcase>'
+        '<testcase classname="" name="tests.test_y"><error>ImportError</error></testcase>'
         '</testsuite></testsuites>', encoding="utf-8")
     got = R.parse_junit(junit, ["tests/test_x.py::test_a", "tests/test_x.py::test_b",
                                 "tests/test_y.py::test_c", "tests/test_z.py::test_d"])
@@ -298,7 +326,7 @@ def test_a_collection_error_reaches_only_its_OWN_files_ids() -> None:
     junit = Path(tempfile.mkdtemp()) / "j.xml"
     junit.write_text(
         '<testsuites><testsuite>'
-        '<testcase classname="" name="other/tests/test_a.py"><error>ImportError</error></testcase>'
+        '<testcase classname="" name="other.tests.test_a"><error>ImportError</error></testcase>'
         '</testsuite></testsuites>', encoding="utf-8")
     got = R.parse_junit(junit, ["tests/test_a.py::t", "other/tests/test_a.py::t",
                                 "tests/test_ab.py::t"])
@@ -340,6 +368,53 @@ def test_the_ids_are_chunked_so_a_command_line_has_a_length(monkeypatch, tmp_pat
     assert [len(b) for b in batches] == [3, 3, 1], batches
     assert [i for b in batches for i in b] == ids, "chunking dropped or reordered ids"
     assert set(got) == set(ids), "a chunk's outcomes did not reach the merged result"
+
+
+@pytest.mark.parametrize("ids,chunk,expect", [
+    # A batch never mixes files unless there is room for BOTH whole files.
+    (["a.py::1", "a.py::2", "b.py::1"], 3, [["a.py::1", "a.py::2", "b.py::1"]]),
+    (["a.py::1", "a.py::2", "b.py::1"], 2, [["a.py::1", "a.py::2"], ["b.py::1"]]),
+    # A file bigger than the chunk is split -- safe, because if it cannot import BOTH halves error.
+    (["a.py::1", "a.py::2", "a.py::3"], 2, [["a.py::1", "a.py::2"], ["a.py::3"]]),
+    # Interleaved input still groups by file.
+    (["a.py::1", "b.py::1", "a.py::2"], 2, [["a.py::1", "a.py::2"], ["b.py::1"]]),
+], ids=["fits together", "split at the boundary", "one file over the cap", "interleaved"])
+def test_a_batch_groups_by_file_so_one_broken_module_cannot_swallow_another(ids, chunk, expect,
+                                                                           monkeypatch) -> None:
+    """A module that cannot import aborts the collection of the WHOLE pytest invocation —
+    `--continue-on-collection-errors` does not help for explicitly named ids, measured. So a flat
+    slice lets one broken module swallow every id sharing its batch, which reports them `missing`
+    and then `inconclusive`. Measured on this job's own CI run: 5 ids from three healthy modules.
+
+    The damage is not cosmetic: a PR carrying BOTH a new `src/` module and a genuine regression test
+    loses the red and gets the loud `inconclusive` instead of the quiet `red` it earned.
+    """
+    monkeypatch.setattr(R, "_CHUNK", chunk)
+    assert R._batches(ids) == expect
+
+
+def test_a_batch_that_errors_is_NARROWED_to_one_file_at_a_time(monkeypatch, tmp_path: Path) -> None:
+    """The other half: a batch may legitimately hold two files, so when one of them errors the rest
+    are re-run alone rather than inheriting its verdict."""
+    calls: list = []
+
+    def _fake_run(argv, **kw):
+        calls.append(sorted(a for a in argv if "::" in a))
+        return None
+
+    def _fake_parse(path, ids):
+        # `broken.py` cannot import; in a mixed batch it takes the whole collection down with it.
+        if any(i.startswith("broken.py") for i in ids):
+            return {i: ("error" if i.startswith("broken.py") else "missing") for i in ids}
+        return {i: "passed" for i in ids}
+
+    monkeypatch.setattr(R.subprocess, "run", _fake_run)
+    monkeypatch.setattr(R, "parse_junit", _fake_parse)
+    monkeypatch.setattr(R, "_CHUNK", 10)
+    got = R.run_ids(["broken.py::t", "fine.py::t"], src_from=None, junit=tmp_path / "j.xml")
+    assert got == {"broken.py::t": "error", "fine.py::t": "passed"}, (
+        f"{got} — `fine.py` inherited the broken module's collection failure instead of being re-run")
+    assert len(calls) == 3, f"expected the mixed batch plus one run per file, got {calls}"
 
 
 def test_the_diff_scan_reads_ADDED_lines_only() -> None:
@@ -462,10 +537,25 @@ def test_the_collect_pin_notices_a_warnings_line_becoming_a_test_id(monkeypatch)
 
 
 def test_the_chunking_pin_notices_one_unbounded_command_line(monkeypatch, tmp_path: Path) -> None:
-    mutate_function(monkeypatch, R, "run_ids",
-                    "for n in range(0, len(ids), _CHUNK):\n        batch = ids[n:n + _CHUNK]",
-                    "for n in [0]:\n        batch = ids")
+    mutate_function(monkeypatch, R, "_batches",
+                    "if cur and len(cur) + len(piece) > _CHUNK:", "if False:")
     print(assert_red(test_the_ids_are_chunked_so_a_command_line_has_a_length, monkeypatch, tmp_path))
+
+
+def test_the_batching_pin_notices_a_flat_slice_that_mixes_files(monkeypatch) -> None:
+    mutate_function(monkeypatch, R, "_batches",
+                    "for group in _by_file(ids).values():", "for group in [ids]:")
+    print(assert_red(test_a_batch_groups_by_file_so_one_broken_module_cannot_swallow_another,
+                     ["a.py::1", "b.py::1", "a.py::2"], 2,
+                     [["a.py::1", "a.py::2"], ["b.py::1"]], monkeypatch))
+
+
+def test_the_narrowing_pin_notices_a_batch_inheriting_a_siblings_collection_failure(
+        monkeypatch, tmp_path: Path) -> None:
+    mutate_function(monkeypatch, R, "run_ids",
+                    'if any(v == "error" for v in got.values()) and len({_file_of(i) for i in batch}) > 1:',
+                    "if False:")
+    print(assert_red(test_a_batch_that_errors_is_NARROWED_to_one_file_at_a_time, monkeypatch, tmp_path))
 
 
 def test_the_vocabulary_pin_notices_a_loud_verdict_with_no_remedy(monkeypatch) -> None:
