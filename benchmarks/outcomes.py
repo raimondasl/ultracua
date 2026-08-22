@@ -675,7 +675,7 @@ def _usage_of(run):
         input_tokens=int(getattr(run, "input_tokens", 0) or 0),
         output_tokens=int(getattr(run, "output_tokens", 0) or 0),
         calls=int(getattr(run, "llm_calls", 0) or 0),
-        accounting_failed=bool(getattr(run, "accounting_failed", False)),
+        accounting_failures=1 if getattr(run, "accounting_failed", False) else 0,
     )
     t.per_model = {m: tuple(v) for m, v in (getattr(run, "per_model", None) or {}).items()}
     return t

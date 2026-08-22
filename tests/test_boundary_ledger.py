@@ -138,7 +138,7 @@ def test_spend_is_summed_from_the_routers_not_from_any_record() -> None:
     b.input_tokens, b.output_tokens, b.calls = 200, 20, 2
     b.per_model["fast"] = (200, 20, 0, 0, 2)
     b.per_model["strong"] = (5, 1, 0, 0, 1)
-    b.accounting_failed = True
+    b.accounting_failures += 1
 
     ledger = BoundaryLedger()
     ledger.routers.extend([_FakeRouter(a), _FakeRouter(b)])
@@ -225,11 +225,11 @@ def test_a_router_that_could_not_account_for_itself_makes_the_answer_unknown() -
     was inert while its commit message claimed it had a caller.
     """
     ledger = BoundaryLedger()
-    r = _router_with(accounting_failed=False)
+    r = _router_with(accounting_failures=0)
     ledger.routers.append(r)
     assert ledger.observed is True and ledger.reached_an_llm() is False
 
-    r.totals.accounting_failed = True          # set AFTER the ledger saw the router, as vision does
+    r.totals.accounting_failures += 1          # set AFTER the ledger saw the router, as vision does
     assert ledger.observed is False, "the flag was latched at construction and could never fire"
     assert ledger.reached_an_llm() is None
 

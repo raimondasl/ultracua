@@ -30,6 +30,12 @@ class MockGrounding:
     def __init__(self, actions: list[dict]) -> None:
         self.actions = list(actions)
         self.calls = 0
+        # DECLARED, not inferred: this teacher has no LLM path at all, so its cost is a real
+        # zero rather than an unknown. `RouterWatch` reads this through the same attribute it
+        # already reads on a spender, which is why the declaration is a `UsageTotals` and not
+        # a flag it would have to probe for (R4.53; commit `00888b4` for why probing is out).
+        self.totals = UsageTotals.cannot_spend()
+
 
     async def decide(self, goal, screenshot, viewport):
         self.calls += 1
@@ -110,7 +116,7 @@ class AnthropicGrounding:
         except Exception:  # noqa: BLE001 - accounting must never break the grounding call itself
             # ...but it must not pretend the spend was zero either. The flag rides on `totals`,
             # not on self, so the watch reads it without probing a foreign attribute.
-            self.totals.accounting_failed = True
+            self.totals.accounting_failures += 1
         block = next((b for b in msg.content if b.type == "tool_use"), None)
         if block is None:
             return Action(action="give_up", intent="vision: no tool call"), ttft

@@ -821,8 +821,16 @@ async def _learn(
         traces.append(nav)
 
         if await _is_interstitial(session):
+            # `usage` RIDES ON THE EARLY RETURN TOO. `flows.py`'s contract is that it is always
+            # populated and always carries `cost_usd`, and both escalate paths were the two places
+            # that quietly were not — so a run that escalated reported no accounting at all, which
+            # every reader then renders as UNKNOWN. Measured on `drift_bench`: 368 of 370 rows
+            # report a real 0.0 and the two escalated ones report nothing, which makes the bench's
+            # own total unknown for a run in which nothing could possibly have been spent.
             return FlowReport(mode="escalate", success=False, traces=traces,
-                              note="interstitial/CAPTCHA detected", extra={"escalate": True})
+                              note="interstitial/CAPTCHA detected",
+                              extra={"escalate": True,
+                                     "usage": _usage_watch.as_dict(settings.model)})
 
         # Reflexion: prior failed attempts' lessons ride in the AUTHORING goal only — never the cache key
         # or the stored `CachedFlow.goal` (those stay the original `goal`), so replay still keys correctly.
@@ -1096,7 +1104,9 @@ async def _replay(
         if await _is_interstitial(session):
             _log.warning("replay: interstitial/CAPTCHA detected — escalating instead of retrying")
             return FlowReport(mode="escalate", success=False, traces=traces,
-                              note="interstitial/CAPTCHA detected", extra={"escalate": True})
+                              note="interstitial/CAPTCHA detected",
+                              extra={"escalate": True,
+                                     "usage": _usage_watch.as_dict(settings.model)})
 
         for i, step in enumerate(flow.steps):
             tr = StepTrace(index=i)

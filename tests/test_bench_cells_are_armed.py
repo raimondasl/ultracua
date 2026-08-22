@@ -19,15 +19,14 @@ rather than a pass, because a stale mutation silently reports the suite as stron
 from __future__ import annotations
 
 import inspect
-import linecache
-import os
-import tempfile
 import textwrap
 
 import pytest
 
 from benchmarks import customer_bench as CB
 from benchmarks import outcomes as O
+from tests import _arming
+from tests._arming import assert_red
 import tests.test_bench_outcomes as TO
 import tests.test_bench_record as TR
 
@@ -36,75 +35,16 @@ import tests.test_bench_record as TR
 # the harness
 # ---------------------------------------------------------------------------------------------
 
+# THE HARNESS ITSELF LIVES IN `tests/_arming.py`, because 1.3 needs it for `benchmarks/variance.py`
+# and two copies of one harness is how a harness drifts — every lesson in that file was paid for by a
+# false verdict here. These wrappers bind the module so the ~30 call sites below keep their shape.
+
 def mutate_function(monkeypatch, name: str, find: str, repl: str) -> None:
-    """Rebind `outcomes.<name>` to a source-level mutation of itself, for this test only.
-
-    A stale or ambiguous `find` raises rather than silently applying nothing — `prove_red.py`'s own
-    rule, and the reason it reports a non-matching mutation as an ERROR and not as a survivor.
-
-    THE MUTANT'S SOURCE IS RETRIEVABLE, and that is not a nicety. Several guards in these modules
-    are STRUCTURAL — they read `inspect.getsource` and scan the AST. Compiling a mutant under a
-    `<mutant:name>` pseudo-filename makes `getsource` raise `OSError: could not get source code`,
-    the guard dies before it reaches its scan, and this harness scores the crash as a kill. That
-    happened THREE times while writing this file, twice in cells added an hour after the first was
-    fixed by hand — which is what says the fix belongs here rather than in a cell.
-
-    So the mutant is compiled under a `.py` filename registered in `linecache`, which is one of the
-    two things `inspect.getsourcefile` accepts for a path that does not exist on disk. Nothing is
-    written to disk, and `monkeypatch` removes the entry afterwards.
-    """
-    src = textwrap.dedent(inspect.getsource(getattr(O, name)))
-    n = src.count(find)
-    if n != 1:
-        raise AssertionError(
-            f"mutation for {name!r} matches its find-text {n} times, not once. The function has "
-            f"moved and this mutation now proves nothing — re-express it against the current "
-            f"source rather than deleting it.\nfind: {find!r}")
-    mutated = src.replace(find, repl, 1)
-    path = os.path.join(tempfile.gettempdir(), f"ultracua_mutant_{name}.py")
-    monkeypatch.setitem(linecache.cache, path,
-                        (len(mutated), None, mutated.splitlines(True), path))
-    ns: dict = {}
-    exec(compile(mutated, path, "exec"), O.__dict__, ns)
-    mutant = ns[name]
-    # Proven, not assumed: a structural guard is about to call this on the mutant, and if it raises
-    # the guard never runs and its failure is credited to the mutation.
-    assert inspect.getsource(mutant), f"the mutant of {name!r} has no retrievable source"
-    monkeypatch.setattr(O, name, mutant)
+    _arming.mutate_function(monkeypatch, O, name, find, repl)
 
 
 def mutate_value(monkeypatch, name: str, value) -> None:
-    assert hasattr(O, name), f"{name} no longer exists in outcomes.py"
-    monkeypatch.setattr(O, name, value)
-
-
-def assert_red(guard, *args) -> str:
-    """Run one guard cell and require it to fail. Returns the message, for printing.
-
-    `AssertionError` OR `KeyError`/`BenchRecordError` all count: a guard whose subject has been
-    broken may notice by asserting or by the mutated code blowing up on the way. What does NOT count
-    is passing, and what also does not count is `TypeError` from calling the guard wrongly — S14's
-    third trap, where a bad kwarg raised and the harness read it as a legitimate refusal.
-
-    `BaseException`, NOT `Exception`, and this cost five false verdicts on its first run. A guard
-    written as `with pytest.raises(...)` fails by raising `_pytest.outcomes.Failed`, which descends
-    from `BaseException` — so an `except Exception` here silently let the loudest kind of guard
-    (the ones asserting a REFUSAL) escape as "the cell passed against a mutation". The instrument
-    was reporting its own blind spot as a hole in the suite.
-    """
-    try:
-        guard(*args)
-    except (KeyboardInterrupt, SystemExit):
-        raise
-    except TypeError as exc:
-        raise AssertionError(
-            f"{guard.__name__} raised TypeError ({exc}) — that is this harness calling the cell "
-            f"wrongly, not the cell noticing the mutation") from exc
-    except BaseException as exc:  # noqa: BLE001 - any genuine complaint is a kill
-        return f"{type(exc).__name__}: {str(exc).splitlines()[0][:110]}"
-    raise AssertionError(
-        f"{guard.__name__} PASSED against a mutation that violates the property it names. The cell "
-        f"is not guarding what its name says it guards.")
+    _arming.mutate_value(monkeypatch, O, name, value)
 
 
 # ---------------------------------------------------------------------------------------------

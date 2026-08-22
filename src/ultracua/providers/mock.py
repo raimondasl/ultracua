@@ -9,10 +9,18 @@ from __future__ import annotations
 
 from typing import Optional
 
+from ..obs import UsageTotals
 from ..types import Action, Observation
 
 
 class MockProvider:
+    def __init__(self) -> None:
+        # DECLARED, not inferred: this teacher has no LLM path at all, so its cost is a real
+        # zero rather than an unknown. `RouterWatch` reads this through the same attribute it
+        # already reads on a spender, which is why the declaration is a `UsageTotals` and not
+        # a flag it would have to probe for (R4.53; commit `00888b4` for why probing is out).
+        self.totals = UsageTotals.cannot_spend()
+
     async def decide(
         self, goal: str, obs: Observation, history: list[str]
     ) -> tuple[Action, Optional[float]]:

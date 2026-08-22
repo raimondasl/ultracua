@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from ultracua.obs import UsageTotals
 from ultracua.providers.base import Action
 
 # The engine's heal hint, built in `flow._maybe_heal`:
@@ -55,6 +56,12 @@ class OracleProvider:
     def __init__(self, plan: list) -> None:
         self.plan = [dict(p) for p in plan]
         self.page = None
+        # DECLARED, not inferred: this teacher has no LLM path at all, so its cost is a real
+        # zero rather than an unknown. `RouterWatch` reads this through the same attribute it
+        # already reads on a spender, which is why the declaration is a `UsageTotals` and not
+        # a flag it would have to probe for (R4.53; commit `00888b4` for why probing is out).
+        self.totals = UsageTotals.cannot_spend()
+
         self.heal_calls = 0
         self.replan_calls = 0
         self.gave_up = 0

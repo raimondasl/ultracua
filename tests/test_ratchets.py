@@ -397,6 +397,33 @@ def test_prove_reds_killer_suite_is_browser_free() -> None:
                     legs = [e.value for e in kw.value.elts if isinstance(e, ast.Constant)]
     assert legs, "could not derive `--tests`'s default from prove_red.py — this cell is inert"
 
+    # AND EVERY `--tests` THE WORKFLOW PASSES EXPLICITLY. The default is only half the exposure:
+    # 1.3 added a second `red-proof` invocation with its own killer suite, which this scan could not
+    # see, so the hazard it was written for would have come back through a door beside it.
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8").split()
+    # EVERY occurrence, not the first. `ci.index("--tests")` finds one, and a second `red-proof`
+    # invocation added below it would be silently unchecked — the exact hazard this cell exists for,
+    # walking in through a door beside the one it is watching. Counted, so "the workflow stopped
+    # spelling them out" fails loudly rather than covering nothing.
+    seen_flags = 0
+    from_ci: list = []
+    for i, tok in enumerate(ci):
+        if tok != "--tests":
+            continue
+        seen_flags += 1
+        j = i + 1
+        while j < len(ci) and ci[j].endswith(".py"):
+            from_ci.append(ci[j])
+            j += 1
+    assert seen_flags >= 1, (
+        "no `--tests` in ci.yml at all — either the `red-proof` job stopped passing an explicit "
+        "killer suite, or it now spells it in a YAML form `.split()` cannot see (a block list, a "
+        "line continuation). Either way this half of the cell covers nothing.")
+    assert len(from_ci) >= 3, (
+        f"only {from_ci} picked up from {seen_flags} `--tests` flag(s) in ci.yml — a leg that is no "
+        f"longer on one whitespace-separated line is a leg this cell no longer checks")
+    legs.extend(from_ci)
+
     offenders = {}
     for leg in legs:
         assert (ROOT / leg).exists(), f"killer-suite leg {leg} does not exist"

@@ -338,8 +338,8 @@
   },
   {
    "id": "R4.53",
-   "status": "open",
-   "summary": "B1: a key-less teacher (`ScriptedProvider`/`MockProvider`) is classified as an unobserved SPENDER, contradicting `flow.py:915-916`; `accounting_failed` is sticky across runs"
+   "status": "fixed",
+   "summary": "B1: a key-less teacher (`ScriptedProvider`/`MockProvider`/`MockGrounding`/the oracle) was classified an unobserved SPENDER, contradicting `flow.py:915-916`; `accounting_failed` was sticky across runs. FIXED at 1.3 — a third state, DECLARED via `UsageTotals.cannot_spend()` through the two attributes the watch already reads (never a probe: commit `00888b4`), and the flag is a run-scoped COUNTER deltaed by `snapshot()`/`since()` like every other field"
   },
   {
    "id": "R4.54",
@@ -565,6 +565,20 @@
    "summary": "The write vocabulary has no word for 'the corpus declared this write must be refused and it LANDED'. B3 maps it onto `incorrect_target` on the argument that an `expect_refusal` row declares an EMPTY intended set, so any landed record is by construction not one it was asked for. That is coherent and it is a STRETCH of a word whose plain meaning is 'the wrong record'. The alternative was a seventh write outcome, which `docs/realistic-benchmark-plan.md` fixes at six. Recorded so the choice is visible rather than discovered by someone reading an `incorrect_target` row and looking for a wrong record that does not exist",
    "severity": "low",
    "class": "benchmark"
+  },
+  {
+   "id": "R4.80",
+   "status": "open",
+   "summary": "`variance.compare_records` is the only remaining reader whose cost clause could not be scored by `prove_red` (R4.77: it lives in `benchmarks/`), and its new unknown-cost branches are pinned only by in-process arming. Filed as a pointer rather than a defect: the guards exist and are proved red, but by a weaker instrument than the `src/` half of the same slice",
+   "severity": "low",
+   "class": "instrument"
+  },
+  {
+   "id": "R4.81",
+   "status": "open",
+   "summary": "`flows.py:219` states the contract that `usage` is ALWAYS populated and always carries `cost_usd`, and FOUR `mode=\"miss\"` early returns in `run_cached` still do not — `flow.py:174` (dry-run misuse), `:192` (no cached flow), `:210` (a terminal refusal) and `:214` (learn without a provider). 1.3 closed the two `escalate` returns for the same reason and left these, deliberately. MEASURED: all four fire after only `cache.get(key)` and a log line — no provider is built and no browser opens — so a literal zero would be SUPPORTABLE there, and the reachable harm is real: a `variance` rep whose learn returns `miss` makes the whole run's cost unknown under the absorbing sum, for a run in which nothing was spent. THE COUNTEREXAMPLE THAT MAKES THIS A SLICE RATHER THAN A FOOTNOTE is `flow.py:1048`, best-of-N's exhausted return: the loop above it MAY have spent, so populating that one with a literal zero would be a confident wrong number. The rule is not 'always populate usage' but 'populate it with what you can support', and a fix that does not distinguish the two makes the accounting worse",
+   "severity": "low",
+   "class": "accounting"
   }
  ]
 }

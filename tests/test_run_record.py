@@ -384,7 +384,7 @@ def test_accounting_failure_DURING_the_run_is_reported() -> None:
     w = UsageTotals.observe(prov, spender)
     assert w.observed is True                      # nothing has gone wrong yet
 
-    t.accounting_failed = True                     # ...now it does, mid-run
+    t.accounting_failures += 1                     # ...now it does, mid-run
 
     assert w.observed is False, "a failure during the run must reach the report"
     d = w.as_dict("claude-opus-4-6")

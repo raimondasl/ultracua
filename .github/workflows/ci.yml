@@ -82,6 +82,16 @@ jobs:
         timeout-minutes: 14
         run: uv run --group bench --group providers --group mcp python scripts/prove_red.py tests/mutations/b1_wiring.py
 
+      # A SECOND registry rather than a longer first one: these mutate `obs.py`, and the suite that
+      # kills them is three small files rather than the exit-set matrix. One invocation per (what is
+      # mutated, what kills it) pair keeps a failure naming both.
+      - name: Apply every cannot-spend mutation
+        timeout-minutes: 10
+        run: >
+          uv run --group bench --group providers --group mcp python scripts/prove_red.py
+          tests/mutations/cannot_spend.py
+          --tests tests/test_cannot_spend.py tests/test_run_record.py tests/test_obs.py
+
   # Sharding trades one silent failure for another if left unchecked: a test in NO shard leaves every
   # shard GREEN, and nothing in the suite can fail for it — the coverage is gone and the signal that
   # would have told you is the signal that was removed. Collection only, so it costs seconds and launches
