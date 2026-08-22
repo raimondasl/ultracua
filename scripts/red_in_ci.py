@@ -304,18 +304,71 @@ def run_ids(ids: "list[str]", *, src_from: "Path | None", junit: Path) -> dict:
     collection error, in which case every id in that file is `error` -- which is the ImportError
     case, and it must not be confused with a failure.
 
-    CHUNKED, because a command line has a length (see `_CHUNK`). Chunking also means an id whose
-    module dies at import takes only its own chunk down, so the rest still return real outcomes.
+    CHUNKED BY FILE, and the "by file" half is not a tidiness preference. A module that cannot import
+    aborts the collection of the WHOLE pytest invocation -- `--continue-on-collection-errors` does not
+    help when the ids are named explicitly, measured -- so a flat slice of ids lets one broken module
+    swallow every id that happens to share its batch. Measured on this job's own run: 5 ids from three
+    healthy modules came back `missing` because `test_write_class.py` (which legitimately cannot
+    import against the base) sat in the same batch.
+
+    That is not cosmetic. Those ids are then `inconclusive` rather than whatever they really are, so a
+    PR carrying BOTH a new `src/` module and a genuine regression test loses the red and gets the loud
+    `inconclusive` instead of the quiet `red` it earned -- a false alarm on the channel, which is the
+    `|| true` direction.
+
+    A chunk that errors anyway is NARROWED: its remaining files are re-run one at a time, so the
+    common case stays one invocation and the broken case still yields real outcomes for its
+    neighbours.
     """
     out: dict = {}
-    for n in range(0, len(ids), _CHUNK):
-        batch = ids[n:n + _CHUNK]
-        part = junit.with_name(f"{junit.stem}-{n // _CHUNK}{junit.suffix}")
-        subprocess.run(
-            [sys.executable, "-m", "pytest", *batch, "-q", "--tb=no", "-p", "no:cacheprovider",
-             f"--junitxml={part}"],
-            cwd=ROOT, capture_output=True, text=True, env=_keyless_env(src_from))
-        out.update(parse_junit(part, batch))
+    for n, batch in enumerate(_batches(ids)):
+        part = junit.with_name(f"{junit.stem}-{n}{junit.suffix}")
+        got = _run_one(batch, src_from=src_from, junit=part)
+        if any(v == "error" for v in got.values()) and len({_file_of(i) for i in batch}) > 1:
+            # NARROW. One file's import error told us nothing about the others in this batch.
+            for k, one in enumerate(_by_file(batch).values()):
+                got.update(_run_one(one, src_from=src_from,
+                                    junit=part.with_name(f"{part.stem}-n{k}{part.suffix}")))
+        out.update(got)
+    return out
+
+
+def _run_one(ids: "list[str]", *, src_from: "Path | None", junit: Path) -> dict:
+    subprocess.run(
+        [sys.executable, "-m", "pytest", *ids, "-q", "--tb=no", "-p", "no:cacheprovider",
+         f"--junitxml={junit}"],
+        cwd=ROOT, capture_output=True, text=True, env=_keyless_env(src_from))
+    return parse_junit(junit, ids)
+
+
+def _file_of(node_id: str) -> str:
+    return node_id.split("::", 1)[0].replace("\\", "/")
+
+
+def _by_file(ids: "list[str]") -> dict:
+    out: dict = {}
+    for i in ids:
+        out.setdefault(_file_of(i), []).append(i)
+    return out
+
+
+def _batches(ids: "list[str]") -> "list[list[str]]":
+    """Pack whole FILES into batches of at most `_CHUNK` ids; split a file only if it alone exceeds it.
+
+    A file split across two batches is still safe: if it cannot import, both batches error and every
+    one of its ids is `error` either way.
+    """
+    out: list = []
+    cur: list = []
+    for group in _by_file(ids).values():
+        for n in range(0, len(group), _CHUNK):
+            piece = group[n:n + _CHUNK]
+            if cur and len(cur) + len(piece) > _CHUNK:
+                out.append(cur)
+                cur = []
+            cur.extend(piece)
+    if cur:
+        out.append(cur)
     return out
 
 
