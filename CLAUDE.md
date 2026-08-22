@@ -88,6 +88,16 @@ Violating any of these is a blocking defect, not a trade-off:
 
 - **`uv` for everything.** `uv run --no-sync pytest tests/... -q`, `uv run --no-sync python -m benchmarks.X`.
   Never bare `uv sync` (it strips groups) — use `uv sync --all-groups`.
+- **DO NOT EDIT THE TREE WHILE A SUITE RUN IS IN FLIGHT — it costs the whole run, twice over.** The
+  warning below about auditors applies to YOU. Measured at 0.115.0: editing two files during a
+  32-minute run produced **twelve confident-looking failures that were pure artifacts**, because
+  `inspect.getsource`/`linecache` read from DISK at call time while the code objects are the ones
+  imported at collection — so a structural cell parses source that does not match the function it
+  holds, and reports `the derivation found no ... construction -- it has gone stale`. Every one
+  re-ran green. Worse, the run's `--emit-marks` observation was then REFUSED by `tier_marks.py`'s
+  identity check ("11 this tree has and they do not"), which is that guard working exactly as
+  designed and a second 32 minutes gone. Freeze the tree, including `docs/` and `CLAUDE.md` — the
+  register-count cells read those.
 - **A LOCAL GREEN IS WEAKER EVIDENCE THAN CI, IN TWO MEASURED WAYS. Both have shipped a red PR.**
   1. *Platform*: CI runs ubuntu AND windows; local runs here are windows-only (see the fixture-race note
      below).
