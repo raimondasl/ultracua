@@ -269,6 +269,43 @@ Violating any of these is a blocking defect, not a trade-off:
     own `has_confirm()` (a barrier answering about itself, which must NOT be flagged), and
     `m = spec.mutate; m.has_confirm()` evades a naive receiver test.
 
+- **The engine takes TWO BUNDLES, and the risk inverted (1.8, 0.118.0).** `run_cached`'s public
+  keyword signature is unchanged; it builds a `RunOptions` and a `RunHooks` in one place and threads
+  those, so the six inner functions went from 8–23 keyword parameters each to a subject plus two
+  objects.
+  * **The split is by FAILURE MODE.** A wrong option is usually loud — a missing header, a run that
+    does not start. **A dropped hook is SILENT**: the run still succeeds and the caller's callback
+    never fires. So the hook-fire counts were captured BEFORE anything moved
+    (`tests/goldens/hook_fire_counts.json`) and asserted after — unchanged at 19 `on_step`,
+    5 `prepare`, 5 `finalize`, 3 `pre_write`, 1 `verifier` across five rows. One of those rows exists
+    only to make `verifier` non-zero, and reaching it took two attempts: `ScriptedProvider` returns
+    `done` once its list is EXHAUSTED, so a shorter script still ends cleanly and never asks the
+    verifier. `max_steps` is the way in.
+  * **A PARAMETER LIST ENFORCED WITHHOLDING; A BUNDLE DOES NOT.** `_learn` could not read `params`
+    because nobody handed it one; `_replay` could not read `grounding`. Two objects hand every
+    function all twenty-one values, so that enforcement now lives in `RECEIVED_BEFORE_1_8` — each
+    function's pre-1.8 parameter set, and **no function may read outside its row**. Measured:
+    `_learn` reads 14 of 23, `_replay` 14 of 22, `_verify_by_replay` 0 of 11.
+  * **A withdrawal is a NAMED VERB**: `opts.without("grounding")`, `hooks.without("on_step",
+    "finalize", "pre_write")`. Those were a `None` nine arguments deep, or an absent argument nobody
+    could see. `CLEARS` holds them, asserted both ways. **R4.12 is PRESERVED by
+    `hooks.without("pre_write")`** — bundling would otherwise have closed an open finding as a
+    migration side effect, and a silent fix is as unreviewable as a silent break.
+  * **Freeze the bundles.** Three parameters used to be REBOUND in place (`max_steps`, `samples`, and
+    `pre_write` nulled after its first fire); the frozen dataclass refused all three, which is the
+    guard working — `hooks` outlives the call, so nulling it would silence the probe for every later
+    run. Each is a local now.
+  * `max_steps` could NOT be bundled: its two callers pass different values (one resolved, one
+    `settings.max_steps`), so it is a renamed forward and stays explicit.
+
+- **A line-granular prose restore OVER-corrects, and 1.8 measured how.** 1.6's rule (restore a
+  clobbered comment by checking the reverted line is byte-identical to one in `HEAD`) is right until
+  a single line holds BOTH a string and code using the same word:
+  `extra = {"finalize": fin} if finalize else {}`. The substitution hit the string too, the restore
+  reverted the whole line, and the code silently went back to the old name — a `NameError` two
+  test-runs later. Substitute per TOKEN, or fix those lines by hand after checking which ones carry
+  both.
+
 - **Eight DOORS reach the engine, and they do not permit the same things (1.7, 0.117.0).**
   `tests/test_door_policy.py` prints and commits what each caller of `flow.run_cached` may do. The
   door SET is derived from the source, so a ninth cannot be quietly absent.
