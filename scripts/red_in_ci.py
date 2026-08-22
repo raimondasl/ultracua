@@ -162,6 +162,20 @@ def verdict(*, src_touched: bool, diff_adds_test_defs: bool, new_ids: "list[str]
     broken derivation is not discharged by evidence from elsewhere) and it does not pre-empt `red`
     (which is already quiet, and is the stronger statement of the two).
     """
+    # THE INPUT IS CHECKED BOTH WAYS BEFORE ANY OF IT IS COUNTED. `counts` sums over `states`, so an
+    # id classified but never asked for inflates `guards` and buys a quiet `red` -- while the
+    # `unseen` check below only looks the other way. And a state outside `STATES` counts as nothing,
+    # which falls through to "none of them pass on THIS branch": a loud verdict for a wrong reason,
+    # which is worse than a quiet one.
+    bad = {i: s for i, s in states.items() if s not in STATES}
+    extra = [i for i in states if i not in new_ids]
+    if bad or extra:
+        return Verdict("harness",
+                       f"the classified set does not match the set asked for: "
+                       f"{len(extra)} id(s) classified but not new {extra[:3]}, "
+                       f"{len(bad)} outside {STATES} {list(bad.items())[:3]}",
+                       {"new_ids": len(new_ids)})
+
     counts = {s: sum(1 for v in states.values() if v == s) for s in STATES}
     counts["new_ids"] = len(new_ids)
 

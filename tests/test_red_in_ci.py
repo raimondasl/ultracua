@@ -146,6 +146,24 @@ def test_an_id_that_was_never_classified_is_a_harness_failure_not_a_pass() -> No
     assert "b" in v.detail
 
 
+@pytest.mark.parametrize("new_ids,states,why", [
+    (["a"], {"a": "guards", "b": "guards"}, "an id classified but never asked for inflates `guards`"),
+    (["a"], {"a": "guardz"}, "a state outside STATES counts as nothing and falls through"),
+], ids=["classified but not new", "a state outside the vocabulary"])
+def test_the_classified_set_is_checked_BOTH_ways_before_anything_is_counted(new_ids, states, why) -> None:
+    """`unseen` looks one way only. The other way buys a QUIET `red` off an id the runs never
+    produced, and a bogus state buys a LOUD verdict for the wrong reason -- 'none of them pass on
+    THIS branch' when what happened is that this harness mislabelled one."""
+    v = R.verdict(src_touched=True, diff_adds_test_defs=True, new_ids=new_ids, states=states)
+    assert v.name == "harness" and not v.quiet, why
+    # THE DETAIL, not just the name -- and this clause is here because the arming cell caught its
+    # absence. With the input check disabled, a bogus state still reaches `harness`, through the
+    # fall-through that says "none of them pass on THIS branch". Same verdict, wrong reason, and a
+    # cell asserting only the name was green against the mutation it exists to notice.
+    assert "does not match the set asked for" in v.detail, (
+        f"the verdict is `harness` for some OTHER reason: {v.detail!r}")
+
+
 def test_new_tests_that_do_not_pass_on_their_own_branch_prove_nothing() -> None:
     v = _v(new_ids=["a", "b"], states={"a": "unusable", "b": "unusable"})
     assert v.name == "harness" and not v.quiet
@@ -368,6 +386,17 @@ def test_the_gate_pin_notices_an_unclassified_id_being_waved_through(monkeypatch
     mutate_function(monkeypatch, R, "verdict",
                     'unseen = [i for i in new_ids if i not in states]', 'unseen = []')
     print(assert_red(test_an_id_that_was_never_classified_is_a_harness_failure_not_a_pass))
+
+
+@pytest.mark.parametrize("new_ids,states", [
+    (["a"], {"a": "guards", "b": "guards"}),
+    (["a"], {"a": "guardz"}),
+], ids=["classified but not new", "a state outside the vocabulary"])
+def test_the_gate_pin_notices_the_input_check_going_one_way_only(monkeypatch, new_ids, states) -> None:
+    mutate_function(monkeypatch, R, "verdict",
+                    "if bad or extra:", "if False:")
+    print(assert_red(test_the_classified_set_is_checked_BOTH_ways_before_anything_is_counted,
+                     new_ids, states, "armed"))
 
 
 def test_the_gate_pin_notices_the_discharge_reaching_harness(monkeypatch) -> None:

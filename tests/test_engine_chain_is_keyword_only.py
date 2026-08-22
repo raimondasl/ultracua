@@ -100,9 +100,15 @@ def _tree():
 
 
 def _signatures() -> dict:
-    out = {}
+    """name -> the def node. UNIQUENESS IS ASSERTED, because a dict keyed on the name is last-wins:
+    a nested or duplicated definition would silently shadow the real one and every pin below would be
+    about a function nothing calls. Same reason `_edges` asserts one call per pair."""
+    out: dict = {}
     for n in ast.walk(_tree()):
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in CHAIN:
+            assert n.name not in out, (
+                f"{n.name} is defined more than once in flow.py — the pins in this file are keyed on "
+                f"the name, so one of the two would go unchecked.")
             out[n.name] = n
     return out
 
@@ -162,7 +168,10 @@ def test_no_two_positional_parameters_of_one_function_share_a_type() -> None:
     """
     for name, n in _signatures().items():
         positional = list(n.args.posonlyargs) + list(n.args.args)
-        annos = [ast.unparse(a.annotation) if a.annotation else f"<unannotated:{a.arg}>"
+        # ONE shared token for "no annotation", not one per parameter name. Two UNANNOTATED
+        # positionals are the most ambiguous case there is, and tagging them apart by their own names
+        # would have let exactly that pair through the duplicate check below.
+        annos = [ast.unparse(a.annotation) if a.annotation else "<unannotated>"
                  for a in positional]
         dupes = {a for a in annos if annos.count(a) > 1}
         assert not dupes, (
@@ -288,11 +297,11 @@ def _checkable(caller: str, callee: str) -> dict:
     that is also a parameter of the caller. Everything else (`None`, `settings.max_steps`,
     `reflections or None`, a local like `heal_provider`) is the AST table's job.
     """
-    tree = _tree()
-    callers = {n.name: n for n in ast.walk(tree)
-               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    params = {a.arg for a in (callers[caller].args.posonlyargs + callers[caller].args.args
-                              + callers[caller].args.kwonlyargs)}
+    hits = [n for n in ast.walk(_tree())
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == caller]
+    assert len(hits) == 1, f"{caller} is defined {len(hits)} times in flow.py — which one forwards?"
+    params = {a.arg for a in (hits[0].args.posonlyargs + hits[0].args.args
+                              + hits[0].args.kwonlyargs)}
     _pos, kw = _edges()[(caller, callee)]
     return {p: e for p, e in kw.items() if e in params}
 
