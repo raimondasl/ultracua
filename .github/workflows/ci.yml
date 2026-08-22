@@ -92,6 +92,64 @@ jobs:
           tests/mutations/cannot_spend.py
           --tests tests/test_cannot_spend.py tests/test_run_record.py tests/test_obs.py
 
+      # A THIRD registry, same reasoning as the second. These mis-key the engine chain's internal
+      # forwards, and three of the seven are TYPE-SILENT swaps the arity pin is fully satisfied by --
+      # which is the whole reason step 1.1 shipped a forwarding sensor beside the arity one.
+      - name: Apply every keyword-only-chain mutation
+        timeout-minutes: 10
+        run: >
+          uv run --group bench --group providers --group mcp python scripts/prove_red.py
+          tests/mutations/keyword_only_chain.py
+          --tests tests/test_engine_chain_is_keyword_only.py
+
+  # RED-IN-CI (reshape-plan 0.4b). "Verify a regression test fails against the old code" has been in
+  # CLAUDE.md since round 1 and has caught several no-op fixes BY HAND. This is the hand-check as a job:
+  # difference this branch's pytest collection against the base's, run the NEW ids twice -- once against
+  # this branch's src/ and once with the base's src/ first on PYTHONPATH, the same install `prove_red`
+  # uses -- and fail if none of them is red against the base.
+  #
+  # TWICE, not once, and that is the whole reason it can be believed. A new browser cell on a runner
+  # with no Chromium, a cell red for an unrelated reason, an id whose fixture is broken -- each fails
+  # against the base too, and a single-run design scores every one of them as a guard. Same rule as
+  # `prove_red._require_a_live_killer_suite`: check the unmutated tree first, or every mutant is
+  # "killed" by a suite that is simply broken.
+  #
+  # It needs Chromium for the same reason: a new browser cell that cannot launch would report `failed`
+  # on BOTH runs and be classified `unusable` rather than silently counted as evidence.
+  #
+  # `pull_request` only. On a push to main there is no base to difference against that means anything.
+  red-in-ci:
+    name: a new test is red against the base
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    if: github.event_name == 'pull_request'
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@v5
+        timeout-minutes: 5
+        with:
+          # FULL history: the base worktree is created from `github.event.pull_request.base.sha`, and
+          # a shallow clone does not have it. Same reason as the jobs above, different consumer.
+          fetch-depth: 0
+      - name: Install uv
+        timeout-minutes: 5
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+      - name: Install Chromium
+        timeout-minutes: 8
+        run: uv run --group bench playwright install chromium
+      - name: Run each new test id against the base's src/
+        timeout-minutes: 20
+        # The BASE SHA, not `origin/main`. On a `pull_request` GitHub checks out `refs/pull/N/merge`,
+        # so `origin/main` has moved on independently of what this PR was branched from -- the same
+        # ambiguity that made `scripts/tier_marks.py` identify a run by its collected ID SET rather
+        # than by a sha. The base sha is the one ref that means "what this PR is proposing to change".
+        run: >
+          uv run --group bench --group providers --group mcp python scripts/red_in_ci.py
+          --base ${{ github.event.pull_request.base.sha }}
+
   # Sharding trades one silent failure for another if left unchecked: a test in NO shard leaves every
   # shard GREEN, and nothing in the suite can fail for it — the coverage is gone and the signal that
   # would have told you is the signal that was removed. Collection only, so it costs seconds and launches

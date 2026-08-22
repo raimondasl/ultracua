@@ -397,12 +397,21 @@ def _unused_legacy_record_walk() -> list:
 
 
 def derive_engine_positional_params() -> list:
-    """Parameters the engine chain accepts POSITIONALLY — what step 1.1's `*` removes.
+    """Parameters the engine chain accepts POSITIONALLY — what step 1.1's `*` removed.
 
     One site per parameter, not per function, so the ratchet moves when a single argument becomes
-    keyword-only rather than only when a whole signature is converted. The identity prefix each function
-    legitimately takes positionally stays in the count until 1.1 decides where the `*` goes; the number
-    is a baseline to drive down, not a target that is already correct.
+    keyword-only rather than only when a whole signature is converted.
+
+    LANDED AT 1.1 (98 -> 7), and 7 is the END STATE rather than a number still being driven down: the
+    remaining seven are each call's SUBJECT — which page the run is about, or which session and step
+    are being acted on. `tests/test_engine_chain_is_keyword_only.py` holds the naming authority (a
+    committed table of WHICH parameter, per function, plus a derived rule that no two positional
+    parameters may share a type); this counts them.
+
+    THE OVERLAP IS DELIBERATE AND IS TWO SENSOR CLASSES, not a duplicate. This walk reads `src/` BY
+    PATH, so under `scripts/prove_red.py` it parses the pristine tree and cannot contribute a kill
+    (R4.75, measured live during 1.3). The test's walk reads `inspect.getsource(flow_mod)` and does.
+    Collapsing them into one would silently disarm whichever half the other was covering.
     """
     out = []
     for path, tree in _modules():

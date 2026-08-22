@@ -47,7 +47,9 @@ async def test_verify_by_replay_accepts_a_reproducible_flow(tmp_path: Path) -> N
     flow = cache.get(flow_key(GOAL, url))
     assert flow is not None and len(flow.steps) == 4
     verified = await _verify_by_replay(
-        url, flow_key(GOAL, url), flow, cache, True, None, PacingGovernor(), "default", None, None, None
+        url, key=flow_key(GOAL, url), candidate=flow, cache=cache, headless=True, prepare=None,
+        governor=PacingGovernor(), scope="default", browser=None, extra_headers=None,
+        storage_state=None,
     )
     assert verified is True   # a genuinely reproducible flow is ACCEPTED
 
@@ -60,7 +62,9 @@ async def test_verify_by_replay_rejects_a_broken_flow(tmp_path: Path) -> None:
     # Corrupt a mid-flow step so it can't resolve on a fresh load -> the flow no longer reproduces.
     flow.steps[2].locator = LocatorSpec(role="link", name="this link is gone", tag="a")
     verified = await _verify_by_replay(
-        url, flow_key(GOAL, url), flow, cache, True, None, PacingGovernor(), "default", None, None, None
+        url, key=flow_key(GOAL, url), candidate=flow, cache=cache, headless=True, prepare=None,
+        governor=PacingGovernor(), scope="default", browser=None, extra_headers=None,
+        storage_state=None,
     )
     assert verified is False   # a non-reproducible flow is REJECTED (false-accept guard)
 

@@ -250,25 +250,46 @@ def test_the_browser_install_is_one_step_shared_by_both_oses(steps: list[Step]) 
         f"no step in {CI.name} installs a browser, but the suite drives real headless Chromium. "
         f"Either this cell's matcher has gone stale or CI has stopped installing the browser."
     )
-    assert len(installs) == 1, (
-        "the browser install is split across "
-        + ", ".join(f"{CI.name}:{s.line_no} ({s.label})" for s in installs)
-        + ". It was two OS-conditional steps until reshape-plan step 0, and the Linux one carried `--with-deps`; "
-        "keeping them collapsed is what makes windows a usable CONTROL for the linux arm."
+
+    # PER JOB, and every command BYTE-IDENTICAL. This used to read `len(installs) == 1`, which said
+    # the right thing while only one job needed a browser and the wrong thing the moment a second did
+    # (0.4b's `red-in-ci`, which needs Chromium so that a new browser cell is classified `unusable`
+    # rather than counted as evidence for failing on both runs). The defect it was written for was
+    # never the COUNT: it was two OS-conditional steps in ONE job whose commands had DRIFTED, so the
+    # linux arm carried `--with-deps` and windows stopped being a control for it. Both halves of that
+    # are asserted below, and together they are strictly stronger than the count was -- a second job
+    # whose install drifts from the first now fails too, which the count could not see.
+    per_job: dict = {}
+    for s in installs:
+        per_job.setdefault(s.job, []).append(s)
+    split = {j: v for j, v in per_job.items() if len(v) > 1}
+    assert not split, (
+        "the browser install is split WITHIN a job: "
+        + "; ".join(f"{j} -> " + ", ".join(f"{CI.name}:{s.line_no} ({s.label})" for s in v)
+                    for j, v in split.items())
+        + ". It was two OS-conditional steps until reshape-plan step 0, and the Linux one carried "
+        "`--with-deps`; keeping them collapsed is what makes windows a usable CONTROL for the linux arm."
+    )
+    commands = {s.run.strip() for s in installs}
+    assert len(commands) == 1, (
+        f"{len(installs)} browser installs across jobs {sorted(per_job)} run {len(commands)} "
+        f"DIFFERENT commands: {sorted(commands)}. One of them can then acquire a flag the others do "
+        f"not have, which is exactly how `--with-deps` reached only the linux arm."
     )
 
-    step = installs[0]
-    assert not any("if:" in line and "runner.os" in line for line in step.block), (
-        f"{CI.name}:{step.line_no} makes the browser install OS-conditional again. The two arms must "
-        f"run the byte-identical command, or a failure on one stops being evidence about the other."
-    )
-    for bad, why in REFUSED_PROVISIONING.items():
-        assert bad not in step.run, (
-            f"{CI.name}:{step.line_no} reintroduces {bad!r} on the critical path: {why}. "
-            f"See docs/ci-provisioning.md for the measurement, and note that a missing shared "
-            f"library fails LOUD (Chromium cannot launch, so every browser test dies at once) "
-            f"whereas this flag's cost is silent and unbounded."
+    for step in installs:
+        assert not any("if:" in line and "runner.os" in line for line in step.block), (
+            f"{CI.name}:{step.line_no} makes the browser install OS-conditional again. The two arms "
+            f"must run the byte-identical command, or a failure on one stops being evidence about "
+            f"the other."
         )
+        for bad, why in REFUSED_PROVISIONING.items():
+            assert bad not in step.run, (
+                f"{CI.name}:{step.line_no} reintroduces {bad!r} on the critical path: {why}. "
+                f"See docs/ci-provisioning.md for the measurement, and note that a missing shared "
+                f"library fails LOUD (Chromium cannot launch, so every browser test dies at once) "
+                f"whereas this flag's cost is silent and unbounded."
+            )
 
 
 def test_no_step_anywhere_smuggles_provisioning_onto_the_critical_path(steps: list[Step]) -> None:
@@ -311,7 +332,7 @@ def test_every_scan_in_this_file_goes_red_when_armed() -> None:
     `scripts/prove_red.py` proves the wiring mutants stay dead on every CI run; `test_ratchets.py`
     injects an extra site per ratchet on every fast-tier run. Both are STANDING instruments, not
     one-shot proofs taken once before a PR and never again. This is the same move for this file:
-    mutate the workflow in memory FIVE ways and require the checkers to notice each one — four
+    mutate the workflow in memory SEVEN ways and require the checkers to notice each one — six
     violations that must be caught, and one legal shape that must NOT be. Without it, a later
     refactor could make every cell above unfalsifiable and nothing would say so.
 
@@ -361,6 +382,24 @@ def test_every_scan_in_this_file_goes_red_when_armed() -> None:
         "after renaming the allowlisted step it became unbudgeted AND unmatched, and neither "
         "checker noticed -- silence would then be granted to a step nobody named"
     )
+
+    # (f) LET THE TWO JOBS' INSTALLS DRIFT APART. This is what the `len(installs) == 1` clause used
+    # to buy and lost the moment a second job legitimately needed a browser; it is bought back here
+    # as byte-identity, which is the property that actually kept windows a control for linux.
+    drifted = text.replace("playwright install chromium",
+                           "playwright install chromium --dry-run", 1)
+    assert drifted != text, "the drift mutation is STALE; the install command changed shape"
+    with pytest.raises(AssertionError, match="DIFFERENT commands"):
+        test_the_browser_install_is_one_step_shared_by_both_oses(parse_steps(drifted))
+
+    # (g) SPLIT ONE JOB'S INSTALL IN TWO -- the original defect, now stated per job rather than per
+    # file. Duplicated inside the same job, so the file-wide count is irrelevant to catching it.
+    one_install = "      - name: Install Chromium\n        timeout-minutes: 8\n" \
+                  "        run: uv run --group bench playwright install chromium\n"
+    assert text.count(one_install) >= 1, "the split mutation is STALE; the install block changed shape"
+    doubled = text.replace(one_install, one_install + one_install, 1)
+    with pytest.raises(AssertionError, match="split WITHIN a job"):
+        test_the_browser_install_is_one_step_shared_by_both_oses(parse_steps(doubled))
 
     # (e) THE QUIET DIRECTION, pinned as hard as the loud one. `ci.yml` is ~35% comments and several
     # of them discuss `apt-get` by name -- including the paragraph explaining why it is gone. A scan

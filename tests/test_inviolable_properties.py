@@ -638,9 +638,11 @@ async def test_no_corpus_row_can_reach_an_llm_in_replay_mode(capsys, no_llm) -> 
     real_replay = _flow_mod._replay
     engine_saw: list = []
 
-    async def _spy(url, key, cached, cache, provider, *a, **kw):
-        engine_saw.append(type(provider).__name__)
-        return await real_replay(url, key, cached, cache, provider, *a, **kw)
+    async def _spy(url, **kw):
+        # KEYWORD-ONLY since step 1.1, and this stub is better for it: it used to name the first five
+        # parameters POSITIONALLY, so it silently depended on their order as well as on their names.
+        engine_saw.append(type(kw.get("provider")).__name__)
+        return await real_replay(url, **kw)
 
     _flow_mod._replay = _spy
     try:

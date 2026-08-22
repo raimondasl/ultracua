@@ -150,7 +150,8 @@ async def test_mutating_step_under_drift_is_never_healed(tmp_path: Path) -> None
         step = CachedStep(intent="place the order", action="click", mutating=True,
                           precond_fingerprint="DELIBERATELY-WRONG")  # force a drift mismatch
         ok, note, did_heal = await _replay_step(
-            session, step, _SpyProvider(), StepTrace(index=0), GOAL, PacingGovernor(), "scope", 0
+            session, step, provider=_SpyProvider(), tr=StepTrace(index=0), goal=GOAL,
+            governor=PacingGovernor(), scope="scope", idx=0,
         )
         assert ok is False and did_heal is False  # failed loud, not healed
         assert heal_calls == []                    # the heal provider was NEVER consulted

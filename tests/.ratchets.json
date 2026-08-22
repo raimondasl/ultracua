@@ -14,9 +14,9 @@
    "disposition": "reshape-plan Phase 3 — one SystemExit funnel"
   },
   "engine_positional_params": {
-   "total": 98,
+   "total": 7,
    "by_file": {
-    "src/ultracua/flow.py": 98
+    "src/ultracua/flow.py": 7
    },
    "disposition": "reshape-plan 1.1 — keyword-only chain"
   },

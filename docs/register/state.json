@@ -133,7 +133,7 @@
   {
    "id": "R4.22",
    "status": "open",
-   "summary": "Windows `ERR_NO_BUFFER_SPACE`, **10 occurrences**; socket churn refuted at 0.104.0; occurrence 8 (local) argues local ≠ CI, and occurrence 9 landed on a DOCS-ONLY PR, and occurrence 10's same-run A/B shows the PASSING shard MORE loaded on peak TIME_WAIT, handles, processes and non-paged pool — the countable axis is refuted for both symptom classes; see R4.58"
+   "summary": "Windows `ERR_NO_BUFFER_SPACE`, **11 occurrences**; socket churn refuted at 0.104.0; occurrence 8 (local) argues local ≠ CI, and occurrence 9 landed on a DOCS-ONLY PR, and occurrence 10's same-run A/B shows the PASSING shard MORE loaded on peak TIME_WAIT, handles, processes and non-paged pool — the countable axis is refuted for both symptom classes; see R4.58. **Occurrence 11 (0.115.0, run 32547205251, `test_flows.py::test_mutate_flow_is_approval_gated_by_default` at `Page.goto`) INDEPENDENTLY REPLICATES that A/B on an unrelated PR**: failing shard 1 vs passing shard 2 — TIME_WAIT max 331 vs 361, handles 53112 vs 54894, non-paged pool 225.7 vs 240.5 MB, paged pool 327.3 vs 368.0, processes 154 vs 153. Every countable axis LOWER on the arm that died, with 206 ephemeral TIME_WAIT against 16384 available ports, so exhaustion is not close. The ONE column that points the other way is `chrome_procs` (max 8 vs 5), which is the concurrent-Chromium hypothesis `ci.yml` already names — recorded at its true weight, which with a single pair is an observation and not evidence. The 5 s sampling interval also makes every max a FLOOR on the true peak, so a sub-5 s spike is invisible to this instrument in both arms"
   },
   {
    "id": "R4.23",
@@ -531,8 +531,12 @@
    "status": "open",
    "severity": "low",
    "class": "g",
-   "summary": "A structural test cell that reads `src/` BY PATH cannot be scored by `scripts/prove_red.py`, which installs its mutant as a COPY first on `PYTHONPATH`. Such a cell parses PRISTINE source, so a mutation whose only guard is one of them is reported as an unregistered SURVIVOR — 'a hole in the matrix' — when the guard exists and the harness simply cannot reach it. Found by 1.4b's audit; two cells were converted to `inspect.getsource(module)` and the limit is now documented in `prove_red`'s own docstring, but several path-reading pins remain (test_refusal_codes.py's whole derivation, test_boundary_truth's AST scans, and scripts/ratchets.py by design)",
-   "disposition": "NOT a defect in those pins — they are a different sensor class, like the ratchets, and reading the repo tree is correct for them. The defect is that the two instruments cannot tell 'unguarded' from 'unreachable by this harness'. Cheapest real fix: have `prove_red` export the scratch root in the environment and let path-reading cells honour it, so a cell can opt IN to being scored. Deliberately not built inside 1.4b: it touches every structural pin in the repo"
+   "summary": "A structural test cell that reads `src/` BY PATH cannot be scored by `scripts/prove_red.py`, which installs its mutant as a COPY first on `PYTHONPATH`. Such a cell parses PRISTINE source, so a mutation whose only guard is one of them is reported as an unregistered SURVIVOR - 'a hole in the matrix' - when the guard exists and the harness simply cannot reach it. Found by 1.4b's audit; two cells were converted to `inspect.getsource(module)` and the limit is documented in `prove_red`'s own docstring. MEASURED AT 0.115.0, and the class is bigger and now reaches a SECOND instrument: NINE path-reading sites survive across six files (test_cannot_spend.py:235, test_inviolable_properties.py:890, test_landed_arms_the_ledger.py:829, test_meta_load_provenance.py:315 and :382, test_refusal_codes.py:27/:577/:637, test_undeclared_write_retry.py:510), and 0.4b's `scripts/red_in_ci.py` swaps `src/` the same way - so every one of them is ALSO invisible to RED-in-CI. Observed live: 1.3's `test_vision_is_the_only_writer_in_src_and_it_counts` came back `no_guard` against pre-1.3 main while being a perfectly good pin. `red_in_ci`'s `all_green` remedy names this as the second of its three explanations, so the instrument reports the limit rather than hiding it",
+   "disposition": "NOT a defect in those pins — they are a different sensor class, like the ratchets, and reading the repo tree is correct for them. The defect is that the two instruments cannot tell 'unguarded' from 'unreachable by this harness'. Cheapest real fix: have `prove_red` export the scratch root in the environment and let path-reading cells honour it, so a cell can opt IN to being scored. Deliberately not built inside 1.4b: it touches every structural pin in the repo",
+   "pins": [
+    "scripts/red_in_ci.py",
+    "scripts/prove_red.py"
+   ]
   },
   {
    "id": "R4.76",
@@ -579,6 +583,16 @@
    "summary": "`flows.py:219` states the contract that `usage` is ALWAYS populated and always carries `cost_usd`, and FOUR `mode=\"miss\"` early returns in `run_cached` still do not — `flow.py:174` (dry-run misuse), `:192` (no cached flow), `:210` (a terminal refusal) and `:214` (learn without a provider). 1.3 closed the two `escalate` returns for the same reason and left these, deliberately. MEASURED: all four fire after only `cache.get(key)` and a log line — no provider is built and no browser opens — so a literal zero would be SUPPORTABLE there, and the reachable harm is real: a `variance` rep whose learn returns `miss` makes the whole run's cost unknown under the absorbing sum, for a run in which nothing was spent. THE COUNTEREXAMPLE THAT MAKES THIS A SLICE RATHER THAN A FOOTNOTE is `flow.py:1048`, best-of-N's exhausted return: the loop above it MAY have spent, so populating that one with a literal zero would be a confident wrong number. The rule is not 'always populate usage' but 'populate it with what you can support', and a fix that does not distinguish the two makes the accounting worse",
    "severity": "low",
    "class": "accounting"
+  },
+  {
+   "id": "R4.82",
+   "status": "open",
+   "severity": "low",
+   "class": "instrument",
+   "summary": "0.4b's RED-in-CI sensor is ID-LEVEL, so a `src/` change guarded by editing an EXISTING cell's BODY is not adjudicated at all: no new node id appears, `new_ids` is empty, and the verdict is the quiet `no_new_tests`. That is a real hole in the new gate - a src-touching PR with no new guard passes it - and it is NOT over-gated deliberately: making it loud would fire on every such PR with nothing to acknowledge it (1.3 modified `test_ratchets.py` in exactly this shape and added no id for it), which is the D0 refusal shape wearing a CI hat. A parametrize CELL added to an existing table IS a new id and is covered. What would close it is a second derivation with a different sensor class - diffing the set of test FUNCTIONS whose body changed, and running those too - which is more diff parsing than 0.4b was worth before the id-level version had been measured on real PRs. The verdict's own detail string states the residual so a reader of a green run knows what was not asked",
+   "pins": [
+    "tests/test_red_in_ci.py"
+   ]
   }
  ]
 }

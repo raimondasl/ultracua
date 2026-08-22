@@ -88,6 +88,16 @@ Violating any of these is a blocking defect, not a trade-off:
 
 - **`uv` for everything.** `uv run --no-sync pytest tests/... -q`, `uv run --no-sync python -m benchmarks.X`.
   Never bare `uv sync` (it strips groups) — use `uv sync --all-groups`.
+- **DO NOT EDIT THE TREE WHILE A SUITE RUN IS IN FLIGHT — it costs the whole run, twice over.** The
+  warning below about auditors applies to YOU. Measured at 0.115.0: editing two files during a
+  32-minute run produced **twelve confident-looking failures that were pure artifacts**, because
+  `inspect.getsource`/`linecache` read from DISK at call time while the code objects are the ones
+  imported at collection — so a structural cell parses source that does not match the function it
+  holds, and reports `the derivation found no ... construction -- it has gone stale`. Every one
+  re-ran green. Worse, the run's `--emit-marks` observation was then REFUSED by `tier_marks.py`'s
+  identity check ("11 this tree has and they do not"), which is that guard working exactly as
+  designed and a second 32 minutes gone. Freeze the tree, including `docs/` and `CLAUDE.md` — the
+  register-count cells read those.
 - **A LOCAL GREEN IS WEAKER EVIDENCE THAN CI, IN TWO MEASURED WAYS. Both have shipped a red PR.**
   1. *Platform*: CI runs ubuntu AND windows; local runs here are windows-only (see the fixture-race note
      below).
@@ -188,10 +198,51 @@ Violating any of these is a blocking defect, not a trade-off:
   attempt evidenced it, else None if any attempt is unknown (raised / precheck-skip / relearn-raise),
   else False.
 
+- **A new test that passes against the base is not a regression test — and CI now says so (0.4b,
+  0.115.0).** `scripts/red_in_ci.py` differences this branch's pytest collection against the base's,
+  runs the NEW ids **twice** — once here, once with the base's `src/` first on `PYTHONPATH`, the same
+  install `prove_red` uses — and fails a src-touching PR when none of them is red against the base.
+  * **Twice, not once, is what makes the verdict believable.** A new browser cell on a runner with no
+    Chromium, a cell red for an unrelated reason, a broken fixture — each fails against the base too,
+    and a single-run design scores every one of them as a guard. Same rule as
+    `prove_red._require_a_live_killer_suite`: check the unmutated tree FIRST.
+  * **An ImportError against the base is `inconclusive`, never a kill.** A PR adding a `src/` module
+    gives its new tests nothing to import there; pytest exits non-zero and reading the exit code
+    reports a green gate over a test that never executed a line of what it claims to guard.
+  * **Only `src/` is swappable, and that is structural.** `benchmarks/` and `scripts/` sit at the repo
+    ROOT, which is `sys.path[0]`, and nothing on `PYTHONPATH` gets in front of it — R4.77 wearing a
+    second hat. **Measured on 1.3 against pre-1.3 main: 34 new ids, 10 `guards`**, and the `no_guard`
+    rows are exactly the two limits — one structural scan reading `src/` BY PATH (R4.75) and the rest
+    aimed at `benchmarks/variance.py`. Those need `tests/_arming.py`, and the loud channel says so.
+  * The loud channel's acknowledgement is **derived, not typed**: a PR shipping a registered mutation
+    under `tests/mutations/` has proven a guard red through the stronger instrument, and that is its
+    own verdict rather than folded into a pass. Quiet is an allowlist; every loud verdict names a
+    remedy, asserted both ways.
+
+- **The engine chain is KEYWORD-ONLY after its subject (1.1, 0.115.0).** Seven positional parameters
+  across six functions, down from 98 — `url` for the three URL-driven entry points, `session` (+`step`)
+  for the two in-session helpers. `flow.py`'s verification call used to pass sixteen positional
+  arguments of which FOUR were a bare `None`, at positions 5, 7, 9 and 14; each is now named beside the
+  reason it is None.
+  * **TWO SENSORS, because neither is enough.** The arity pin (`POSITIONAL_PREFIX`, a committed table
+    per function) is fully satisfied by `_replay(..., on_step=finalize, finalize=on_step)`. The
+    forwarding pins are what catch that: **every forward is `name=name` unless it is registered in
+    `RENAMED`** — thirteen rows against 132 forwards, so a mistranslated site is a one-line review —
+    and `DELIBERATE_DROPS` is asserted BOTH ways, because an undeclared drop is a parameter silently
+    taking its default. A runtime cell drives the five browser-free edges with a distinct object per
+    argument and asserts `is` identity on arrival, including the positional subject.
+  * **`tests/mutations/keyword_only_chain.py` keeps all three honest — 7 killed, 0 survived.** Three of
+    the seven are type-silent swaps (`str`/`str`, `bool`/`bool`, two `Optional` callables) that the
+    arity pin cannot see at all.
+  * **The overlap with `scripts/ratchets.py` is two SENSOR CLASSES, not a duplicate.** The ratchet
+    reads `src/` by path, so under `prove_red` it parses the pristine tree and cannot contribute a
+    kill; the test reads `inspect.getsource(flow_mod)` and does. Collapsing them would disarm one.
+
 - **Six shapes may only ever SHRINK — the ratchets.** `python scripts/ratchets.py` counts them by AST
   (`--print` for every site, `--update` to re-seed) and `test_every_ratchet_holds` runs it in the fast
   tier. Today: `spec_mutate_raw` 27, `flow_key_transcriptions` 25, `cli_system_exit` 34,
-  `engine_positional_params` 98, and **two at ZERO** — `run_record_write_sites` (1.5) and
+  `engine_positional_params` **7** (98 until 1.1; 7 is its END STATE, one subject per call, not a
+  number still coming down), and **two at ZERO** — `run_record_write_sites` (1.5) and
   `bare_flow_replay_error` (1.4) — each tagged with the Phase-1 step that removes it. **A shrink FAILS
   too**, asking for `--update`: a ratchet that tolerates progress silently stops ratcheting, and the
   next regression is measured against the old, looser number. A derivation that matches NOTHING fails

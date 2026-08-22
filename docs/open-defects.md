@@ -12,7 +12,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**44 open**, 33 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**45 open**, 33 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **44 open**, 33 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **45 open**, 33 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -812,7 +812,7 @@ if and only if that branch is ever resumed.
 | R4.19 | open | `_reset_learn_baselines` clears shape/contracts but not `read_pin` |
 | R4.20 | fixed | seven durable renames, one retry — closed in 0.95.0 (S10) by one shared `fsio` helper |
 | R4.21 | open | `record()`'s refusal stays non-terminal — deliberate, but each retry re-fires the write |
-| R4.22 | open | Windows `ERR_NO_BUFFER_SPACE`, **10 occurrences**; socket churn refuted at 0.104.0; occurrence 8 (local) argues local ≠ CI, and occurrence 9 landed on a DOCS-ONLY PR, and occurrence 10's same-run A/B shows the PASSING shard MORE loaded on peak TIME_WAIT, handles, processes and non-paged pool — the countable axis is refuted for both symptom classes; see R4.58 |
+| R4.22 | open | Windows `ERR_NO_BUFFER_SPACE`, **11 occurrences**; socket churn refuted at 0.104.0; occurrence 8 (local) argues local ≠ CI, and occurrence 9 landed on a DOCS-ONLY PR, and occurrence 10's same-run A/B shows the PASSING shard MORE loaded on peak TIME_WAIT, handles, processes and non-paged pool — the countable axis is refuted for both symptom classes; see R4.58. **Occurrence 11 (0.115.0, run 32547205251, `test_flows.py::test_mutate_flow_is_approval_gated_by_default` at `Page.goto`) INDEPENDENTLY REPLICATES that A/B on an unrelated PR**: failing shard 1 vs passing shard 2 — TIME_WAIT max 331 vs 361, handles 53112 vs 54894, non-paged pool 225.7 vs 240.5 MB, paged pool 327.3 vs 368.0, processes 154 vs 153. Every countable axis LOWER on the arm that died, with 206 ephemeral TIME_WAIT against 16384 available ports, so exhaustion is not close. The ONE column that points the other way is `chrome_procs` (max 8 vs 5), which is the concurrent-Chromium hypothesis `ci.yml` already names — recorded at its true weight, which with a single pair is an observation and not evidence. The 5 s sampling interval also makes every max a FLOOR on the true peak, so a sub-5 s spike is invisible to this instrument in both arms |
 | R4.23 | open | `test_flows_dry_run_holds_a_real_write_flow` failed once under load, undiagnosed |
 | R4.24 | open | a localhost round-trip stalled past the 5 s budget; ships unmitigated, 2 occurrences. The obvious mitigation (`ULTRACUA_ACTION_TIMEOUT_MS=15000` in CI) was BUILT and REFUSED: the bench records the ambient `settings.action_timeout_ms`, `baselines/drift_v2.json` pins it, and `test_drift_bench.py::test_the_baseline_is_current` exact-compares it, so an ambient override reddens a corpus-provenance test minutes into a shard. That refusal lived only in this narrative from 0.85.0 to 0.110.0 while `tests/test_production_timeouts.py` said the opposite in its docstring AND in the failure message a reader sees when the guard fires — the file even contradicted itself, one cell down. Now CARRIED by a pin, and the advice is derived from `ci.yml` + `baselines/` rather than written |
 | R4.25 | fixed | the load-dependent "cluster of three" was one defect + one bad test — assertion fixed in 0.88.0 |
@@ -865,13 +865,14 @@ if and only if that branch is ever resumed.
 | R4.72 | open | `not_learned` names a STATE, and its three raise sites need three different next steps — on `unapprove()`, this project's designated ACKNOWLEDGEMENT verb, it prescribes `flow learn`, which drives a browser and an LLM and can actuate a write during discovery. Measured: approve -> "nothing to approve, learn the flow first"; unapprove -> "nothing to unapprove, learn or record the flow first"; run_batch -> "nothing to batch, learn and approve the flow first". Same code, opposite directions. At ecd9af2 all three were the base `replay_error`, so 1.4a attached a machine-actionable instruction where there was none |
 | R4.73 | open | ONE condition, TWO word-order-transposed slugs on two code fields: a recipe stale against its approval is `stale_approval` on `ToolOutcome` (the taxonomy) and `approval_stale` on `SkippedFlow` (mcpserver). Both read `_approval_recipe_stale`. 1.4a's `RESERVED_CODES` FREEZES the duplication rather than resolving it — it reserves `approval_stale` so the taxonomy cannot adopt it, which is correct as a collision guard and leaves the transposition in place. A third near-identical slug, `approval_binding_stale`, now names a DIFFERENT condition (the spec surface moved), so a reader has three similar strings for two conditions |
 | R4.74 | open | `can_follow_actuation` is a DECLARATION with no sensor, and 1.4a wired two inviolable-#3 properties to derive from it. Two of the twenty-seven declarations were measurably false when the audit checked them BY HAND (`MetaUnreadableError`, `NotLearnedError`), and a third clause in the comment justifying the rest was false too ("the login pair runs before the flow's own steps" — `refresh_auth` is called from `_replay_body` AFTER the first attempt). The axis was additionally AMBIGUOUS between "raised from" and "escapes from", which is what produced all three confusions: the `Login*` classes are raised post-actuation and cannot escape, so their value is right under one reading and wrong under the other. That is R3.7's overloaded token in an axis. Both comments claiming a pin existed have been deleted and the definition narrowed to ESCAPES; what remains missing is the instrument |
-| R4.75 | open | A structural test cell that reads `src/` BY PATH cannot be scored by `scripts/prove_red.py`, which installs its mutant as a COPY first on `PYTHONPATH`. Such a cell parses PRISTINE source, so a mutation whose only guard is one of them is reported as an unregistered SURVIVOR — 'a hole in the matrix' — when the guard exists and the harness simply cannot reach it. Found by 1.4b's audit; two cells were converted to `inspect.getsource(module)` and the limit is now documented in `prove_red`'s own docstring, but several path-reading pins remain (test_refusal_codes.py's whole derivation, test_boundary_truth's AST scans, and scripts/ratchets.py by design) |
+| R4.75 | open | A structural test cell that reads `src/` BY PATH cannot be scored by `scripts/prove_red.py`, which installs its mutant as a COPY first on `PYTHONPATH`. Such a cell parses PRISTINE source, so a mutation whose only guard is one of them is reported as an unregistered SURVIVOR - 'a hole in the matrix' - when the guard exists and the harness simply cannot reach it. Found by 1.4b's audit; two cells were converted to `inspect.getsource(module)` and the limit is documented in `prove_red`'s own docstring. MEASURED AT 0.115.0, and the class is bigger and now reaches a SECOND instrument: NINE path-reading sites survive across six files (test_cannot_spend.py:235, test_inviolable_properties.py:890, test_landed_arms_the_ledger.py:829, test_meta_load_provenance.py:315 and :382, test_refusal_codes.py:27/:577/:637, test_undeclared_write_retry.py:510), and 0.4b's `scripts/red_in_ci.py` swaps `src/` the same way - so every one of them is ALSO invisible to RED-in-CI. Observed live: 1.3's `test_vision_is_the_only_writer_in_src_and_it_counts` came back `no_guard` against pre-1.3 main while being a perfectly good pin. `red_in_ci`'s `all_green` remedy names this as the second of its three explanations, so the instrument reports the limit rather than hiding it |
 | R4.76 | open | `_row_write_evidence`'s lowering clause reads `record.attempts == 0`, which is a MEASUREMENT on every path the sink writes and a DATACLASS DEFAULT on the one it cannot. `_RecordSink.finish` is total by design — an internal error goes to `record.note` and forces `usage` to unknown — but it leaves the write fields at their defaults (`attempts=0`, `committed=None`), which the clause then reads as 'no engine attempt ran' and lowers to a confident False. One token, two states, and the available sensor (`record.note`) is never consulted: R3.7's `anchor_id=None` shape. MEASURED with `_RecordSink._usage` patched to raise: the confirmed-write row goes True -> False and the `write_unverified` row None -> False, i.e. the 1.4b fix is DISARMED, not inverted — both equal the pre-1.4b values. No natural trigger found; both repros inject the fault |
 | R4.77 | open | `prove_red` structurally cannot mutate `benchmarks/` — pytest puts the repo ROOT at `sys.path[0]`, ahead of the `PYTHONPATH` the mutant is installed on, so every bench mutation reports as a SURVIVOR while the guard is fine; B3's matrix is in-process instead |
 | R4.78 | open | `outcomes.cross_check` has no supplier, so `record_disagrees` is structurally always empty. `adjudicate(record=)` is only ever passed a stand-in from tests; `run_scenario` catches an EXCEPTION, not a `RunRecord`, and nothing in `benchmarks/` calls `replay(record=...)`. So RULE 5's cross-check — the one thing that would catch the product's report disagreeing with the server, including the dangerous 'the write landed and the caller was told it did not' — produces no findings on a real run. B3 owns the contract and B4 owns the arm that must supply it; filed so the wiring cannot be forgotten when the corpus lands. The SAME gap covers `GateEvidence`: nothing outside tests constructs one, and `run_scenario` has no seam to supply it, so `gate=None` is the state of the world and every WRITE_GATE refusal on a read is unscored(`gate_unexplainable`) rather than the headline `over_gated`. Both are B4 arm wiring against a contract B3 fixed |
 | R4.79 | open | The write vocabulary has no word for 'the corpus declared this write must be refused and it LANDED'. B3 maps it onto `incorrect_target` on the argument that an `expect_refusal` row declares an EMPTY intended set, so any landed record is by construction not one it was asked for. That is coherent and it is a STRETCH of a word whose plain meaning is 'the wrong record'. The alternative was a seventh write outcome, which `docs/realistic-benchmark-plan.md` fixes at six. Recorded so the choice is visible rather than discovered by someone reading an `incorrect_target` row and looking for a wrong record that does not exist |
 | R4.80 | open | `variance.compare_records` is the only remaining reader whose cost clause could not be scored by `prove_red` (R4.77: it lives in `benchmarks/`), and its new unknown-cost branches are pinned only by in-process arming. Filed as a pointer rather than a defect: the guards exist and are proved red, but by a weaker instrument than the `src/` half of the same slice |
 | R4.81 | open | `flows.py:219` states the contract that `usage` is ALWAYS populated and always carries `cost_usd`, and FOUR `mode="miss"` early returns in `run_cached` still do not — `flow.py:174` (dry-run misuse), `:192` (no cached flow), `:210` (a terminal refusal) and `:214` (learn without a provider). 1.3 closed the two `escalate` returns for the same reason and left these, deliberately. MEASURED: all four fire after only `cache.get(key)` and a log line — no provider is built and no browser opens — so a literal zero would be SUPPORTABLE there, and the reachable harm is real: a `variance` rep whose learn returns `miss` makes the whole run's cost unknown under the absorbing sum, for a run in which nothing was spent. THE COUNTEREXAMPLE THAT MAKES THIS A SLICE RATHER THAN A FOOTNOTE is `flow.py:1048`, best-of-N's exhausted return: the loop above it MAY have spent, so populating that one with a literal zero would be a confident wrong number. The rule is not 'always populate usage' but 'populate it with what you can support', and a fix that does not distinguish the two makes the accounting worse |
+| R4.82 | open | 0.4b's RED-in-CI sensor is ID-LEVEL, so a `src/` change guarded by editing an EXISTING cell's BODY is not adjudicated at all: no new node id appears, `new_ids` is empty, and the verdict is the quiet `no_new_tests`. That is a real hole in the new gate - a src-touching PR with no new guard passes it - and it is NOT over-gated deliberately: making it loud would fire on every such PR with nothing to acknowledge it (1.3 modified `test_ratchets.py` in exactly this shape and added no id for it), which is the D0 refusal shape wearing a CI hat. A parametrize CELL added to an existing table IS a new id and is covered. What would close it is a second derivation with a different sensor class - diffing the set of test FUNCTIONS whose body changed, and running those too - which is more diff parsing than 0.4b was worth before the id-level version had been measured on real PRs. The verdict's own detail string states the residual so a reader of a green run knows what was not asked |
 <!-- /generated:r4-index -->
 
 
@@ -5366,3 +5367,45 @@ is the system working — but the shape is now unmistakable and belongs here as 
 from it.** Name every half, and fail if a named half is MISSING rather than scanning whatever is
 found. All three now do. The operational version: when you split a function, the scans that name it
 are a fourth thing to check beside the ratchets, the mutants and the goldens.
+
+---
+
+## R4.82 — RED-in-CI is an ID-LEVEL sensor, and an edited cell body has no id
+
+**Filed 2026-08-21, at 0.115.0, by the slice that built the instrument.** Not a defect in
+`scripts/red_in_ci.py`; a bound on what it can answer, recorded so a green run is read correctly.
+
+0.4b decides "does this PR add a guard?" by differencing two pytest COLLECTIONS — the branch's ids
+minus the base's — and running what is left against the base's `src/`. That sensor sees:
+
+* a new test function (a new id);
+* a new **parametrize cell** in an existing table (also a new id — which is how a table gaining a row
+  is covered for free, and the reason node-id differencing was chosen over diff parsing);
+
+and does not see a `src/` change guarded by **editing the body of a test that already existed**. No id
+appears, `new_ids` is empty, and the verdict is the quiet `no_new_tests`.
+
+That population is not hypothetical. Release 1.3 rewrote one cell in `test_ratchets.py` — the walk over
+`--tests` occurrences in `ci.yml`, which had been reading only the first — and added no id for it. Under
+0.4b that half of the PR is unadjudicated. (1.3 as a whole was still `RED`: ten of its 34 new ids failed
+against pre-1.3 main.)
+
+**Why it is quiet rather than loud, and why that is not laziness.** Making `no_new_tests` a failure
+fires on every PR of the shape above, and there is nothing an author can do about it except add a
+throwaway id — an alert with no discharge, which is how a loud channel gets `|| true`d and takes the
+findings beside it dark. That is R3.9/CLI-1's rule and the D0 over-refusal shape wearing a CI hat.
+`red_in_ci.verdict` returns the residual in its own detail string ("NOT adjudicated: an existing cell
+whose body changed is invisible to an id-level sensor"), so a reader of a green run is told what was
+not asked, and `tests/test_red_in_ci.py` asserts that sentence is still there.
+
+**What would close it** is a second derivation with a different sensor class: diff the set of test
+FUNCTIONS whose body changed (a function-level diff over `tests/`, not a line scan), and run those
+against the base too. It is deliberately not built here. It is materially more diff parsing than the
+id-level version, it has its own false-positive direction — a test edited for a rename or a comment
+would fail against the base for no reason and produce exactly the unacknowledgeable noise this entry
+refuses — and the id-level sensor has been measured on one PR, which is not enough evidence to price a
+second one. Measure a few real runs first.
+
+**Sibling:** [[R4.75]], which is the same class one instrument over — a structural cell that reads
+`src/` BY PATH is invisible to `prove_red` AND, since 0.4b, to `red_in_ci`, because both swap `src/` on
+`PYTHONPATH` and neither can reach a file read off disk. Nine such sites survive across six files.
