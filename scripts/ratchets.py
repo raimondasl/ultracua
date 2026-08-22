@@ -104,23 +104,61 @@ def _dotted(node) -> str:
 # The derivations. Each returns the SITES, never a number — the number is len().
 
 def derive_spec_mutate_raw() -> list:
-    """`<x>.mutate is (not) None` — the raw write predicate 1.6 replaces with named questions.
+    """The write-declaration comparison asked OUTSIDE `WriteClass.of` — what step 1.6 removed.
 
-    AST-only, so the ~6 occurrences of this text inside comments and docstrings do not count. That
+    AST-only, so the ~10 occurrences of this text inside comments and docstrings do not count. That
     difference is the whole reason this is not a grep.
+
+    REDEFINED AT 1.6, for exactly the reason `derive_run_record_write_sites` was redefined at 1.5's
+    audit round. Counting every `<x>.mutate is (not) None` was the right measure while the predicate
+    was transcribed at 27 sites across three modules. Once they were concentrated into one
+    constructor the count stopped measuring anything: the constructor legitimately contains five of
+    them, so a straight count would report 5 and would FAIL for any future named question added
+    beside them. The invariant that actually holds now is CONTAINMENT — the comparison lives inside
+    `WriteClass.of` or nowhere — whose only acceptable value is zero.
+
+    Its non-vacuity is not taken on trust: `_mutate_comparisons` must still find the comparisons
+    INSIDE the constructor, so a broken pattern cannot read as a clean codebase.
     """
-    out = []
+    inside, outside = _mutate_comparisons()
+    assert inside, (
+        "the write-declaration comparison matches NOTHING inside `WriteClass.of` — the derivation is "
+        "broken, not the codebase clean. That is the stale-derivation failure this file refuses.")
+    return outside
+
+
+def _mutate_comparisons():
+    """(inside `WriteClass.of`, outside it) — the same walk, split by containment.
+
+    BOTH SPELLINGS, and that is load-bearing rather than thorough: the 27 removed sites wrote
+    `spec.mutate is not None` (a dotted receiver) while the constructor writes `mutate is not None`
+    (the bare parameter). A walk that matched only the dotted form would find the outside sites and
+    NONE of the inside ones, so the liveness half would be empty and the assert above would fire on a
+    perfectly healthy tree.
+    """
+    inside, outside = [], []
     for path, tree in _modules():
+        of = None
+        for cls in ast.walk(tree):
+            if isinstance(cls, ast.ClassDef) and cls.name == "WriteClass":
+                of = next((n for n in ast.walk(cls)
+                           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                           and n.name == "of"), None)
+        in_of = {id(n) for n in ast.walk(of)} if of is not None else set()
         for n in ast.walk(tree):
             if not (isinstance(n, ast.Compare) and len(n.ops) == 1
                     and isinstance(n.ops[0], (ast.Is, ast.IsNot))):
                 continue
             left = _dotted(n.left)
             right = n.comparators[0]
-            if left.endswith(".mutate") and isinstance(right, ast.Constant) and right.value is None:
-                op = "is None" if isinstance(n.ops[0], ast.Is) else "is not None"
-                out.append(Site(_rel(path), n.lineno, f"{left} {op}"))
-    return out
+            if not (left == "mutate" or left.endswith(".mutate")):
+                continue
+            if not (isinstance(right, ast.Constant) and right.value is None):
+                continue
+            op = "is None" if isinstance(n.ops[0], ast.Is) else "is not None"
+            site = Site(_rel(path), n.lineno, f"{left} {op}")
+            (inside if id(n) in in_of else outside).append(site)
+    return inside, outside
 
 
 def derive_flow_key_transcriptions() -> list:
@@ -428,12 +466,20 @@ def derive_engine_positional_params() -> list:
 # failure this file refuses, so an exemption has to be earned: `derive_run_record_write_sites` proves
 # its own pattern is live by asserting it still finds the writes INSIDE `_RecordSink` before returning
 # the ones outside. Nothing else may join this set without the same proof.
-MAY_BE_ZERO = frozenset({"run_record_write_sites", "bare_flow_replay_error"})
+MAY_BE_ZERO = frozenset({"run_record_write_sites", "bare_flow_replay_error", "spec_mutate_raw"})
 
 
 RATCHETS = {
-    "spec_mutate_raw": (derive_spec_mutate_raw, "reshape-plan 1.6 — WriteClass named questions"),
-    "flow_key_transcriptions": (derive_flow_key_transcriptions, "reshape-plan 1.6 — FlowSpec.key"),
+    "spec_mutate_raw": (derive_spec_mutate_raw,
+                        "reshape-plan 1.6 — WriteClass named questions (landed; the invariant is now "
+                        "CONTAINMENT inside `WriteClass.of`, so the only acceptable value is 0)"),
+    "flow_key_transcriptions": (derive_flow_key_transcriptions,
+                                "reshape-plan 1.6 — FlowSpec.key (landed 25 -> 2, and 2 is the FLOOR, "
+                                "not a residue: one is `FlowSpec.key`'s own body — the site every other "
+                                "one now funnels into — and one is `cli.py`'s raw `ultracua <url> "
+                                "<goal>` entry point, whose argparse Namespace has `url` rather than "
+                                "`start_url` and is not a FlowSpec at all. Neither can go without "
+                                "inventing a spec the caller never made"),
     "bare_flow_replay_error": (derive_bare_flow_replay_error,
                                "reshape-plan 1.4 — distinct codes (landed). The invariant is EMISSION, "
                                "not syntax: the base is unconstructible since 1.4, so the only "

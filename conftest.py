@@ -49,6 +49,12 @@ def pytest_addoption(parser) -> None:
         help="write this run's OBSERVATION to PATH (never the manifest). Safe on a shard, safe on CI; "
              "merge parts with `python scripts/tier_marks.py merge`",
     )
+    parser.addoption(
+        "--update-truth-table", action="store_true", default=False,
+        help="rewrite tests/goldens/auth_retry_truth.json from the current source. A diff there is a "
+             "change to what may be RE-DRIVEN after an auth refresh — never regenerate to make a "
+             "test pass; regenerate only once the new cells have been read",
+    )
 
 
 def pytest_configure(config) -> None:

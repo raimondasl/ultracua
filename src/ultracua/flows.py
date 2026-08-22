@@ -166,6 +166,76 @@ class SlotSpec:
     description: str = ""
 
 
+@dataclass(frozen=True)
+class WriteClass:
+    """What a spec DECLARES about writing. Never what a recorded RECIPE in fact does.
+
+    THE DISTINCTION IS THE WHOLE POINT, and it has already cost a defect. The raw predicate (a spec's
+    `mutate` field compared against None) was spelled identically at 27 sites whether the author meant
+    "the human declared this a write" or "would acting again re-fire a write" — and those are
+    different questions with different answers. An UNDECLARED write (nothing declared, but a cached
+    step carries `mutating=True`, which is what the learn path's wire promotion produces for a
+    formless fetch-POST) is a write in fact and
+    not in declaration. `_auth_retry_allowed` asked the declaration question, scored it retry-safe,
+    and re-fired a commit under a byte-identical Idempotency-Key. That is R3.5.
+
+    So the two families are shaped differently ON PURPOSE and cannot be reached the same way:
+
+      * a DECLARATION question is an attribute of the spec alone -> `spec.write.<question>`;
+      * a RECIPE question needs the recorded steps and is therefore a FUNCTION that visibly takes
+        them -> `is_write_flow(spec, cached_flow)`, `recipe_write_count(cached_flow)`,
+        `recipe_has_multiple_writes(cached_flow)`.
+
+    You cannot ask a recipe question of this object, because it does not have the recipe. That is
+    structural rather than a naming convention, which is what makes it survive a careless edit.
+
+    CARRIES NO REFUSAL, deliberately (reshape-plan's standing rule for this step). Every field here
+    is exactly the boolean the raw expression it replaces evaluated to — `tests/test_write_class.py`
+    pins each one against its old expression over the full cross-product of `MutateSpec` shapes.
+    Nothing about what a flow is ALLOWED to do changed in this step.
+    """
+
+    declares_write: bool                  # the spec carries a `mutate` block at all
+    declares_confirm: bool                # ... and it carries a whole-flow confirm barrier
+    declares_precheck: bool               # ... and it carries a whole-flow idempotency precheck
+    declares_barriers: bool               # ... and it carries per-write barriers at all
+    declares_multiple_barriers: bool      # ... and MORE THAN ONE of them (a declared transaction)
+
+    @staticmethod
+    def of(mutate: "Optional[MutateSpec]") -> "WriteClass":
+        """THE one constructor. Every field is derived here or nowhere."""
+        return WriteClass(
+            declares_write=mutate is not None,
+            declares_confirm=mutate is not None and mutate.has_confirm(),
+            declares_precheck=mutate is not None and mutate.has_precheck(),
+            declares_barriers=mutate is not None and bool(mutate.step_confirms),
+            declares_multiple_barriers=mutate is not None and mutate.is_multiwrite(),
+        )
+
+
+def recipe_write_count(cached_flow) -> int:
+    """How many recorded steps will actually FIRE a write. A fact about the RECIPE, not the spec.
+
+    Deliberately a function taking the recipe rather than anything reachable from a `FlowSpec`: see
+    `WriteClass`. `_auth_retry_allowed` needs the NUMBER for its message ("{n} recorded steps are
+    marked as WRITING"), so the count is the primitive and the boolean below is derived from it —
+    two spellings of one fact cannot disagree if only one of them does the counting.
+    """
+    return sum(1 for s in (cached_flow.steps if cached_flow is not None else [])
+               if getattr(s, "mutating", False))
+
+
+def recipe_has_multiple_writes(cached_flow) -> bool:
+    """Does the RECIPE commit more than once? NOT `WriteClass.declares_multiple_barriers`.
+
+    Kept separately named from the declaration question because `_auth_retry_allowed` keeps them as
+    separate arms with DIFFERENT MESSAGES and different remedies: `record()` permits a flow with two
+    mutating steps and no `step_confirms` at all, which reads as a single write by declaration and
+    commits twice in fact. Collapsing the two is R3.5's own failure shape one level down.
+    """
+    return recipe_write_count(cached_flow) > 1
+
+
 @dataclass
 class FlowSpec:
     """A named, reusable recurring task."""
@@ -192,6 +262,22 @@ class FlowSpec:
     @property
     def scope(self) -> str:
         return f"flow:{self.name}"
+
+    @property
+    def key(self) -> str:
+        """This flow's cache key. THE single transcription of `flow_key(goal, start_url, scope)`.
+
+        It was written out at 24 sites across three modules. Nothing was wrong with any of them --
+        that is the point: 24 chances for the next one to pass `spec.name` or to reorder two of three
+        `str` arguments, silently keying a flow to somebody else's cache entry. `scope` above is the
+        precedent; this is the same move for the value derived from it.
+        """
+        return flow_key(self.goal, self.start_url, self.scope)
+
+    @property
+    def write(self) -> WriteClass:
+        """What this spec DECLARES about writing. Cannot answer a recipe question -- see `WriteClass`."""
+        return WriteClass.of(self.mutate)
 
 
 @dataclass
@@ -1593,9 +1679,10 @@ def _make_pre_write(spec: FlowSpec, out: dict):
 
     Handed to `run_cached(pre_write=...)`, which calls it once, immediately before the run's FIRST write
     actuates. `_make_finalize` then requires an absent->present TRANSITION rather than mere presence."""
-    if spec.mutate is None or not spec.mutate.has_confirm():
+    if not spec.write.declares_confirm:
         return None
     m = spec.mutate
+    assert m is not None                      # `declares_confirm` implies it; stated for the reader
 
     async def _pre(session) -> None:
         out["_pre_confirm"] = await condition_present(
@@ -1609,7 +1696,7 @@ def _make_pre_write(spec: FlowSpec, out: dict):
 def _make_finalize(spec: FlowSpec, router, out: dict, pin: Optional[dict] = None,
                    redact: tuple = ()):
     async def _finalize(session):
-        if spec.mutate is not None:
+        if spec.write.declares_write:
             # WRITE flow: success is action-completion — the declared confirm check must hold,
             # else the write didn't land and replay fails loud (Phase D).
             m = spec.mutate
@@ -1793,7 +1880,7 @@ async def _already_committed(spec: FlowSpec) -> bool:
 
 async def _precheck_done(spec: FlowSpec) -> bool:
     """True if this is a write flow with an idempotency precheck whose end-state already holds."""
-    return spec.mutate is not None and spec.mutate.has_precheck() and await _already_committed(spec)
+    return spec.write.declares_precheck and await _already_committed(spec)
 
 
 async def refresh_auth(spec: FlowSpec, *, headless: Optional[bool] = None) -> None:
@@ -1850,7 +1937,7 @@ async def learn(
     cache = cache or _default_cache()
     fixed = provider is not None and router is not None  # a caller-supplied teacher -> one attempt
     # NEVER multi-sample a declared write flow: each attempt re-performs the write (double-submit).
-    if spec.mutate is not None:
+    if spec.write.declares_write:
         samples = 1
     attempts = 1 if fixed else max(1, samples)
     best: Optional[LearnResult] = None
@@ -1897,7 +1984,7 @@ async def _learn_once(
         # is usually `provider.router` already).
         aux_routers=(router,) if router is not None else (),
     )
-    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    key = spec.key
     # ONLY the flow THIS attempt authored counts. `cache.get(key)` also returns a PRE-EXISTING flow, which
     # would report a FAILED re-learn as `cached=True` off someone else's recipe: best-of-N would stop
     # resampling, the "nothing was cached" warning would never print, and — worst — the meta refresh below
@@ -1954,8 +2041,8 @@ async def _learn_once(
                  "attributes each write that fires directly from its own action.")
     # Phase G: attach per-write completion barriers (in commit order) to the LLM-authored mutating steps.
     # A mismatch refuses the flow (delete + cached=False) — never a half/mis-confirmed multi-write flow.
-    if cached is not None and spec.mutate is not None and spec.mutate.step_confirms:
-        if spec.mutate.is_multiwrite():
+    if cached is not None and spec.write.declares_barriers:
+        if spec.write.declares_multiple_barriers:
             # The LLM-learn path classifies writes by `classify_mutation` alone, which can MISS a formless
             # write (so the 1:1 count check would falsely pass with an unbarriered write). The recorder has
             # per-write wire attribution, so a MULTI-write barrier must be authored via `record()`. (A single
@@ -1997,7 +2084,7 @@ async def _learn_once(
                 meta.shape = _shape_of(data)
                 # READ flows only — a write flow's meta.contracts stays None (the write rail is untouched).
                 meta.contracts = (seed_contracts(data, truncated=bool(out.get("truncated")))
-                                  if spec.mutate is None else None)
+                                  if not spec.write.declares_write else None)
             meta.audit_due = True   # H9: a re-authored extraction is high-risk -> the next replay is audited
             pinned = meta.read_pin is not None
             approved = meta.approved
@@ -2056,7 +2143,7 @@ def approve(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> None:
       - the human value-contract OVERLAY (`FlowSpec.contracts`) — a weakened fail-loud guarantee.
     """
     cache = cache or _default_cache()
-    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    key = spec.key
     cached = cache.get(key)
     if cached is None:
         raise NotLearnedError(f"{spec.name!r}: nothing to approve — learn the flow first")
@@ -2078,7 +2165,7 @@ def unapprove(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> None:
     while approved those are deliberately preserved across a re-author, so `unapprove` -> re-author ->
     `approve` is how a human adopts a legitimately restructured page."""
     cache = cache or _default_cache()
-    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    key = spec.key
     # Mirror `approve`'s guard: don't silently mint a meta sidecar (and promise a re-seed) for a flow that was
     # never learned in the first place.
     if cache.get(key) is None:
@@ -2131,7 +2218,7 @@ def mark_step(spec: FlowSpec, index: int, *, writes: bool,
     overruled, since a refusal whose reason is invisible is one an operator learns to route around.
     """
     cache = cache or _default_cache()
-    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    key = spec.key
     flow = cache.get(key)
     if flow is None:
         raise ValueError(
@@ -2164,7 +2251,7 @@ def mark_step(spec: FlowSpec, index: int, *, writes: bool,
                 f"bound to the Nth MUTATING step — demoting this one would silently re-bind every later "
                 f"confirm to the wrong write. Remove the barrier from `spec.mutate.step_confirms` first "
                 f"if this step really does not commit")
-        if spec.mutate is not None and step.mutating:
+        if spec.write.declares_write and step.mutating:
             others = [i for i, s in enumerate(flow.steps) if s.mutating and i != index]
             if not others:
                 raise ValueError(
@@ -2258,7 +2345,7 @@ def release(spec: FlowSpec, *, cache: Optional[FlowCache] = None,
     permanent level shift (a price that really did move) — it does NOT inject the suspect value (which would
     leave a bimodal baseline and habituate); the field re-warms (advisory) from subsequent clean runs."""
     cache = cache or _default_cache()
-    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    key = spec.key
     # R3.13: `release` is THE human act, so it clears both things that can be holding this flow — the
     # run-time quarantine below, and the engine's refusal memory, which blocks RE-AUTHORING rather than
     # running. They are separate mechanisms for the reason spelled out on `FlowCache.refusal` (the engine
@@ -2373,7 +2460,7 @@ def contracts_for(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> "tupl
     """The EFFECTIVE value contracts (the machine SEED overlaid by the human `spec.contracts`) and the current
     quarantine record (or None), for `flow contracts` / inspection. Read-only."""
     cache = cache or _default_cache()
-    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    key = spec.key
     meta = _load_meta(cache, key)
     return effective_contracts(spec.contracts, meta.contracts), meta.quarantine
 
@@ -2499,7 +2586,7 @@ def is_write_flow(spec: FlowSpec, cached_flow) -> bool:
     human in the loop, so a future upgrade of the write SIGNAL would have to find all three. (This release
     is such an upgrade: `_author_steps` now promotes a wire-attributed write onto its step, which changes
     what `s.mutating` means and therefore what all three of those callers do.)"""
-    if spec.mutate is not None:
+    if spec.write.declares_write:
         return True
     return cached_flow is not None and any(getattr(s, "mutating", False) for s in cached_flow.steps)
 
@@ -2574,7 +2661,7 @@ def _auth_retry_allowed(spec: FlowSpec, cached_flow, *, auth_refresh: bool,
         return True, ""             # a read is idempotent — re-running it is free
     # It WRITES. Only a DECLARED, SINGLE-commit flow with a whole-flow precheck can be retried safely: the
     # precheck re-checks first and skips if the write already landed.
-    if spec.mutate is None:
+    if not spec.write.declares_write:
         return False, (
             "not retrying after auth refresh — a recorded step is marked as WRITING and this flow "
             f"declares no write, so a re-run from the start could re-fire it with no confirm barrier to "
@@ -2586,8 +2673,7 @@ def _auth_retry_allowed(spec: FlowSpec, cached_flow, *, auth_refresh: bool,
     # `is_multiwrite()` alone answers "did the human declare more than one BARRIER" — and `record()`
     # explicitly permits a flow with two mutating steps and no `step_confirms` at all, which therefore
     # read as a single write and was granted the retry. Settled here by counting what will actually fire.
-    cached_writes = sum(1 for s in (cached_flow.steps if cached_flow is not None else [])
-                        if getattr(s, "mutating", False))
+    cached_writes = recipe_write_count(cached_flow)
     # ARM ORDER IS MESSAGE QUALITY, NOT LOGIC — every arm here returns False, so `allowed` is
     # order-independent. The order preserved below is the one the caller's chain used (multiwrite ->
     # parameterized -> no-precheck) with the new recipe-count arm inserted after `parameterizing`, and
@@ -2595,7 +2681,7 @@ def _auth_retry_allowed(spec: FlowSpec, cached_flow, *, auth_refresh: bool,
     # refuses the combination as row-blind), so telling it that "a whole-flow precheck cannot tell whether
     # an earlier write landed" explains it in terms of a mechanism it is forbidden to have, and drops the
     # guidance that actually applies — its row-keyed Idempotency-Key makes a manual re-run safe.
-    if spec.mutate.is_multiwrite():
+    if spec.write.declares_multiple_barriers:
         return False, ("not retrying a MULTI-WRITE flow after auth refresh (a re-run would re-fire an "
                        "already-landed earlier write; per-write resume is not yet supported) — run "
                        "`flow login` then replay")
@@ -2614,7 +2700,7 @@ def _auth_retry_allowed(spec: FlowSpec, cached_flow, *, auth_refresh: bool,
             f"declaration: `flow inspect --name {spec.name}` shows which steps are marked — if only one "
             f"of them really writes, re-record so the others are not. Otherwise run `flow login` then "
             f"replay")
-    if not spec.mutate.has_precheck():
+    if not spec.write.declares_precheck:
         return False, ("not retrying a write after auth refresh without an idempotency precheck (would "
                        "risk a double-submit) — add mutate.precheck_* or run `flow login` then replay")
     return True, ""
@@ -2653,7 +2739,7 @@ def health(spec: FlowSpec, *, cache: Optional[FlowCache] = None, stale_after: Op
     `stale_after` (seconds): a flow whose last success is older than this counts as `stale`.
     """
     cache = cache or _default_cache()
-    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    key = spec.key
     # `health()` backs `flow status` and the MCP tools/list loop, so ONE unreadable flow must not take down
     # the fleet view — but it must not read as "not learned" either, which is what silently flattening it
     # to None would do. Surface it as its own status.
@@ -3163,7 +3249,7 @@ async def _attempt_replay_body(spec, router, cache, key, meta, check_shape, *, c
         # not ordinary locator drift.
         kind = "escalate" if report.mode == "escalate" else "drift"
         return _fail(f"replay failed (page drift?): {report.note or report.mode}", kind)
-    if (spec.extract is not None or spec.mutate is not None) and not out.get("found"):
+    if (spec.extract is not None or spec.write.declares_write) and not out.get("found"):
         # a write flow gates `found` on the confirm check, so an unconfirmed write fails here
         if out.get("confirm_pre_true"):
             # NOT "drift". Drift means the run did not get where it meant to; here the commit ACTUATED and
@@ -3179,7 +3265,7 @@ async def _attempt_replay_body(spec, router, cache, key, meta, check_shape, *, c
             committed_report = None
             return _fail(f"{out.get('error')}", "write_unverified")
         return _fail(f"data not found / write not confirmed on replay: {out.get('error')}", "drift")
-    if spec.mutate is not None and spec.extract is not None and not out.get("extract_found"):
+    if spec.write.declares_write and spec.extract is not None and not out.get("extract_found"):
         # The write CONFIRMED (above) but its readback missed. A distinct KIND from "drift", because the
         # remedy is the opposite one: the side effect already landed, so this must never be retried or
         # re-learned. Returning the confirm as a clean success here would hand the caller `data=None` for
@@ -3194,7 +3280,7 @@ async def _attempt_replay_body(spec, router, cache, key, meta, check_shape, *, c
         return _fail(f"data shape changed vs the learned flow (expected {meta.shape})", "shape")
     # H9 VALUE checks (deterministic, 0-LLM). READ flows only (a write flow's meta.contracts stays None),
     # gated on the same `check_shape` trust switch as the shape gate. Both layers quarantine identically.
-    if check_shape and spec.mutate is None:
+    if check_shape and not spec.write.declares_write:
         eff = effective_contracts(spec.contracts, meta.contracts)
         # Layer 1: same-shape VALUE check (type / null / sign / format / count-floor / null-rate).
         if eff:
@@ -3335,7 +3421,7 @@ def _preflight_row(
     # write"; that one is `is_write_flow`, and it lives in `_auth_retry_allowed`. Widening the predicate
     # HERE would be a defect, not a fix: the three dereferences below would become AttributeErrors, and it
     # would refuse a large population of ordinary READS (see `_auth_retry_allowed` for the measurement).
-    declares_write = spec.mutate is not None
+    declares_write = spec.write.declares_write
     parameterizing = params is not None
     # H9: a quarantined flow refuses EVERY future run, 0-LLM, before any browser or arg validation — a
     # persisted wrong-value quarantine dominates (a bad arg is moot while the flow is known to return wrong
@@ -3506,12 +3592,12 @@ def preflight_keys(
     `(resolved, the write's Idempotency-Key(s))`. Raises `FlowReplayError` (incl. `ParamValidationError`) on
     any violation. `keys == []` for a read. The public entrypoint the MCP write surface uses to check the
     dedupe ledger + build a confirm preview BEFORE actuating — without reaching into the private helpers."""
-    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    key = spec.key
     meta = _load_meta(cache, key)
     cached = cache.get(key)
     resolved = _preflight_row(spec, params, meta=meta, cached_flow=cached,
                               require_approved=require_approved, on_drift="raise")
-    return resolved, (_plan_idempotency_keys(spec, resolved, cached) if spec.mutate is not None else [])
+    return resolved, (_plan_idempotency_keys(spec, resolved, cached) if spec.write.declares_write else [])
 
 
 async def dry_run(spec: FlowSpec, params: Optional[dict] = None, *,
@@ -3548,7 +3634,7 @@ async def dry_run(spec: FlowSpec, params: Optional[dict] = None, *,
     from .dryrun import ATTRIBUTED, DryRunArbiter
 
     cache = cache or _default_cache()
-    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    key = spec.key
     meta = _load_meta(cache, key)
     cached = cache.get(key)
     arb = DryRunArbiter()
@@ -3586,7 +3672,7 @@ async def dry_run(spec: FlowSpec, params: Optional[dict] = None, *,
         rep.abort_detail = str(exc)
         return rep
 
-    rep.precheck_skipped = spec.mutate is not None and spec.mutate.has_precheck()
+    rep.precheck_skipped = spec.write.declares_precheck
     report = await run_cached(
         spec.start_url, spec.goal, None, cache, mode="replay", headless=spec.headless,
         scope=spec.scope, extra_headers=spec.headers, storage_state=spec.storage_state,
@@ -3681,7 +3767,7 @@ async def _replay_body(
 ) -> Any:
     """`replay()`'s body. Returns data or raises; it never writes the record — see `_RecordSink`."""
     cache = cache or _default_cache()
-    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    key = spec.key
     meta = _load_meta(cache, key)
     parameterizing = params is not None  # caller opted into the param path (vs a frozen replay)
     # H3 slice 2a/2b: run the shared 0-LLM, NO-BROWSER preflight gate — resolve + validate this row's params
@@ -3698,7 +3784,7 @@ async def _replay_body(
     # flow must not claim it) and the operator-facing messages that dereference `spec.mutate`. The question
     # "would acting again re-fire a write" is NOT this predicate — that is `_auth_retry_allowed`, keyed off
     # `is_write_flow`. Conflating the two is exactly R3.5.
-    declares_write = spec.mutate is not None
+    declares_write = spec.write.declares_write
 
     # Idempotency precheck (opt-in, one-shot writes): if the end-state already holds, skip the write.
     if await _precheck_done(spec):
@@ -3971,7 +4057,7 @@ def save_spec(spec: FlowSpec) -> Path:
     body = asdict(spec)
     # `asdict` doesn't recurse into the pydantic StepConfirm objects in mutate.step_confirms (they'd make
     # json.dumps raise) — serialize them explicitly.
-    if spec.mutate is not None and spec.mutate.step_confirms:
+    if spec.write.declares_barriers:
         body["mutate"]["step_confirms"] = [sc.model_dump() for sc in spec.mutate.step_confirms]
     p.write_text(json.dumps(body, indent=2), encoding="utf-8")
     return p
@@ -4174,7 +4260,7 @@ async def audit_flows(
         # most-repeated shape (R4.14).
         try:
             spec = load_spec(name)
-            key = flow_key(spec.goal, spec.start_url, spec.scope)
+            key = spec.key
             # `is_write_flow`, not the declaration (R4.10). An UNDECLARED write — `spec.mutate is None`
             # with a cached step the wire promotion marked `mutating` — walked straight past the old test
             # and was judged, and in `enforce` mode an LLM finding could quarantine it: the one thing
@@ -4307,7 +4393,7 @@ async def run_all(
             spec = load_spec(name)
         except Exception as exc:  # noqa: BLE001 - a missing/malformed spec is a failed flow, not a crash
             return FleetRun(name=name, ok=False, status="failed", error=f"load failed: {exc}")
-        key = flow_key(spec.goal, spec.start_url, spec.scope)
+        key = spec.key
         # THE FOURTH TRANSCRIPTION. `is_write_flow` was extracted to stop this predicate existing in
         # triplicate (mcpserver, run_batch, `flow approve --all`) — and `run_all`, the UNATTENDED cron
         # driver, was the copy that got missed. It gated on `spec.mutate is not None` alone, so an
@@ -4366,7 +4452,7 @@ async def run_all(
                                       f"{q.get('reason') or meta.quarantine}")
             return FleetRun(name=name, ok=False, status="skipped", error="not approved")
         if is_write_flow(spec, cache.get(key)):
-            if spec.mutate is None:
+            if not spec.write.declares_write:
                 # An UNDECLARED write is skipped whatever `include_writes` says, exactly as `run_batch`
                 # already refuses one: with no `spec.mutate` there is no confirm barrier, so replay cannot
                 # tell whether the write landed. `--include-writes` is consent to run writes that can be
@@ -4517,7 +4603,7 @@ async def run_batch(
         raise BatchArgumentError(f"run_batch: on_row_error must be 'stop' or 'continue', not {on_row_error!r}")
 
     cache = cache or _default_cache()
-    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    key = spec.key
     meta = _load_meta(cache, key)
     cached_flow = cache.get(key)
     if cached_flow is None:
@@ -4535,7 +4621,7 @@ async def run_batch(
     # would record a row off a page-controlled status field it can't trust (a false skip = a silently-lost
     # write). Refuse loud: declare the write + a confirm check so each row's landing is verified. (Matches the
     # recorder, which refuses to cache an undeclared write.)
-    if is_mutate and spec.mutate is None:
+    if is_mutate and not spec.write.declares_write:
         raise UndeclaredWriteError(
             f"{spec.name!r}: this flow performs a write (a mutating step) but isn't declared as a write — so "
             f"replay can't verify each row's write LANDED, which a batch (and its resume ledger) requires. "
@@ -4728,7 +4814,7 @@ async def canary(spec: FlowSpec, *, cache: Optional[FlowCache] = None) -> Canary
     full `run_all` replay; the canary is a fast first-line warning you can run far more often.
     """
     cache = cache or _default_cache()
-    flow = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+    flow = cache.get(spec.key)
     if flow is None:
         return CanaryResult(spec.name, "not-learned", "learn the flow first")
     first = next((s for s in flow.steps if s.locator is not None), None)
@@ -5094,8 +5180,8 @@ async def record(
     `run-all` / `canary` find it.
     """
     cache = cache or _default_cache()
-    key = flow_key(spec.goal, spec.start_url, spec.scope)
-    declared_write = spec.mutate is not None
+    key = spec.key
+    declared_write = spec.write.declares_write
     # H3 write-slot binding: `writable_slots` is the EXPLICIT sign-off to parameterize named WRITE fields.
     # Refuse the mis-configurations BEFORE any browser opens (config errors should never dial the site):
     # it needs a declared write (a read uses `mine_slots`), and it's mutually exclusive with `mine_slots`

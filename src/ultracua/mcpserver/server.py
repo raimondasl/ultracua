@@ -168,9 +168,9 @@ def _is_write_flow(spec, cache: FlowCache) -> bool:
     independent transcriptions of it, and it is the one whose answer decides `readOnlyHint`."""
     from ..cache import flow_key
     from ..flows import is_write_flow
-    if spec.mutate is not None:
+    if spec.write.declares_write:
         return True
-    return is_write_flow(spec, cache.get(flow_key(spec.goal, spec.start_url, spec.scope)))
+    return is_write_flow(spec, cache.get(spec.key))
 
 
 def list_flow_tools(cache: Optional[FlowCache] = None, *, expose_writes: bool = False) -> list[FlowTool]:
@@ -291,11 +291,11 @@ def _tool_for(spec, spec_name: str, cache: FlowCache, *, expose_writes: bool,
         # check. An undeclared write (mutating steps, no spec.mutate) has no confirm barrier -> replay
         # can't verify it landed -> never exposed. A declared write missing a confirm would only ever
         # refuse at preflight, so don't advertise it either.
-        if not (expose_writes and spec.mutate is not None and spec.mutate.has_confirm()):
+        if not (expose_writes and spec.write.declares_confirm):
             return SkippedFlow(
                 spec_name, "write_not_exposed",
                 "a WRITE flow: exposed only with --expose-writes, and only when declared with a confirm "
-                "check" if spec.mutate is not None else
+                "check" if spec.write.declares_write else
                 "an UNDECLARED write (mutating steps, no `mutate` spec) is never exposed — its writes "
                 "cannot be verified; declare it with `flow set-mutate` or re-record it")
     tname = _tool_name(spec_name)
@@ -387,12 +387,12 @@ async def call_flow_tool(
 
     # WRITE path (H2 stage 2). An undeclared write must never reach here (list_flow_tools excludes it); re-check
     # on the CURRENT cache — belt-and-suspenders against a race / a direct call.
-    if spec.mutate is None:
+    if not spec.write.declares_write:
         return ToolOutcome(False, code="write_denied",
                            message=f"{resolved.spec_name!r}: an undeclared write (mutating steps, no confirm "
                                    f"barrier) — replay can't verify it landed, so it's never exposed")
 
-    key = flow_key(spec.goal, spec.start_url, spec.scope)
+    key = spec.key
     async with _lock_for(key):   # SINGLE-FLIGHT: two concurrent calls to this flow can't both fire
         # PRE-FLIGHT (0-LLM, no browser): validate the args + compute the write's Idempotency-Key(s). Any
         # violation (invalid_params / not-approved / stale slots_hash / unbound slot / precheck) fails here,
