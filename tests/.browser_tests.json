@@ -1,6 +1,6 @@
 {
  "_comment": "DERIVED, never hand-edited. A test is a browser test iff it was OBSERVED launching one, OR the fast tier later caught it launching (attribution is order-dependent when a module shares browser work through a fixture). Regenerate with `pytest -q --store-browser-marks` then `python scripts/derive_test_tiers.py`, which iterates to the fixed point. An unclassified test makes a tiered run fail loudly rather than skip it.",
- "total": 1738,
+ "total": 1739,
  "browser": [
   "tests/test_annotation_disposition.py::test_the_r427_population_arrives_non_demotable_so_the_verb_cannot_dispose_of_it",
   "tests/test_audit.py::test_advisory_mode_reports_but_never_quarantines",
@@ -1306,6 +1306,7 @@
   "tests/test_red_in_ci.py::test_an_id_that_was_never_classified_is_a_harness_failure_not_a_pass",
   "tests/test_red_in_ci.py::test_an_import_error_against_the_base_is_never_a_kill",
   "tests/test_red_in_ci.py::test_an_outcome_outside_the_vocabulary_is_refused_rather_than_guessed",
+  "tests/test_red_in_ci.py::test_an_unimportable_module_reports_ERROR_for_its_ids_against_real_pytest",
   "tests/test_red_in_ci.py::test_every_verdict_the_function_can_return_is_in_the_declared_vocabulary",
   "tests/test_red_in_ci.py::test_inconclusive_is_loud_and_names_the_registered_mutation_as_its_remedy",
   "tests/test_red_in_ci.py::test_new_tests_that_do_not_pass_on_their_own_branch_prove_nothing",
