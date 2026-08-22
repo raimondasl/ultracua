@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -60,6 +61,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+_NODE_ID = re.compile(r"^[\w./\\-]+\.py::\S.*$")
+
+# HOW MANY IDS GO ON ONE COMMAND LINE. Windows caps a command at 8191 characters and an id here
+# averages ~90, so ~85 is the wall -- a PR adding a hundred parametrize cells would fail with a
+# meaningless OS error rather than a verdict. The job runs on ubuntu, but this script is meant to be
+# runnable by hand on the primary dev platform, which is windows.
+_CHUNK = 40
 
 # What one test id can be, per run. `missing` is its own word rather than folded into `error`: an id
 # that pytest never reported at all means this harness asked for something that did not exist, which
@@ -83,7 +92,7 @@ REMEDY = {
         "Every new test in this PR passes against the base's src/. Three ways that happens: the src/ "
         "change is not guarded at all; the guard is a structural scan that reads the repo BY PATH, "
         "which sees the pristine tree here for the same reason it does under prove_red (R4.75) -- use "
-        "`inspect.getsource(module)`; or the new cells aim at benchmarks//scripts/, which this job "
+        "`inspect.getsource(module)`; or the new cells aim at benchmarks/ or scripts/, which this job "
         "structurally cannot swap (see the module docstring) -- arm those with tests/_arming.py and "
         "ship a registered mutation."
     ),
@@ -268,7 +277,10 @@ def collect_ids(cwd: Path, *, src_from: "Path | None" = None) -> "list[str]":
             f"collection in {cwd} exited {p.returncode}. Both collections must succeed or the "
             f"difference between them is not a set of NEW ids, it is noise.\n"
             + (p.stdout or "")[-3000:] + (p.stderr or "")[-2000:])
-    return [l.strip() for l in p.stdout.splitlines() if "::" in l and not l.startswith(" ")]
+    # A NODE-ID SHAPE, not "contains `::`". `-q` also prints a warnings summary, and a warning that
+    # names a node id would otherwise enter `new_ids` as a test that exists in neither run -- which
+    # this gate reads as a HARNESS failure. Loud, but for a reason nobody could act on.
+    return [m.group(0) for m in (_NODE_ID.match(l.strip()) for l in p.stdout.splitlines()) if m]
 
 
 def run_ids(ids: "list[str]", *, src_from: "Path | None", junit: Path) -> dict:
@@ -277,12 +289,20 @@ def run_ids(ids: "list[str]", *, src_from: "Path | None", junit: Path) -> dict:
     Returns id -> outcome. An id pytest never mentions is `missing`, unless its FILE carries a
     collection error, in which case every id in that file is `error` -- which is the ImportError
     case, and it must not be confused with a failure.
+
+    CHUNKED, because a command line has a length (see `_CHUNK`). Chunking also means an id whose
+    module dies at import takes only its own chunk down, so the rest still return real outcomes.
     """
-    subprocess.run(
-        [sys.executable, "-m", "pytest", *ids, "-q", "--tb=no", "-p", "no:cacheprovider",
-         f"--junitxml={junit}"],
-        cwd=ROOT, capture_output=True, text=True, env=_keyless_env(src_from))
-    return parse_junit(junit, ids)
+    out: dict = {}
+    for n in range(0, len(ids), _CHUNK):
+        batch = ids[n:n + _CHUNK]
+        part = junit.with_name(f"{junit.stem}-{n // _CHUNK}{junit.suffix}")
+        subprocess.run(
+            [sys.executable, "-m", "pytest", *batch, "-q", "--tb=no", "-p", "no:cacheprovider",
+             f"--junitxml={part}"],
+            cwd=ROOT, capture_output=True, text=True, env=_keyless_env(src_from))
+        out.update(parse_junit(part, batch))
+    return out
 
 
 def parse_junit(path: Path, ids: "list[str]") -> dict:
@@ -310,7 +330,15 @@ def parse_junit(path: Path, ids: "list[str]") -> dict:
             resolved[i] = out[i]
             continue
         f = i.split("::", 1)[0].replace("\\", "/")
-        resolved[i] = "error" if any(f in e or e in f for e in errored_files) else "missing"
+        # EXACT EQUALITY. A substring test makes `tests/test_a.py` match `other/tests/test_a.py`, so
+        # one file's ImportError would be reported for another's ids -- `error` (inconclusive, ship a
+        # mutant) where the honest answer is `missing` (this harness asked for something that does
+        # not exist). The first draft of that fix hedged with `endswith("/" + f)` in case junit ever
+        # reported an absolute path, and reintroduced the identical bug one suffix over; the cell
+        # below caught it. Both sides are rootdir-relative by construction -- junit's collection-error
+        # `name` is the collector's node id, and `collect_ids` runs with cwd=ROOT -- and if that ever
+        # stopped being true, equality fails to `missing`, which is the LOUD direction.
+        resolved[i] = "error" if f in errored_files else "missing"
     return resolved
 
 
@@ -354,7 +382,7 @@ def main() -> int:
                     mutations_shipped=bool(mutations))
         return _report(v)
 
-    with tempfile.TemporaryDirectory(prefix="red-in-ci-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="red-in-ci-", ignore_cleanup_errors=True) as tmp:
         tree = Path(tmp) / "base"
         _git("worktree", "add", "--detach", str(tree), base_sha)
         try:

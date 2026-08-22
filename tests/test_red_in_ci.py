@@ -271,6 +271,59 @@ def test_a_collection_error_is_an_error_and_a_failure_is_a_failure(tmp_path: Pat
     assert got["tests/test_z.py::test_d"] == "missing"
 
 
+def test_a_collection_error_reaches_only_its_OWN_files_ids() -> None:
+    """Path-SEGMENT equality, not `in`. A substring test makes `tests/test_a.py` match
+    `other/tests/test_a.py`, so one file's ImportError would be published as another file's -- `error`
+    (inconclusive, ship a mutant) where the honest answer is `missing` (this harness asked for
+    something that does not exist)."""
+    import tempfile
+    junit = Path(tempfile.mkdtemp()) / "j.xml"
+    junit.write_text(
+        '<testsuites><testsuite>'
+        '<testcase classname="" name="other/tests/test_a.py"><error>ImportError</error></testcase>'
+        '</testsuite></testsuites>', encoding="utf-8")
+    got = R.parse_junit(junit, ["tests/test_a.py::t", "other/tests/test_a.py::t",
+                                "tests/test_ab.py::t"])
+    assert got == {"tests/test_a.py::t": "missing",
+                   "other/tests/test_a.py::t": "error",
+                   "tests/test_ab.py::t": "missing"}, got
+
+
+def test_a_collected_line_must_look_like_a_node_id() -> None:
+    """`pytest -q --collect-only` also prints a warnings summary, and a warning that NAMES a node id
+    would otherwise enter `new_ids` as a test present in neither run -- which the gate reads as a
+    harness failure. Loud, but for something nobody could act on."""
+    matched = [l for l in [
+        "tests/test_a.py::test_b",
+        "tests/test_a.py::TestC::test_d[a real cost]",
+        "  /path/site-packages/x.py:12: PytestUnraisableWarning: tests/test_a.py::test_b leaked",
+        "1612 tests collected in 3.42s",
+        "",
+        "ERROR tests/test_a.py - ImportError: no module named q",
+    ] if R._NODE_ID.match(l.strip())]
+    assert matched == ["tests/test_a.py::test_b",
+                       "tests/test_a.py::TestC::test_d[a real cost]"], matched
+
+
+def test_the_ids_are_chunked_so_a_command_line_has_a_length(monkeypatch, tmp_path: Path) -> None:
+    """Windows caps a command at 8191 characters and an id here averages ~90. Unchunked, a PR adding
+    a hundred parametrize cells would fail with an OS error instead of returning a verdict."""
+    batches: list = []
+
+    def _fake_run(argv, **kw):
+        batches.append([a for a in argv if "::" in a])
+        return None
+
+    monkeypatch.setattr(R.subprocess, "run", _fake_run)
+    monkeypatch.setattr(R, "parse_junit", lambda p, ids: {i: "passed" for i in ids})
+    monkeypatch.setattr(R, "_CHUNK", 3)
+    ids = [f"tests/test_x.py::test_{n}" for n in range(7)]
+    got = R.run_ids(ids, src_from=None, junit=tmp_path / "j.xml")
+    assert [len(b) for b in batches] == [3, 3, 1], batches
+    assert [i for b in batches for i in b] == ids, "chunking dropped or reordered ids"
+    assert set(got) == set(ids), "a chunk's outcomes did not reach the merged result"
+
+
 def test_the_diff_scan_reads_ADDED_lines_only() -> None:
     """A removed `def test_` or an unchanged context line must not satisfy the cross-check, or the
     harness guard fires on a PR that deleted a test."""
@@ -351,6 +404,39 @@ def test_the_junit_pin_notices_an_error_folded_into_a_failure(monkeypatch, tmp_p
                     'kind = "error"\n            elif case.find("failure") is not None:',
                     'kind = "failed"\n            elif case.find("failure") is not None:')
     print(assert_red(test_a_collection_error_is_an_error_and_a_failure_is_a_failure, tmp_path))
+
+
+def test_the_junit_pin_notices_a_substring_match_borrowing_another_files_error(monkeypatch) -> None:
+    mutate_function(monkeypatch, R, "parse_junit",
+                    'resolved[i] = "error" if f in errored_files else "missing"',
+                    'resolved[i] = "error" if any(f in e or e in f\n'
+                    '                                     for e in errored_files) else "missing"')
+    print(assert_red(test_a_collection_error_reaches_only_its_OWN_files_ids))
+
+
+def test_the_junit_pin_notices_the_SUFFIX_hedge_that_actually_shipped(monkeypatch) -> None:
+    """Not a hypothetical mutation -- this exact expression was the first draft of the fix for the
+    substring bug, and it reintroduced it one suffix over. Armed so the hedge cannot come back as a
+    plausible-looking defence against an absolute path."""
+    mutate_function(monkeypatch, R, "parse_junit",
+                    'resolved[i] = "error" if f in errored_files else "missing"',
+                    'resolved[i] = "error" if any(e == f or e.endswith("/" + f)\n'
+                    '                                     for e in errored_files) else "missing"')
+    print(assert_red(test_a_collection_error_reaches_only_its_OWN_files_ids))
+
+
+def test_the_collect_pin_notices_a_warnings_line_becoming_a_test_id(monkeypatch) -> None:
+    from _arming import mutate_value
+    import re as _re
+    mutate_value(monkeypatch, R, "_NODE_ID", _re.compile(r"^.*\.py::\S.*$"))
+    print(assert_red(test_a_collected_line_must_look_like_a_node_id))
+
+
+def test_the_chunking_pin_notices_one_unbounded_command_line(monkeypatch, tmp_path: Path) -> None:
+    mutate_function(monkeypatch, R, "run_ids",
+                    "for n in range(0, len(ids), _CHUNK):\n        batch = ids[n:n + _CHUNK]",
+                    "for n in [0]:\n        batch = ids")
+    print(assert_red(test_the_ids_are_chunked_so_a_command_line_has_a_length, monkeypatch, tmp_path))
 
 
 def test_the_vocabulary_pin_notices_a_loud_verdict_with_no_remedy(monkeypatch) -> None:
