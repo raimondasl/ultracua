@@ -112,6 +112,16 @@ jobs:
           tests/mutations/write_class.py
           --tests tests/test_write_class.py tests/test_auth_retry_truth_table.py
 
+      # A FIFTH registry. These attack the door Policy table's load-bearing claims and the daemon's
+      # closed sets — in BOTH directions, because a validator that refuses everything satisfies every
+      # "is it refused?" cell ever written and takes the daemon offline.
+      - name: Apply every door-policy mutation
+        timeout-minutes: 10
+        run: >
+          uv run --group bench --group providers --group mcp python scripts/prove_red.py
+          tests/mutations/door_policy.py
+          --tests tests/test_door_policy.py
+
   # RED-IN-CI (reshape-plan 0.4b). "Verify a regression test fails against the old code" has been in
   # CLAUDE.md since round 1 and has caught several no-op fixes BY HAND. This is the hand-check as a job:
   # difference this branch's pytest collection against the base's, run the NEW ids twice -- once against

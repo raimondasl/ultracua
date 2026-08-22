@@ -593,6 +593,28 @@
    "pins": [
     "tests/test_red_in_ci.py"
    ]
+  },
+  {
+   "id": "R4.83",
+   "status": "fixed",
+   "severity": "medium",
+   "class": "silent-degradation",
+   "summary": "The daemon's `run` method read `if params.get(\"grounding\") == \"anthropic\"` — an equality test against ONE literal, with `grounding = None` as the fall-through. So a typo, or a backend that does not exist yet, disabled grounding entirely: the caller asked for it, the run proceeded without it, and nothing said so. Inviolable #2 in one operator. Found by 1.7 while adding the closed-set validation the plan asked for on `mode`/`provider`; `grounding` was the third one in the same shape and the only one that was silent. FIXED at 0.117.0 — `GROUNDINGS` is a set and an out-of-set value is refused with a reason. Both directions are armed (`tests/mutations/door_policy.py`), because a validator that refuses EVERYTHING satisfies every 'is it refused?' cell and takes the daemon offline",
+   "pins": [
+    "tests/test_door_policy.py",
+    "tests/mutations/door_policy.py"
+   ]
+  },
+  {
+   "id": "R4.84",
+   "status": "open",
+   "severity": "medium",
+   "class": "d",
+   "summary": "THREE DOORS CAN RE-PERFORM A WRITE BY RE-AUTHORING A FLOW, and they are exactly the three with no flow-level gates: `cli_root`, `daemon_run` and `run_many`. In `mode=\"auto\"` a replay that fails irrecoverably falls through to a full re-author (`flow.run_cached`'s \"auto-mode replay failed irrecoverably -> fall through to a fresh learn run\"), and re-authoring a write flow performs the write again. The gated doors cannot: `flows.replay` reaches only `replay`/`repair`, neither of which falls through. The one gated door that can is `flows.learn`, where a write fires ONCE by design and R3.13's terminal refusal bounds runs 2..N. MEASURED and printed by `tests/test_door_policy.py::test_the_printed_policy_table` at 0.117.0",
+   "disposition": "RECORDED, NOT CHANGED, and deliberately. Closing it means adding a refusal — either narrowing `auto` at three doors or gating the fall-through on a write signal — and `reshape-plan`'s standing rule is that a migration step adds NO refusal. It is also the D0 shape: the only pre-act write signal available at these doors is the keyword classifier, measured at 28% false positives, so a refusal keyed on it would break a large read population. What 1.7 buys is that the decision is now a printed row somebody can point at rather than a branch nobody had read. A real fix wants a door-level `Policy` the engine CONSULTS, which is Phase 3 territory",
+   "pins": [
+    "tests/test_door_policy.py"
+   ]
   }
  ]
 }
