@@ -1,81 +1,100 @@
-"""Mutations for reshape-plan step 1.1 — the keyword-only engine chain.
+"""Mutations for the engine chain's shape — reshape-plan steps 1.1 and 1.8.
 
-Applied by `scripts/prove_red.py` to a scratch copy of `src/`, so these reach `flow.py` for real
-rather than in-process. The plan's own acceptance for 1.1 is "shown RED against a mis-keyed scratch
-copy"; this is that, standing rather than taken once.
+Applied by `scripts/prove_red.py` to a scratch copy of `src/`, so these reach `flow.py` for real.
 
-WHAT EACH ONE ATTACKS. The arity pin and the forwarding pins are DIFFERENT sensors and the split is
-deliberate — `_replay(..., on_step=finalize, finalize=on_step)` satisfies the arity pin completely,
-which is the critic's clause on this step. Three of the seven below are exactly that shape: a
-type-silent swap between two parameters that both accept `None`, both accept a callable, or are both
-`str`. If any of them survives, the pin that was supposed to see it does not.
+RE-EXPRESSED AT 1.8, and the way they came due is worth the line: 1.8 moved every call site, so all
+seven of 1.1's find-texts stopped matching at once. `prove_red` reported them as ERRORS rather than
+as survivors — which is exactly the rule the harness exists for, because a stale mutation silently
+reports the suite as stronger than it is.
+
+WHAT THEY ATTACK NOW. 1.1's risk was ORDER: a positional argument list where two swappable values
+are the same type. 1.8's risk is REACH: two bundles hand every inner function all twenty-one values,
+so the withholding a signature used to enforce is now enforced by nothing but a test. Both families
+are below.
 
 (id, module-relative path, find, replace, why it must not survive)
 """
 
 MUTANTS = [
-    (
-        "a_type_silent_swap_at_the_four_none_site",
-        "flow.py",
-        "        on_step=None,           # the caller's progress callback is not this verification's business\n"
-        "        prepare=prepare,",
-        "        on_step=prepare,\n"
-        "        prepare=None,",
-        "the exact defect 1.1 exists to prevent, at the exact line the critic named: `on_step` and "
-        "`prepare` are both Optional callables, so nothing in the type system separates the right "
-        "order from the wrong one. The runtime identity cell must see it arrive under the wrong name.",
-    ),
+    # ---- 1.1's family: the SHAPE of the signatures ------------------------------------------
     (
         "the_star_walks_back_out_of_learn",
         "flow.py",
-        "async def _learn(\n    url: str,\n    *,\n    goal: str,",
-        "async def _learn(\n    url: str,\n    goal: str,",
-        "the whole of step 1.1 for `_learn`: without the `*`, `goal` and `key` may be passed "
-        "positionally again and the type-silent str/str/str swap is back.",
+        "async def _learn(\n    url: str, *, opts: RunOptions,",
+        "async def _learn(\n    url: str, opts: RunOptions,",
+        "without the `*` the bundles may be passed positionally again, and `opts`/`hooks` are two "
+        "adjacent objects that no type error separates — the 1.1 swap in its 1.8 clothes.",
     ),
     (
         "a_positional_creeps_into_the_prefix",
         "flow.py",
-        "async def _replay_step(\n    session: BrowserSession,\n    step: CachedStep,\n    *,\n    provider: Optional[Provider],",
-        "async def _replay_step(\n    session: BrowserSession,\n    step: CachedStep,\n    provider: Optional[Provider],\n    *,",
-        "the prefix table is what stops the `*` drifting one parameter at a time. This one is legal "
-        "under the same-type rule, so ONLY the committed table can catch it — which is why the table "
-        "is committed rather than derived from the rule alone.",
-    ),
-    (
-        "an_undeclared_drop",
-        "flow.py",
-        "            on_step=on_step, grounding=grounding,\n        )",
-        "            on_step=on_step,\n        )",
-        "a parameter that stops being forwarded takes its DEFAULT silently. Here the learn path would "
-        "quietly lose its grounding model. DELIBERATE_DROPS is asserted both ways for this.",
-    ),
-    (
-        "a_forward_silently_renamed",
-        "flow.py",
-        "storage_state=storage_state, verify_replay=verify_replay, samples=samples,\n            reflect=reflect,",
-        "storage_state=storage_state, verify_replay=verify_replay, samples=samples,\n            reflect=verify_replay,",
-        "two bools, so the swap is type-silent and best-of-N would reflect whenever verification was "
-        "on. Both the RENAMED table and the runtime identity cell should see it.",
+        "    session: BrowserSession, step: CachedStep, *, opts: RunOptions,",
+        "    session: BrowserSession, step: CachedStep, opts: RunOptions, *,",
+        "the prefix table is what stops the `*` drifting one parameter at a time. Legal under the "
+        "same-type rule, so ONLY the committed table can catch it.",
     ),
     (
         "a_str_for_str_swap_the_arity_pin_cannot_see",
         "flow.py",
-        "                session, step, provider=provider, tr=tr, goal=goal, governor=governor, scope=scope,",
-        "                session, step, provider=provider, tr=tr, goal=scope, governor=governor, scope=goal,",
+        "                session, step, opts=opts, provider=provider, tr=tr, goal=goal, scope=scope, idx=i,",
+        "                session, step, opts=opts, provider=provider, tr=tr, goal=scope, scope=goal, idx=i,",
         "`goal` and `scope` are both `str` and both forwarded by keyword, so the arity pin is fully "
         "satisfied. The RENAMED table is the only sensor that can fail for it.",
     ),
     (
         "the_subject_stops_being_the_subject",
         "flow.py",
-        "        report = await _replay(\n            url, key=key, flow=cached,",
-        "        report = await _replay(\n            goal, key=key, flow=cached,",
+        "        report = await _replay(\n            url, opts=opts, hooks=hooks,",
+        "        report = await _replay(\n            goal, opts=opts, hooks=hooks,",
         "the positional subject is the one argument every edge passes and the one the kwarg check "
         "cannot see. `url` and `goal` are both `str`, so replay would navigate to the goal text.",
     ),
+    (
+        "an_undeclared_drop",
+        "flow.py",
+        "                        block_mutations=True,  # a replay-repair must never perform a NEW write",
+        "                        # a replay-repair must never perform a NEW write",
+        "a parameter that stops being forwarded takes its DEFAULT silently — here `block_mutations` "
+        "falls back to False and a suffix-replan may perform a NEW write during a repair.",
+    ),
+
+    # ---- 1.8's family: the REACH of the bundles ----------------------------------------------
+    (
+        "a_function_reads_what_it_never_received",
+        "flow.py",
+        "    max_steps = opts.max_steps or settings.max_steps",
+        "    max_steps = opts.max_steps or settings.max_steps\n    _ = opts.params",
+        "THE CENTRAL RISK OF 1.8. `_learn` never received `params` and must not start reading it "
+        "merely because a bundle made it reachable. A signature used to enforce that; nothing does "
+        "now except the pin.",
+    ),
+    (
+        "r412_gets_quietly_fixed",
+        "flow.py",
+        "        hooks=hooks.without(\"pre_write\"),",
+        "        hooks=hooks,",
+        "R4.12 is OPEN and must stay open through a migration. Handing the learn path `pre_write` "
+        "closes it as a SIDE EFFECT, and a silent fix inside a refactor is as unreviewable as a "
+        "silent break — the plan's own row says `preserved, not fixed`.",
+    ),
+    (
+        "the_replan_acquires_a_grounding_model",
+        "flow.py",
+        "                        opts=opts.without(\"grounding\"), hooks=hooks,",
+        "                        opts=opts, hooks=hooks,",
+        "`_replay` never received `grounding`, so its suffix-replan never had one. The bundle makes "
+        "it reachable; dropping the clearing hands the replan a vision model it has never had.",
+    ),
+    (
+        "a_verification_run_starts_carrying_the_callers_hooks",
+        "flow.py",
+        "        hooks=hooks.without(\"on_step\", \"finalize\", \"pre_write\"),",
+        "        hooks=hooks.without(\"on_step\", \"pre_write\"),",
+        "the verification replay is supposed to make NO paid call. Letting `finalize` through means "
+        "every verify-by-replay runs the caller's extraction — a silent cost, and the kind of "
+        "withdrawal that used to be a `None` nine arguments deep and is now a named clearing.",
+    ),
 ]
 
-# Empty, and it must stay that way: an entry here is a hole in the matrix with a reason attached, not
-# a bug in the mutation. A mutation whose find-text no longer matches is reported as an ERROR.
+# Empty, and it must stay that way: an entry here is a hole in the matrix with a reason attached.
 KNOWN_SURVIVORS: dict = {}

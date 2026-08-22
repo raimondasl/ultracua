@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import MISSING, dataclass, field, fields, replace
 from typing import Any, Awaitable, Callable, Optional
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -95,6 +95,89 @@ class FlowReport:
 MODES = frozenset({"auto", "learn", "replay", "repair"})
 
 
+@dataclass(frozen=True)
+class RunHooks:
+    """The CALLBACKS a caller supplies. Things the engine invokes at a point in the run.
+
+    Separate from `RunOptions` because the failure modes differ in kind. A wrong option is usually
+    loud — the wrong window size, a missing header, a run that does not start. A DROPPED HOOK IS
+    SILENT: the run still succeeds and the caller's callback simply never fires. That asymmetry is
+    why `tests/test_hook_fire_counts.py` counts these per mode against a table captured BEFORE this
+    refactor, and why all five are grouped where a reader can see them at once.
+    """
+
+    on_step: Optional[OnStep] = None          # after each step, with its StepTrace
+    prepare: Optional[Prepare] = None         # once, after the first navigation
+    finalize: Optional[Finalize] = None       # once, at the end — a read's extraction lives here
+    # A8: probed ONCE, just before the FIRST write of the run actuates. The whole-flow (Phase D)
+    # confirm needs an absent->present TRANSITION for the same reason the per-write barrier does — a
+    # confirm that was already true is not evidence THIS write landed.
+    pre_write: Optional[Prepare] = None
+    # Consulted only while AUTHORING, and only when the agent took steps without emitting `done`.
+    verifier: Optional[Verifier] = None
+
+    def without(self, *names: str) -> "RunHooks":
+        """A copy with these hooks cleared. THE ONLY WAY a path may decline to offer one.
+
+        Before this, a path that did not want a hook passed `None` at a call site nine arguments
+        deep in a positional list — invisible unless you counted. Now it is a named verb with the
+        names in it, and `tests/test_engine_chain_is_keyword_only.py` holds the table of which path
+        clears what, asserted BOTH ways.
+        """
+        return replace(self, **{n: None for n in names})
+
+
+@dataclass(frozen=True)
+class RunOptions:
+    """The CONFIGURATION of one run: everything that is neither the subject nor a callback.
+
+    `run_cached`'s public keyword signature is unchanged — it builds one of these and threads it
+    through instead of re-listing twenty scalars at every inner call. `governor` is the RESOLVED one
+    (`run_cached` defaults it before constructing this), so an inner function never has to ask
+    whether it got one.
+
+    A BUNDLE MAKES AVAILABLE WHAT A PARAMETER LIST WITHHELD, and that is this step's central risk:
+    `_learn` never received `params` or `dry_run` and must not start reading them just because they
+    now travel in the same object. What keeps that honest is not this docstring — it is
+    `test_no_engine_function_reads_more_than_it_used_to_receive`, which derives every `opts.X` and
+    `hooks.X` each function reads and compares it to the parameter list that function had before
+    1.8, both ways.
+    """
+
+    governor: PacingGovernor
+    max_steps: Optional[int] = None
+    headless: Optional[bool] = None
+    browser: Optional[Any] = None
+    grounding: Optional[Any] = None
+    record_har_path: Optional[str] = None
+    extra_headers: Optional[dict] = None
+    storage_state: Optional[str] = None
+    window_size: Optional[tuple[int, int]] = None
+    verify_replay: bool = False
+    samples: int = 1
+    reflect: bool = False
+    params: Optional[dict] = None
+    # B2: runtime SECRET VALUES (`flows._secret_values`) scrubbed from every Observation before it
+    # can reach a provider. `SNAPSHOT_JS` masks `input[type=password]` on its own; this covers a
+    # `$secret_env` token typed into a PLAIN text input, which nothing in the DOM marks as sensitive.
+    redact: tuple = ()
+    # H5: a `dryrun.DryRunArbiter`, not a bool — the CALLER owns the arbiter so it can read the held
+    # writes afterwards, and so the object that made the hold guarantee is the one that reports it.
+    dry_run: Optional[object] = None
+    # B1: routers this run will spend through that the engine cannot otherwise see. The one that
+    # matters is the extraction router `flows.py` builds for a data replay and hands over inside the
+    # `finalize` closure: on `mode="replay"` the agent provider is nulled, so without this the run
+    # would observe no router at all and report a CONFIDENT ZERO over real spending. Deduplicated by
+    # identity — the agent's router and the extraction router are usually the same object.
+    aux_routers: tuple = ()
+
+    def without(self, *names: str) -> "RunOptions":
+        """A copy with these options reset to their declared defaults. See `RunHooks.without`."""
+        blank = {f.name: (f.default_factory() if f.default_factory is not MISSING else f.default)
+                 for f in fields(self)}
+        return replace(self, **{n: blank[n] for n in names})
+
+
 async def run_cached(
     url: str,
     goal: str,
@@ -162,7 +245,20 @@ async def run_cached(
         raise ValueError(
             f"unknown mode {mode!r} — expected one of {sorted(MODES)}. Refusing rather than guessing: "
             f"this used to fall through to a full re-author, which re-performs a cached flow's write.")
+    # THE PUBLIC KEYWORDS BECOME TWO OBJECTS, HERE AND NOWHERE ELSE (step 1.8). `run_cached`'s
+    # signature above is unchanged, so a caller sees the flat keywords and every inner function sees
+    # the bundles; this is the one place that knows both shapes. `governor` is resolved BEFORE the
+    # bundle is built, so no inner function has to ask whether it got one.
     governor = governor or PacingGovernor()
+    opts = RunOptions(
+        governor=governor, max_steps=max_steps, headless=headless, browser=browser,
+        grounding=grounding, record_har_path=record_har_path, extra_headers=extra_headers,
+        storage_state=storage_state, window_size=window_size, verify_replay=verify_replay,
+        samples=samples, reflect=reflect, params=params, redact=redact, dry_run=dry_run,
+        aux_routers=aux_routers,
+    )
+    hooks = RunHooks(on_step=on_step, prepare=prepare, finalize=finalize, pre_write=pre_write,
+                     verifier=verifier)
     key = flow_key(goal, url, scope)
     cached = cache.get(key)
     new_run_id()
@@ -179,12 +275,8 @@ async def run_cached(
         # NO fall-through to a full re-author — the caller owns whole-flow relearn (and its metadata).
         heal_provider = provider if mode in ("auto", "repair") else None
         report = await _replay(
-            url, key=key, flow=cached, cache=cache, provider=heal_provider, headless=headless,
-            on_step=on_step, prepare=prepare, finalize=finalize, goal=goal, governor=governor,
-            scope=scope, browser=browser, record_har_path=record_har_path,
-            extra_headers=extra_headers, storage_state=storage_state, window_size=window_size,
-            params=params, dry_run=dry_run, pre_write=pre_write, redact=redact,
-            aux_routers=aux_routers,
+            url, opts=opts, hooks=hooks, key=key, flow=cached, cache=cache,
+            provider=heal_provider, goal=goal, scope=scope,
         )
         if report.success or mode in ("replay", "repair") or report.mode == "escalate":
             return report
@@ -216,20 +308,18 @@ async def run_cached(
         return FlowReport(mode="miss", success=False, note="learn requires a provider or grounding")
     if samples and samples > 1:  # best-of-N: re-author up to N times, keep the first verified sample
         return await _learn_n(
-            url, goal=goal, key=key, provider=provider, cache=cache, max_steps=max_steps,
-            headless=headless, on_step=on_step, prepare=prepare, finalize=finalize,
-            governor=governor, scope=scope, browser=browser, verifier=verifier,
-            grounding=grounding, record_har_path=record_har_path, extra_headers=extra_headers,
-            storage_state=storage_state, verify_replay=verify_replay, samples=samples,
-            reflect=reflect, window_size=window_size, redact=redact, aux_routers=aux_routers,
+            url, opts=opts, hooks=hooks, goal=goal, key=key, provider=provider, cache=cache,
+            scope=scope,
         )
     return await _learn(
-        url, goal=goal, key=key, provider=provider, cache=cache, max_steps=max_steps,
-        headless=headless, on_step=on_step, prepare=prepare, finalize=finalize, governor=governor,
-        scope=scope, browser=browser, verifier=verifier, grounding=grounding,
-        record_har_path=record_har_path, extra_headers=extra_headers, storage_state=storage_state,
-        verify_replay=verify_replay, window_size=window_size, redact=redact,
-        aux_routers=aux_routers,
+        url, opts=opts,
+        # R4.12, PRESERVED NOT FIXED. `_learn` never received `pre_write`, so its whole-flow confirm
+        # is a bare presence check rather than an absent->present transition. It used to be a missing
+        # argument in a 23-item list; it is now a NAMED clearing with the finding id on it. Bundling
+        # without this would have CLOSED R4.12 as a side effect of a migration, and a silent fix is
+        # as unreviewable as a silent break.
+        hooks=hooks.without("pre_write"),
+        goal=goal, key=key, provider=provider, cache=cache, scope=scope,
     )
 
 
@@ -308,9 +398,8 @@ def _write_owner(act_open: bool, cur_i: int, live_tails: "set[int]") -> int:
 
 
 async def _author_steps(
-    session: BrowserSession, *, goal: str, provider: Optional[Provider], governor: PacingGovernor,
-    max_steps: int, on_step: Optional[OnStep] = None, grounding: Optional[Any] = None,
-    block_mutations: bool = False,
+    session: BrowserSession, *, opts: RunOptions, hooks: RunHooks, goal: str,
+    provider: Optional[Provider], max_steps: int, block_mutations: bool = False,
 ) -> "tuple[list[CachedStep], bool, int, list[StepTrace], bool, bool]":
     """Drive the agent from the CURRENT page to author replayable steps toward `goal`.
 
@@ -419,13 +508,13 @@ async def _author_steps(
         obs.webmcp_tools = await _webmcp_detect(session.page)
 
         t0 = time.perf_counter()
-        if not obs.elements and grounding is not None:
-            action, ttft = await _vision_decide(session, goal, grounding, tr)
+        if not obs.elements and opts.grounding is not None:
+            action, ttft = await _vision_decide(session, goal, opts.grounding, tr)
         elif provider is not None:
             action, ttft = await provider.decide(goal, obs, history)
             if action.action == "need_vision":
-                if grounding is not None:
-                    action, ttft = await _vision_decide(session, goal, grounding, tr)
+                if opts.grounding is not None:
+                    action, ttft = await _vision_decide(session, goal, opts.grounding, tr)
                 else:
                     action = Action(action="give_up", intent="vision requested but unavailable")
         else:
@@ -443,8 +532,8 @@ async def _author_steps(
             success = action.action == "done"
             tr.meta["stop"] = action.action
             traces.append(tr)
-            if on_step:
-                on_step(tr)
+            if hooks.on_step:
+                hooks.on_step(tr)
             break
 
         spec = None
@@ -471,8 +560,8 @@ async def _author_steps(
             # A replay-triggered re-author must NOT perform a new write — abort before acting.
             tr.meta["blocked"] = "mutation-under-replan"
             traces.append(tr)
-            if on_step:
-                on_step(tr)
+            if hooks.on_step:
+                hooks.on_step(tr)
             break
         # For a mutating step, record the PRECISE precondition (the target's form/section) now,
         # while the element is still present — the gate checks this at replay.
@@ -513,7 +602,7 @@ async def _author_steps(
         act_window["open"] = True  # OPEN: from here through verify, a wire write is attributed to this act
         with tr.measure("act"):
             try:
-                async with governor.gate(origin):
+                async with opts.governor.gate(origin):
                     await session.act(action)
             except Exception as exc:  # noqa: BLE001
                 ok, note = False, f"{type(exc).__name__}: {exc}"
@@ -558,8 +647,8 @@ async def _author_steps(
             desc += f" {action.text!r}"
         history.append(f"{desc} -> {'ok' if ok else 'FAIL ' + note}")
         traces.append(tr)
-        if on_step:
-            on_step(tr)
+        if hooks.on_step:
+            hooks.on_step(tr)
 
         if no_progress >= settings.stuck_limit:
             tr.meta["stuck"] = no_progress  # bail: agent looping without progress
@@ -744,9 +833,8 @@ async def _author_steps(
 
 
 async def _verify_by_replay(
-    url: str, *, key: str, candidate: CachedFlow, cache: FlowCache, headless: Optional[bool],
-    prepare: Optional[Prepare], governor: PacingGovernor, scope: str, browser: Optional[Any],
-    extra_headers: Optional[dict], storage_state: Optional[str],
+    url: str, *, opts: RunOptions, hooks: RunHooks, key: str, candidate: CachedFlow,
+    cache: FlowCache, scope: str,
 ) -> bool:
     """Re-run a freshly-authored flow 0-LLM on a FRESH session; True iff every step reproduces.
 
@@ -761,58 +849,41 @@ async def _verify_by_replay(
     # None and three of the four accept a callable. Nothing in the type system, the suite or a
     # reviewer's eye separates the right order from a wrong one there.
     report = await _replay(
-        url, key=key, flow=candidate, cache=cache,
-        provider=None,          # 0-LLM: no heal, no replan (see the docstring)
-        headless=headless,
-        on_step=None,           # the caller's progress callback is not this verification's business
-        prepare=prepare,
-        finalize=None,          # no extraction, so this costs no paid call
-        goal=candidate.goal, governor=governor, scope=scope, browser=browser,
-        record_har_path=None,   # a verification run is not the caller's recorded artefact
-        extra_headers=extra_headers, storage_state=storage_state,
+        url,
+        # The six options and three hooks this verification declines, NAMED. They used to be nine
+        # `None`s and six absent arguments in a sixteen-item list; a reader had to count to find
+        # them. A verification run carries no caller artefact, no row params, no dry-run arbiter,
+        # and makes no paid call.
+        opts=opts.without("window_size", "params", "dry_run", "redact", "aux_routers",
+                          "record_har_path"),
+        hooks=hooks.without("on_step", "finalize", "pre_write"),
+        key=key, flow=candidate, cache=cache,
+        provider=None,                  # 0-LLM: no heal, no replan (see the docstring)
+        goal=candidate.goal, scope=scope,
     )
     return report.success
 
 
 async def _learn(
-    url: str,
-    *,
-    goal: str,
-    key: str,
-    provider: Provider,
-    cache: FlowCache,
-    max_steps: Optional[int],
-    headless: Optional[bool],
-    on_step: Optional[OnStep],
-    prepare: Optional[Prepare],
-    finalize: Optional[Finalize],
-    governor: PacingGovernor,
-    scope: str,
-    browser: Optional[Any] = None,
-    verifier: Optional[Verifier] = None,
-    grounding: Optional[Any] = None,
-    record_har_path: Optional[str] = None,
-    extra_headers: Optional[dict] = None,
-    storage_state: Optional[str] = None,
-    verify_replay: bool = False,
-    reflections: Optional[list] = None,
-    window_size: Optional[tuple[int, int]] = None,
-    redact: tuple = (),
-    aux_routers: tuple = (),
+    url: str, *, opts: RunOptions, hooks: RunHooks, goal: str, key: str, provider: Provider,
+    cache: FlowCache, scope: str, reflections: Optional[list] = None,
 ) -> FlowReport:
-    max_steps = max_steps or settings.max_steps
-    _usage_watch = UsageTotals.observe(provider, grounding, *aux_routers)  # per-run cost accounting
+    # A LOCAL, not a write back into `opts`: the bundle is frozen and shared, so rebinding it
+    # here would change what a LATER call sees. This value went exactly as far as this function
+    # before 1.8 and goes exactly as far now.
+    max_steps = opts.max_steps or settings.max_steps
+    _usage_watch = UsageTotals.observe(provider, opts.grounding, *opts.aux_routers)  # per-run cost accounting
     session = await BrowserSession(
-        headless=headless, browser=browser, record_har_path=record_har_path,
-        storage_state=storage_state, window_size=window_size,
+        headless=opts.headless, browser=opts.browser, record_har_path=opts.record_har_path,
+        storage_state=opts.storage_state, window_size=opts.window_size,
     ).start()
-    session.redact = redact
+    session.redact = opts.redact
     traces: list[StepTrace] = []
     try:
         # Auth/setup headers must be on the context BEFORE the first navigation (e.g. a
         # Magento auto-login header on the initial admin request).
-        if extra_headers:
-            await session.set_extra_http_headers(extra_headers)
+        if opts.extra_headers:
+            await session.set_extra_http_headers(opts.extra_headers)
         # S6/AB-1: the recorder's causal signal, on the AUTHORING path (this function; 0-LLM replay
         # never reaches it). Installed BEFORE the first navigation — an init script applies to future
         # documents only — so a write that leaves in a bare task is distinguishable from one that leaves
@@ -835,8 +906,8 @@ async def _learn(
         nav = StepTrace(index=-1)
         with nav.measure("navigate"):
             await session.goto(url)
-            if prepare:
-                await prepare(session)
+            if hooks.prepare:
+                await hooks.prepare(session)
         traces.append(nav)
 
         if await _is_interstitial(session):
@@ -858,28 +929,28 @@ async def _learn(
             author_goal = goal + "\n\nLESSONS FROM PRIOR FAILED ATTEMPTS (do not repeat these mistakes):\n" + \
                 "\n".join(f"- {r}" for r in reflections)
         steps, success, llm, step_traces, performed_write, write_unattributed = await _author_steps(
-            session, goal=author_goal, provider=provider, governor=governor, max_steps=max_steps,
-            on_step=on_step, grounding=grounding,
+            session, opts=opts, hooks=hooks, goal=author_goal, provider=provider,
+            max_steps=max_steps,
         )
         traces.extend(step_traces)
 
         # The agent didn't cleanly emit `done` but took real steps — ask the verifier whether
         # the goal is actually met (e.g. fast tier solved it but didn't recognize completion).
-        if not success and steps and verifier is not None:
+        if not success and steps and hooks.verifier is not None:
             try:
-                if await verifier(goal, await session.snapshot()):
+                if await hooks.verifier(goal, await session.snapshot()):
                     success = True
             except Exception:  # noqa: BLE001
                 pass
 
-        fin = await finalize(session) if finalize else None
+        fin = await hooks.finalize(session) if hooks.finalize else None
         # A finalize hook may itself signal completion (e.g. a data-read task that "solved" via
         # final full-text extraction without the agent ever emitting `done`) — cache the flow so
         # it can replay. The agent's observation is a short snippet, so this full-text signal is
         # more reliable than an observation-based verifier for retrieval tasks.
         if not success and steps and isinstance(fin, dict) and fin.get("solved"):
             success = True
-        extra = {"finalize": fin} if finalize else {}
+        extra = {"finalize": fin} if hooks.finalize else {}
         final_text = await _body_text(session)
         cached_here = False
         learn_note = ""
@@ -922,12 +993,9 @@ async def _learn(
             # double-submit; they cache on the Phase-D confirm check and are approval-gated. The gate
             # keys off `performed_write` (a write fired on the wire), NOT the recipe's `mutating` flags,
             # which miss Enter-submits and formless JS POSTs.
-            if verify_replay and not performed_write:
-                if await _verify_by_replay(url, key=key, candidate=candidate, cache=cache,
-                                           headless=headless, prepare=prepare, governor=governor,
-                                           scope=scope, browser=browser,
-                                           extra_headers=extra_headers,
-                                           storage_state=storage_state):
+            if opts.verify_replay and not performed_write:
+                if await _verify_by_replay(url, opts=opts, hooks=hooks, key=key,
+                                           candidate=candidate, cache=cache, scope=scope):
                     cache.put(candidate)
                     extra["verify"] = "passed"
                     cached_here = True
@@ -1010,19 +1078,8 @@ async def _reflect(provider: Provider, goal: str, report: FlowReport) -> Optiona
 
 
 async def _learn_n(
-    url: str, *, goal: str, key: str, provider: Provider, cache: FlowCache, max_steps: Optional[int],
-    headless: Optional[bool], on_step: Optional[OnStep], prepare: Optional[Prepare],
-    finalize: Optional[Finalize], governor: PacingGovernor, scope: str, browser: Optional[Any] = None,
-    verifier: Optional[Verifier] = None, grounding: Optional[Any] = None,
-    record_har_path: Optional[str] = None, extra_headers: Optional[dict] = None,
-    storage_state: Optional[str] = None, verify_replay: bool = False, samples: int = 1,
-    reflect: bool = False, window_size: Optional[tuple[int, int]] = None,
-    redact: tuple = (),
-    # APPEND-ONLY, and this comment is why: inserting it above `reflect` put a new parameter in a
-    # slot the dispatch was already filling POSITIONALLY, so `reflect` became `aux_routers` and the
-    # keyword form then collided. Seven tests went red with a TypeError. New parameters on the
-    # positional call chain go at the END.
-    aux_routers: tuple = (),
+    url: str, *, opts: RunOptions, hooks: RunHooks, goal: str, key: str, provider: Provider,
+    cache: FlowCache, scope: str,
 ) -> FlowReport:
     """Best-of-N authoring: re-author up to `samples` times and keep the FIRST sample the verify-by-replay
     oracle confirms. Each attempt is a fresh `_learn` (fresh session -> the LLM resamples at
@@ -1034,8 +1091,8 @@ async def _learn_n(
     (`performed_write`), or an attempt raised — re-authoring after a write would re-submit. Usage is
     reported cumulatively across attempts. (Needs `verify_replay=True` to actually retry.)
     """
-    samples = max(1, samples)
-    _usage_watch = UsageTotals.observe(provider, grounding, *aux_routers)
+    samples = max(1, opts.samples)          # a local, for the reason `_learn` gives
+    _usage_watch = UsageTotals.observe(provider, opts.grounding, *opts.aux_routers)
     last: Optional[FlowReport] = None
     used = 0
     reflections: list = []
@@ -1043,20 +1100,15 @@ async def _learn_n(
         used = attempt + 1
         try:
             last = await _learn(
-                url, goal=goal, key=key, provider=provider, cache=cache, max_steps=max_steps,
-                headless=headless, on_step=on_step, prepare=prepare, finalize=finalize,
-                governor=governor, scope=scope, browser=browser, verifier=verifier,
-                grounding=grounding, record_har_path=record_har_path, extra_headers=extra_headers,
-                storage_state=storage_state, verify_replay=verify_replay,
-                reflections=reflections or None, window_size=window_size, redact=redact,
-                aux_routers=aux_routers,
+                url, opts=opts, hooks=hooks, goal=goal, key=key, provider=provider, cache=cache,
+                scope=scope, reflections=reflections or None,
             )
         except Exception:  # an attempt that raised mid-way may have fired a write — never silently retry
             _log.warning("best-of-N: attempt %d raised — stopping (a write may have fired)", used)
             raise
         if last.extra.get("cached") or last.extra.get("performed_write"):
             break  # THIS attempt cached a (verified) read OR a write fired -> never re-author
-        if reflect and attempt + 1 < samples:  # learn from this failure before the next sample
+        if opts.reflect and attempt + 1 < samples:  # learn from this failure before the next sample
             lesson = await _reflect(provider, goal, last)
             if lesson:
                 reflections.append(lesson)
@@ -1077,35 +1129,14 @@ async def _learn_n(
 
 
 async def _replay(
-    url: str,
-    *,
-    key: str,
-    flow: CachedFlow,
-    cache: FlowCache,
-    provider: Optional[Provider],
-    headless: Optional[bool],
-    on_step: Optional[OnStep],
-    prepare: Optional[Prepare],
-    finalize: Optional[Finalize],
-    goal: str,
-    governor: PacingGovernor,
-    scope: str,
-    browser: Optional[Any] = None,
-    record_har_path: Optional[str] = None,
-    extra_headers: Optional[dict] = None,
-    storage_state: Optional[str] = None,
-    window_size: Optional[tuple[int, int]] = None,
-    params: Optional[dict] = None,
-    dry_run: Optional[object] = None,
-    pre_write: Optional[Prepare] = None,
-    redact: tuple = (),
-    aux_routers: tuple = (),
+    url: str, *, opts: RunOptions, hooks: RunHooks, key: str, flow: CachedFlow,
+    cache: FlowCache, provider: Optional[Provider], goal: str, scope: str,
 ) -> FlowReport:
     session = await BrowserSession(
-        headless=headless, browser=browser, record_har_path=record_har_path,
-        storage_state=storage_state, window_size=window_size, dry_run=dry_run,
+        headless=opts.headless, browser=opts.browser, record_har_path=opts.record_har_path,
+        storage_state=opts.storage_state, window_size=opts.window_size, dry_run=opts.dry_run,
     ).start()
-    session.redact = redact
+    session.redact = opts.redact
     traces: list[StepTrace] = []
     llm = 0
     healed = 0
@@ -1117,15 +1148,15 @@ async def _replay(
     # and reports zeros; a HEAL or suffix-replan does, and its cost was previously invisible — `llm_calls`
     # counts `decide()` calls, which is not a price. Without this no benchmark can put a dollar figure on
     # a recovery. (`_router` is None on the 0-LLM path, so this costs nothing there.)
-    _usage_watch = UsageTotals.observe(provider, *aux_routers)
+    _usage_watch = UsageTotals.observe(provider, *opts.aux_routers)
     try:
-        if extra_headers:
-            await session.set_extra_http_headers(extra_headers)
+        if opts.extra_headers:
+            await session.set_extra_http_headers(opts.extra_headers)
         nav = StepTrace(index=-1)
         with nav.measure("navigate"):
             await session.goto(url)
-            if prepare:
-                await prepare(session)
+            if hooks.prepare:
+                await hooks.prepare(session)
         traces.append(nav)
 
         if await _is_interstitial(session):
@@ -1135,6 +1166,10 @@ async def _replay(
                               extra={"escalate": True,
                                      "usage": _usage_watch.as_dict(settings.model)})
 
+        # ONCE per run. This used to be `pre_write = None` after the first fire — a rebinding of the
+        # function's own parameter, which a frozen shared bundle cannot express and must not: `hooks`
+        # outlives this call, so nulling it there would silence the probe for every later run too.
+        pre_write_fired = False
         for i, step in enumerate(flow.steps):
             tr = StepTrace(index=i)
             tr.meta["intent"] = step.intent
@@ -1160,21 +1195,22 @@ async def _replay(
             # mutation gate passes) and a persistent banner from a previous order satisfies it. Probed once,
             # before the FIRST write of the run — the baseline must be the state before ANY write, not
             # before the last one.
-            if pre_write is not None and step.mutating:
-                await pre_write(session)
-                pre_write = None
+            if hooks.pre_write is not None and step.mutating and not pre_write_fired:
+                await hooks.pre_write(session)
+                # ONCE per run, and a local flag rather than nulling the shared hook: the
+                # baseline must be the state before ANY write, and `hooks` outlives this call.
+                pre_write_fired = True
             ok, note, did_heal = await _replay_step(
-                session, step, provider=provider, tr=tr, goal=goal, governor=governor, scope=scope,
-                idx=i, params=params, dry_run=dry_run,
+                session, step, opts=opts, provider=provider, tr=tr, goal=goal, scope=scope, idx=i,
             )
-            if dry_run is not None and getattr(dry_run, 'aborted', False):
+            if opts.dry_run is not None and getattr(opts.dry_run, 'aborted', False):
                 # A safety abort OUTRANKS the step result: a step can look fine while the arbiter
                 # saw something it could not promise to hold.
                 success = False
-                note = f"dry-run aborted: {dry_run.report.aborted} — {dry_run.report.abort_detail}"
+                note = f"dry-run aborted: {opts.dry_run.report.aborted} — {opts.dry_run.report.abort_detail}"
                 traces.append(tr)
-                if on_step:
-                    on_step(tr)
+                if hooks.on_step:
+                    hooks.on_step(tr)
                 break
             # COMMIT BARRIER: a write with a per-step confirm must show its completion signal TRANSITION to
             # present before we proceed. A failure flips `ok` to False and falls into the existing fail-loud
@@ -1209,8 +1245,8 @@ async def _replay(
             if note:
                 tr.meta["note"] = note
             traces.append(tr)
-            if on_step:
-                on_step(tr)
+            if hooks.on_step:
+                hooks.on_step(tr)
             if not ok:
                 # Suffix-replan: the working prefix (steps[:i]) already drove us here, so re-author
                 # ONLY the broken tail from the current page rather than relearning the whole flow.
@@ -1224,15 +1260,20 @@ async def _replay(
                 # branch over. `flows.replay` already refuses `params` + on_drift="relearn" for exactly
                 # this reason; that refusal lived in the wrapper and never in the mechanism, so the raw
                 # exported `run_cached`/`run_many` reached it unguarded.
-                if provider is not None and not step.mutating and not params:
+                if provider is not None and not step.mutating and not opts.params:
                     _log.warning(
                         "replay: step %d %r failed (%s) — suffix-replanning the tail",
                         i, step.intent, note,
                     )
                     (new_steps, authored_ok, replan_llm, replan_traces, _replan_wrote,
                      _replan_unattr) = await _author_steps(
-                        session, goal=goal, provider=provider, governor=governor,
-                        max_steps=settings.max_steps, on_step=on_step,
+                        session,
+                        # A suffix-replan has no grounding model, and never had one -- `_replay` does
+                        # not receive it. NAMED here, because a bundle makes available what a
+                        # parameter list withheld, and that silence is what this step must not lose.
+                        opts=opts.without("grounding"), hooks=hooks,
+                        goal=goal, provider=provider,
+                        max_steps=settings.max_steps,
                         block_mutations=True,  # a replay-repair must never perform a NEW write
                     )
                     llm += replan_llm
@@ -1264,12 +1305,12 @@ async def _replay(
                 _log.warning("replay: step %d %r failed: %s", i, step.intent, note)
                 break
 
-        fin = await finalize(session) if finalize else None
+        fin = await hooks.finalize(session) if hooks.finalize else None
         # A suffix-replan that reached the data page without the agent emitting `done` still solves
         # the goal when the finalize extraction succeeds — mirror _learn's finalize-solved upgrade.
         if replanned and not success and isinstance(fin, dict) and fin.get("solved"):
             success = True
-        extra = {"finalize": fin} if finalize else {}
+        extra = {"finalize": fin} if hooks.finalize else {}
         # ALWAYS report usage, including the 0-LLM path, where `_router` is None because
         # `run_cached` nulls the heal provider for mode="replay" (flow.py:172). Omitting the key
         # there made "this replay called no LLM" and "no provider was configured" the same
@@ -1320,17 +1361,8 @@ def _select_values(text: Optional[str]):
 
 
 async def _replay_step(
-    session: BrowserSession,
-    step: CachedStep,
-    *,
-    provider: Optional[Provider],
-    tr: StepTrace,
-    goal: str,
-    governor: PacingGovernor,
-    scope: str,
-    idx: int,
-    params: Optional[dict] = None,
-    dry_run: Optional[object] = None,
+    session: BrowserSession, step: CachedStep, *, opts: RunOptions, provider: Optional[Provider],
+    tr: StepTrace, goal: str, scope: str, idx: int,
 ) -> tuple[bool, str, bool]:
     """Replay one cached step. Returns (ok, note, did_heal)."""
     page = session.page
@@ -1342,10 +1374,10 @@ async def _replay_step(
     # actions (a `press` carries a KEY like "Enter", never a slot value). Pre-validated in
     # flows.validate_params; here we only stringify for the fill/select. No slot / no param -> frozen text.
     text = step.text
-    _parameterized = bool(step.slot and params and step.slot in params
+    _parameterized = bool(step.slot and opts.params and step.slot in opts.params
                           and step.action in ("type", "select"))
     if _parameterized:
-        text = str(params[step.slot])
+        text = str(opts.params[step.slot])
 
     # MUTATION GATE — never blind-replay an irreversible action under page drift, and never let
     # an LLM re-drive a write under uncertainty: on drift a mutating step FAILS LOUD (it is not
@@ -1385,13 +1417,13 @@ async def _replay_step(
         # parameterized write thus mints a DISTINCT key per distinct row (so a backend dedupe can't
         # silently drop rows 2..N) and the SAME key on a retry of one row (so a retry dedupes instead of
         # double-writing). None/{} params -> byte-identical to the pre-2a key (frozen writes unchanged).
-        key = idempotency_key(scope, idx, step.intent, slot_values=params)
+        key = idempotency_key(scope, idx, step.intent, slot_values=opts.params)
         tr.meta["idempotency_key"] = key
         await session.set_transient_headers({"Idempotency-Key": key})
-        if dry_run is not None:
+        if opts.dry_run is not None:
             # Opened AFTER the header so the held request carries it: the report can then show that
             # the key `flows.preflight_keys` PREDICTED is the key that actually rode the wire.
-            dry_run.open_window(step=idx, intent=step.intent, key=key,
+            opts.dry_run.open_window(step=idx, intent=step.intent, key=key,
                                 grace_ms=settings.write_window_ms)
 
     # Bounded wait for a mutating step's (possibly async) write to leave the browser before the `finally`
@@ -1420,7 +1452,7 @@ async def _replay_step(
                 action=step.action, intent=step.intent, text=text,
                 coords=step.coords, tool=step.tool, args=step.args,
             )
-            async with governor.gate(origin):
+            async with opts.governor.gate(origin):
                 with tr.measure("act"):
                     try:
                         if step.action == "press" and step.mutating:
@@ -1475,7 +1507,7 @@ async def _replay_step(
                 else:
                     await loc.fill(text or "", timeout=settings.action_timeout_ms)
 
-            async with governor.gate(origin):
+            async with opts.governor.gate(origin):
                 with tr.measure("act"):
                     try:
                         if step.mutating:
@@ -1508,15 +1540,15 @@ async def _replay_step(
         return False, "unreplayable step", False
     finally:
         if step.mutating:
-            if dry_run is not None:
+            if opts.dry_run is not None:
                 # DRAIN BEFORE CLOSING, and the ordering is the subtle part: the `request` event
                 # that `page.expect_request` resolves on fires BEFORE the route handler runs, so at
                 # the moment that context manager returns the HeldWrite may not be recorded yet.
                 # Closing on that signal alone would classify the flow's OWN expected write as
                 # out-of-window and trip `ungated-write` — turning the safest possible flow into an
                 # abort.
-                await dry_run.drain(timeout_ms=write_settle_ms)
-                dry_run.close_window()
+                await opts.dry_run.drain(timeout_ms=write_settle_ms)
+                opts.dry_run.close_window()
             # Restores the flow's BASE headers, it does not clear them — see
             # `BrowserSession.set_transient_headers`.
             await session.set_transient_headers({})
