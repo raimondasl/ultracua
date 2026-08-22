@@ -133,7 +133,7 @@
   {
    "id": "R4.22",
    "status": "open",
-   "summary": "Windows `ERR_NO_BUFFER_SPACE`, **10 occurrences**; socket churn refuted at 0.104.0; occurrence 8 (local) argues local ≠ CI, and occurrence 9 landed on a DOCS-ONLY PR, and occurrence 10's same-run A/B shows the PASSING shard MORE loaded on peak TIME_WAIT, handles, processes and non-paged pool — the countable axis is refuted for both symptom classes; see R4.58"
+   "summary": "Windows `ERR_NO_BUFFER_SPACE`, **11 occurrences**; socket churn refuted at 0.104.0; occurrence 8 (local) argues local ≠ CI, and occurrence 9 landed on a DOCS-ONLY PR, and occurrence 10's same-run A/B shows the PASSING shard MORE loaded on peak TIME_WAIT, handles, processes and non-paged pool — the countable axis is refuted for both symptom classes; see R4.58. **Occurrence 11 (0.115.0, run 32547205251, `test_flows.py::test_mutate_flow_is_approval_gated_by_default` at `Page.goto`) INDEPENDENTLY REPLICATES that A/B on an unrelated PR**: failing shard 1 vs passing shard 2 — TIME_WAIT max 331 vs 361, handles 53112 vs 54894, non-paged pool 225.7 vs 240.5 MB, paged pool 327.3 vs 368.0, processes 154 vs 153. Every countable axis LOWER on the arm that died, with 206 ephemeral TIME_WAIT against 16384 available ports, so exhaustion is not close. The ONE column that points the other way is `chrome_procs` (max 8 vs 5), which is the concurrent-Chromium hypothesis `ci.yml` already names — recorded at its true weight, which with a single pair is an observation and not evidence. The 5 s sampling interval also makes every max a FLOOR on the true peak, so a sub-5 s spike is invisible to this instrument in both arms"
   },
   {
    "id": "R4.23",
