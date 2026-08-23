@@ -1,7 +1,46 @@
 # The reshape plan — stop manufacturing the defect classes
 
-**Status: Phase 0's instruments are BUILT — 0.1 (#168, #170), 0.2a (#171), 0.2b (#172), 0.3 (#175). 0.4-0.7
-are not, and §12 records which of them Phase 1 actually needs (answer: only 0.4).** Researched 2026-08-16
+**STATUS IS DATA, and this table is the only place to read it.** It is rendered from
+`docs/plan/state.json`, and every row is adjudicated against the tree by `tests/test_plan_state.py` —
+a `done` step must have its artifact present, a `pending` or `held` step must have it ABSENT. The four
+tables below keep their reasoning columns; they no longer keep the answer. **This exists because the
+status went stale in the worst possible direction**: 2.1 (B2) merged as PR #189 on 2026-08-20 and
+§13's row naming it as *next* still read "never started" three days and six merged slices later, with
+every row below it marked. The next instruction to act on that table was an instruction to build B2 a
+second time.
+
+<!-- generated:plan-status — edit docs/plan/state.json, then `python scripts/render_plan_status.py --write` -->
+| step | phase | status | landed / trigger | what |
+|---|---|---|---|---|
+| 0 | 0 | done | 2026-08-20 | CI provisioning |
+| 0.1 | 0 | done | #168 #170 | fast tier |
+| 0.2a | 0 | done | #171 | B1's ten filed in the register |
+| 0.2b | 0 | done | #172 | register as structured data |
+| 0.3 | 0 | done | #175 | exit-set matrix over a fake engine |
+| 0.4a | 0 | done | 0.4a | ratchets + red-proof |
+| 0.4b | 0 | done | 0.115.0 | RED-in-CI |
+| 0.5 | 0 | held | held → 1.1 (**fired**) | contract tests for the must-agree pairs |
+| 0.6 | 0 | held | held → 1.5 (**fired**) | scheduled mutation sweep |
+| 0.7 | 0 | held | held → 2.3 (not fired) | shared fixture server |
+| 0.8 | 0 | done | 2026-08-20 | tier marks from an observation |
+| 1.1 | 1 | done | 0.115.0 | keyword-only engine chain |
+| 1.2 | 1 | done | 0.109.0 | `flow release` reaches `release()` |
+| 1.3 | 1 | done | 0.114.0 | a cannot-spend third state |
+| 1.4a | 1 | done | 0.111.0 | distinct refusal codes |
+| 1.4b | 1 | done | #191 | `outcome_of` + the tri-state readers |
+| 1.5 | 1 | done | 0.110.0 | the single-exit RunRecord sink |
+| 1.6 | 1 | done | 0.116.0 | `WriteClass` + `FlowSpec.key` |
+| 1.7 | 1 | done | 0.117.0 | the printed door policy table |
+| 1.8 | 1 | done | 0.118.0 | `RunOptions` / `RunHooks` |
+| 2.1 | 2 | done | #189 | B2 — substrates, reset, readiness, boundary ledger |
+| 2.2 | 2 | done | 0.113.0 | B3 — the outcome vocabulary |
+| 2.3 | 2 | pending | — | B4 — the 14-scenario corpus + server-side oracles |
+| 2.4 | 2 | pending | — | B5 — baseline, nightly, honesty page |
+
+**19 of 24 steps done.** Every row is adjudicated against the tree by `tests/test_plan_state.py` — a `done` step must have its artifact and a `pending`/`held` step must not.
+<!-- /generated:plan-status -->
+
+Researched 2026-08-16
 against `6d2aa90` / 0.108.0, immediately after PR #165 (B1, "the run record") merged. Every `file:line`
 in this document was re-verified against the tree by hand before it landed; where a number comes from a
 measurement made during the analysis and **not** re-run here, it says so. §12 is a SEQUENCING decision and
@@ -320,9 +359,9 @@ change.
 | 0.2b | done #172 | **Register as structured data.** `docs/register/<id>.yaml` (id, title, status, severity, inviolable, class letter, attempts, `blocked_by`, `next_attempt_requires`, pins, disposition); `scripts/render_register.py` generates the index/state blocks; the 4,401 narrative lines move **unchanged** to `docs/register/history/` (frozen, append-only). `D5` becomes a schema rule: open + ≥2 attempts ⇒ `blocked_by` + `next_attempt_requires` required. **(critic)** no line-count target for CLAUDE.md — its operational lessons are the one text every session reliably loads; pin only "no hand-typed counts outside the generated block" | l, k; the 170k-token read | schema (anti-vacuity ≥83 ids, ≥10 open); render byte-equality; rendered counts equal today's; every strict xfail names an open id; a PR that deletes an xfail or adds an id-naming test must flip that id's status in the same diff | S · 1.5 d |
 | 0.3 | done #175 | **Exit-set matrix over a fake engine.** `tests/_fake_engine.py` installed by patching the bindings `flows.py` holds — `run_cached`, `_precheck_done`, `refresh_auth`, `learn`, and **(critic)** `_make_finalize`/`_make_pre_write` so the `out` dict is scripted explicitly; all six added to a module-bindings AST pin. Drives `replay()` through every exit **derived by AST** over its own `raise`/`return` nodes — **(critic)** not a hand list — including preflight refusal, `on_step` raising inside the auth-refresh retry, and record reuse across calls. Fidelity cells for read **and write** shapes against the real engine on existing fixtures. The ten B1 defects become strict-xfail cells RED against main; the vacuous cell gets specific values; the 11 wiring mutants registered and proved killed | g; RED-first for 1.5 | every derived exit hit ≥1 cell (printed); premise counts per cell; fidelity cells; `prove_red` 11/11; xfails machine-checked RED | M · 3–5 d |
 | 0.4 | **done** (0.4a; 0.4b at 0.115.0) | **RED-in-CI + red-proof + ratchets.** Run each PR's *new* test ids against main's `src/` in a worktree; a src-touching PR whose new tests all pass against main fails. **(critic)** ImportError-against-main is *inconclusive*, not a label-shaped opt-out — a PR adding a src module ships a registered mutant instead; the job's self-test is a unit test of its verdict function. `assert_ratchet(name, derived_sites)` fails on growth **and** staleness | g, f | the job asserts it found ≥1 new test when the diff adds `def test_`; each ratchet asserts a minimum hit count first | S · 1.5 d |
-| 0.5 | held -> 1.1 (`_SDK_CTORS` taken at 0.4a) | **Contract tests for every "must agree" pair**; `node --check` over every assembled `*_JS` payload; add `Client` to `_SDK_CTORS` and raise the anti-vacuity threshold (test-only) | l, f | each pair asserts a minimum match count before equality; delta sets frozen | S · 1 d |
-| 0.6 | held -> after 1.5 | **Scheduled mutation sweep (S16).** The nine known mutants + the 11 B1 wiring mutants + generic operators on a frozen hot-file list, one at a time on a scratch copy; weekly; a survivor not in `known_survivors` fails | g, a | `known_survivors` only shrinks; the nine known mutants must be killed every run | M · 2 d |
-| 0.7 | held -> 2.3 | **Shared fixture server** — `serve()` owning the protocol version, the `Content-Length` framing and the synchronous-reveal discipline, plus a `Site` recorder with a `saves` count and the common stubs; migrate ~8 files as proof. **Now evidence-backed (R4.56):** 38 files define a fixture handler, **8 of them write a body with no `Content-Length`**, and a sub-resource that silently fails to load surfaces as a JS `ReferenceError` inside the page rather than as a connection error. That is why the one-line sweep is REFUSED — measured, `HTTP/1.1` buys 8→6 connections per page load (25%) and would leave those 8 files hanging on an unframed body. The seam is the fix: correct by construction for every future fixture, and the 38 migrate as they are touched | g, n | ratchet on files defining their own handler class (only shrinks); collection count unchanged; the `serve()` self-test asserts framing + HTTP/1.1 + a `reveal_sync` page's state present on the FIRST snapshot | M · 3 d |
+| 0.5 | held -> 1.1 — **TRIGGER FIRED** (1.1 landed 0.115.0 without it); `_SDK_CTORS` taken at 0.4a | **Contract tests for every "must agree" pair**; `node --check` over every assembled `*_JS` payload; add `Client` to `_SDK_CTORS` and raise the anti-vacuity threshold (test-only) | l, f | each pair asserts a minimum match count before equality; delta sets frozen | S · 1 d |
+| 0.6 | held -> after 1.5 — **TRIGGER FIRED** (1.5 landed 0.110.0, five slices ago) | **Scheduled mutation sweep (S16).** The nine known mutants + the 11 B1 wiring mutants + generic operators on a frozen hot-file list, one at a time on a scratch copy; weekly; a survivor not in `known_survivors` fails | g, a | `known_survivors` only shrinks; the nine known mutants must be killed every run | M · 2 d |
+| 0.7 | held -> 2.3 — not fired; §13 row 8 lands it there | **Shared fixture server** — `serve()` owning the protocol version, the `Content-Length` framing and the synchronous-reveal discipline, plus a `Site` recorder with a `saves` count and the common stubs; migrate ~8 files as proof. **Now evidence-backed (R4.56):** 38 files define a fixture handler, **8 of them write a body with no `Content-Length`**, and a sub-resource that silently fails to load surfaces as a JS `ReferenceError` inside the page rather than as a connection error. That is why the one-line sweep is REFUSED — measured, `HTTP/1.1` buys 8→6 connections per page load (25%) and would leave those 8 files hanging on an unframed body. The seam is the fix: correct by construction for every future fixture, and the 38 migrate as they are touched | g, n | ratchet on files defining their own handler class (only shrinks); collection count unchanged; the `serve()` self-test asserts framing + HTTP/1.1 + a `reveal_sync` page's state present on the FIRST snapshot | M · 3 d |
 
 ### Phase 1 — bounded `src/` changes (~20–30 days incl. audits)
 
@@ -527,6 +566,13 @@ instead of a queue position.
 
 ### The order
 
+> **SUPERSEDED by §13's re-derived order, and left standing as the record of a decision rather than as
+> a plan.** Its rows carry no status markers on purpose: the answer to "has this shipped" is the STATUS
+> INDEX at the top of this document, generated from `docs/plan/state.json`. Reading a status out of a
+> superseded table is how 2.1 came within one instruction of being built twice.
+
+<!-- order-table:historical -->
+
 | # | Step | Why here | Audits |
 |---|---|---|---|
 | 1 | **0.4a — the ratchet library** | Instrument BEFORE touching `src/`. `assert_ratchet(name, derived_sites)` with the six shapes seeded from a derivation, never a typed number, failing on growth **and** on staleness (a ratchet whose derivation finds zero sites is an ERROR, the rule `prove_red` already applies to a stale mutation). 1.4, 1.5 and 1.6 each name a ratchet; landing it first means their counts are frozen before their own edits move them | — |
@@ -539,6 +585,13 @@ instead of a queue position.
 | 8 | **1.7** *(done, 0.117.0)*, **then 1.8** *(done, 0.118.0)* — **PHASE 1 COMPLETE** | 1.7 made `auto_reauthor_writes=True` a visible decision, and MEASURED it: the three doors that can re-perform a write by re-authoring — `cli_root`, `daemon_run`, `run_many` — are exactly the three with no flow-level gates. Filed as **R4.84**, recorded rather than changed, because closing it is a refusal. The daemon's validation also found a SILENT one: `grounding` was an equality test against one literal, so any other value ran without grounding and said nothing (**R4.83**, fixed). 1.8 moved every call site and was therefore last, in its own PR. **It INVERTED the risk 1.1 addressed**: a parameter list ENFORCED withholding (`_learn` could not read `params`; `_replay` could not read `grounding`) and a bundle does not, so `RECEIVED_BEFORE_1_8` carries that enforcement now — measured, `_learn` reads 14 of the 23 it used to receive and `_verify_by_replay` 0 of 11. The hook-fire counts were captured BEFORE anything moved and are unchanged. R4.12 preserved by a named `hooks.without("pre_write")` rather than closed as a side effect | 1.8 only |
 
 ### The three held steps, and what un-holds them
+
+**TWO OF THE THREE TRIGGERS HAVE SINCE FIRED AND NEITHER STEP WAS TAKEN** (noticed 2026-08-22): 1.1
+landed at 0.115.0 without 0.5, and 1.5 landed at 0.110.0 — five slices before this was written down.
+A hold is a decision to defer *until a named event*; once that event happens, silence is no longer the
+same decision. Both now carry `trigger_fired` in `docs/plan/state.json`, so the index at the top of this
+document states it rather than leaving it to be re-derived by whoever next reads these three bullets.
+Neither is re-opened here — that is a call to make with a slice in hand, not in a documentation fix.
 
 * **0.5 — contract tests for the "must agree" pairs.** Held to land beside **1.1** (both are AST-pin work
   over the same tree). **One line of it is taken early, with 0.4a:** `_SDK_CTORS`
@@ -671,14 +724,31 @@ condition under which building a tool mid-programme is not a detour.
 
 ### The thing this re-derivation found that nobody had asked about
 
-**Phase 2 has never started, and 2.1 (B2) has been unblocked since day one.** Its dependency cell reads
-`nothing in src/`. Every one of the fourteen merged commits has been Phase 0 or Phase 1. The plan's own
-§5 says Phase 2 is *"the benchmark, harness-side, from day 1 (~14 days, parallel)"* — the parallelism
-was priced in and has not happened.
+> **Written 2026-08-19; true for one day. Kept verbatim because the FINDING was right and acted on —
+> B2 merged the next afternoon as PR #189 — and because what happened to this paragraph afterwards is
+> the reason the status index at the top of this document exists.**
+>
+> **Phase 2 has never started, and 2.1 (B2) has been unblocked since day one.** Its dependency cell
+> reads `nothing in src/`. Every one of the fourteen merged commits has been Phase 0 or Phase 1. The
+> plan's own §5 says Phase 2 is *"the benchmark, harness-side, from day 1 (~14 days, parallel)"* — the
+> parallelism was priced in and has not happened.
+>
+> That matters because the benchmark is the stated reason the reshape exists. B2 needs no `src/`
+> change, so it carries **no audit burden at all** — the cost driver this re-price just measured at
+> 1.4x. It is the only remaining work with that property.
 
-That matters because the benchmark is the stated reason the reshape exists. B2 needs no `src/` change,
-so it carries **no audit burden at all** — the cost driver this re-price just measured at 1.4x. It is
-the only remaining work with that property.
+**What actually happened, and it is a defect in this document rather than in the work.** B2 shipped on
+**2026-08-20** — `benchmarks/substrates.py`, the two-substrate compose, `customer_bench.py`, the
+boundary ledger, three test files, 1750 lines — and then **six more slices merged on top of it**, each
+one marking its own row done and none of them touching this one. The row above stayed "never started"
+for three days. It was not ambiguous and nobody had to interpret it: it was simply never re-read.
+
+Two small things made it invisible. The B2 commit **bumped no version** (0.110.0 either side), so the
+usual "which release was this" thread that leads back to a plan row was absent; and the status lived in
+four tables with three different column shapes, so there was no single place a reader could be wrong in
+only one way. Both are now closed by construction — `docs/plan/state.json` is the single status, and
+`tests/test_plan_state.py` requires the TREE to agree with it in **both** directions, so a step whose
+code is present and whose row says pending is a red test naming the step.
 
 ### The re-derived order
 
@@ -691,23 +761,39 @@ the parallel-world figure it says it is. No attempt is made here to re-derive it
 have never been measured against reality, and inventing a new one would be the same typed-number
 failure §13 exists to correct.
 
+<!-- order-table:operative -->
+
 | # | step | why here | audits |
 |---|---|---|---|
 | 0 | **~~CI capacity~~ → CI provisioning** *(done, 2026-08-20)* | PREREQUISITE, and it blocked everything below because 0.8 cannot exist until CI's full run completes. **It was not a capacity problem.** Measured over 58 ubuntu jobs: the SUITE is 12.4–13.8 min, flat, and is the fastest arm; the variance is entirely `playwright install --with-deps chromium`, which killed 8 of 58 jobs (6 of them still inside `apt-get` at the wall, having run ZERO tests). Fix: delete `--with-deps` — it installs nine FONT packages and no libraries. See below and `docs/ci-provisioning.md` | 3 lenses |
 | 1 | **0.8 — marks from an observation** *(done, 2026-08-20)* | the manifest is now built from runs that already happened, CI's four shards included. NOTE the rule this was filed under does NOT authorise it: `manifest_cost.verdict` answers ONE question about merge-mode, and its clause (b) is a merge-specific safety clause that this design preserves by construction rather than trades away. Shipped on its own argument. Zero `src/` | 1 |
-| 2 | **2.1 — B2** | unblocked since day one and never started; zero `src/`, therefore zero audit burden; it is the goal | none |
-| 3 | **1.4 — distinct codes** *(1.4a done, 0.111.0)* | the ONE Phase-1 step B3 waits on. Scope shrank: R4.49 is already closed. **SPLIT IN TWO**: 1.4a is the VOCABULARY (15 classes, 24 sites re-classed, the ratchet, no behaviour change but the codes); 1.4b is the READERS (`outcome_of`, R4.52's tri-state, R4.61). Different blast radii — one changes what a refusal is CALLED, the other what a record MEANS — so the plan's two audits aim at two diffs rather than one | 2 |
+| 2 | **2.1 — B2** *(done, PR #189, 2026-08-20)* | unblocked since day one and never started; zero `src/`, therefore zero audit burden; it is the goal. **Shipped the day after this row was written and the row was not marked for three days** — see the paragraph above, and the status index at the top, which exists because of it. Delivered: the two-substrate compose (Odoo + Gitea, images pinned to a minor, `libfaketime` for Odoo's clock-coupled demo data), both resets, the per-scenario readiness hook, R4.40's not-a-skeleton guard, the boundary ledger, and two smoke scenarios. **No version bump**, which is part of why it went unnoticed | none |
+| 3 | **1.4 — distinct codes** *(1.4a done, 0.111.0; 1.4b done, PR #191)* | the ONE Phase-1 step B3 waits on. Scope shrank: R4.49 is already closed. **SPLIT IN TWO**: 1.4a is the VOCABULARY (15 classes, 24 sites re-classed, the ratchet, no behaviour change but the codes); 1.4b is the READERS (`outcome_of`, R4.52's tri-state, R4.61). Different blast radii — one changes what a refusal is CALLED, the other what a record MEANS — so the plan's two audits aim at two diffs rather than one | 2 |
 | 4 | **2.2 — B3** *(done, 0.113.0)* | unblocked by 1.4, and it consumed 1.4b's seam directly: `ScenarioRun` records the refusal through `outcome_of` rather than stringifying it, and `CODE_FAMILY` is a TOTAL partition of `flows.REGISTRY` so a code minted later fails the suite instead of falling into a default | 1 |
 | 5 | **1.3 — cannot-spend** *(done, 0.114.0)* | completed the accounting story B3 consumes. The third state is DECLARED via `UsageTotals.cannot_spend()` rather than probed, and `accounting_failed` became a run-scoped COUNTER — a sticky bool cannot be deltaed, because two consecutive failures leave it True both times. Measured end to end: `drift_bench` now states its own total as a real `0.0` where it published `null` | 1 |
 | 6 | **0.4b + 1.1** *(done, 0.115.0)* | 1.1's own pin is RED-in-CI. 0.4b shipped `scripts/red_in_ci.py` and measured itself on 1.3: 34 new ids, 10 `guards`. The rows that came back `no_guard` name its two structural limits -- a scan that reads `src/` BY PATH (R4.75) and anything under `benchmarks/`/`scripts/`, which sit at `sys.path[0]` and cannot be swapped by PYTHONPATH at all (R4.77). 1.1 took `engine_positional_params` 98 -> 7, and 7 is the END STATE: each call's subject | 1 |
-| 7 | **1.6 -> 1.7 -> 1.8** | unchanged; 1.6 is the largest ratchet consumer, 1.8 moves every call site and stays last | 2 / 0 / 1 |
+| 7 | **1.6 -> 1.7 -> 1.8** *(done, 0.116.0 / 0.117.0 / 0.118.0 — **PHASE 1 COMPLETE**)* | unchanged; 1.6 is the largest ratchet consumer, 1.8 moves every call site and stays last | 2 / 0 / 1 |
+| 8 | **2.3 — B4** | **NEXT, and the only thing this table still has in it.** The 14-scenario paired corpus, its server-side oracles (SQL for Odoo, API for Gitea) and the Idempotency-Key logging proxy, on top of the substrates 2.1 already built and the vocabulary 2.2 already froze. §7 calls it the long pole and the one where the house rules bite hardest, so **0.7 lands with it** — the shared fixture server's payoff is proportional to fixtures written AFTER it exists, and 14 is by far the largest batch left. It is also the first step that spends real money (§6: ≈$60–250 of one-time core learns) and the first that needs both substrates running | **adversarial pass on this PR** |
+| 9 | **2.4 — B5** | baseline, the nightly, and the honesty page whose open-id list is pinned to the register's open set. Cheap once 2.3 exists, and worth nothing before it | 1 |
 
 **What changed from §12:** 0.8 inserted at the front on measured evidence; 2.1 promoted from "parallel
 someday" to explicitly next, because it is the goal and carries no audit cost; 1.3 moves after B3
 rather than before it. The tail is unchanged, and its reasons are unchanged.
 
+**Rows 8 and 9 were added on 2026-08-22**, when this table ran out of unfinished rows and the only
+place left saying what came next was §5's design table. A table that stops naming the next step is the
+same failure as a row that stops being true; both were found in the same reading.
+
+**Two of §12's three held steps have had their triggers fire, and neither was acted on** (line below
+said "none of which have fired", and that was written when it was true). **0.5** is held to 1.1, which
+landed at 0.115.0; **0.6** is held to *after 1.5*, which landed at 0.110.0 — five slices ago. Both are
+now carried as `trigger_fired: true` in the status index rather than as a sentence, because a held
+step whose trigger has fired is a decision somebody owes, not a state. **0.7**'s trigger is 2.3 and has
+not fired; row 8 above lands it there.
+
 **What did not change and should not be re-litigated:** 1.4 before B3 (the one hard edge in Phase 2);
-0.5 with 1.1, 0.6 after 1.5, 0.7 with 2.3 (§12's triggers, none of which have fired); 1.8 last.
+0.5 with 1.1, 0.6 after 1.5, 0.7 with 2.3 (§12's triggers — ~~none of which have fired~~ **two of the
+three have; see above**); 1.8 last.
 
 ### Step 0 — and it was the wrong step, which is the point
 
