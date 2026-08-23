@@ -144,7 +144,7 @@ def test_the_gate_passes_a_real_oracle_set_and_names_every_case() -> None:
     assert report, "the gate returned an empty report, so it adjudicated nothing"
     assert all(satisfied is False for _, _, satisfied in report), report
     labels = {label for _, label, _ in report}
-    assert "DOUBLE-submitted" in labels, "no falsification covers the double-submit inviolable"
+    assert any("DOUBLE" in x for x in labels), "no falsification covers the double-submit inviolable"
     assert "a comment on the WRONG issue" in labels, "none covers incorrect_target"
 
 
@@ -288,3 +288,83 @@ def test_every_registered_oracle_declares_a_falsification() -> None:
             for label, before, after in cases:
                 assert isinstance(before, O.Probe), f"{o.name}/{label}: before is not a Probe"
                 assert isinstance(after, tuple), f"{o.name}/{label}: after is not a row tuple"
+
+
+# --- 7. a write oracle must be able to SEE the same write landing twice --------------------------
+#
+# R4.87, measured live: `GiteaCommentOracle`'s identity was `(issue, author, body)`, so two identical
+# comments collapsed to ONE member of a set. B3 decides `double` on `len(matched) >= 2`, so a write
+# that fired twice scored `true` — the inviolable was invisible in the oracle that exists to catch it.
+# Gitea held two comments with ids [3, 4] and the identity set had one member.
+#
+# A falsification could not have caught it: the one labelled "DOUBLE-submitted" declared two rows
+# differing by a TRAILING SPACE, so it passed while the hole was open. This project's worst-documented
+# trap is a cell that asserts the counterexample, and that is what it was.
+
+def test_a_write_oracle_distinguishes_two_identical_landings() -> None:
+    """The property, asked of the identity function directly rather than through a falsification."""
+    for name in O.REGISTRY:
+        for o in O.for_substrate(name, _Fake()):
+            if not getattr(o, "MUTATING", False):
+                continue
+            a, b = o.duplicate_pair()
+            assert o.identity_of(a) != o.identity_of(b), (
+                f"{o.name}: the same write submitted twice yields ONE identity "
+                f"{o.identity_of(a)} — `double` is `len(matched) >= 2`, so it would score `true`")
+
+
+def test_the_gate_refuses_a_write_oracle_that_cannot_see_a_double() -> None:
+    """...and the gate enforces it, rather than this cell being the only place it is checked."""
+    class _Blind(_Silent):
+        name, MUTATING = "blind-write", True
+
+        def falsifications(self):
+            return (("x", O.Probe(()), (("a",),)),)
+
+        def identity_of(self, record):
+            return (record["body"],)          # the id dropped — the R4.87 shape exactly
+
+        def duplicate_pair(self):
+            return ({"id": 3, "body": "same"}, {"id": 4, "body": "same"})
+
+    with pytest.raises(O.OracleError, match="collapses to one identity"):
+        O.arm_oracles([_Blind()])
+
+
+def test_the_gate_refuses_a_write_oracle_that_declares_no_duplicate_pair() -> None:
+    """Silence is not a pass here either — same rule as the falsifications themselves."""
+    class _NoPair(_Silent):
+        name, MUTATING = "no-pair", True
+
+        def falsifications(self):
+            return (("x", O.Probe(()), (("a",),)),)
+
+    with pytest.raises(O.OracleError, match="declares no duplicate_pair"):
+        O.arm_oracles([_NoPair()])
+
+
+def test_a_read_oracle_is_not_required_to_declare_one() -> None:
+    """The other direction: a read has no write target, so the requirement must not apply to it —
+    or every read oracle would have to invent a meaningless pair to satisfy a gate."""
+    read = [o for o in O.for_substrate("gitea", _Fake()) if not o.MUTATING]
+    assert read, "no read oracle in the registry, so this cell proves nothing"
+    O.arm_oracles(read)
+
+
+def test_the_double_falsification_uses_genuinely_identical_content() -> None:
+    """The cell that would have caught the original. A falsification whose two rows differ in any
+    user-visible field is not a double-submit — it is two different writes."""
+    for name in O.REGISTRY:
+        for o in O.for_substrate(name, _Fake()):
+            if not getattr(o, "MUTATING", False):
+                continue
+            doubles = [rows for label, _, rows in o.falsifications() if "DOUBLE" in label]
+            assert doubles, f"{o.name} declares no double-submit falsification"
+            for rows in doubles:
+                assert len(rows) >= 2, f"{o.name}: a double needs two rows"
+                tails = {r[1:] for r in rows}
+                assert len(tails) == 1, (
+                    f"{o.name}: the double falsification's rows differ in a user-visible field "
+                    f"{tails} — that is two different writes, not the same one twice")
+                assert len({r[0] for r in rows}) == len(rows), (
+                    f"{o.name}: the rows share a server key, so they are one record")

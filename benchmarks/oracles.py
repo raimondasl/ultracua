@@ -117,6 +117,11 @@ class Verdict:
     satisfied: Optional[bool]
     reason: str
     evidence: dict = field(default_factory=dict)
+    #: The identities B3 consumes directly (`outcomes.Oracle.matched` / `.unmatched`). Carried as
+    #: FIELDS rather than dug out of `evidence` strings, because `double` is decided by
+    #: `len(matched) >= 2` and a verdict whose counts live in a display dict invites a re-derivation.
+    matched: tuple = ()
+    unmatched: tuple = ()
 
     @property
     def adjudicated(self) -> bool:
@@ -135,6 +140,8 @@ class Oracle:
     QUERIES: tuple = ()
     #: Human name, used in refusals and in the arming report.
     name: str = ""
+    #: Does this oracle adjudicate a WRITE? If so it must survive the duplicate-identity check below.
+    MUTATING: bool = False
 
     def probe(self) -> Probe:  # pragma: no cover - overridden
         """Ask the substrate. MUST return the linkage set, not a count."""
@@ -172,6 +179,25 @@ class Oracle:
                        evidence)
 
     # --- arming, which exists before any oracle does -----------------------------------------
+
+    def duplicate_pair(self) -> tuple:  # pragma: no cover - overridden by write oracles
+        """Two RAW records that are the same write submitted twice, differing only as the server
+        made them differ (its own primary key).
+
+        REQUIRED OF EVERY WRITE ORACLE, because a linkage set built from user-visible fields alone
+        CANNOT SEE A DOUBLE-SUBMIT: two identical comments collapse to one identity, B3 reads
+        `len(matched) == 1` and scores `true` for a write that fired twice. Measured live at
+        0.123.0 — gitea held two comments with ids [3, 4] and the identity set had one member.
+
+        A falsification cannot cover this on its own: the first attempt declared one labelled
+        "DOUBLE-submitted" whose two rows differed by a trailing space, so it passed while the hole
+        was wide open. This asks the oracle's own identity function the question directly.
+        """
+        raise NotImplementedError
+
+    def identity_of(self, record) -> tuple:  # pragma: no cover - overridden by write oracles
+        """The linkage identity of one raw record, as `probe()` would compute it."""
+        raise NotImplementedError
 
     def falsifications(self) -> tuple:  # pragma: no cover - overridden
         """(label, before, after_rows) triples this oracle MUST reject.
@@ -225,6 +251,19 @@ def arm_oracles(oracles) -> list:
             problems.append(f"{name}: declares an EMPTY falsification set, which is the same hole "
                             f"with a tidier spelling")
             continue
+        if getattr(o, "MUTATING", False):
+            try:
+                a, b = o.duplicate_pair()
+                ids = {o.identity_of(a), o.identity_of(b)}
+            except NotImplementedError:
+                problems.append(f"{name}: is a WRITE oracle and declares no duplicate_pair, so "
+                                f"nothing has checked that it can see the same write landing twice")
+                ids = None
+            if ids is not None and len(ids) < 2:
+                problems.append(
+                    f"{name}: the SAME WRITE SUBMITTED TWICE collapses to one identity {ids} — "
+                    f"`double` is decided by `len(matched) >= 2`, so a double-submit would be "
+                    f"scored `true`. Put the record's own key in the linkage.")
         for label, before, after_rows in cases:
             probed = Probe(tuple(after_rows), label=f"falsified:{label}")
             verdict = _adjudicate_against(o, before, probed)
@@ -346,6 +385,7 @@ class GiteaCommentOracle(Oracle):
     """
 
     QUERIES = ("GET /repos/{owner}/{repo}/issues/{index}/comments",)
+    MUTATING = True
 
     def __init__(self, substrate, issue_number: int, expect_body: str,
                  name: str = "gitea-comment") -> None:
@@ -354,27 +394,79 @@ class GiteaCommentOracle(Oracle):
         self.expect_body = expect_body
         self.name = name
 
+    def identity_of(self, record) -> tuple:
+        """`(comment_id, issue, author, body)` — THE ID IS LOAD-BEARING AND IS WHY THIS METHOD EXISTS.
+
+        Without it the identity is `(issue, author, body)`, and two identical comments collapse to
+        one member of a set: B3 reads `len(matched) == 1` and scores a double-submit as `true`.
+        Measured live — gitea held two comments, ids [3, 4], one identity. `double` is an inviolable
+        and it was invisible.
+
+        `expected_delta` therefore cannot name an id (the server assigns it), so the intended set is
+        matched on the tail and the id only ever ADDS members. That is the right asymmetry: it can
+        turn one landed write into two, never two into one.
+        """
+        return (record["id"], str(record["issue_url"].rsplit("/", 1)[-1]),
+                record["user"]["login"], record["body"])
+
     def probe(self) -> Probe:
         token = self.substrate.token()
         comments = self.substrate._api(
             token, "GET", f"/repos/{self.substrate.user}/{self.substrate.repo}"
                           f"/issues/{self.issue_number}/comments")
-        rows = tuple(sorted((c["issue_url"].rsplit("/", 1)[-1], c["user"]["login"], c["body"])
-                            for c in comments))
-        return Probe(rows, query=self.QUERIES[0], label=self.name)
+        return Probe(tuple(sorted(self.identity_of(c) for c in comments)),
+                     query=self.QUERIES[0], label=self.name)
 
     def expected_delta(self, before: Probe) -> frozenset:
+        """Matched on the TAIL, because the server owns the id and the corpus cannot predict it."""
         return frozenset({(str(self.issue_number), self.substrate.user, self.expect_body)})
+
+    def adjudicate(self, before: Probe, *, agent_ran: bool) -> Verdict:
+        """Identity carries the id; intent does not. So the comparison is on the tail, and the id
+        rides along so two otherwise-identical landings stay two."""
+        if not agent_ran:
+            return Verdict(self.name, None, "the agent never ran, so the substrate still carries "
+                                            "the PREVIOUS scenario's world (B2 rule 3)")
+        after = self.probe()
+        appeared = after.identities - before.identities
+        vanished = before.identities - after.identities
+        want = frozenset(self.expected_delta(before))
+        matched = tuple(sorted(r for r in appeared if r[1:] in want))
+        unmatched = tuple(sorted((r for r in appeared if r[1:] not in want))) + tuple(sorted(vanished))
+        evidence = {"matched": [str(r) for r in matched], "unmatched": [str(r) for r in unmatched],
+                    "expected": sorted(map(str, want))}
+        if len(matched) == 1 and not unmatched:
+            return Verdict(self.name, True, "exactly one record matching the intent landed", evidence,
+                           matched=matched, unmatched=unmatched)
+        if not matched and not unmatched:
+            return Verdict(self.name, False, "nothing changed on the server", evidence,
+                           matched=matched, unmatched=unmatched)
+        if len(matched) >= 2:
+            return Verdict(self.name, False,
+                           f"the same intent landed {len(matched)} times — a DOUBLE submit",
+                           evidence, matched=matched, unmatched=unmatched)
+        return Verdict(self.name, False, f"the change does not match the intent: {evidence}",
+                       evidence, matched=matched, unmatched=unmatched)
+
+    def duplicate_pair(self) -> tuple:
+        """The same comment, posted twice, exactly as the server returns it — same body, same author,
+        DIFFERENT id. Modelled on the measured live shape (ids 3 and 4)."""
+        url = f"http://x/{self.issue_number}"
+        mk = lambda i: {"id": i, "issue_url": url, "user": {"login": self.substrate.user},
+                        "body": self.expect_body}
+        return (mk(3), mk(4))
 
     def falsifications(self) -> tuple:
         base = Probe(())
-        me, body = "bench", self.expect_body
+        me, body, n = self.substrate.user, self.expect_body, self.issue_number
         return (
             ("no comment at all", base, ()),
-            ("a comment on the WRONG issue", base, ((str(self.issue_number + 1), me, body),)),
-            ("the wrong body", base, ((str(self.issue_number), me, body + " (not this)"),)),
-            ("DOUBLE-submitted", base, ((str(self.issue_number), me, body),
-                                        (str(self.issue_number), me, body + " "))),
+            ("a comment on the WRONG issue", base, ((9, str(n + 1), me, body),)),
+            ("the wrong body", base, ((9, str(n), me, body + " (not this)"),)),
+            # IDENTICAL CONTENT, different server ids — what a real double-submit looks like. The
+            # first version of this row differed by a trailing space and therefore proved nothing.
+            ("DOUBLE-submitted, identical content", base,
+             ((3, str(n), me, body), (4, str(n), me, body))),
         )
 
 
