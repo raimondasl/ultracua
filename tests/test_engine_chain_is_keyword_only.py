@@ -1,31 +1,40 @@
-"""reshape-plan step 1.1 — the engine chain is KEYWORD-ONLY after its subject.
+"""reshape-plan steps 1.1 and 1.8 — the SHAPE of the engine chain, and the REACH of its bundles.
 
-WHAT THIS IS FOR. Six functions in `flow.py` took between 8 and 23 arguments positionally, and the
-call chain filled them in order. `flow.py:752` was the worst of them: sixteen positional arguments of
-which FOUR were a bare `None`, at positions 5, 7, 9 and 14. Swapping any two of those four is
-type-silent — `provider`, `on_step`, `finalize` and `record_har_path` all accept None, and three of
-the four accept a callable — so nothing in the type system, in the suite, or in a reviewer's eye
-separates the right order from a wrong one. `_learn_n`'s own signature carries the scar in a comment:
-inserting a parameter above `reflect` once made `reflect` arrive as `aux_routers`.
+1.1: KEYWORD-ONLY AFTER THE SUBJECT. Six functions took between 8 and 23 arguments positionally.
+`_verify_by_replay`'s call was the worst: sixteen positional arguments of which FOUR were a bare
+`None`, at positions 5, 7, 9 and 14. Swapping any two of those four is type-silent — `provider`,
+`on_step`, `finalize` and `record_har_path` all accept None and three accept a callable — so nothing
+in the type system, the suite, or a reviewer's eye separates the right order from a wrong one.
+`_learn_n`'s signature carried the scar in a comment: inserting a parameter above `reflect` once made
+`reflect` arrive as `aux_routers`.
 
-TWO SENSORS, DELIBERATELY, BECAUSE NEITHER IS ENOUGH ALONE.
+1.8: TWO BUNDLES INSTEAD OF TWENTY-ONE SCALARS, and it changes what this file has to prove. A
+parameter list ENFORCED withholding: `_learn` could not read `params` because it was not handed one,
+and `_replay` could not read `grounding`. `RunOptions`/`RunHooks` hand every inner function all of
+them, so that enforcement is gone and lives here instead — `RECEIVED_BEFORE_1_8` is what each
+function got before the migration, and no function may read outside its row.
+
+FOUR SENSORS, BECAUSE NO ONE OF THEM IS ENOUGH.
 
   * The ARITY pin (`POSITIONAL_PREFIX`) says a parameter cannot be passed positionally at all. It
     cannot see a MIS-KEYED forward: `_replay(..., on_step=finalize, finalize=on_step)` satisfies it
-    completely. That is the critic's clause on this step.
+    completely. That is the critic's clause on 1.1.
   * The FORWARDING pins say every internal call forwards `name=name` unless the difference is
-    REGISTERED, and that the registered ones are exactly what the source does. Fourteen rows, so a
-    mistranslated site is visible on sight rather than buried in 130 identical ones.
-  * And the RUNTIME cell drives the edges that need no browser with a distinct sentinel per argument
-    and asserts `is` identity on arrival — which is the only one of the three that can fail for a
-    forward the AST reads as fine.
+    REGISTERED in `RENAMED`, and that the registered ones are exactly what the source does.
+  * The REACH pins (`RECEIVED_BEFORE_1_8`, `CLEARS`) are 1.8's, and they are the only thing standing
+    where a signature used to stand.
+  * The RUNTIME cell drives the browser-free edges with a distinct object per argument and asserts
+    `is` identity on arrival — the only one of the four that can fail for a forward the AST reads as
+    fine.
+
+AND ONE PIN THAT IS NOT HERE: how many times each hook FIRES. That is behaviour rather than shape,
+it needs a browser, and it lives in `tests/test_hook_fire_counts.py` against a table captured before
+1.8 moved anything.
 
 WHAT SHOULD BE POSITIONAL, AND WHY IT STOPS THERE. The prefix is the call's SUBJECT: which page the
-run is about (`url`), or which session and step are being acted on. Everything else — configuration,
-injected collaborators, flags — is keyword. The rule that says where the `*` may NOT move is derived
-below rather than asserted: no two positional parameters of one function may share an annotation.
-`_learn(url, goal, key, ...)` opened with THREE `str`s and `_replay(url, key, ...)` with two in a
-DIFFERENT order, which is the swap this step exists to make impossible.
+run is about (`url`), or which session and step are being acted on. The rule that says where the `*`
+may NOT move is derived rather than asserted: no two positional parameters of one function may share
+an annotation.
 """
 
 from __future__ import annotations
@@ -64,29 +73,73 @@ POSITIONAL_PREFIX = {
 # table would only be as good as its worst entry.
 RENAMED = {
     ("_learn", "_author_steps"):            {"goal": "author_goal"},
-    ("_replay", "_author_steps"):           {"max_steps": "settings.max_steps",
+    ("_learn_n", "_learn"):                 {"reflections": "reflections or None"},
+    ("_replay", "_author_steps"):           {"opts": "opts.without('grounding')",
+                                             "max_steps": "settings.max_steps",
                                              "block_mutations": "True"},
     ("_replay", "_replay_step"):            {"idx": "i"},
-    ("_learn_n", "_learn"):                 {"reflections": "reflections or None"},
-    ("_verify_by_replay", "_replay"):       {"flow": "candidate", "provider": "None",
-                                             "on_step": "None", "finalize": "None",
-                                             "goal": "candidate.goal", "record_har_path": "None"},
+    ("_verify_by_replay", "_replay"):       {"opts": "opts.without('window_size', 'params', "
+                                                     "'dry_run', 'redact', 'aux_routers', "
+                                                     "'record_har_path')",
+                                             "hooks": "hooks.without('on_step', 'finalize', "
+                                                      "'pre_write')",
+                                             "flow": "candidate", "provider": "None",
+                                             "goal": "candidate.goal"},
+    ("run_cached", "_learn"):               {"hooks": "hooks.without('pre_write')"},
     ("run_cached", "_replay"):              {"flow": "cached", "provider": "heal_provider"},
 }
 
+
 # WHAT A CALLER DELIBERATELY DOES NOT FORWARD. Asserted BOTH ways: a declared drop that is actually
 # forwarded is a stale entry, and an undeclared one is a parameter silently taking its default.
+#
+# SHORT SINCE 1.8, and the shortness is the point rather than a loss: what used to be six absent
+# arguments in a sixteen-item list is now a NAMED clearing (`opts.without(...)` / `hooks.without(...)`)
+# that `CLEARS` below holds. Only the two arguments outside the bundles are left here.
 DELIBERATE_DROPS = {
-    # `_learn` MAY write — that is how a write flow is discovered at all. `_replay`'s replan may not.
-    ("_learn", "_author_steps"):      frozenset({"block_mutations"}),
-    # A suffix-replan re-authors from `goal` alone; there is no grounding model on the replay path.
-    ("_replay", "_author_steps"):     frozenset({"grounding"}),
-    # A verification run is navigation-fidelity only: no params, no dry-run arbiter, no pre-write
-    # probe, no redaction and no aux routers, because it performs no write and makes no paid call.
-    ("_verify_by_replay", "_replay"): frozenset({"window_size", "params", "dry_run", "pre_write",
-                                                 "redact", "aux_routers"}),
+    # `_learn` MAY write — that is how a write flow is discovered at all. `_replay`'s replan may not,
+    # and passes `block_mutations=True` explicitly.
+    ("_learn", "_author_steps"): frozenset({"block_mutations"}),
     # `reflections` is best-of-N's own state; a single learn has none to pass.
-    ("run_cached", "_learn"):         frozenset({"reflections"}),
+    ("run_cached", "_learn"):    frozenset({"reflections"}),
+}
+
+# WHAT EACH FUNCTION CLEARS OUT OF THE BUNDLE BEFORE PASSING IT ON — 1.8's replacement for a
+# `None` nine arguments deep. Committed, because these are the deliberate silences of the engine and
+# each one is a decision: a verification run carries no caller artefact and makes no paid call; a
+# suffix-replan has no grounding model; the learn path never gets `pre_write` (R4.12).
+CLEARS = {
+    "_verify_by_replay": frozenset({"window_size", "params", "dry_run", "redact", "aux_routers",
+                                    "record_har_path", "on_step", "finalize", "pre_write"}),
+    "_replay": frozenset({"grounding"}),
+    "run_cached": frozenset({"pre_write"}),
+}
+
+# WHAT EACH FUNCTION RECEIVED BEFORE 1.8 — captured from `origin/main` at authoring time, and the
+# whole point of it: A BUNDLE MAKES AVAILABLE WHAT A PARAMETER LIST WITHHELD. `_learn` never received
+# `params` or `dry_run` and must not start reading them merely because they now travel in the same
+# object. `_replay` never received `grounding`. Nothing here is a style rule; each is a behaviour
+# this step must not change by accident.
+RECEIVED_BEFORE_1_8 = {
+    "_author_steps": frozenset({"block_mutations", "goal", "governor", "grounding", "max_steps",
+                                "on_step", "provider", "session"}),
+    "_verify_by_replay": frozenset({"browser", "cache", "candidate", "extra_headers", "governor",
+                                    "headless", "key", "prepare", "scope", "storage_state", "url"}),
+    "_learn": frozenset({"aux_routers", "browser", "cache", "extra_headers", "finalize", "goal",
+                         "governor", "grounding", "headless", "key", "max_steps", "on_step",
+                         "prepare", "provider", "record_har_path", "redact", "reflections", "scope",
+                         "storage_state", "url", "verifier", "verify_replay", "window_size"}),
+    "_learn_n": frozenset({"aux_routers", "browser", "cache", "extra_headers", "finalize", "goal",
+                           "governor", "grounding", "headless", "key", "max_steps", "on_step",
+                           "prepare", "provider", "record_har_path", "redact", "reflect", "samples",
+                           "scope", "storage_state", "url", "verifier", "verify_replay",
+                           "window_size"}),
+    "_replay": frozenset({"aux_routers", "browser", "cache", "dry_run", "extra_headers", "finalize",
+                          "flow", "goal", "governor", "headless", "key", "on_step", "params",
+                          "pre_write", "prepare", "provider", "record_har_path", "redact", "scope",
+                          "storage_state", "url", "window_size"}),
+    "_replay_step": frozenset({"dry_run", "goal", "governor", "idx", "params", "provider", "scope",
+                               "session", "step", "tr"}),
 }
 
 
@@ -310,14 +363,14 @@ def _checkable(caller: str, callee: str) -> dict:
 # derivation that silently starts finding nothing would otherwise pass this cell with zero assertions
 # — the anti-vacuity rule S14 paid for twice.
 RUNTIME_EDGES = {
-    ("run_cached", "_replay"): 18,
-    ("run_cached", "_learn"): 20,
-    ("run_cached", "_learn_n"): 22,
-    ("_learn_n", "_learn"): 21,
-    # The one the critic named: sixteen positional arguments with four bare `None`s. Ten of them are
-    # identity-checkable here, INCLUDING `flow=candidate` -- a rename to another PARAMETER is still a
-    # forward a sentinel can follow, and it is one of the two the mis-keying would have swallowed.
-    ("_verify_by_replay", "_replay"): 10,
+    ("run_cached", "_replay"): 3,
+    ("run_cached", "_learn"): 4,
+    ("run_cached", "_learn_n"): 4,
+    ("_learn_n", "_learn"): 7,
+    # The one the critic named at 1.1. It used to pass sixteen positional arguments with four bare
+    # `None`s; since 1.8 it passes two bundles with their silences NAMED, and four of its forwards
+    # are still objects a sentinel can follow all the way in.
+    ("_verify_by_replay", "_replay"): 4,
 }
 
 
@@ -393,10 +446,17 @@ async def _drive(caller: str, callee: str, tags: dict) -> None:
         kw["mode"] = "replay" if callee == "_replay" else "learn"
         await flow_mod.run_cached(**kw)
     elif caller == "_learn_n":
-        tags["samples"] = _IntTag(1)
+        # REAL BUNDLES, not sentinels, and identity still holds: `_learn_n` dereferences
+        # `opts.samples`/`opts.grounding`/`opts.reflect`/`opts.aux_routers` before forwarding, so a
+        # `_Tag` would die on the first read. The object that goes in is the object that must come
+        # out, which is the whole assertion, and a real one satisfies both.
+        tags["opts"] = flow_mod.RunOptions(governor=PacingGovernor(), samples=1)
+        tags["hooks"] = flow_mod.RunHooks()
         await flow_mod._learn_n(**tags)
     elif caller == "_verify_by_replay":
         tags["candidate"] = _flow()             # `candidate.goal` is read before the forward
+        tags["opts"] = flow_mod.RunOptions(governor=PacingGovernor())
+        tags["hooks"] = flow_mod.RunHooks()
         await flow_mod._verify_by_replay(**tags)
     else:  # pragma: no cover - a new row in RUNTIME_EDGES with no driver must fail LOUD
         raise AssertionError(f"no driver for {caller} -> {callee}")
@@ -404,3 +464,88 @@ async def _drive(caller: str, callee: str, tags: dict) -> None:
 
 def _params(name: str) -> set:
     return set(inspect.signature(getattr(flow_mod, name)).parameters)
+
+
+# ---------------------------------------------------------------------------------------------------
+# 5. STEP 1.8's OWN PIN. A bundle makes available what a parameter list withheld.
+
+def _bundle_use(fn_name: str) -> tuple:
+    """(what this function READS off the bundles, what it CLEARS out of them)."""
+    tree = _tree()
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == fn_name)
+    reads = {n.attr for n in ast.walk(fn)
+             if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+             and n.value.id in ("opts", "hooks") and n.attr != "without"}
+    clears = {a.value for n in ast.walk(fn)
+              if isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "without"
+              for a in n.args if isinstance(a, ast.Constant)}
+    return reads, clears
+
+
+@pytest.mark.parametrize("fn", sorted(RECEIVED_BEFORE_1_8))
+def test_no_engine_function_reads_more_than_it_used_to_receive(fn: str) -> None:
+    """THE CENTRAL RISK OF STEP 1.8, and the only cell that can see it.
+
+    Before the bundles, a function could not read what it was not handed — `_learn` had no `params`
+    and no `dry_run`, `_replay` had no `grounding`. Threading two objects instead of twenty scalars
+    hands every function ALL of them, and the withholding that used to be enforced by the signature
+    is now enforced by nothing at all. Except this.
+
+    A read outside the set is not a style problem: it is a behaviour change smuggled into a
+    migration, and it would be invisible in a diff that is already moving every call site.
+    """
+    reads, _clears = _bundle_use(fn)
+    extra = sorted(reads - RECEIVED_BEFORE_1_8[fn])
+    assert not extra, (
+        f"{fn} reads {extra} off the bundle, and did NOT receive {'it' if len(extra) == 1 else 'them'} "
+        f"before 1.8. Threading a bundle made {'it' if len(extra) == 1 else 'them'} reachable; that is "
+        f"not permission to read {'it' if len(extra) == 1 else 'them'}. If the widening is deliberate "
+        f"it is a behaviour change and belongs in its own diff with its own reason.")
+    print(f"{fn:<20} reads {len(reads):>2} of the {len(RECEIVED_BEFORE_1_8[fn])} it used to receive")
+
+
+def test_every_clearing_is_declared_and_every_declaration_clears_something() -> None:
+    """BOTH WAYS. An undeclared clearing is a silent withdrawal — the thing 1.8's `without()` exists
+    to make visible in the first place; a declared one that no longer happens is a stale entry
+    granting cover to nothing."""
+    derived = {fn: clears for fn in (*RECEIVED_BEFORE_1_8, "run_cached")
+               if (clears := _bundle_use(fn)[1])}
+    assert derived == CLEARS, (
+        "the clearings the source makes and the CLEARS table disagree.\n"
+        + "\n".join(f"  {k}: table={sorted(CLEARS.get(k, ()))} actual={sorted(v)}"
+                    for k, v in sorted({**{k: set() for k in CLEARS}, **derived}.items())
+                    if CLEARS.get(k, frozenset()) != frozenset(v)))
+    for fn, names in sorted(CLEARS.items()):
+        print(f"  {fn} clears {sorted(names)}")
+
+
+def test_r412_is_preserved_and_not_quietly_fixed() -> None:
+    """R4.12 is OPEN and must stay open through this step. `_learn` never received `pre_write`, so
+    its whole-flow confirm is a bare presence check rather than an absent->present transition.
+    Bundling would have CLOSED it by accident — a silent fix inside a migration is as unreviewable
+    as a silent break, and the plan's own row for 1.8 says `R4.12 included -- preserved, not fixed`.
+    """
+    assert "pre_write" in CLEARS["run_cached"], "the learn path was handed `pre_write` — R4.12 fixed"
+    assert "pre_write" not in RECEIVED_BEFORE_1_8["_learn"]
+    reads, _ = _bundle_use("_learn")
+    assert "pre_write" not in reads, "`_learn` now reads `pre_write` — R4.12 closed as a side effect"
+
+
+def test_every_bundle_field_is_read_by_someone() -> None:
+    """ANTI-VACUITY on the bundles themselves. A field nobody reads is a parameter that stopped
+    working, and the flat signature made that loud (an unused argument is visible); an object with
+    sixteen attributes hides it."""
+    import dataclasses
+    declared = ({f.name for f in dataclasses.fields(flow_mod.RunOptions)}
+                | {f.name for f in dataclasses.fields(flow_mod.RunHooks)})
+    read_or_cleared: set = set()
+    for fn in (*RECEIVED_BEFORE_1_8, "run_cached"):
+        r, c = _bundle_use(fn)
+        read_or_cleared |= r | c
+    unused = sorted(declared - read_or_cleared)
+    assert not unused, (
+        f"{unused} travel(s) in a bundle and is read by NOTHING. Before 1.8 an unused parameter was "
+        f"visible in a signature; inside an object it is invisible, so this is the cell that keeps it "
+        f"honest.")
+    print(f"all {len(declared)} bundle fields are read or explicitly cleared somewhere")
