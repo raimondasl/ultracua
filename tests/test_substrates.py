@@ -23,6 +23,49 @@ import pytest
 from benchmarks import substrates as S
 
 
+@pytest.fixture(autouse=True)
+def _docker_is_not_available_to_unit_tests(monkeypatch, request):
+    """No test in this file may shell out to Docker, and this is what makes that TRUE rather than
+    intended.
+
+    A THIRD AXIS OF "a local green is weaker evidence than CI", measured at 0.121.0 and now the one
+    that has actually shipped a red PR here. CLAUDE.md records two axes — platform (CI runs ubuntu
+    AND windows) and keys (`.env` makes a provider reachable locally). This is the third: **the
+    developer machine has Docker running and CI does not.**
+
+    R4.85 added writability as a fourth readiness layer, and that layer execs into a container. Two
+    pre-existing cells drive `await_ready()` with only layers 1-2 mocked, so they began reaching
+    Docker for real — and passed locally against a live, healthy Gitea while failing on both CI
+    arms with a baffling `NOT WRITABLE`. The suite was green on this host for the wrong reason.
+
+    So the leak is closed the way the fast tier closes Chromium: not by remembering to patch, but by
+    making the call RAISE and name its remedy. A test that needs a mocked `docker compose` asks for
+    the `compose` fixture (which installs its own recorder) or patches `_compose` in its own body.
+
+    The guard sits on `subprocess.run` rather than on `_compose`, and that placement is the second
+    thing this fixture got wrong before it was right. Guarding `_compose` also blocked
+    `test_a_missing_docker_binary_is_a_substrate_error_not_a_raw_oserror`, which patches
+    `subprocess.run` itself and calls the REAL `_compose` to check its error wrapping — it never
+    reaches Docker at all. A guard whose false positives block correct tests is the same
+    over-refusal shape as the `su` probe above; the precise invariant is "no test runs the real
+    `docker` binary", so that is what is asserted. A test that patches `subprocess.run` or
+    `_compose` in its own body wins, because its patch is applied after this one.
+    """
+    def _refuse(*args, **kwargs):
+        argv = args[0] if args else kwargs.get("args", [])
+        raise AssertionError(
+            f"{request.node.name} tried to run {' '.join(map(str, argv))[:80]!r} for real.\n"
+            f"    Unit tests here must not touch Docker: it is present on a developer host and "
+            f"ABSENT on CI, so a test that reaches it passes locally and fails both CI arms — "
+            f"measured, R4.85's readiness layer did exactly that.\n"
+            f"    Use the `compose` fixture, patch `S._compose` or `subprocess.run` in the test "
+            f"body, or neutralise the probe that calls it (e.g. `assert_writable`) when this cell "
+            f"is about a different layer."
+        )
+
+    monkeypatch.setattr(S.subprocess, "run", _refuse)
+
+
 class _Obs:
     """Duck-typed stand-in: the bench holds no import of the agent's Observation type, deliberately."""
 
@@ -91,6 +134,9 @@ def test_readiness_refuses_on_timeout_and_says_what_it_was_waiting_for(monkeypat
     """
     monkeypatch.setattr(S, "_container_health", lambda name: "starting")
     monkeypatch.setattr(S, "_http_ok", lambda url, min_bytes: False)
+    # Layer 3 is somebody else's cell (below). Neutralised here because it EXECS INTO A CONTAINER,
+    # and leaving it live made this test pass on a host with Docker up and fail both CI arms.
+    monkeypatch.setattr(S.Gitea, "assert_writable", lambda self: None)
     g = S.Gitea()
     with pytest.raises(S.SubstrateNotReady) as exc:
         g.await_ready(timeout_s=0.1, poll_s=0.01)
@@ -116,6 +162,7 @@ def test_a_container_with_no_healthcheck_does_not_block_readiness(monkeypatch) -
     """
     monkeypatch.setattr(S, "_container_health", lambda name: "none")
     monkeypatch.setattr(S, "_http_ok", lambda url, min_bytes: True)
+    monkeypatch.setattr(S.Gitea, "assert_writable", lambda self: None)   # layer 3 execs; see above
     S.Gitea().await_ready(timeout_s=1, poll_s=0.01)
 
 
