@@ -29,7 +29,9 @@ ubuntu job. Everything key-less and Docker-free in here is unit-tested in
 
 from __future__ import annotations
 
+import datetime
 import json
+import re
 import subprocess
 import time
 import urllib.error
@@ -46,11 +48,40 @@ COMPOSE = ROOT / "benchmarks" / "substrates" / "docker-compose.yml"
 # not know its own clock cannot be compared with one taken later.
 FAKETIME_EPOCH = "@2026-01-15 09:00:00"
 
+# How far the Odoo container's clock may sit from the pinned epoch before readiness refuses.
+# GENEROUS ON PURPOSE: `faketime` with an absolute `@epoch` starts there and then advances in real
+# time, so a long-lived container drifts forward legitimately. This separates "pinned, and has been
+# up a while" from "not pinned at all" — and the failure it exists to catch misses by MONTHS
+# (2026-08 against a 2026-01 epoch), not by days, so the tolerance costs nothing.
+CLOCK_DRIFT_TOLERANCE_S = 7 * 86400
+
 # Below this, an observation is a skeleton rather than a page. Not a guess: a served Gitea landing
 # page is ~13.5 kB of HTML with dozens of elements, and an Odoo web client shell before its registry
 # loads is a near-empty body. The number is a FLOOR for "something rendered", not a quality bar, and
 # it is deliberately far below any real page so it can only fire on the failure it names.
 SKELETON_ELEMENT_FLOOR = 3
+
+# Gitea's seeded world. FIXED CONTENT, because a scenario asserts against it: `gitea-filter-state`
+# needs both states present, `gitea-sort-list` needs a creation order that differs from alphabetical
+# (or sorting proves nothing), and `gitea-search` needs one distinctive token that appears in exactly
+# one title. Titles are deliberately mundane; the read-only ones must NOT trip
+# `safety.MUTATING_KEYWORDS`, whose measured false-positive rate on ordinary controls is 28%.
+#   (title, body, closed)
+ISSUES = (
+    ("Zebra crossing renders behind the map layer", "Reported on the staging tile server.", False),
+    ("Alpha channel lost on export",                "Only for 16-bit sources.",             False),
+    ("Marmalade parser rejects trailing commas",    "The distinctive one, for search.",     False),
+    ("Kerning regression in the sidebar",           "Since the font bump.",                 True),
+    ("Dark mode contrast below AA on links",        "Measured 3.9:1.",                      False),
+    ("Batch importer times out past 10k rows",      "Needs a cursor.",                      True),
+    ("Tooltip clips at the viewport edge",          "Right edge only.",                     False),
+)
+
+# A LOCAL, THROWAWAY FIXTURE CREDENTIAL for a container bound to localhost with registration
+# disabled — the same standing as the `odoo/odoo` Postgres pair already in the compose file. It is
+# not a secret and must never become one: if this substrate is ever exposed beyond localhost, this
+# constant is the first thing that has to go.
+GITEA_PASSWORD = "benchbench"
 
 
 class SubstrateError(RuntimeError):
@@ -116,11 +147,21 @@ class Substrate:
         _compose(*args, check=False)
 
     def await_ready(self, timeout_s: int = 300, poll_s: float = 2.0) -> None:
-        """Container health FIRST, then a substantive HTTP response.
+        """Container health, then a substantive HTTP response, then CAN IT BE WRITTEN TO.
 
-        Both, because they fail differently: a container can be `healthy` while a proxy in front of it
-        is not, and an HTTP probe can pass against a cached error page. Neither alone has been enough
+        The first two fail differently: a container can be `healthy` while a proxy in front of it is
+        not, and an HTTP probe can pass against a cached error page. Neither alone has been enough
         anywhere this repo has looked.
+
+        THE THIRD LAYER EXISTS BECAUSE THE FIRST TWO ARE BOTH READS (R4.85). A `wget --spider`
+        healthcheck and an HTTP GET pass perfectly against a substrate whose database the service
+        cannot write, which is precisely the state `Gitea.reset()` used to leave behind. A substrate
+        that cannot accept a write is not ready; discovering that from a scored write scenario
+        attributes the harness's breakage to the agent.
+
+        A NOT-WRITABLE verdict raises immediately rather than spinning: it never self-heals, and
+        burning the full timeout would report it as "not ready in 300s" instead of naming it. Only
+        an ABSENT state can resolve on its own, so only that one keeps waiting.
         """
         deadline = time.monotonic() + timeout_s
         last = ""
@@ -129,7 +170,14 @@ class Substrate:
             if unhealthy:
                 last = f"container(s) not healthy: {', '.join(unhealthy)}"
             elif _http_ok(self.url + self.health_path, self.min_body_bytes):
-                return
+                try:
+                    self.assert_writable()
+                except SubstrateNotReady as exc:
+                    if "NOT WRITABLE" in str(exc):
+                        raise
+                    last = str(exc).splitlines()[0]
+                else:
+                    return
             else:
                 last = f"no substantive response from {self.url + self.health_path}"
             time.sleep(poll_s)
@@ -138,6 +186,18 @@ class Substrate:
             f"    Refusing rather than proceeding: a scenario started against a half-built substrate "
             f"scores the harness's impatience as the agent's failure (R4.40)."
         )
+
+    def assert_writable(self) -> None:
+        """Nothing to check by default. Overridden where a reset COPIES the substrate's state files.
+
+        DELIBERATELY NOT A SHARED MECHANISM, and that is measured rather than stylistic:
+        `docker compose exec` lands as a DIFFERENT user per image — **root** in gitea's Alpine, uid
+        101 `odoo` in odoo's Debian — so one probe cannot be correct for both. The gitea probe needs
+        an `su` hop precisely because root would make it vacuous; running that same probe against
+        odoo reports its perfectly healthy filestore as NOT WRITABLE, because Debian's `su` demands a
+        password when a non-root caller invokes it. A false alarm in the readiness path is the
+        over-refusal shape D0 records, and it would have taken the whole Odoo arm offline.
+        """
 
     def reset(self) -> None:  # pragma: no cover - overridden
         raise NotImplementedError
@@ -165,8 +225,78 @@ class Gitea(Substrate):
     url: str = "http://localhost:3000"
     health_path: str = "/"
     containers: tuple = ("ultracua-bench-gitea-1",)
+    user: str = "bench"
+    repo: str = "acme"
+    data_dir: str = "/data/gitea"
     db_path: str = "/data/gitea/gitea.db"
     seed_path: str = "/data/gitea/seed.db"
+
+    def mint_token(self, name: str = "bench") -> str:
+        """A fresh API token, minted on demand and NEVER stored.
+
+        The oracles need API access; the alternative to minting is persisting a token in a file or a
+        report, and this repo's standing rule is that secrets are env-resolved and never serialized.
+        Gitea is happy to issue several, so a caller that needs one asks for one.
+
+        Run as the `git` user: the CLI REFUSES to run as root ("Gitea is not supposed to be run as
+        root"), while `docker compose exec` lands as root in this image — so the hop is required
+        here for the opposite reason it is required in `assert_writable`.
+        """
+        proc = _compose("--profile", self.profile, "exec", "-T", "-u", "git", "gitea",
+                        "gitea", "admin", "user", "generate-access-token",
+                        "--username", self.user, "--token-name", name, "--scopes", "all", "--raw")
+        token = (proc.stdout or "").strip().splitlines()[-1:] or [""]
+        token = token[0].strip()
+        if not re.fullmatch(r"[0-9a-f]{40}", token):
+            raise SubstrateError(
+                f"{self.name}: token mint did not return a token. Gitea prints its ERRORS on stdout "
+                f"too, so a missing user yields a plausible-looking 56-character string — which is "
+                f"why this is shape-checked rather than merely non-empty.")
+        return token
+
+    def _api(self, token: str, method: str, path: str, payload: "dict | None" = None) -> dict:
+        req = urllib.request.Request(
+            f"{self.url}/api/v1{path}", method=method,
+            data=None if payload is None else json.dumps(payload).encode(),
+            headers={"Authorization": f"token {token}", "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                body = resp.read().decode() or "null"
+        except urllib.error.HTTPError as exc:
+            raise SubstrateError(
+                f"{self.name}: {method} {path} -> HTTP {exc.code}: {exc.read().decode()[:200]}") from exc
+        return json.loads(body)
+
+    def seed(self) -> None:
+        """Build the world every Gitea scenario starts from: one admin, one repo, `ISSUES`.
+
+        NOT idempotent and deliberately not: it is called once against a virgin instance, and
+        `snapshot()` is what makes it repeatable. A `seed()` that tolerated existing state would
+        quietly produce a DIFFERENT world on a second call, which is the drift the template exists
+        to remove.
+
+        The admin user comes from the CLI rather than the API because there is no API before there
+        is a user. `INSTALL_LOCK=true` in the compose file is what lets that skip the web installer.
+        """
+        _compose("--profile", self.profile, "exec", "-T", "-u", "git", "gitea",
+                 "gitea", "admin", "user", "create", "--admin",
+                 "--username", self.user, "--password", GITEA_PASSWORD,
+                 "--email", f"{self.user}@example.invalid", "--must-change-password=false")
+        token = self.mint_token("seed")
+        self._api(token, "POST", "/user/repos", {"name": self.repo, "auto_init": True})
+        # Time tracking is OFF by default and `gitea-start-timer` is the scenario that needs it —
+        # a real write with NO enclosing form, catchable only by the wire (benchmark-plan §7).
+        self._api(token, "PATCH", f"/repos/{self.user}/{self.repo}",
+                  {"has_issues": True, "external_tracker": None, "internal_tracker": {
+                      "enable_time_tracker": True, "allow_only_contributors_to_track_time": False,
+                      "enable_issue_dependencies": True}})
+        for title, body, closed in ISSUES:
+            issue = self._api(token, "POST", f"/repos/{self.user}/{self.repo}/issues",
+                              {"title": title, "body": body})
+            if closed:
+                self._api(token, "PATCH",
+                          f"/repos/{self.user}/{self.repo}/issues/{issue['number']}",
+                          {"state": "closed"})
 
     def snapshot(self) -> None:
         """Freeze the CURRENT state as the world every scenario starts from."""
@@ -197,6 +327,21 @@ class Gitea(Substrate):
            direction and never for the RESTORE direction.
         3. No `try/finally`, while `stop` comes first — so any raise in between left the service
            DOWN, and every later scenario reported a harness error from a second, unrelated cause.
+
+        A FOURTH, found by driving it (0.121.0, R4.85). The restore ran `cp` inside a
+        `run --rm --entrypoint sh` container, which in this image lands as **root** — so the restored
+        `gitea.db` came out `root:root` while the service runs as `git`, and SQLite reported
+        `attempt to write a readonly database` on the first write. `await_ready()` never noticed,
+        because all three of its layers are READS: a `wget --spider` healthcheck and an HTTP GET both
+        pass happily against a read-only database. Every scenario runs after a reset, so this was
+        every scenario, and B3 would have published the harness's broken substrate as the agent's
+        failure — R4.40's shape one level over, in the silent direction.
+
+        Reproduced from a virgin instance before it was fixed: `git:git` on boot, still `git:git`
+        after `snapshot()` (which only creates `seed.db`), `root:root` after `reset()`.
+
+        The `chown` is written against the DIRECTORY's owner rather than a hardcoded `git`, so it
+        stays right if the image changes uid. `--reference` is GNU and busybox rejects it.
         """
         _compose("--profile", self.profile, "stop")
         try:
@@ -208,10 +353,35 @@ class Gitea(Substrate):
                     f"first scenario silently defines the world for every later one")
             _compose("--profile", self.profile, "run", "--rm", "-T", "--entrypoint", "sh", "gitea",
                      "-c", f"rm -f {self.db_path}-wal {self.db_path}-shm && "
-                           f"cp {self.seed_path} {self.db_path}")
+                           f"cp {self.seed_path} {self.db_path} && "
+                           f"chown \"$(stat -c %u:%g {self.data_dir})\" {self.db_path}")
         finally:
             _compose("--profile", self.profile, "start", check=False)
         self.await_ready()
+
+    def assert_writable(self) -> None:
+        """Can the SERVICE write its database? The question `await_ready`'s three read-layers cannot ask.
+
+        RUN AS THE OWNING USER, resolved at run time, and that is the whole point: `docker compose
+        exec` lands as **root** in this image and root can write anything, so the same `test -w` run
+        without the `su` hop passes over a database the service cannot touch. Measured both ways
+        before this shipped.
+        """
+        probe = (f'test -f {self.db_path} || {{ echo ABSENT; exit 3; }}; '
+                 f'u=$(stat -c %U {self.data_dir}); '
+                 f'su -s /bin/sh "$u" -c "test -w {self.db_path}"')
+        proc = _compose("--profile", self.profile, "exec", "-T", "gitea", "sh", "-c", probe,
+                        check=False)
+        if proc.returncode == 0:
+            return
+        absent = "ABSENT" in (proc.stdout or "")
+        raise SubstrateNotReady(
+            f"{self.name}: {self.db_path} is " + ("ABSENT" if absent else "NOT WRITABLE by the user "
+            f"that owns {self.data_dir}") + ".\n"
+            f"    Refusing rather than proceeding. A read-only database serves every readiness probe "
+            f"in this module — they are all reads — and then fails the first WRITE scenario, which "
+            f"B3 would score against the agent rather than the harness (R4.85)."
+        )
 
 
 @dataclass
@@ -231,6 +401,10 @@ class Odoo(Substrate):
     containers: tuple = ("ultracua-bench-odoo-db-1", "ultracua-bench-odoo-1")
     db_name: str = "bench"
     seed_db: str = "bench_seed"
+    # `crm` for the lead scenarios; `base` comes with it but is named so the install is explicit.
+    # A SHORT list on purpose: every extra module is more demo rows, a slower seed and a larger
+    # template, and the corpus only reads CRM.
+    modules: str = "base,crm"
 
     def _psql(self, sql: str) -> str:
         proc = _compose("--profile", self.profile, "exec", "-T", "odoo-db",
@@ -239,6 +413,123 @@ class Odoo(Substrate):
 
     # Odoo's filestore is per-database and lives in the ODOO container, not the db one.
     filestore: str = "/var/lib/odoo/filestore"
+    data_dir: str = "/var/lib/odoo"
+
+    def await_ready(self, timeout_s: int = 300, poll_s: float = 2.0) -> None:
+        """Everything the base class checks, and THEN that the clock is really pinned (R4.86).
+
+        Ordered after readiness because the probe execs into a running container. The clock check is
+        not part of `assert_writable` on purpose — they are different questions with different
+        remedies, and collapsing two questions into one predicate is the shape R3.3 spent six passes
+        on.
+        """
+        super().await_ready(timeout_s=timeout_s, poll_s=poll_s)
+        self.assert_clock_pinned()
+
+    def assert_clock_pinned(self) -> None:
+        """`LD_PRELOAD` fails OPEN, which is why this cannot be left to configuration.
+
+        `odoo:17` ships no `libfaketime`, so for the whole of B2's life `ld.so` printed one line to
+        stderr — `cannot be preloaded: ignored` — and Odoo ran on the real wall clock while
+        `substrate_report()` recorded `faketime_epoch` into the run record. A stated guarantee that
+        is false is worse than an absent one. `Dockerfile.odoo` supplies the library and asserts its
+        path at BUILD time; this asserts the effect at RUN time, because the two can come apart
+        (an image rebuilt from the wrong Dockerfile, a compose override, an env var).
+
+        WHY IT MATTERS, measured on a seeded database rather than argued: Odoo's demo data is
+        generated relative to install time, and re-seeding under the pinned clock moved the activity
+        deadlines from 2026-08-21..27 to 2026-01-13..19. The Postgres template freezes those stored
+        dates; it cannot freeze `now()`, and "overdue" is `deadline < now()`.
+
+        The window is deliberately generous. `faketime` with an absolute `@epoch` starts there and
+        then ADVANCES in real time, so a long-lived container legitimately drifts forward; this is
+        checking that the clock is pinned to roughly the right place, not that it is frozen solid.
+        An unpinned container fails by seven MONTHS, not seven days.
+        """
+        if not FAKETIME_EPOCH:
+            return          # deliberately unpinned: the existing knob IS the acknowledgement
+        proc = _compose("--profile", self.profile, "exec", "-T", "odoo",
+                        "date", "-u", "+%Y-%m-%dT%H:%M:%S", check=False)
+        observed = (proc.stdout or "").strip().splitlines()[-1:] or [""]
+        try:
+            seen = datetime.datetime.strptime(observed[0], "%Y-%m-%dT%H:%M:%S")
+            want = datetime.datetime.strptime(FAKETIME_EPOCH.lstrip("@").strip(), "%Y-%m-%d %H:%M:%S")
+        except ValueError as exc:
+            raise SubstrateNotReady(
+                f"{self.name}: could not read the container clock ({observed[0]!r}) to verify the "
+                f"pinned epoch {FAKETIME_EPOCH!r}: {exc}") from exc
+        drift = abs((seen - want).total_seconds())
+        if drift > CLOCK_DRIFT_TOLERANCE_S:
+            raise SubstrateNotReady(
+                f"{self.name}: the container clock reads {seen.isoformat()} but the pinned epoch is "
+                f"{want.isoformat()} — {drift / 86400:.1f} days apart.\n"
+                f"    `LD_PRELOAD` fails OPEN: if libfaketime is missing, ld.so warns and the "
+                f"container runs on the real clock while the run record claims the epoch. Rebuild "
+                f"with `Dockerfile.odoo`, or set ULTRACUA_BENCH_FAKETIME= to run deliberately "
+                f"unpinned (R4.86)."
+            )
+
+    def assert_writable(self) -> None:
+        """The volume the filestore lives on, tested DIRECTLY — no `su` hop, and that is the point.
+
+        `docker compose exec` lands here as uid 101 `odoo`, which IS the service user (the image ends
+        `USER odoo`), so a plain `test -w` asks the real question. Its gitea sibling must hop, because
+        exec lands there as root. Same invariant, two probes, for a reason measured rather than
+        assumed.
+
+        Aimed at the VOLUME rather than at `filestore/<db>`: `up()` calls `await_ready()` before
+        anything is seeded, and a probe pointed at a per-database directory would report ABSENT on
+        every fresh instance and spin until the timeout.
+
+        Odoo's own reset is not known to break this — it copies with `cp -a`, which preserves
+        ownership, and runs as the service user anyway. Measured after a real reset: `odoo:odoo` on
+        both `bench` and `bench_seed`. This guards the copy METHOD changing, which is how the gitea
+        side broke.
+        """
+        proc = _compose("--profile", self.profile, "exec", "-T", "odoo", "sh", "-c",
+                        f"test -d {self.data_dir} || {{ echo ABSENT; exit 3; }}; "
+                        f"test -w {self.data_dir}", check=False)
+        if proc.returncode == 0:
+            return
+        absent = "ABSENT" in (proc.stdout or "")
+        raise SubstrateNotReady(
+            f"{self.name}: {self.data_dir} is " + ("ABSENT" if absent else "NOT WRITABLE by the "
+            "service user") + ".\n"
+            f"    Refusing rather than proceeding: every readiness probe above this one is a READ, "
+            f"so an unwritable substrate passes them all and fails the first write scenario, which "
+            f"B3 would score against the agent rather than the harness (R4.85)."
+        )
+
+    def seed(self) -> None:
+        """Create `bench` from scratch, WITH demo data, under the pinned clock.
+
+        THE FLAG TRAP, and it cost a whole seed to find: `--without-demo=False` DISABLES demo data.
+        Odoo reads any non-empty value as a comma-separated list of modules to skip demo for, so the
+        string "False" is just a module name nobody has and the switch is simply ON. The first seed
+        written that way produced **0 leads and an empty world** — which is R4.40's near-empty
+        observation arriving from the harness rather than from impatience, and it would have been
+        scored as the agent failing to find anything. OMITTING the flag is the only spelling that
+        means "load it", so it is omitted here and asserted by a test.
+
+        Run in a `run --rm` container rather than `exec`, because the service holds sessions on the
+        database and `DROP DATABASE` fails with `There are 2 other sessions using the database` —
+        the same reason `snapshot()` and `reset()` stop it.
+
+        The clock matters here and not only at read time: demo data is generated RELATIVE TO INSTALL
+        TIME. Seeding under an unpinned clock bakes today's dates into the template, so
+        `assert_clock_pinned` runs FIRST rather than after — by the time the rows exist it is too
+        late, and `reset()` would faithfully restore the wrong world forever (R4.86).
+        """
+        self.assert_clock_pinned()
+        _compose("--profile", self.profile, "stop", "odoo")
+        try:
+            self._psql(f'DROP DATABASE IF EXISTS "{self.db_name}"')
+            _compose("--profile", self.profile, "run", "--rm", "-T", "--entrypoint", "odoo", "odoo",
+                     "-d", self.db_name, "-i", self.modules, "--stop-after-init",
+                     "--db_host=odoo-db", "--db_user=odoo", "--db_password=odoo", timeout=1800)
+        finally:
+            _compose("--profile", self.profile, "start", "odoo", check=False)
+        self.await_ready()
 
     def snapshot(self) -> None:
         """Freeze the seeded world: a template database plus its filestore."""

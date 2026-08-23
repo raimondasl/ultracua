@@ -112,7 +112,7 @@ Violating any of these is a blocking defect, not a trade-off:
   identity check ("11 this tree has and they do not"), which is that guard working exactly as
   designed and a second 32 minutes gone. Freeze the tree, including `docs/` and `CLAUDE.md` — the
   register-count cells read those.
-- **A LOCAL GREEN IS WEAKER EVIDENCE THAN CI, IN TWO MEASURED WAYS. Both have shipped a red PR.**
+- **A LOCAL GREEN IS WEAKER EVIDENCE THAN CI, IN THREE MEASURED WAYS. All three have shipped a red PR.**
   1. *Platform*: CI runs ubuntu AND windows; local runs here are windows-only (see the fixture-race note
      below).
   2. *Keys*: **importing `ultracua.config` loads `.env` into `os.environ`**, so anything that reaches for
@@ -126,6 +126,16 @@ Violating any of these is a blocking defect, not a trade-off:
      `load_dotenv` does not override a variable that is already set, so an empty value is enough. When a
      test needs an agent, pass a `ScriptedProvider` AND a mock `Router` — `learn()` only skips building a
      real provider when BOTH are supplied.
+  3. *Docker*: **this host has a daemon and CI does not.** Added at 0.121.0 with R4.85's fourth
+     readiness layer, which execs into a container: two pre-existing cells drove `await_ready()` with
+     only layers 1-2 mocked, so they began reaching Docker for real — and passed here against a live,
+     healthy Gitea while failing **both** CI arms with a baffling `NOT WRITABLE`. Same shape as the
+     keys axis: the local machine supplies something CI does not, so the suite is green for the wrong
+     reason. `tests/test_substrates.py` closes it the way the fast tier closes Chromium — an autouse
+     fixture makes `subprocess.run` RAISE and name its remedy, so a leak fails HERE instead of on CI.
+     Guard `subprocess.run`, **not** `_compose`: the `_compose` version also blocked the cell that
+     patches `subprocess.run` itself to test `_compose`'s error wrapping, which is a false positive
+     in a guard — D0 wearing a test-harness hat, and it was caught by the guard's own first run.
 - **CI runs the suite on ubuntu AND windows; local runs here are windows-only.** A green local suite is
   therefore half the evidence. The browser fixtures are where this bites: anything whose page state is
   revealed inside a `fetch(...).then(...)` races the agent's next observation, and Linux loses that race

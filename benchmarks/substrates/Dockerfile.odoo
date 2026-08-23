@@ -1,0 +1,40 @@
+# Odoo with a WORKING libfaketime — reshape-plan 2.3 (B4).
+#
+# WHY A DERIVED IMAGE AT ALL. `docker-compose.yml` has set `LD_PRELOAD=.../libfaketime.so.1` since
+# B2, and `odoo:17` does not contain that file. `ld.so` prints one line to stderr and CARRIES ON:
+#
+#     ERROR: ld.so: object '.../libfaketime.so.1' from LD_PRELOAD cannot be preloaded: ignored.
+#
+# Odoo then starts normally on the real wall clock while `substrate_report()` records
+# `faketime_epoch: "@2026-01-15 09:00:00"` into the run record. A stated guarantee that is false is
+# worse than an absent one, and it is inviolable #2 wearing a container's hat.
+#
+# WHY IT MATTERS HERE, measured on a seeded `bench` database rather than argued:
+#
+#     today 2026-08-23 | activity deadlines 2026-08-21 .. 2026-08-27
+#     overdue 3 | due today 2 | future 9
+#
+# Odoo's demo data is generated RELATIVE TO INSTALL TIME. The Postgres template freezes those stored
+# dates, so every scenario starts from the same rows — but `overdue` is `deadline < now()`, so the
+# same template reads differently tomorrow and completely differently in October. Freezing the data
+# without freezing the clock is a half-reset, the same shape as `Odoo.reset` restoring the database
+# and not the filestore.
+#
+# The base stays PINNED TO A MINOR for the reason the compose file gives; this image inherits that.
+FROM odoo:17
+
+USER root
+# One apt invocation, and the step that runs it carries a `timeout-minutes` wherever it is automated —
+# step 0 measured `apt-get` killing 8 of 58 CI jobs while the suite itself was never the problem.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libfaketime \
+ && rm -rf /var/lib/apt/lists/*
+
+# Fail the BUILD if the path the compose file preloads is not the path the package installed to.
+# A missing file here becomes a silently-ignored LD_PRELOAD at run time, which is the defect this
+# image exists to remove — so it is asserted once, where it is still loud.
+RUN test -f /usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1 \
+ || (echo "libfaketime.so.1 is not where docker-compose.yml preloads it:" \
+     && find / -name 'libfaketime*' 2>/dev/null && exit 1)
+
+USER odoo

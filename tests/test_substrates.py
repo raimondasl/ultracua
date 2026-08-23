@@ -23,6 +23,49 @@ import pytest
 from benchmarks import substrates as S
 
 
+@pytest.fixture(autouse=True)
+def _docker_is_not_available_to_unit_tests(monkeypatch, request):
+    """No test in this file may shell out to Docker, and this is what makes that TRUE rather than
+    intended.
+
+    A THIRD AXIS OF "a local green is weaker evidence than CI", measured at 0.121.0 and now the one
+    that has actually shipped a red PR here. CLAUDE.md records two axes — platform (CI runs ubuntu
+    AND windows) and keys (`.env` makes a provider reachable locally). This is the third: **the
+    developer machine has Docker running and CI does not.**
+
+    R4.85 added writability as a fourth readiness layer, and that layer execs into a container. Two
+    pre-existing cells drive `await_ready()` with only layers 1-2 mocked, so they began reaching
+    Docker for real — and passed locally against a live, healthy Gitea while failing on both CI
+    arms with a baffling `NOT WRITABLE`. The suite was green on this host for the wrong reason.
+
+    So the leak is closed the way the fast tier closes Chromium: not by remembering to patch, but by
+    making the call RAISE and name its remedy. A test that needs a mocked `docker compose` asks for
+    the `compose` fixture (which installs its own recorder) or patches `_compose` in its own body.
+
+    The guard sits on `subprocess.run` rather than on `_compose`, and that placement is the second
+    thing this fixture got wrong before it was right. Guarding `_compose` also blocked
+    `test_a_missing_docker_binary_is_a_substrate_error_not_a_raw_oserror`, which patches
+    `subprocess.run` itself and calls the REAL `_compose` to check its error wrapping — it never
+    reaches Docker at all. A guard whose false positives block correct tests is the same
+    over-refusal shape as the `su` probe above; the precise invariant is "no test runs the real
+    `docker` binary", so that is what is asserted. A test that patches `subprocess.run` or
+    `_compose` in its own body wins, because its patch is applied after this one.
+    """
+    def _refuse(*args, **kwargs):
+        argv = args[0] if args else kwargs.get("args", [])
+        raise AssertionError(
+            f"{request.node.name} tried to run {' '.join(map(str, argv))[:80]!r} for real.\n"
+            f"    Unit tests here must not touch Docker: it is present on a developer host and "
+            f"ABSENT on CI, so a test that reaches it passes locally and fails both CI arms — "
+            f"measured, R4.85's readiness layer did exactly that.\n"
+            f"    Use the `compose` fixture, patch `S._compose` or `subprocess.run` in the test "
+            f"body, or neutralise the probe that calls it (e.g. `assert_writable`) when this cell "
+            f"is about a different layer."
+        )
+
+    monkeypatch.setattr(S.subprocess, "run", _refuse)
+
+
 class _Obs:
     """Duck-typed stand-in: the bench holds no import of the agent's Observation type, deliberately."""
 
@@ -91,6 +134,9 @@ def test_readiness_refuses_on_timeout_and_says_what_it_was_waiting_for(monkeypat
     """
     monkeypatch.setattr(S, "_container_health", lambda name: "starting")
     monkeypatch.setattr(S, "_http_ok", lambda url, min_bytes: False)
+    # Layer 3 is somebody else's cell (below). Neutralised here because it EXECS INTO A CONTAINER,
+    # and leaving it live made this test pass on a host with Docker up and fail both CI arms.
+    monkeypatch.setattr(S.Gitea, "assert_writable", lambda self: None)
     g = S.Gitea()
     with pytest.raises(S.SubstrateNotReady) as exc:
         g.await_ready(timeout_s=0.1, poll_s=0.01)
@@ -116,6 +162,7 @@ def test_a_container_with_no_healthcheck_does_not_block_readiness(monkeypatch) -
     """
     monkeypatch.setattr(S, "_container_health", lambda name: "none")
     monkeypatch.setattr(S, "_http_ok", lambda url, min_bytes: True)
+    monkeypatch.setattr(S.Gitea, "assert_writable", lambda self: None)   # layer 3 execs; see above
     S.Gitea().await_ready(timeout_s=1, poll_s=0.01)
 
 
@@ -201,12 +248,50 @@ class _Compose:
         return [" ".join(a) for a in self.calls]
 
 
+def _classes_defining(method: str) -> list:
+    """Every substrate class with its OWN `method` in `__dict__` — base included.
+
+    DERIVED, not listed. Patching `Substrate.await_ready` alone was correct until `Odoo` grew an
+    override for the clock check, at which point the base patch stopped reaching Odoo and a reset
+    test failed inside a readiness probe it never meant to run. That is CLAUDE.md's "a scan that
+    names ONE function asserts a negative about a body that can walk away", wearing a monkeypatch.
+    """
+    out = []
+    stack = [S.Substrate]
+    while stack:
+        cls = stack.pop()
+        if method in vars(cls):
+            out.append(cls)
+        stack.extend(cls.__subclasses__())
+    return out
+
+
 @pytest.fixture()
 def compose(monkeypatch):
+    """No Docker, and therefore no probe that needs a real container to answer.
+
+    `assert_clock_pinned` is neutralised alongside `await_ready` because `Odoo.seed()` calls it
+    DIRECTLY rather than through readiness — deliberately, since seeding under an unpinned clock
+    bakes the wrong dates in. Under the mock it would parse the canned `"yes"` as a date and refuse.
+    Both lists are derived for the same reason: the first version of this fixture named
+    `Substrate.await_ready` and stopped reaching Odoo the moment Odoo grew an override.
+    """
     c = _Compose(stdout="yes")
     monkeypatch.setattr(S, "_compose", c)
-    monkeypatch.setattr(S.Substrate, "await_ready", lambda self, **kw: None)
+    for name, stub in (("await_ready", lambda self, **kw: None),
+                       ("assert_clock_pinned", lambda self: None)):
+        for cls in _classes_defining(name):
+            monkeypatch.setattr(cls, name, stub)
     return c
+
+
+def test_the_fixture_neutralises_every_readiness_override_not_just_the_base() -> None:
+    """Arms the fixture itself. A subclass that grows its own `await_ready` must be caught here
+    rather than by a puzzling failure inside an unrelated reset test."""
+    found = {c.__name__ for c in _classes_defining("await_ready")}
+    assert "Substrate" in found, "the base defines await_ready; the derivation is broken"
+    assert found >= {"Substrate", "Odoo"}, (
+        f"a class overrides await_ready and the fixture would not neutralise it: {found}")
 
 
 def test_gitea_reset_removes_the_wal_before_restoring_the_seed(compose) -> None:
@@ -315,3 +400,217 @@ def test_a_missing_docker_binary_is_a_substrate_error_not_a_raw_oserror(monkeypa
     monkeypatch.setattr(subprocess, "run", slow)
     with pytest.raises(S.SubstrateError, match="did not return within"):
         S._compose("up", "-d")
+
+
+# --- R4.85: readiness is three READS, and a substrate that cannot be written is not ready --------
+#
+# Found by driving `Gitea.reset()` against a live container for the first time (0.121.0). The restore
+# runs `cp` inside `run --rm --entrypoint sh`, which lands as ROOT in the gitea image, so the restored
+# `gitea.db` came out `root:root` while the service runs as `git`. Every write then failed with
+# SQLite's `attempt to write a readonly database` — and `await_ready()` passed throughout, because a
+# `wget --spider` healthcheck and an HTTP GET are both READS.
+#
+# Reproduced from a virgin instance: `git:git` on boot, still `git:git` after `snapshot()` (which
+# only creates `seed.db`), `root:root` after `reset()`. Every scenario runs after a reset.
+
+def test_the_gitea_restore_chowns_the_database_to_whoever_owns_the_data_directory(compose) -> None:
+    S.Gitea().reset()
+    restore = [c for c in compose.joined() if "cp " in c and "seed.db" in c]
+    assert restore, f"nothing restored the seed; calls were {compose.joined()}"
+    cmd = restore[0]
+    assert "chown" in cmd, (
+        f"the restore does not chown the database: {cmd!r} — `cp` in this image runs as root, so the "
+        f"service (which runs as `git`) gets a read-only database and every write fails")
+    assert cmd.index("cp ") < cmd.index("chown"), "the chown must come AFTER the copy"
+    assert "stat -c %u:%g" in cmd, (
+        "the chown must derive the owner from the data directory rather than hardcoding `git`, so it "
+        "stays correct if the image changes uid")
+    assert "--reference" not in cmd, "busybox rejects GNU --reference; it was measured failing"
+
+
+def test_readiness_refuses_a_substrate_whose_database_the_service_cannot_write(monkeypatch) -> None:
+    """The layer that did not exist. A read-only database passes health AND HTTP."""
+    g = S.Gitea()
+    monkeypatch.setattr(S, "_container_health", lambda name: "healthy")
+    monkeypatch.setattr(S, "_http_ok", lambda url, n: True)
+    monkeypatch.setattr(S.Gitea, "assert_writable",
+                        lambda self: (_ for _ in ()).throw(
+                            S.SubstrateNotReady("gitea: /data/gitea/gitea.db is NOT WRITABLE by x")))
+    with pytest.raises(S.SubstrateNotReady) as e:
+        g.await_ready(timeout_s=5, poll_s=0.01)
+    assert "NOT WRITABLE" in str(e.value)
+
+
+def test_a_not_writable_verdict_raises_at_once_instead_of_burning_the_timeout(monkeypatch) -> None:
+    """It never self-heals, so spinning would report `not ready in 300s` instead of naming it.
+    ABSENT is the opposite case and must keep waiting — asserted by its sibling below."""
+    calls = {"n": 0}
+
+    def _boom(self):
+        calls["n"] += 1
+        raise S.SubstrateNotReady("gitea: /data/gitea/gitea.db is NOT WRITABLE by x")
+
+    monkeypatch.setattr(S, "_container_health", lambda name: "healthy")
+    monkeypatch.setattr(S, "_http_ok", lambda url, n: True)
+    monkeypatch.setattr(S.Gitea, "assert_writable", _boom)
+    with pytest.raises(S.SubstrateNotReady):
+        S.Gitea().await_ready(timeout_s=30, poll_s=0.01)
+    assert calls["n"] == 1, f"it retried a verdict that cannot change ({calls['n']} probes)"
+
+
+def test_an_absent_database_keeps_waiting_because_that_one_can_resolve_itself(monkeypatch) -> None:
+    calls = {"n": 0}
+
+    def _absent(self):
+        calls["n"] += 1
+        raise S.SubstrateNotReady("gitea: /data/gitea/gitea.db is ABSENT")
+
+    monkeypatch.setattr(S, "_container_health", lambda name: "healthy")
+    monkeypatch.setattr(S, "_http_ok", lambda url, n: True)
+    monkeypatch.setattr(S.Gitea, "assert_writable", _absent)
+    with pytest.raises(S.SubstrateNotReady) as e:
+        S.Gitea().await_ready(timeout_s=0.3, poll_s=0.01)
+    assert calls["n"] > 1, "an ABSENT database must be retried, not refused on the first probe"
+    assert "was not ready within" in str(e.value)
+
+
+def test_the_gitea_probe_hops_to_the_owning_user_and_the_odoo_one_must_not(monkeypatch) -> None:
+    """TWO PROBES ON PURPOSE, and this is the cell that says why.
+
+    `docker compose exec` lands as ROOT in gitea's Alpine and as uid 101 `odoo` in odoo's Debian.
+    Root can write anything, so the gitea probe MUST hop with `su` or it passes over a database the
+    service cannot touch. Running that same `su` probe against odoo reports its healthy filestore as
+    NOT WRITABLE, because Debian's `su` demands a password from a non-root caller — a false alarm in
+    the readiness path, which is D0's over-refusal shape and would take the Odoo arm offline.
+    """
+    seen = []
+    monkeypatch.setattr(S, "_compose",
+                        lambda *a, **k: (seen.append(" ".join(a)),
+                                         __import__("types").SimpleNamespace(
+                                             stdout="", stderr="", returncode=0))[1])
+    S.Gitea().assert_writable()
+    S.Odoo().assert_writable()
+    gitea_probe = next(c for c in seen if "gitea" in c and "test -w" in c)
+    odoo_probe = next(c for c in seen if "odoo" in c and "test -w" in c)
+    assert "su -s" in gitea_probe, "the gitea probe runs as root and would be vacuous without the hop"
+    assert "su -s" not in odoo_probe, (
+        "the odoo probe must NOT use `su`: exec is already the service user there, and Debian's `su` "
+        "fails for a non-root caller — measured reporting a healthy filestore as NOT WRITABLE")
+    assert "/var/lib/odoo" in odoo_probe and "filestore/" not in odoo_probe, (
+        "the odoo probe must target the VOLUME, not a per-database filestore directory: `up()` calls "
+        "`await_ready()` before anything is seeded, so a per-db path reports ABSENT and spins")
+
+
+def test_the_base_class_writability_check_is_a_no_op(monkeypatch) -> None:
+    """Anti-vacuity in the other direction: a substrate that copies nothing must not be forced to
+    invent a probe, and the base must not silently pass for the two that DO override it."""
+    monkeypatch.setattr(S, "_compose", lambda *a, **k: pytest.fail("the base probe ran a command"))
+    S.Substrate(name="x", profile="x", url="http://x", health_path="/").assert_writable()
+    assert S.Gitea.assert_writable is not S.Substrate.assert_writable
+    assert S.Odoo.assert_writable is not S.Substrate.assert_writable
+
+
+# --- seeding: the half of B2 that was named and never shipped ------------------------------------
+
+def test_the_odoo_seed_never_passes_without_demo(compose) -> None:
+    """THE FLAG TRAP, and it cost a whole seed. `--without-demo=False` DISABLES demo data: Odoo reads
+    any non-empty value as a list of modules to skip demo for, so "False" is a module name nobody has
+    and the switch is simply on. Measured: that spelling produced 0 leads and an empty world — R4.40's
+    near-empty observation arriving from the harness, which would be scored against the agent.
+
+    Omitting the flag is the ONLY spelling that means "load it", so the assertion is on ABSENCE.
+    """
+    S.Odoo().seed()
+    init = [c for c in compose.joined() if "--stop-after-init" in c]
+    assert init, f"nothing initialised the database; calls were {compose.joined()}"
+    assert "without-demo" not in init[0], (
+        f"the seed passes --without-demo: {init[0]!r}. Every non-empty value DISABLES demo data, "
+        f"including the ones that read like they enable it (`False`, `0`, `no`).")
+    assert "-i base,crm" in init[0] or "-i" in init[0], "no module list was installed"
+
+
+def test_the_odoo_seed_verifies_the_clock_before_it_creates_any_rows(monkeypatch) -> None:
+    """Ordering, and it is the whole point (R4.86). Demo data is generated RELATIVE TO INSTALL TIME,
+    so seeding under an unpinned clock bakes the wrong dates into the template and `reset()` then
+    restores that wrong world forever. Checking after the rows exist is too late."""
+    order = []
+    c = _Compose(stdout="yes")
+
+    def _record(*a, **k):
+        order.append(" ".join(a))
+        return c(*a, **k)
+
+    monkeypatch.setattr(S, "_compose", _record)
+    monkeypatch.setattr(S.Odoo, "await_ready", lambda self, **kw: None)
+    monkeypatch.setattr(S.Odoo, "assert_clock_pinned",
+                        lambda self: order.append("CLOCK-CHECK"))
+    S.Odoo().seed()
+    assert "CLOCK-CHECK" in order, "the seed never verified the clock"
+    init = next(i for i, c in enumerate(order) if "--stop-after-init" in c)
+    assert order.index("CLOCK-CHECK") < init, (
+        f"the clock is checked AFTER the rows are created: {order}")
+
+
+def test_the_odoo_seed_stops_the_service_around_the_drop(compose) -> None:
+    """`DROP DATABASE` fails with `There are 2 other sessions using the database` while the service
+    is up — measured, doing it by hand."""
+    S.Odoo().seed()
+    js = compose.joined()
+    stop = next(i for i, c in enumerate(js) if c.endswith("stop odoo"))
+    start = next(i for i, c in enumerate(js) if c.endswith("start odoo"))
+    init = next(i for i, c in enumerate(js) if "--stop-after-init" in c)
+    assert stop < init < start, f"the init is not bracketed by stop/start: {js}"
+
+
+def test_the_gitea_seed_creates_the_user_before_it_mints_a_token(compose, monkeypatch) -> None:
+    """There is no API before there is a user; a token minted first comes back as an error string."""
+    order = []
+    monkeypatch.setattr(S.Gitea, "mint_token", lambda self, name="bench": order.append("MINT") or "t")
+    monkeypatch.setattr(S.Gitea, "_api", lambda self, *a, **k: {"number": 1})
+    S.Gitea().seed()
+    created = [i for i, c in enumerate(compose.joined()) if "admin user create" in c]
+    assert created, f"no user was created; calls were {compose.joined()}"
+    assert order == ["MINT"], "the token was minted more than once, or not at all"
+
+
+def test_minting_a_token_rejects_gitea_error_text_on_stdout(monkeypatch) -> None:
+    """Gitea prints its ERRORS on stdout too, so a missing user yields a plausible-looking
+    56-character string. Measured while building this: `${#TOK}` reported 56 and the token was an
+    error message. Shape-checked, not merely non-empty."""
+    monkeypatch.setattr(S, "_compose", lambda *a, **k: __import__("types").SimpleNamespace(
+        stdout="Command error: user does not exist [uid: 0, name: bench]", stderr="", returncode=0))
+    with pytest.raises(S.SubstrateError) as e:
+        S.Gitea().mint_token()
+    assert "did not return a token" in str(e.value)
+
+    monkeypatch.setattr(S, "_compose", lambda *a, **k: __import__("types").SimpleNamespace(
+        stdout="a" * 40, stderr="", returncode=0))
+    assert S.Gitea().mint_token() == "a" * 40
+
+
+def test_the_seeded_issue_set_can_actually_support_its_scenarios() -> None:
+    """The corpus asserts against this world, so its shape is a property and not decoration."""
+    assert len(S.ISSUES) >= 5
+    states = {closed for _, _, closed in S.ISSUES}
+    assert states == {True, False}, "gitea-filter-state needs BOTH states present to prove anything"
+    titles = [t for t, _, _ in S.ISSUES]
+    assert titles != sorted(titles), (
+        "creation order equals alphabetical order, so gitea-sort-list would pass without sorting")
+    assert len(set(titles)) == len(titles), "duplicate titles make gitea-open-issue ambiguous"
+    distinctive = [t for t in titles if "marmalade" in t.lower()]
+    assert len(distinctive) == 1, "gitea-search needs exactly one title carrying its search token"
+
+
+def test_no_seeded_title_trips_the_write_classifier() -> None:
+    """The read scenarios must not be misclassified as writes before they start.
+
+    `safety.MUTATING_KEYWORDS` is a bare substring match with a measured 28% false-positive rate on
+    ordinary controls ("Show borders" -> `order`, "Sender" -> `send`), and it CANNOT be fixed or
+    removed — see CLAUDE.md. So the seeded world is written around it rather than fighting it, and
+    that is pinned here: a title added later that trips it would silently turn a read scenario into a
+    gated one and the bench would score `over_gated` against the product for the corpus's mistake.
+    """
+    from ultracua.safety import MUTATING_KEYWORDS
+    tripped = {t: [k for k in MUTATING_KEYWORDS if k in t.lower()] for t, _, _ in S.ISSUES}
+    tripped = {t: k for t, k in tripped.items() if k}
+    assert not tripped, f"seeded titles trip the write classifier: {tripped}"

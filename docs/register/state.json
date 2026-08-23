@@ -615,6 +615,16 @@
    "pins": [
     "tests/test_door_policy.py"
    ]
+  },
+  {
+   "id": "R4.85",
+   "status": "fixed",
+   "summary": "`Gitea.reset()` left the restored SQLite database owned by **root** while the service runs as `git`, so every write failed with `attempt to write a readonly database` — and `await_ready()` passed throughout, because all of its layers are READS (a `wget --spider` healthcheck and an HTTP GET both serve happily from a read-only file). The restore ran `cp` inside `run --rm --entrypoint sh`, which lands as root in that image; its Odoo sibling uses `cp -a` (preserves ownership) and execs as the service user, which is why only one of the two broke. EVERY scenario runs after a reset, so this was every write scenario, and B3 would have published the harness's broken substrate as the agent's failure — R4.40's shape one level over, in the silent direction. Reproduced from a virgin instance before fixing: `git:git` on boot, still `git:git` after `snapshot()` (which only creates `seed.db`), `root:root` after `reset()`. Fixed by chowning the restored file to whatever owns the data directory (derived, not a hardcoded `git`; busybox rejects GNU `--reference`), and closed as a CLASS by making writability the fourth readiness layer. The probe is per-substrate on purpose: `docker compose exec` lands as root in gitea's Alpine and as uid 101 `odoo` in odoo's Debian, so gitea's needs an `su` hop that would otherwise be vacuous, and running that same probe against odoo reports its healthy filestore as NOT WRITABLE because Debian's `su` demands a password from a non-root caller — a false alarm in the readiness path, which is D0's over-refusal shape, caught before shipping"
+  },
+  {
+   "id": "R4.86",
+   "status": "fixed",
+   "summary": "`libfaketime` was never in the `odoo:17` image, so the `LD_PRELOAD` the compose file has set since B2 failed OPEN: `ld.so` printed `cannot be preloaded: ignored` and Odoo ran on the real wall clock while `substrate_report()` recorded `faketime_epoch: \"@2026-01-15 09:00:00\"` into the run record. A stated comparability guarantee that is false, which is worse than an absent one. It is load-bearing: Odoo's demo data is generated relative to install time, and re-seeding under the pinned clock moved activity deadlines from 2026-08-21..27 to 2026-01-13..19; the Postgres template freezes those stored dates but cannot freeze `now()`, and `overdue` is `deadline < now()`. Fixed with a derived image (base still pinned to a minor) that installs the library and asserts its path at BUILD time, plus a RUN-time readiness check, because the two can come apart. Verified both ways: pinned image reads exactly 2026-01-15T09:00:00 and passes; an unpinned container is refused at 220.1 days. SECOND-ORDER, and it constrains B4's oracles: the fake clock stops at the container boundary — Postgres is a separate container and is NOT faked, measured as `overdue` = 14 against `now()` versus 3 against the epoch, so oracle SQL may never use `now()`/`CURRENT_DATE`"
   }
  ]
 }
