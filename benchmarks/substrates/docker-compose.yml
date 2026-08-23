@@ -70,7 +70,15 @@ services:
 
   odoo:
     profiles: ["odoo", "all"]
-    image: odoo:17
+    # BUILT, not pulled, and only because `odoo:17` does not ship `libfaketime` — the preload below
+    # was silently ignored for the whole of B2's life (`ld.so` warns and carries on), so Odoo ran on
+    # the real wall clock while the run record claimed a pinned epoch. See Dockerfile.odoo, which
+    # asserts the `.so` is where this file preloads it and fails the BUILD if it is not. The base
+    # stays pinned to a minor; this inherits that.
+    image: ultracua-bench/odoo:17-faketime
+    build:
+      context: .
+      dockerfile: Dockerfile.odoo
     depends_on:
       odoo-db:
         condition: service_healthy
@@ -81,6 +89,11 @@ services:
       # ODOO'S DEMO DATA IS CLOCK-COUPLED: invoices, leads and deadlines are seeded relative to
       # "today", so a scenario asserting "the overdue invoice" changes meaning as the wall clock
       # moves and a baseline recorded in March fails in June for no reason the bench can see.
+      # MEASURED on a seeded `bench` database, so this is not a hypothetical: with today at
+      # 2026-08-23 the demo activity deadlines span 2026-08-21..27 and split 3 overdue / 2 due today
+      # / 9 future. The Postgres template freezes those stored dates; it cannot freeze `now()`, and
+      # `overdue` is `deadline < now()`. Freezing the data without freezing the clock is a
+      # half-reset — the same shape as restoring the database and not the filestore.
       # `libfaketime` pins the container's clock so the seeded world is the same world every run.
       # Set by `substrates.py`, which owns the epoch, so the value is recorded in the run record
       # rather than living only here.

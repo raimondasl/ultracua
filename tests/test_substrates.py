@@ -315,3 +315,111 @@ def test_a_missing_docker_binary_is_a_substrate_error_not_a_raw_oserror(monkeypa
     monkeypatch.setattr(subprocess, "run", slow)
     with pytest.raises(S.SubstrateError, match="did not return within"):
         S._compose("up", "-d")
+
+
+# --- R4.85: readiness is three READS, and a substrate that cannot be written is not ready --------
+#
+# Found by driving `Gitea.reset()` against a live container for the first time (0.121.0). The restore
+# runs `cp` inside `run --rm --entrypoint sh`, which lands as ROOT in the gitea image, so the restored
+# `gitea.db` came out `root:root` while the service runs as `git`. Every write then failed with
+# SQLite's `attempt to write a readonly database` — and `await_ready()` passed throughout, because a
+# `wget --spider` healthcheck and an HTTP GET are both READS.
+#
+# Reproduced from a virgin instance: `git:git` on boot, still `git:git` after `snapshot()` (which
+# only creates `seed.db`), `root:root` after `reset()`. Every scenario runs after a reset.
+
+def test_the_gitea_restore_chowns_the_database_to_whoever_owns_the_data_directory(compose) -> None:
+    S.Gitea().reset()
+    restore = [c for c in compose.joined() if "cp " in c and "seed.db" in c]
+    assert restore, f"nothing restored the seed; calls were {compose.joined()}"
+    cmd = restore[0]
+    assert "chown" in cmd, (
+        f"the restore does not chown the database: {cmd!r} — `cp` in this image runs as root, so the "
+        f"service (which runs as `git`) gets a read-only database and every write fails")
+    assert cmd.index("cp ") < cmd.index("chown"), "the chown must come AFTER the copy"
+    assert "stat -c %u:%g" in cmd, (
+        "the chown must derive the owner from the data directory rather than hardcoding `git`, so it "
+        "stays correct if the image changes uid")
+    assert "--reference" not in cmd, "busybox rejects GNU --reference; it was measured failing"
+
+
+def test_readiness_refuses_a_substrate_whose_database_the_service_cannot_write(monkeypatch) -> None:
+    """The layer that did not exist. A read-only database passes health AND HTTP."""
+    g = S.Gitea()
+    monkeypatch.setattr(S, "_container_health", lambda name: "healthy")
+    monkeypatch.setattr(S, "_http_ok", lambda url, n: True)
+    monkeypatch.setattr(S.Gitea, "assert_writable",
+                        lambda self: (_ for _ in ()).throw(
+                            S.SubstrateNotReady("gitea: /data/gitea/gitea.db is NOT WRITABLE by x")))
+    with pytest.raises(S.SubstrateNotReady) as e:
+        g.await_ready(timeout_s=5, poll_s=0.01)
+    assert "NOT WRITABLE" in str(e.value)
+
+
+def test_a_not_writable_verdict_raises_at_once_instead_of_burning_the_timeout(monkeypatch) -> None:
+    """It never self-heals, so spinning would report `not ready in 300s` instead of naming it.
+    ABSENT is the opposite case and must keep waiting — asserted by its sibling below."""
+    calls = {"n": 0}
+
+    def _boom(self):
+        calls["n"] += 1
+        raise S.SubstrateNotReady("gitea: /data/gitea/gitea.db is NOT WRITABLE by x")
+
+    monkeypatch.setattr(S, "_container_health", lambda name: "healthy")
+    monkeypatch.setattr(S, "_http_ok", lambda url, n: True)
+    monkeypatch.setattr(S.Gitea, "assert_writable", _boom)
+    with pytest.raises(S.SubstrateNotReady):
+        S.Gitea().await_ready(timeout_s=30, poll_s=0.01)
+    assert calls["n"] == 1, f"it retried a verdict that cannot change ({calls['n']} probes)"
+
+
+def test_an_absent_database_keeps_waiting_because_that_one_can_resolve_itself(monkeypatch) -> None:
+    calls = {"n": 0}
+
+    def _absent(self):
+        calls["n"] += 1
+        raise S.SubstrateNotReady("gitea: /data/gitea/gitea.db is ABSENT")
+
+    monkeypatch.setattr(S, "_container_health", lambda name: "healthy")
+    monkeypatch.setattr(S, "_http_ok", lambda url, n: True)
+    monkeypatch.setattr(S.Gitea, "assert_writable", _absent)
+    with pytest.raises(S.SubstrateNotReady) as e:
+        S.Gitea().await_ready(timeout_s=0.3, poll_s=0.01)
+    assert calls["n"] > 1, "an ABSENT database must be retried, not refused on the first probe"
+    assert "was not ready within" in str(e.value)
+
+
+def test_the_gitea_probe_hops_to_the_owning_user_and_the_odoo_one_must_not(monkeypatch) -> None:
+    """TWO PROBES ON PURPOSE, and this is the cell that says why.
+
+    `docker compose exec` lands as ROOT in gitea's Alpine and as uid 101 `odoo` in odoo's Debian.
+    Root can write anything, so the gitea probe MUST hop with `su` or it passes over a database the
+    service cannot touch. Running that same `su` probe against odoo reports its healthy filestore as
+    NOT WRITABLE, because Debian's `su` demands a password from a non-root caller — a false alarm in
+    the readiness path, which is D0's over-refusal shape and would take the Odoo arm offline.
+    """
+    seen = []
+    monkeypatch.setattr(S, "_compose",
+                        lambda *a, **k: (seen.append(" ".join(a)),
+                                         __import__("types").SimpleNamespace(
+                                             stdout="", stderr="", returncode=0))[1])
+    S.Gitea().assert_writable()
+    S.Odoo().assert_writable()
+    gitea_probe = next(c for c in seen if "gitea" in c and "test -w" in c)
+    odoo_probe = next(c for c in seen if "odoo" in c and "test -w" in c)
+    assert "su -s" in gitea_probe, "the gitea probe runs as root and would be vacuous without the hop"
+    assert "su -s" not in odoo_probe, (
+        "the odoo probe must NOT use `su`: exec is already the service user there, and Debian's `su` "
+        "fails for a non-root caller — measured reporting a healthy filestore as NOT WRITABLE")
+    assert "/var/lib/odoo" in odoo_probe and "filestore/" not in odoo_probe, (
+        "the odoo probe must target the VOLUME, not a per-database filestore directory: `up()` calls "
+        "`await_ready()` before anything is seeded, so a per-db path reports ABSENT and spins")
+
+
+def test_the_base_class_writability_check_is_a_no_op(monkeypatch) -> None:
+    """Anti-vacuity in the other direction: a substrate that copies nothing must not be forced to
+    invent a probe, and the base must not silently pass for the two that DO override it."""
+    monkeypatch.setattr(S, "_compose", lambda *a, **k: pytest.fail("the base probe ran a command"))
+    S.Substrate(name="x", profile="x", url="http://x", health_path="/").assert_writable()
+    assert S.Gitea.assert_writable is not S.Substrate.assert_writable
+    assert S.Odoo.assert_writable is not S.Substrate.assert_writable

@@ -116,11 +116,21 @@ class Substrate:
         _compose(*args, check=False)
 
     def await_ready(self, timeout_s: int = 300, poll_s: float = 2.0) -> None:
-        """Container health FIRST, then a substantive HTTP response.
+        """Container health, then a substantive HTTP response, then CAN IT BE WRITTEN TO.
 
-        Both, because they fail differently: a container can be `healthy` while a proxy in front of it
-        is not, and an HTTP probe can pass against a cached error page. Neither alone has been enough
+        The first two fail differently: a container can be `healthy` while a proxy in front of it is
+        not, and an HTTP probe can pass against a cached error page. Neither alone has been enough
         anywhere this repo has looked.
+
+        THE THIRD LAYER EXISTS BECAUSE THE FIRST TWO ARE BOTH READS (R4.85). A `wget --spider`
+        healthcheck and an HTTP GET pass perfectly against a substrate whose database the service
+        cannot write, which is precisely the state `Gitea.reset()` used to leave behind. A substrate
+        that cannot accept a write is not ready; discovering that from a scored write scenario
+        attributes the harness's breakage to the agent.
+
+        A NOT-WRITABLE verdict raises immediately rather than spinning: it never self-heals, and
+        burning the full timeout would report it as "not ready in 300s" instead of naming it. Only
+        an ABSENT state can resolve on its own, so only that one keeps waiting.
         """
         deadline = time.monotonic() + timeout_s
         last = ""
@@ -129,7 +139,14 @@ class Substrate:
             if unhealthy:
                 last = f"container(s) not healthy: {', '.join(unhealthy)}"
             elif _http_ok(self.url + self.health_path, self.min_body_bytes):
-                return
+                try:
+                    self.assert_writable()
+                except SubstrateNotReady as exc:
+                    if "NOT WRITABLE" in str(exc):
+                        raise
+                    last = str(exc).splitlines()[0]
+                else:
+                    return
             else:
                 last = f"no substantive response from {self.url + self.health_path}"
             time.sleep(poll_s)
@@ -138,6 +155,18 @@ class Substrate:
             f"    Refusing rather than proceeding: a scenario started against a half-built substrate "
             f"scores the harness's impatience as the agent's failure (R4.40)."
         )
+
+    def assert_writable(self) -> None:
+        """Nothing to check by default. Overridden where a reset COPIES the substrate's state files.
+
+        DELIBERATELY NOT A SHARED MECHANISM, and that is measured rather than stylistic:
+        `docker compose exec` lands as a DIFFERENT user per image — **root** in gitea's Alpine, uid
+        101 `odoo` in odoo's Debian — so one probe cannot be correct for both. The gitea probe needs
+        an `su` hop precisely because root would make it vacuous; running that same probe against
+        odoo reports its perfectly healthy filestore as NOT WRITABLE, because Debian's `su` demands a
+        password when a non-root caller invokes it. A false alarm in the readiness path is the
+        over-refusal shape D0 records, and it would have taken the whole Odoo arm offline.
+        """
 
     def reset(self) -> None:  # pragma: no cover - overridden
         raise NotImplementedError
@@ -165,6 +194,7 @@ class Gitea(Substrate):
     url: str = "http://localhost:3000"
     health_path: str = "/"
     containers: tuple = ("ultracua-bench-gitea-1",)
+    data_dir: str = "/data/gitea"
     db_path: str = "/data/gitea/gitea.db"
     seed_path: str = "/data/gitea/seed.db"
 
@@ -197,6 +227,21 @@ class Gitea(Substrate):
            direction and never for the RESTORE direction.
         3. No `try/finally`, while `stop` comes first — so any raise in between left the service
            DOWN, and every later scenario reported a harness error from a second, unrelated cause.
+
+        A FOURTH, found by driving it (0.121.0, R4.85). The restore ran `cp` inside a
+        `run --rm --entrypoint sh` container, which in this image lands as **root** — so the restored
+        `gitea.db` came out `root:root` while the service runs as `git`, and SQLite reported
+        `attempt to write a readonly database` on the first write. `await_ready()` never noticed,
+        because all three of its layers are READS: a `wget --spider` healthcheck and an HTTP GET both
+        pass happily against a read-only database. Every scenario runs after a reset, so this was
+        every scenario, and B3 would have published the harness's broken substrate as the agent's
+        failure — R4.40's shape one level over, in the silent direction.
+
+        Reproduced from a virgin instance before it was fixed: `git:git` on boot, still `git:git`
+        after `snapshot()` (which only creates `seed.db`), `root:root` after `reset()`.
+
+        The `chown` is written against the DIRECTORY's owner rather than a hardcoded `git`, so it
+        stays right if the image changes uid. `--reference` is GNU and busybox rejects it.
         """
         _compose("--profile", self.profile, "stop")
         try:
@@ -208,10 +253,35 @@ class Gitea(Substrate):
                     f"first scenario silently defines the world for every later one")
             _compose("--profile", self.profile, "run", "--rm", "-T", "--entrypoint", "sh", "gitea",
                      "-c", f"rm -f {self.db_path}-wal {self.db_path}-shm && "
-                           f"cp {self.seed_path} {self.db_path}")
+                           f"cp {self.seed_path} {self.db_path} && "
+                           f"chown \"$(stat -c %u:%g {self.data_dir})\" {self.db_path}")
         finally:
             _compose("--profile", self.profile, "start", check=False)
         self.await_ready()
+
+    def assert_writable(self) -> None:
+        """Can the SERVICE write its database? The question `await_ready`'s three read-layers cannot ask.
+
+        RUN AS THE OWNING USER, resolved at run time, and that is the whole point: `docker compose
+        exec` lands as **root** in this image and root can write anything, so the same `test -w` run
+        without the `su` hop passes over a database the service cannot touch. Measured both ways
+        before this shipped.
+        """
+        probe = (f'test -f {self.db_path} || {{ echo ABSENT; exit 3; }}; '
+                 f'u=$(stat -c %U {self.data_dir}); '
+                 f'su -s /bin/sh "$u" -c "test -w {self.db_path}"')
+        proc = _compose("--profile", self.profile, "exec", "-T", "gitea", "sh", "-c", probe,
+                        check=False)
+        if proc.returncode == 0:
+            return
+        absent = "ABSENT" in (proc.stdout or "")
+        raise SubstrateNotReady(
+            f"{self.name}: {self.db_path} is " + ("ABSENT" if absent else "NOT WRITABLE by the user "
+            f"that owns {self.data_dir}") + ".\n"
+            f"    Refusing rather than proceeding. A read-only database serves every readiness probe "
+            f"in this module — they are all reads — and then fails the first WRITE scenario, which "
+            f"B3 would score against the agent rather than the harness (R4.85)."
+        )
 
 
 @dataclass
@@ -239,6 +309,38 @@ class Odoo(Substrate):
 
     # Odoo's filestore is per-database and lives in the ODOO container, not the db one.
     filestore: str = "/var/lib/odoo/filestore"
+    data_dir: str = "/var/lib/odoo"
+
+    def assert_writable(self) -> None:
+        """The volume the filestore lives on, tested DIRECTLY — no `su` hop, and that is the point.
+
+        `docker compose exec` lands here as uid 101 `odoo`, which IS the service user (the image ends
+        `USER odoo`), so a plain `test -w` asks the real question. Its gitea sibling must hop, because
+        exec lands there as root. Same invariant, two probes, for a reason measured rather than
+        assumed.
+
+        Aimed at the VOLUME rather than at `filestore/<db>`: `up()` calls `await_ready()` before
+        anything is seeded, and a probe pointed at a per-database directory would report ABSENT on
+        every fresh instance and spin until the timeout.
+
+        Odoo's own reset is not known to break this — it copies with `cp -a`, which preserves
+        ownership, and runs as the service user anyway. Measured after a real reset: `odoo:odoo` on
+        both `bench` and `bench_seed`. This guards the copy METHOD changing, which is how the gitea
+        side broke.
+        """
+        proc = _compose("--profile", self.profile, "exec", "-T", "odoo", "sh", "-c",
+                        f"test -d {self.data_dir} || {{ echo ABSENT; exit 3; }}; "
+                        f"test -w {self.data_dir}", check=False)
+        if proc.returncode == 0:
+            return
+        absent = "ABSENT" in (proc.stdout or "")
+        raise SubstrateNotReady(
+            f"{self.name}: {self.data_dir} is " + ("ABSENT" if absent else "NOT WRITABLE by the "
+            "service user") + ".\n"
+            f"    Refusing rather than proceeding: every readiness probe above this one is a READ, "
+            f"so an unwritable substrate passes them all and fails the first write scenario, which "
+            f"B3 would score against the agent rather than the harness (R4.85)."
+        )
 
     def snapshot(self) -> None:
         """Freeze the seeded world: a template database plus its filestore."""
