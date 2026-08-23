@@ -42,6 +42,7 @@ if str(ROOT) not in sys.path:
 
 from ultracua import flows                         # noqa: E402
 
+from benchmarks import oracles                      # noqa: E402
 from benchmarks import substrates as S              # noqa: E402
 from benchmarks.boundary_ledger import BoundaryLedger  # noqa: E402
 
@@ -234,12 +235,30 @@ def main(argv=None) -> int:
     ap.add_argument("--scenario", default=None)
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--up", action="store_true", help="bring the substrate up and report readiness")
+    ap.add_argument("--arm-oracles", dest="arm_oracles", action="store_true",
+                    help="prove every oracle can say NO; a scored run refuses without this")
     args = ap.parse_args(argv)
 
     scenarios = [s for s in SMOKE if s.substrate == args.substrate]
     if args.list:
         for s in scenarios:
             print(f"{s.name:14} {'write' if s.mutating else 'read ':5}  {s.goal}")
+        return 0
+
+    if args.arm_oracles:
+        # THE GATE, and it runs BEFORE anything is scored (benchmark-plan §7, gate 1). An oracle
+        # that cannot fail approves everything and publishes a perfect availability rate; every
+        # number downstream inherits it. Offline by construction — falsified probes rather than a
+        # mutated substrate — so it costs nothing and can gate every run rather than a nightly one.
+        substrate = SUBSTRATES[args.substrate]()
+        try:
+            report = oracles.arm_oracles(oracles.for_substrate(args.substrate, substrate))
+        except oracles.OracleError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        for name, label, satisfied in report:
+            print(f"  {name:16} {label:36} rejected={satisfied is False}")
+        print(f"{len(report)} falsification(s), every one rejected. The oracle set is armed.")
         return 0
 
     if args.up:
