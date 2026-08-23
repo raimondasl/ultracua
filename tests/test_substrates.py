@@ -221,10 +221,20 @@ def _classes_defining(method: str) -> list:
 
 @pytest.fixture()
 def compose(monkeypatch):
+    """No Docker, and therefore no probe that needs a real container to answer.
+
+    `assert_clock_pinned` is neutralised alongside `await_ready` because `Odoo.seed()` calls it
+    DIRECTLY rather than through readiness — deliberately, since seeding under an unpinned clock
+    bakes the wrong dates in. Under the mock it would parse the canned `"yes"` as a date and refuse.
+    Both lists are derived for the same reason: the first version of this fixture named
+    `Substrate.await_ready` and stopped reaching Odoo the moment Odoo grew an override.
+    """
     c = _Compose(stdout="yes")
     monkeypatch.setattr(S, "_compose", c)
-    for cls in _classes_defining("await_ready"):
-        monkeypatch.setattr(cls, "await_ready", lambda self, **kw: None)
+    for name, stub in (("await_ready", lambda self, **kw: None),
+                       ("assert_clock_pinned", lambda self: None)):
+        for cls in _classes_defining(name):
+            monkeypatch.setattr(cls, name, stub)
     return c
 
 
@@ -451,3 +461,109 @@ def test_the_base_class_writability_check_is_a_no_op(monkeypatch) -> None:
     S.Substrate(name="x", profile="x", url="http://x", health_path="/").assert_writable()
     assert S.Gitea.assert_writable is not S.Substrate.assert_writable
     assert S.Odoo.assert_writable is not S.Substrate.assert_writable
+
+
+# --- seeding: the half of B2 that was named and never shipped ------------------------------------
+
+def test_the_odoo_seed_never_passes_without_demo(compose) -> None:
+    """THE FLAG TRAP, and it cost a whole seed. `--without-demo=False` DISABLES demo data: Odoo reads
+    any non-empty value as a list of modules to skip demo for, so "False" is a module name nobody has
+    and the switch is simply on. Measured: that spelling produced 0 leads and an empty world — R4.40's
+    near-empty observation arriving from the harness, which would be scored against the agent.
+
+    Omitting the flag is the ONLY spelling that means "load it", so the assertion is on ABSENCE.
+    """
+    S.Odoo().seed()
+    init = [c for c in compose.joined() if "--stop-after-init" in c]
+    assert init, f"nothing initialised the database; calls were {compose.joined()}"
+    assert "without-demo" not in init[0], (
+        f"the seed passes --without-demo: {init[0]!r}. Every non-empty value DISABLES demo data, "
+        f"including the ones that read like they enable it (`False`, `0`, `no`).")
+    assert "-i base,crm" in init[0] or "-i" in init[0], "no module list was installed"
+
+
+def test_the_odoo_seed_verifies_the_clock_before_it_creates_any_rows(monkeypatch) -> None:
+    """Ordering, and it is the whole point (R4.86). Demo data is generated RELATIVE TO INSTALL TIME,
+    so seeding under an unpinned clock bakes the wrong dates into the template and `reset()` then
+    restores that wrong world forever. Checking after the rows exist is too late."""
+    order = []
+    c = _Compose(stdout="yes")
+
+    def _record(*a, **k):
+        order.append(" ".join(a))
+        return c(*a, **k)
+
+    monkeypatch.setattr(S, "_compose", _record)
+    monkeypatch.setattr(S.Odoo, "await_ready", lambda self, **kw: None)
+    monkeypatch.setattr(S.Odoo, "assert_clock_pinned",
+                        lambda self: order.append("CLOCK-CHECK"))
+    S.Odoo().seed()
+    assert "CLOCK-CHECK" in order, "the seed never verified the clock"
+    init = next(i for i, c in enumerate(order) if "--stop-after-init" in c)
+    assert order.index("CLOCK-CHECK") < init, (
+        f"the clock is checked AFTER the rows are created: {order}")
+
+
+def test_the_odoo_seed_stops_the_service_around_the_drop(compose) -> None:
+    """`DROP DATABASE` fails with `There are 2 other sessions using the database` while the service
+    is up — measured, doing it by hand."""
+    S.Odoo().seed()
+    js = compose.joined()
+    stop = next(i for i, c in enumerate(js) if c.endswith("stop odoo"))
+    start = next(i for i, c in enumerate(js) if c.endswith("start odoo"))
+    init = next(i for i, c in enumerate(js) if "--stop-after-init" in c)
+    assert stop < init < start, f"the init is not bracketed by stop/start: {js}"
+
+
+def test_the_gitea_seed_creates_the_user_before_it_mints_a_token(compose, monkeypatch) -> None:
+    """There is no API before there is a user; a token minted first comes back as an error string."""
+    order = []
+    monkeypatch.setattr(S.Gitea, "mint_token", lambda self, name="bench": order.append("MINT") or "t")
+    monkeypatch.setattr(S.Gitea, "_api", lambda self, *a, **k: {"number": 1})
+    S.Gitea().seed()
+    created = [i for i, c in enumerate(compose.joined()) if "admin user create" in c]
+    assert created, f"no user was created; calls were {compose.joined()}"
+    assert order == ["MINT"], "the token was minted more than once, or not at all"
+
+
+def test_minting_a_token_rejects_gitea_error_text_on_stdout(monkeypatch) -> None:
+    """Gitea prints its ERRORS on stdout too, so a missing user yields a plausible-looking
+    56-character string. Measured while building this: `${#TOK}` reported 56 and the token was an
+    error message. Shape-checked, not merely non-empty."""
+    monkeypatch.setattr(S, "_compose", lambda *a, **k: __import__("types").SimpleNamespace(
+        stdout="Command error: user does not exist [uid: 0, name: bench]", stderr="", returncode=0))
+    with pytest.raises(S.SubstrateError) as e:
+        S.Gitea().mint_token()
+    assert "did not return a token" in str(e.value)
+
+    monkeypatch.setattr(S, "_compose", lambda *a, **k: __import__("types").SimpleNamespace(
+        stdout="a" * 40, stderr="", returncode=0))
+    assert S.Gitea().mint_token() == "a" * 40
+
+
+def test_the_seeded_issue_set_can_actually_support_its_scenarios() -> None:
+    """The corpus asserts against this world, so its shape is a property and not decoration."""
+    assert len(S.ISSUES) >= 5
+    states = {closed for _, _, closed in S.ISSUES}
+    assert states == {True, False}, "gitea-filter-state needs BOTH states present to prove anything"
+    titles = [t for t, _, _ in S.ISSUES]
+    assert titles != sorted(titles), (
+        "creation order equals alphabetical order, so gitea-sort-list would pass without sorting")
+    assert len(set(titles)) == len(titles), "duplicate titles make gitea-open-issue ambiguous"
+    distinctive = [t for t in titles if "marmalade" in t.lower()]
+    assert len(distinctive) == 1, "gitea-search needs exactly one title carrying its search token"
+
+
+def test_no_seeded_title_trips_the_write_classifier() -> None:
+    """The read scenarios must not be misclassified as writes before they start.
+
+    `safety.MUTATING_KEYWORDS` is a bare substring match with a measured 28% false-positive rate on
+    ordinary controls ("Show borders" -> `order`, "Sender" -> `send`), and it CANNOT be fixed or
+    removed — see CLAUDE.md. So the seeded world is written around it rather than fighting it, and
+    that is pinned here: a title added later that trips it would silently turn a read scenario into a
+    gated one and the bench would score `over_gated` against the product for the corpus's mistake.
+    """
+    from ultracua.safety import MUTATING_KEYWORDS
+    tripped = {t: [k for k in MUTATING_KEYWORDS if k in t.lower()] for t, _, _ in S.ISSUES}
+    tripped = {t: k for t, k in tripped.items() if k}
+    assert not tripped, f"seeded titles trip the write classifier: {tripped}"

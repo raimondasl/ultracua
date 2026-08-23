@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import re
 import subprocess
 import time
 import urllib.error
@@ -59,6 +60,28 @@ CLOCK_DRIFT_TOLERANCE_S = 7 * 86400
 # loads is a near-empty body. The number is a FLOOR for "something rendered", not a quality bar, and
 # it is deliberately far below any real page so it can only fire on the failure it names.
 SKELETON_ELEMENT_FLOOR = 3
+
+# Gitea's seeded world. FIXED CONTENT, because a scenario asserts against it: `gitea-filter-state`
+# needs both states present, `gitea-sort-list` needs a creation order that differs from alphabetical
+# (or sorting proves nothing), and `gitea-search` needs one distinctive token that appears in exactly
+# one title. Titles are deliberately mundane; the read-only ones must NOT trip
+# `safety.MUTATING_KEYWORDS`, whose measured false-positive rate on ordinary controls is 28%.
+#   (title, body, closed)
+ISSUES = (
+    ("Zebra crossing renders behind the map layer", "Reported on the staging tile server.", False),
+    ("Alpha channel lost on export",                "Only for 16-bit sources.",             False),
+    ("Marmalade parser rejects trailing commas",    "The distinctive one, for search.",     False),
+    ("Kerning regression in the sidebar",           "Since the font bump.",                 True),
+    ("Dark mode contrast below AA on links",        "Measured 3.9:1.",                      False),
+    ("Batch importer times out past 10k rows",      "Needs a cursor.",                      True),
+    ("Tooltip clips at the viewport edge",          "Right edge only.",                     False),
+)
+
+# A LOCAL, THROWAWAY FIXTURE CREDENTIAL for a container bound to localhost with registration
+# disabled — the same standing as the `odoo/odoo` Postgres pair already in the compose file. It is
+# not a secret and must never become one: if this substrate is ever exposed beyond localhost, this
+# constant is the first thing that has to go.
+GITEA_PASSWORD = "benchbench"
 
 
 class SubstrateError(RuntimeError):
@@ -202,9 +225,78 @@ class Gitea(Substrate):
     url: str = "http://localhost:3000"
     health_path: str = "/"
     containers: tuple = ("ultracua-bench-gitea-1",)
+    user: str = "bench"
+    repo: str = "acme"
     data_dir: str = "/data/gitea"
     db_path: str = "/data/gitea/gitea.db"
     seed_path: str = "/data/gitea/seed.db"
+
+    def mint_token(self, name: str = "bench") -> str:
+        """A fresh API token, minted on demand and NEVER stored.
+
+        The oracles need API access; the alternative to minting is persisting a token in a file or a
+        report, and this repo's standing rule is that secrets are env-resolved and never serialized.
+        Gitea is happy to issue several, so a caller that needs one asks for one.
+
+        Run as the `git` user: the CLI REFUSES to run as root ("Gitea is not supposed to be run as
+        root"), while `docker compose exec` lands as root in this image — so the hop is required
+        here for the opposite reason it is required in `assert_writable`.
+        """
+        proc = _compose("--profile", self.profile, "exec", "-T", "-u", "git", "gitea",
+                        "gitea", "admin", "user", "generate-access-token",
+                        "--username", self.user, "--token-name", name, "--scopes", "all", "--raw")
+        token = (proc.stdout or "").strip().splitlines()[-1:] or [""]
+        token = token[0].strip()
+        if not re.fullmatch(r"[0-9a-f]{40}", token):
+            raise SubstrateError(
+                f"{self.name}: token mint did not return a token. Gitea prints its ERRORS on stdout "
+                f"too, so a missing user yields a plausible-looking 56-character string — which is "
+                f"why this is shape-checked rather than merely non-empty.")
+        return token
+
+    def _api(self, token: str, method: str, path: str, payload: "dict | None" = None) -> dict:
+        req = urllib.request.Request(
+            f"{self.url}/api/v1{path}", method=method,
+            data=None if payload is None else json.dumps(payload).encode(),
+            headers={"Authorization": f"token {token}", "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                body = resp.read().decode() or "null"
+        except urllib.error.HTTPError as exc:
+            raise SubstrateError(
+                f"{self.name}: {method} {path} -> HTTP {exc.code}: {exc.read().decode()[:200]}") from exc
+        return json.loads(body)
+
+    def seed(self) -> None:
+        """Build the world every Gitea scenario starts from: one admin, one repo, `ISSUES`.
+
+        NOT idempotent and deliberately not: it is called once against a virgin instance, and
+        `snapshot()` is what makes it repeatable. A `seed()` that tolerated existing state would
+        quietly produce a DIFFERENT world on a second call, which is the drift the template exists
+        to remove.
+
+        The admin user comes from the CLI rather than the API because there is no API before there
+        is a user. `INSTALL_LOCK=true` in the compose file is what lets that skip the web installer.
+        """
+        _compose("--profile", self.profile, "exec", "-T", "-u", "git", "gitea",
+                 "gitea", "admin", "user", "create", "--admin",
+                 "--username", self.user, "--password", GITEA_PASSWORD,
+                 "--email", f"{self.user}@example.invalid", "--must-change-password=false")
+        token = self.mint_token("seed")
+        self._api(token, "POST", "/user/repos", {"name": self.repo, "auto_init": True})
+        # Time tracking is OFF by default and `gitea-start-timer` is the scenario that needs it —
+        # a real write with NO enclosing form, catchable only by the wire (benchmark-plan §7).
+        self._api(token, "PATCH", f"/repos/{self.user}/{self.repo}",
+                  {"has_issues": True, "external_tracker": None, "internal_tracker": {
+                      "enable_time_tracker": True, "allow_only_contributors_to_track_time": False,
+                      "enable_issue_dependencies": True}})
+        for title, body, closed in ISSUES:
+            issue = self._api(token, "POST", f"/repos/{self.user}/{self.repo}/issues",
+                              {"title": title, "body": body})
+            if closed:
+                self._api(token, "PATCH",
+                          f"/repos/{self.user}/{self.repo}/issues/{issue['number']}",
+                          {"state": "closed"})
 
     def snapshot(self) -> None:
         """Freeze the CURRENT state as the world every scenario starts from."""
@@ -309,6 +401,10 @@ class Odoo(Substrate):
     containers: tuple = ("ultracua-bench-odoo-db-1", "ultracua-bench-odoo-1")
     db_name: str = "bench"
     seed_db: str = "bench_seed"
+    # `crm` for the lead scenarios; `base` comes with it but is named so the install is explicit.
+    # A SHORT list on purpose: every extra module is more demo rows, a slower seed and a larger
+    # template, and the corpus only reads CRM.
+    modules: str = "base,crm"
 
     def _psql(self, sql: str) -> str:
         proc = _compose("--profile", self.profile, "exec", "-T", "odoo-db",
@@ -403,6 +499,37 @@ class Odoo(Substrate):
             f"so an unwritable substrate passes them all and fails the first write scenario, which "
             f"B3 would score against the agent rather than the harness (R4.85)."
         )
+
+    def seed(self) -> None:
+        """Create `bench` from scratch, WITH demo data, under the pinned clock.
+
+        THE FLAG TRAP, and it cost a whole seed to find: `--without-demo=False` DISABLES demo data.
+        Odoo reads any non-empty value as a comma-separated list of modules to skip demo for, so the
+        string "False" is just a module name nobody has and the switch is simply ON. The first seed
+        written that way produced **0 leads and an empty world** — which is R4.40's near-empty
+        observation arriving from the harness rather than from impatience, and it would have been
+        scored as the agent failing to find anything. OMITTING the flag is the only spelling that
+        means "load it", so it is omitted here and asserted by a test.
+
+        Run in a `run --rm` container rather than `exec`, because the service holds sessions on the
+        database and `DROP DATABASE` fails with `There are 2 other sessions using the database` —
+        the same reason `snapshot()` and `reset()` stop it.
+
+        The clock matters here and not only at read time: demo data is generated RELATIVE TO INSTALL
+        TIME. Seeding under an unpinned clock bakes today's dates into the template, so
+        `assert_clock_pinned` runs FIRST rather than after — by the time the rows exist it is too
+        late, and `reset()` would faithfully restore the wrong world forever (R4.86).
+        """
+        self.assert_clock_pinned()
+        _compose("--profile", self.profile, "stop", "odoo")
+        try:
+            self._psql(f'DROP DATABASE IF EXISTS "{self.db_name}"')
+            _compose("--profile", self.profile, "run", "--rm", "-T", "--entrypoint", "odoo", "odoo",
+                     "-d", self.db_name, "-i", self.modules, "--stop-after-init",
+                     "--db_host=odoo-db", "--db_user=odoo", "--db_password=odoo", timeout=1800)
+        finally:
+            _compose("--profile", self.profile, "start", "odoo", check=False)
+        self.await_ready()
 
     def snapshot(self) -> None:
         """Freeze the seeded world: a template database plus its filestore."""
