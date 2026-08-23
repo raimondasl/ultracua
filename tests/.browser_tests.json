@@ -1,6 +1,6 @@
 {
  "_comment": "DERIVED, never hand-edited. A test is a browser test iff it was OBSERVED launching one, OR the fast tier later caught it launching (attribution is order-dependent when a module shares browser work through a fixture). Regenerate with `pytest -q --store-browser-marks` then `python scripts/derive_test_tiers.py`, which iterates to the fixed point. An unclassified test makes a tiered run fail loudly rather than skip it.",
- "total": 1803,
+ "total": 1806,
  "browser": [
   "tests/test_annotation_disposition.py::test_the_r427_population_arrives_non_demotable_so_the_verb_cannot_dispose_of_it",
   "tests/test_audit.py::test_advisory_mode_reports_but_never_quarantines",
@@ -1283,12 +1283,15 @@
   "tests/test_multiwrite.py::test_attach_binds_by_commit_order_and_validates",
   "tests/test_multiwrite.py::test_is_multiwrite_and_spec_roundtrip",
   "tests/test_multiwrite.py::test_single_write_attach_does_not_require_expects_intent",
+  "tests/test_obs.py::test_an_unknown_model_is_still_unpriceable",
   "tests/test_obs.py::test_configure_logging_emits_with_run_id",
+  "tests/test_obs.py::test_every_model_the_settings_can_name_is_priceable",
   "tests/test_obs.py::test_is_transient_classifies",
   "tests/test_obs.py::test_record_run_accumulates_and_save_meta_is_atomic",
   "tests/test_obs.py::test_router_does_not_retry_nontransient",
   "tests/test_obs.py::test_router_gives_up_after_max_retries",
   "tests/test_obs.py::test_router_retries_transient_then_succeeds",
+  "tests/test_obs.py::test_the_current_claude_family_is_priceable",
   "tests/test_obs.py::test_usage_since_delta",
   "tests/test_obs.py::test_usage_totals_accumulate_and_cost",
   "tests/test_obs.py::test_usage_totals_add_tolerates_none",
