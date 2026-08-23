@@ -54,6 +54,20 @@ derived from which instrument each Phase-1 step's own pins name (only 0.4 is gat
 0.5–0.7). Read §12 before picking a step, for the same reason `correctness-plan.md` exists: picking ad
 hoc re-creates the orderings a plan exists to prevent.
 
+**THE PLAN'S STATUS IS DATA — read the STATUS INDEX at the top of it, never a sentence in its
+narrative (0.119.0).** `docs/plan/state.json` is the status of record and the index is rendered from
+it. **This exists because 2.1 (B2) merged as PR #189 on 2026-08-20 and §13's row naming it as NEXT
+still read "never started" three days and six merged slices later** — every row below it had been
+marked — so the next instruction to act on that table was an instruction to build B2 a second time.
+1750 lines, four modules, three test files, all already on `main`. Two things hid it: the B2 commit
+**bumped no version** (0.110.0 either side), and the status lived in four tables with three different
+column shapes. **`tests/test_plan_state.py` makes the TREE adjudicate every row, both ways** — a `done`
+step must have its named artifact and a `pending`/`held` step must NOT, which is the direction that
+failed. Phase 1 is complete; **2.3 (B4) is the next step**, and 0.7 lands with it. **Two held steps'
+triggers fired unremarked**: 0.5's (1.1, at 0.115.0) and 0.6's (1.5, at 0.110.0). And the plan holds
+TWO order tables — §12's is marked `order-table:historical`, §13's `order-table:operative`; reading a
+status out of the superseded one is the same failure one table over.
+
 **Audit the fix, not just the code it fixes.** The reverted 0.73.0 redesign (754 tests green,
 `drift_bench` clean, every regression test verified RED against pre-fix source), the parked 0.76.0
 branch (785 tests, same clean bench), and BOTH R3.7 attempts (0.100.0 and 0.103.0 — each with its own
