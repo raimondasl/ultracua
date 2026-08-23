@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import re
 import subprocess
 import time
@@ -38,6 +39,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 COMPOSE = ROOT / "benchmarks" / "substrates" / "docker-compose.yml"
@@ -227,9 +229,31 @@ class Gitea(Substrate):
     containers: tuple = ("ultracua-bench-gitea-1",)
     user: str = "bench"
     repo: str = "acme"
+    # Process-local, never serialized. `repr=False, compare=False` so a token cannot reach a log or
+    # a record through a dataclass repr, which is how secrets leak by accident.
+    _token: Optional[str] = field(default=None, repr=False, compare=False)
+    _token_seq: int = field(default=0, repr=False, compare=False)
     data_dir: str = "/data/gitea"
     db_path: str = "/data/gitea/gitea.db"
     seed_path: str = "/data/gitea/seed.db"
+
+    def token(self) -> str:
+        """A cached API token for this process. Minted on first use, never written to disk.
+
+        CACHED because gitea REFUSES a duplicate token name ("access token name has been used
+        already"), and an oracle probes at least twice by construction — once for the premise and
+        once to adjudicate. The first draft minted per call with a fixed name and failed on the
+        SECOND probe, every time.
+
+        INVALIDATED BY `reset()`, and that is not tidiness: the token is created after `snapshot()`,
+        so restoring the seed DELETES it. A cached token that survived a reset would 401 on the next
+        probe, and an oracle would report a harness fault as a substrate one — the attribution error
+        this whole benchmark exists to avoid.
+        """
+        if self._token is None:
+            self._token = self.mint_token(f"oracle-{os.getpid()}-{self._token_seq}")
+            self._token_seq += 1
+        return self._token
 
     def mint_token(self, name: str = "bench") -> str:
         """A fresh API token, minted on demand and NEVER stored.
@@ -357,6 +381,7 @@ class Gitea(Substrate):
                            f"chown \"$(stat -c %u:%g {self.data_dir})\" {self.db_path}")
         finally:
             _compose("--profile", self.profile, "start", check=False)
+        self._token = None      # the seed predates it; a survivor would 401 on the next probe
         self.await_ready()
 
     def assert_writable(self) -> None:
