@@ -29,6 +29,7 @@ ubuntu job. Everything key-less and Docker-free in here is unit-tested in
 
 from __future__ import annotations
 
+import datetime
 import json
 import subprocess
 import time
@@ -45,6 +46,13 @@ COMPOSE = ROOT / "benchmarks" / "substrates" / "docker-compose.yml"
 # than only in the compose file so a run RECORDS the epoch it measured under — a baseline that does
 # not know its own clock cannot be compared with one taken later.
 FAKETIME_EPOCH = "@2026-01-15 09:00:00"
+
+# How far the Odoo container's clock may sit from the pinned epoch before readiness refuses.
+# GENEROUS ON PURPOSE: `faketime` with an absolute `@epoch` starts there and then advances in real
+# time, so a long-lived container drifts forward legitimately. This separates "pinned, and has been
+# up a while" from "not pinned at all" — and the failure it exists to catch misses by MONTHS
+# (2026-08 against a 2026-01 epoch), not by days, so the tolerance costs nothing.
+CLOCK_DRIFT_TOLERANCE_S = 7 * 86400
 
 # Below this, an observation is a skeleton rather than a page. Not a guess: a served Gitea landing
 # page is ~13.5 kB of HTML with dozens of elements, and an Odoo web client shell before its registry
@@ -310,6 +318,60 @@ class Odoo(Substrate):
     # Odoo's filestore is per-database and lives in the ODOO container, not the db one.
     filestore: str = "/var/lib/odoo/filestore"
     data_dir: str = "/var/lib/odoo"
+
+    def await_ready(self, timeout_s: int = 300, poll_s: float = 2.0) -> None:
+        """Everything the base class checks, and THEN that the clock is really pinned (R4.86).
+
+        Ordered after readiness because the probe execs into a running container. The clock check is
+        not part of `assert_writable` on purpose — they are different questions with different
+        remedies, and collapsing two questions into one predicate is the shape R3.3 spent six passes
+        on.
+        """
+        super().await_ready(timeout_s=timeout_s, poll_s=poll_s)
+        self.assert_clock_pinned()
+
+    def assert_clock_pinned(self) -> None:
+        """`LD_PRELOAD` fails OPEN, which is why this cannot be left to configuration.
+
+        `odoo:17` ships no `libfaketime`, so for the whole of B2's life `ld.so` printed one line to
+        stderr — `cannot be preloaded: ignored` — and Odoo ran on the real wall clock while
+        `substrate_report()` recorded `faketime_epoch` into the run record. A stated guarantee that
+        is false is worse than an absent one. `Dockerfile.odoo` supplies the library and asserts its
+        path at BUILD time; this asserts the effect at RUN time, because the two can come apart
+        (an image rebuilt from the wrong Dockerfile, a compose override, an env var).
+
+        WHY IT MATTERS, measured on a seeded database rather than argued: Odoo's demo data is
+        generated relative to install time, and re-seeding under the pinned clock moved the activity
+        deadlines from 2026-08-21..27 to 2026-01-13..19. The Postgres template freezes those stored
+        dates; it cannot freeze `now()`, and "overdue" is `deadline < now()`.
+
+        The window is deliberately generous. `faketime` with an absolute `@epoch` starts there and
+        then ADVANCES in real time, so a long-lived container legitimately drifts forward; this is
+        checking that the clock is pinned to roughly the right place, not that it is frozen solid.
+        An unpinned container fails by seven MONTHS, not seven days.
+        """
+        if not FAKETIME_EPOCH:
+            return          # deliberately unpinned: the existing knob IS the acknowledgement
+        proc = _compose("--profile", self.profile, "exec", "-T", "odoo",
+                        "date", "-u", "+%Y-%m-%dT%H:%M:%S", check=False)
+        observed = (proc.stdout or "").strip().splitlines()[-1:] or [""]
+        try:
+            seen = datetime.datetime.strptime(observed[0], "%Y-%m-%dT%H:%M:%S")
+            want = datetime.datetime.strptime(FAKETIME_EPOCH.lstrip("@").strip(), "%Y-%m-%d %H:%M:%S")
+        except ValueError as exc:
+            raise SubstrateNotReady(
+                f"{self.name}: could not read the container clock ({observed[0]!r}) to verify the "
+                f"pinned epoch {FAKETIME_EPOCH!r}: {exc}") from exc
+        drift = abs((seen - want).total_seconds())
+        if drift > CLOCK_DRIFT_TOLERANCE_S:
+            raise SubstrateNotReady(
+                f"{self.name}: the container clock reads {seen.isoformat()} but the pinned epoch is "
+                f"{want.isoformat()} — {drift / 86400:.1f} days apart.\n"
+                f"    `LD_PRELOAD` fails OPEN: if libfaketime is missing, ld.so warns and the "
+                f"container runs on the real clock while the run record claims the epoch. Rebuild "
+                f"with `Dockerfile.odoo`, or set ULTRACUA_BENCH_FAKETIME= to run deliberately "
+                f"unpinned (R4.86)."
+            )
 
     def assert_writable(self) -> None:
         """The volume the filestore lives on, tested DIRECTLY — no `su` hop, and that is the point.

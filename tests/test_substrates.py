@@ -201,12 +201,40 @@ class _Compose:
         return [" ".join(a) for a in self.calls]
 
 
+def _classes_defining(method: str) -> list:
+    """Every substrate class with its OWN `method` in `__dict__` — base included.
+
+    DERIVED, not listed. Patching `Substrate.await_ready` alone was correct until `Odoo` grew an
+    override for the clock check, at which point the base patch stopped reaching Odoo and a reset
+    test failed inside a readiness probe it never meant to run. That is CLAUDE.md's "a scan that
+    names ONE function asserts a negative about a body that can walk away", wearing a monkeypatch.
+    """
+    out = []
+    stack = [S.Substrate]
+    while stack:
+        cls = stack.pop()
+        if method in vars(cls):
+            out.append(cls)
+        stack.extend(cls.__subclasses__())
+    return out
+
+
 @pytest.fixture()
 def compose(monkeypatch):
     c = _Compose(stdout="yes")
     monkeypatch.setattr(S, "_compose", c)
-    monkeypatch.setattr(S.Substrate, "await_ready", lambda self, **kw: None)
+    for cls in _classes_defining("await_ready"):
+        monkeypatch.setattr(cls, "await_ready", lambda self, **kw: None)
     return c
+
+
+def test_the_fixture_neutralises_every_readiness_override_not_just_the_base() -> None:
+    """Arms the fixture itself. A subclass that grows its own `await_ready` must be caught here
+    rather than by a puzzling failure inside an unrelated reset test."""
+    found = {c.__name__ for c in _classes_defining("await_ready")}
+    assert "Substrate" in found, "the base defines await_ready; the derivation is broken"
+    assert found >= {"Substrate", "Odoo"}, (
+        f"a class overrides await_ready and the fixture would not neutralise it: {found}")
 
 
 def test_gitea_reset_removes_the_wal_before_restoring_the_seed(compose) -> None:
