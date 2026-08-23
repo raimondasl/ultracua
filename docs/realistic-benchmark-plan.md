@@ -188,6 +188,45 @@ refuted shape.
 | Per-run wall-clock | ~40–60 min | core arm including resets; drift arm ≈ +1 h; versioning ≈ 2 h, occasional |
 | Infra | ≈$0 | one Docker-capable box; WebArena-class hosting explicitly avoided |
 
+### 6a · Which model spends that, decided by measurement (0.120.0)
+
+**Strong tier `claude-opus-5`; fast tier `claude-haiku-4-5`.** `settings.tier` defaults to **strong**,
+so a learn runs entirely on the strong model — Haiku is reached only under `ULTRACUA_TIER=fast`, and
+`vision.py` inherits the strong model for grounding, which §9.1 says is *not* a rare path on Odoo.
+Every learn-time dollar above is therefore spent at the strong tier's rate.
+
+The switch from `claude-opus-4-8` was gated on a measured A/B rather than on the model card. Three
+real learns each on the demo-shop fixture, same goal, `mode="learn"`, `tier=strong`:
+
+| strong model | cost mean | cost range | output tokens | wall mean | reached goal |
+|---|---|---|---|---|---|
+| `claude-opus-4-8` | $0.0552 | $0.0529–0.0592 (**12% spread**) | 511 / 765 / 534 | 26.3 s | 3/3 |
+| `claude-opus-5` | $0.0539 | $0.0538–0.0540 (**0.5% spread**) | 560 / 551 / 561 | 20.5 s | 3/3 |
+
+Marginally cheaper on the mean, ~24× tighter in cost variance, and faster. **The variance is the
+part that matters here**, because B3 gates `cost_usd` through `compare_records`, whose tolerance is
+`max(rate_floor, baseline_std)` — a strong tier with 12% run-to-run cost spread widens that tolerance
+against itself, which is the shape §B3's Wilson note already refuses one metric over.
+
+**Two hypotheses this measurement refuted, recorded so they are not re-derived:**
+
+* **"`temperature` 400s on the current models, so best-of-N does not resample."** FALSE. Probed
+  directly: `temperature=1.0` is accepted on `claude-opus-4-8` and `claude-opus-5`, alone and
+  combined with `thinking: {"type": "adaptive"}`. This came from a published parameter table and
+  would have produced a `src/` change to a mechanism that was never broken — the "reproduce before
+  fixing" rule earning its place again, for the price of five one-token calls.
+* **"Opus 5 thinks by default, so it costs materially more."** The *premise* is true and the
+  *conclusion* is not. On a trivial prompt (`17*23`) Opus 5 returned `['thinking','text']` and 12
+  output tokens against Opus 4.8's `['text']` and 3 — a 4× that is entirely an artifact of a
+  three-token baseline. On a real agent turn (`max_tokens=512`, forced tool call, a page
+  observation) the same difference is **+2% and inside the noise**. No `output_config.effort` tuning
+  was taken; effort stays at its default.
+
+**What this does NOT establish.** The demo shop is four steps of static HTML; §9 measured Odoo's DOM
+at 10–50× MiniWoB with no test-ids. The absolute $0.054/learn does not transfer, and nothing here
+re-derives the $1.50–4 Odoo figure above — only the *comparison between the two models* transfers,
+which is the question that was being asked. n=3 on one flow.
+
 ---
 
 ## 7 · Phasing and gates

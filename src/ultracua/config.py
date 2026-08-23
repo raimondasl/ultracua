@@ -93,8 +93,14 @@ class Settings:
     provider: str = os.getenv("ULTRACUA_PROVIDER", "anthropic")
     # Native LLM backend used to build the router (when provider is an LLM backend).
     llm_backend: str = os.getenv("ULTRACUA_LLM_BACKEND", "anthropic")
-    # STRONG-tier model (discovery / escalation). Defaults to Anthropic's most capable.
-    model: str = os.getenv("ULTRACUA_MODEL", "claude-opus-4-8")
+    # STRONG-tier model (discovery / escalation), and the model `vision.py` inherits for grounding.
+    # `tier` below defaults to STRONG, so this is the model a learn actually spends at.
+    # It THINKS BY DEFAULT — omitting `thinking` runs adaptive here, where Opus 4.8 ran none. That is
+    # a capability change and, measured, NOT a cost one: 4x the output tokens on a trivial prompt
+    # (12 vs 3, a three-token baseline) but **+2% on a real agent turn**, inside the noise. No
+    # `output_config.effort` is sent as a result. See docs/realistic-benchmark-plan.md §6a.
+    # Whatever is set here must have a `_PRICES` entry; a test derives that rather than trusting it.
+    model: str = os.getenv("ULTRACUA_MODEL", "claude-opus-5")
     # FAST-tier model (routine element selection); escalates to STRONG on low confidence.
     fast_model: str = os.getenv("ULTRACUA_FAST_MODEL", "claude-haiku-4-5")
     # Default tier the agent uses. Discovery (learning a novel flow) needs reasoning, so

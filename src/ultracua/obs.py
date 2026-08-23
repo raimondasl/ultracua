@@ -59,10 +59,23 @@ def configure_logging(level: "str | int" = "INFO", *, stream=None) -> None:
 # --- LLM usage + cost -------------------------------------------------------------------------
 # $ per 1M tokens (input, output) for the known models; cache tokens are approximated at the
 # input rate (a small over-estimate for cache reads — fine for a cost ceiling, not billing).
+#
+# A model ABSENT here is not free, it is UNKNOWN: `_price` returns None, `cost_usd` returns None
+# for the whole run, and the customer bench raises `unpriced_spend`. That is the intended loud
+# behaviour — but it is discovered at the END of a paid run, so the table is kept ahead of the
+# configured defaults by `test_every_model_the_settings_can_name_is_priceable`, which DERIVES the
+# models from `config.settings` rather than repeating them here.
+#
+# Rates are LIST rates on purpose. Sonnet 5 carries introductory pricing of (2.0, 10.0) through
+# 2026-08-31; this table is a cost CEILING (see the cache-token note above), and a rate that
+# silently changes on a calendar date would make two runs incomparable across it — which is the
+# same reason `benchmarks/substrates/docker-compose.yml` pins image minors.
 _PRICES = {
+    "claude-opus-5": (5.0, 25.0),
     "claude-opus-4-8": (5.0, 25.0),
     "claude-opus-4-7": (5.0, 25.0),
     "claude-opus-4-6": (5.0, 25.0),
+    "claude-sonnet-5": (3.0, 15.0),
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-haiku-4-5": (1.0, 5.0),
     "claude-fable-5": (10.0, 50.0),

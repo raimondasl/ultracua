@@ -233,6 +233,33 @@ Violating any of these is a blocking defect, not a trade-off:
     own verdict rather than folded into a pass. Quiet is an allowlist; every loud verdict names a
     remedy, asserted both ways.
 
+- **The strong tier is `claude-opus-5`, and the price table may not drift from it (0.120.0).**
+  `settings.tier` defaults to **strong**, so a learn runs ENTIRELY on `settings.model` — `fast_model`
+  (`claude-haiku-4-5`) is reached only under `ULTRACUA_TIER=fast`, and `vision.py` inherits the strong
+  model for grounding, which §9.1 says is not a rare path on Odoo. Every learn-time dollar is the
+  strong tier's.
+  * **A model absent from `obs._PRICES` is not free, it is UNKNOWN** — `cost_usd` goes None for the
+    whole run and `outcomes._cost_of` raises `unpriced_spend`. Correct and loud, but discovered at the
+    END of a paid run, so the guard DERIVES the models from `config.settings` rather than repeating
+    them (`test_every_model_the_settings_can_name_is_priceable`). The table and the default are edited
+    by different slices; that is the drift. `tests/mutations/model_pricing.py` attacks BOTH directions
+    — 4 killed — because a DEFAULT price is worse than a missing one: it turns an unknown bill into a
+    confident wrong number, which is 1.3's `or 0.0` one layer down. Sonnet 5's introductory rate is
+    deliberately NOT in the table: a price that changes on a calendar date makes two runs incomparable
+    across it.
+  * **TWO PLAUSIBLE DEFECTS WERE REFUTED BY MEASUREMENT, and one of them nearly became a `src/`
+    change.** A published parameter table says sampling params are removed on Opus 4.8/5 and return a
+    400 — so `decide()`'s unconditional `temperature=1.0` looked like a broken escalation path and a
+    silently-inert `reflect=True`. **Probed: accepted on both, alone and with `thinking: adaptive`.**
+    Five one-token calls, and the fix would have been a no-op edit to a mechanism that was never
+    broken. And "Opus 5 thinks by default so it costs more" has a TRUE premise and a false conclusion:
+    4× the output tokens on `17*23`, **+2% and inside the noise** on a real agent turn. Measure the
+    thing at the size you actually run it.
+  * **The A/B that decided it: 3 real learns each on the demo-shop fixture.** Opus 5 $0.0539 mean
+    (0.5% spread) vs Opus 4.8 $0.0552 (**12%** spread), 20.5 s vs 26.3 s, 3/3 goal-reached both. The
+    VARIANCE is the reason, not the mean: B3 gates cost through `compare_records`, whose tolerance is
+    `max(rate_floor, baseline_std)`, so a noisy strong tier widens the gate against itself.
+
 - **The engine chain is KEYWORD-ONLY after its subject (1.1, 0.115.0).** Seven positional parameters
   across six functions, down from 98 — `url` for the three URL-driven entry points, `session` (+`step`)
   for the two in-session helpers. `flow.py`'s verification call used to pass sixteen positional
