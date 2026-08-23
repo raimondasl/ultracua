@@ -136,3 +136,46 @@ def test_record_run_accumulates_and_save_meta_is_atomic(tmp_path: Path) -> None:
     # the atomic temp file must not linger next to the meta json
     leftovers = list((tmp_path / "cache").glob("*.tmp"))
     assert leftovers == [] and _meta_path(cache, key).exists()
+
+
+# --- the price table and the configured models cannot drift apart -----------------------------
+# WHY THIS EXISTS. `_PRICES` and `config.settings.model` are two independent lists, and nothing
+# made them agree. Measured at 0.120.0: the table carried opus-4-8/4-7/4-6, sonnet-4-6, haiku-4-5
+# and fable-5 while the Claude 5 family was absent, so pointing the strong tier at `claude-opus-5`
+# made every call unpriceable. That is not silently wrong — `cost_usd` returns None and the
+# customer bench raises `BenchRecordError("unpriced_spend")` — but it is a benchmark that refuses
+# to publish the cost column it exists to publish, discovered at the end of a paid run rather than
+# before it. The invariant is DERIVED from the settings, so a future default change cannot
+# reintroduce it.
+
+def test_every_model_the_settings_can_name_is_priceable() -> None:
+    from ultracua.config import settings
+    from ultracua.obs import _price
+
+    named = {"model (strong tier, and vision inherits it)": settings.model,
+             "fast_model": settings.fast_model}
+    unpriced = {k: v for k, v in named.items() if _price(v) is None}
+    assert not unpriced, (
+        "the configured model(s) have no entry in `ultracua.obs._PRICES`, so a real run reports "
+        f"cost UNKNOWN and the customer bench refuses it: {unpriced}. Add them to `_PRICES`."
+    )
+
+
+def test_the_current_claude_family_is_priceable() -> None:
+    """The models a caller may reasonably set today. `_price` is a PREFIX match, so a dated
+    variant of any of these resolves through the same entry."""
+    from ultracua.obs import _price
+
+    missing = [m for m in ("claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5",
+                           "claude-opus-4-8", "claude-fable-5") if _price(m) is None]
+    assert not missing, f"absent from `_PRICES`: {missing}"
+
+
+def test_an_unknown_model_is_still_unpriceable() -> None:
+    """The other direction, so the two cells above are not satisfied by pricing everything —
+    which would turn a genuinely unknown bill into a confident wrong number."""
+    from ultracua.obs import _PRICES, _price
+
+    assert _PRICES, "the price table is empty; the cells above would pass vacuously"
+    for m in ("gpt-5-turbo", "gemini-3-pro", "claude-opus-9", ""):
+        assert _price(m) is None, f"{m!r} resolved to a price it should not have"
