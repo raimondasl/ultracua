@@ -50,10 +50,18 @@ class _Fake:
 
     user, repo = "bench", "acme"
 
+    #: Enough of a world for the corpus's own expected-answer functions to have one right answer:
+    #: two states, a distinctive search token, and DISTINCT creation times so "oldest" is not a tie.
+    DEFAULT = ({"number": 1, "title": "Alpha", "state": "open"},
+               {"number": 2, "title": "Beta", "state": "closed"},
+               {"number": 3, "title": "Marmalade parser rejects trailing commas", "state": "open"})
+
     def __init__(self, issues=None, comments=None):
-        self.issues = list(issues if issues is not None else
-                           [{"number": 1, "title": "Alpha", "state": "open"},
-                            {"number": 2, "title": "Beta", "state": "closed"}])
+        self.issues = [dict(i) for i in (issues if issues is not None else self.DEFAULT)]
+        for i in self.issues:
+            # DERIVED FROM THE NUMBER, so a cell that supplies its own issues does not have to know
+            # this field exists — and `oldest` still means `#1`, as the real seed makes it mean.
+            i.setdefault("created_at", f"2026-01-{15 + i['number']:02d}T09:00:00Z")
         #: {issue number: [(login, body), …]}
         self.comments = dict(comments or {})
 
@@ -61,12 +69,93 @@ class _Fake:
         return "t" * 40
 
     def _api(self, token, method, path, payload=None):
+        """Serves the QUERY STRING too, not just the route.
+
+        `state=` and `q=` are what `gitea-filter-state` and `gitea-search` turn on, and a fake that
+        ignored them would hand every caller the whole list — so the closed COUNT and the search hit
+        would both be wrong, and the cells that compute them would be asserting the fake's shape
+        rather than the corpus's logic. `_search_title` refuses a non-unique hit, so ignoring `q`
+        does not even fail quietly; it fails for the wrong reason, which is worse to debug.
+        """
         assert method == "GET", f"a unit-test fake serves reads only, got {method} {path}"
         if "/comments" in path:
             n = int(path.rsplit("/issues/", 1)[1].split("/")[0])
             return [{"issue_url": f"http://x/{n}", "user": {"login": u}, "body": b}
                     for u, b in self.comments.get(n, ())]
-        return list(self.issues)
+        route, _, qs = path.partition("?")
+        query = dict(kv.split("=", 1) for kv in qs.split("&") if "=" in kv)
+        if "/issues/" in route:                      # a single issue, by index
+            n = int(route.rsplit("/issues/", 1)[1])
+            hit = [i for i in self.issues if i["number"] == n]
+            assert hit, f"the fake holds no issue {n}"
+            return hit[0]
+        out = list(self.issues)
+        if query.get("state", "all") != "all":
+            out = [i for i in out if i["state"] == query["state"]]
+        if "q" in query:
+            out = [i for i in out if query["q"].lower() in i["title"].lower()]
+        return out
+
+
+class _FakeOdoo:
+    """A substrate stand-in that SERVES `query()`, so the real Odoo probes run against known rows.
+
+    UNRECOGNISED SQL RAISES. A fake that answered `()` to a query it did not know would turn every
+    probe whose SQL changed into an empty linkage set -- which compares EQUAL to another empty one,
+    so the cell would go green having exercised nothing. That is this repo's "assume the stub is
+    inert until measured" lesson, and the loud failure is what makes the fake worth having.
+    """
+
+    LEADS = (("1", "Quote for 12 Tables", "1", "t"),
+             ("2", "Need 20 Desks", "3", "t"),
+             ("3", "Quote for 150 carpets", "1", "t"))
+    ORDERS = (("18", "S00018", "sale", "9"), ("19", "S00019", "sent", "4"))
+    STAGES = (("1",), ("2",), ("3",), ("4",))
+    #: (name, expected_revenue, stage) -- what the corpus's `_opportunities` asks for.
+    OPPS = (("Quote for 12 Tables", "40000", "New"),
+            ("Need 20 Desks", "60000", "Proposition"),
+            ("Quote for 150 carpets", "40000", "New"))
+    CUSTOMER = (("Gemini Furniture",),)
+
+    def __init__(self, **over):
+        for k, v in over.items():
+            setattr(self, k.upper(), v)
+
+    def query(self, sql: str) -> tuple:
+        s = " ".join(sql.split()).lower()
+        if "from crm_stage" in s and "join" not in s:
+            return tuple(self.STAGES)
+        if "join crm_stage" in s:
+            return tuple(self.OPPS)
+        if "from sale_order" in s and "res_partner" in s:
+            return tuple(self.CUSTOMER)
+        if "from sale_order" in s:
+            return tuple(self.ORDERS)
+        if "from crm_lead" in s and ", type from" in s:
+            return tuple((i, n, "lead") for i, n, _st, _a in self.LEADS)
+        if "from crm_lead" in s:
+            return tuple(self.LEADS)
+        raise AssertionError(
+            f"_FakeOdoo does not recognise this query, so it would have answered nothing and the "
+            f"cell would pass having exercised no probe:\n    {sql}")
+
+
+#: substrate -> its unit-test stand-in. Asserted against the corpus below, so a substrate added
+#: without a fake fails HERE rather than silently dropping out of every property in this file.
+FAKES = {"gitea": _Fake, "odoo": _FakeOdoo}
+
+
+def corpus_oracles(name: str) -> list:
+    """The oracle set a scored run would consult, built against a fake substrate.
+
+    DERIVED FROM THE CORPUS AND NOWHERE ELSE (R4.88). Until 0.124.0 this file walked an `O.REGISTRY`
+    that `benchmarks/corpus.py` had superseded: two oracles under names no scenario used, while the
+    corpus held seven. Every cell below said "derived over the registry, so an oracle added tomorrow
+    is covered" and none of them covered the five that had been added -- including the only oracle
+    with real SQL, which is the only thing the clock scan can police.
+    """
+    from benchmarks import corpus
+    return corpus.oracles_for(name, FAKES[name]())
 
 
 def _oracle(rows=()):
@@ -140,7 +229,7 @@ def test_the_gate_refuses_an_oracle_that_has_never_been_seen_to_say_no(oracle, e
 
 def test_the_gate_passes_a_real_oracle_set_and_names_every_case() -> None:
     """The other direction, or "refuse everything" satisfies every cell above."""
-    report = O.arm_oracles(O.for_substrate("gitea", _Fake()))
+    report = O.arm_oracles(corpus_oracles("gitea"))
     assert report, "the gate returned an empty report, so it adjudicated nothing"
     assert all(satisfied is False for _, _, satisfied in report), report
     labels = {label for _, label, _ in report}
@@ -155,7 +244,8 @@ def test_arming_the_real_registry_touches_no_container() -> None:
     The autouse guard makes `subprocess.run` raise, so this cell fails loudly the day arming starts
     reaching a container rather than quietly becoming a nightly-only check.
     """
-    O.arm_oracles(O.for_substrate("gitea", _Fake()))
+    for name in FAKES:
+        O.arm_oracles(corpus_oracles(name))
 
 
 # --- 3. the clock scan (R4.86), in both directions -----------------------------------------------
@@ -190,7 +280,8 @@ def test_the_clock_scan_flags_the_calls_and_not_the_columns(query, flagged) -> N
 
 def test_no_registered_oracle_asks_the_clock() -> None:
     """The scan pointed at the real set, which is the only place it decides anything."""
-    assert O.forbidden_clock_reads(O.for_substrate("gitea", _Fake())) == {}
+    for name in FAKES:
+        assert O.forbidden_clock_reads(corpus_oracles(name)) == {}, name
 
 
 def test_the_gate_refuses_an_oracle_whose_query_reads_the_clock() -> None:
@@ -270,19 +361,68 @@ def test_the_read_probe_actually_reads_the_comments_it_claims_to_watch() -> None
     assert ("comment", 1, "bench", "a real comment") in rows
 
 
+def test_the_odoo_read_probe_reads_every_surface_it_claims() -> None:
+    """The Odoo half of the surface cell above, and it is the ONLY offline guard on probe breadth.
+
+    `arm_oracles` structurally cannot see this: `_adjudicate_against` REPLACES `probe` with the
+    falsified rows, so an oracle whose probe watches half of what it claims arms perfectly. The
+    liveness pass catches it against a real container, and this catches it in CI — the two are not
+    redundant, they are the only two instruments that exist for it.
+
+    A narrowed probe is not hypothetical. `GiteaReadOracle` shipped watching only the issue list
+    while claiming "a read must change NOTHING on the server", and a comment posted during a read
+    left it reporting True.
+    """
+    sub = _FakeOdoo()
+    rows = O.OdooReadOracle(sub, "fake-odoo-read").probe().rows
+    kinds = {r[0] for r in rows}
+    assert kinds == {"lead", "order"}, (
+        f"the probe returned {kinds}; it claims to watch {O.OdooReadOracle.SURFACES} and a surface "
+        f"it does not read is a claim nothing checks")
+    assert ("order", "18", "S00018", "sale", "9") in rows
+
+
+def test_every_odoo_query_is_answerable_by_the_fake() -> None:
+    """The fake RAISES on an unrecognised query, so this drives each declared query through it.
+
+    Without it a probe's SQL could change, the fake would raise inside a cell nobody runs, and the
+    surface cell above would keep passing on stale rows — a fake is only worth what its coverage is.
+    """
+    sub = _FakeOdoo()
+    for oracle in corpus_oracles("odoo"):
+        assert oracle.probe().rows, f"{oracle.name}: probed the fake and got an EMPTY linkage set"
+
+
 # --- 6. one registry, so armed and consulted cannot diverge --------------------------------------
 
-def test_for_substrate_refuses_an_unknown_substrate_instead_of_returning_nothing() -> None:
-    """An empty oracle list is the silent version of having no oracles at all: `arm_oracles([])`
-    passes trivially and a scored run then adjudicates nothing while reporting success."""
-    with pytest.raises(O.OracleError, match="no oracles registered"):
-        O.for_substrate("nosuch", _Fake())
+def test_the_oracle_set_has_exactly_one_derivation() -> None:
+    """`benchmarks.oracles` must hold NO substrate registry of its own (R4.88).
+
+    It held one, and `--arm-oracles` -- the gate a scored run must pass -- read it: two oracles under
+    names no scenario used, against a corpus of seven. The operator was told "the oracle set is
+    armed" over 2 of 7. Deleting the second list is the fix; this cell is what stops it coming back,
+    because a reviewer adding a convenience lookup here would not think of it as a second list.
+
+    The set cannot live in that module anyway: it is a fact about the CORPUS, and `corpus.py` imports
+    `oracles.py`, so only the layer that knows both halves can derive it.
+    """
+    assert not hasattr(O, "REGISTRY") and not hasattr(O, "for_substrate"), (
+        "`benchmarks.oracles` has grown a second oracle registry. The set is derived by "
+        "`corpus.oracles_for`, once; two derivations is how the gate came to arm 2 of 7 (R4.88).")
+
+
+def test_every_corpus_substrate_has_a_unit_test_fake() -> None:
+    """Derived, so a third substrate cannot join the corpus and silently skip every cell here."""
+    from benchmarks import corpus
+
+    assert sorted(FAKES) == sorted(corpus.CORPORA), (
+        f"substrates without a fake: {sorted(set(corpus.CORPORA) - set(FAKES))}")
 
 
 def test_every_registered_oracle_declares_a_falsification() -> None:
     """Derived over the registry, so an oracle added tomorrow is covered without editing this cell."""
-    for name in O.REGISTRY:
-        for o in O.for_substrate(name, _Fake()):
+    for name in FAKES:
+        for o in corpus_oracles(name):
             cases = o.falsifications()
             assert cases, f"{o.name} declares no falsification"
             for label, before, after in cases:
@@ -303,8 +443,8 @@ def test_every_registered_oracle_declares_a_falsification() -> None:
 
 def test_a_write_oracle_distinguishes_two_identical_landings() -> None:
     """The property, asked of the identity function directly rather than through a falsification."""
-    for name in O.REGISTRY:
-        for o in O.for_substrate(name, _Fake()):
+    for name in FAKES:
+        for o in corpus_oracles(name):
             if not getattr(o, "MUTATING", False):
                 continue
             a, b = o.duplicate_pair()
@@ -346,7 +486,7 @@ def test_the_gate_refuses_a_write_oracle_that_declares_no_duplicate_pair() -> No
 def test_a_read_oracle_is_not_required_to_declare_one() -> None:
     """The other direction: a read has no write target, so the requirement must not apply to it —
     or every read oracle would have to invent a meaningless pair to satisfy a gate."""
-    read = [o for o in O.for_substrate("gitea", _Fake()) if not o.MUTATING]
+    read = [o for name in FAKES for o in corpus_oracles(name) if not o.MUTATING]
     assert read, "no read oracle in the registry, so this cell proves nothing"
     O.arm_oracles(read)
 
@@ -354,8 +494,8 @@ def test_a_read_oracle_is_not_required_to_declare_one() -> None:
 def test_the_double_falsification_uses_genuinely_identical_content() -> None:
     """The cell that would have caught the original. A falsification whose two rows differ in any
     user-visible field is not a double-submit — it is two different writes."""
-    for name in O.REGISTRY:
-        for o in O.for_substrate(name, _Fake()):
+    for name in FAKES:
+        for o in corpus_oracles(name):
             if not getattr(o, "MUTATING", False):
                 continue
             doubles = [rows for label, _, rows in o.falsifications() if "DOUBLE" in label]

@@ -854,6 +854,100 @@ so a mutant has retrievable source, and asserts that before handing it over.
 `AssertionError` behind a cell is a cell that died on the way rather than noticed. Today: 67
 AssertionError, 5 `pytest.raises` DID-NOT-RAISE, 2 KeyError, 1 BenchRecordError, zero crashes.
 
+## B4's substrates: two lists, one door, and a probe aimed at the broken page (0.124.0)
+
+The 14-scenario corpus is real — seven per substrate, bound to their oracles in `benchmarks/corpus.py`,
+armed offline and verified against live containers. What is worth carrying forward is what building
+it broke.
+
+* **THE ORACLE SET HAS EXACTLY ONE DERIVATION, and for one release it had two (R4.88).** PR #202 put
+  the Gitea seven in `corpus.py` and left `oracles.REGISTRY` standing, so `--arm-oracles` — the gate
+  a scored run must pass — armed **2 of 7** under names no scenario uses and printed *"The oracle set
+  is armed."* Six cells in `tests/test_oracles.py` each claimed to be "derived over the registry, so
+  an oracle added tomorrow is covered", and all six walked the stale one; the only oracle with real
+  SQL was therefore never seen by R4.86's clock scan. **The suite was green because a different
+  helper armed the corpus set.** `REGISTRY` and `oracles.for_substrate` are deleted — the set cannot
+  live in `oracles.py` anyway, since it is a fact about the corpus and `corpus.py` imports
+  `oracles.py`. The sensor drives the OPERATOR surface and compares its printed NAMES: a count would
+  not have caught it, because 8 falsifications is a plausible-looking number.
+
+* **THE AGENT'S FIRST PAGE WAS ODOO'S DATABASE MANAGER, WITH DELETE NEXT TO THE RESET TEMPLATE
+  (R4.89).** Two databases (`bench`, `bench_seed`) and no `--db-filter` means Odoo cannot pick one,
+  so it serves the database manager — measured, at `/`, `/web` AND `/web/login`, all the same
+  43,551-byte page listing both with Delete / Duplicate / Backup / Restore. And `health_path` was
+  `/web/database/selector`, so **readiness was pointed at the very page that means the app is
+  unreachable**: R4.85 restated, since a compose healthcheck, a `min_body_bytes` floor and
+  `assert_writable` all pass happily against it. Bound it is 4,430 bytes; unbound 42,559; **both are
+  HTTP 200**, so the body is the only discriminator. When you add a substrate, ask what its start
+  page actually serves before trusting any probe that says it is up.
+
+* **`Odoo.reset()` HAD NEVER BEEN RUN, AND RUNNING IT FOUND WHAT REVIEW COULD NOT.** It carried a
+  standing note saying so. Driven now: **seed 87.6 s, snapshot 14.0 s, reset 14.8–15.5 s** across
+  several runs — the plan budgeted 30–60 s for the reset. The thing review missed is that the
+  template is **cold**: restoring it discards the compiled asset bundles, so the first backend page
+  load after every reset paid **+2.42 s**, charged entirely to whichever scenario ran first. The plan
+  predicted "tens of seconds" and asked for a warmup; the number is small, real, and order-dependent,
+  which is the part that matters. `warm_assets()` at the end of `seed()` freezes a warm template
+  (per-reset penalty measured back to **+0.00 s**) and at the end of `reset()` makes that a guarantee
+  rather than an assumption about how the template was made.
+
+* **A WARMUP THAT WARMS THE WRONG THING IS R4.86 IN ONE METHOD, and the first draft was one.** Its
+  guard raised only when NO bundle was found, on the measured claim that an anonymous `/web`
+  referenced none — true of the database-manager page, and **false the moment R4.89 was fixed and a
+  real login page appeared** carrying three `web.assets_frontend*` bundles. A broken session would
+  have warmed those, returned 3, never raised, and left the 4.9 MB backend pair cold. The sensor is a
+  **differential** now: the authenticated page must reach bundles the anonymous one cannot. Caught by
+  re-measuring after a change, which is the only reason it was caught.
+
+* **THE THIRD AXIS HAS A SECOND TRANSPORT (R4.90).** "This host runs the substrates and CI does not"
+  arrived over Docker at 0.121.0 and over **HTTP** here: the moment `seed()`/`reset()` grew a warmup,
+  four cells that correctly mock `_compose` began fetching from this host's live Odoo on `:8069`.
+  Measured by stopping the container — **4 failed, 22 passed**. The autouse guard now makes
+  `urllib.request.urlopen` **and** `urllib.request.OpenerDirector.open` raise; both, because they are
+  different objects (`_http_ok` uses one, `warm_assets`/`rpc` the other) and a half-closed guard reads
+  as closed. `test_every_probe_the_lifecycle_calls_outside_compose_is_neutralised` reads the
+  lifecycle methods' own source, so the next probe added to `seed()`/`reset()` fails there instead of
+  silently un-mocking a cell.
+
+* **A CORPUS EXPECTED ANSWER IS CHECKED AGAINST THE BROWSER, NOT AGAINST SQL.** They disagree easily:
+  an Odoo action carries a domain AND a context, and most CRM entry points default to
+  `search_default_assigned_to_me`, so the same table answers 17 or 10 depending which menu reached
+  it. An expected answer that differs from the rendered list mints `wrong_data` against an agent that
+  answered correctly — inviolable #2 fired from the harness's own mistake. All five Odoo reads were
+  driven in a real browser first. Two consequences worth keeping: `/web#model=…&view_type=list` does
+  **not** work in Odoo 17 (the hash is rewritten to `/web#cids=1`) and a numeric `action=` is a
+  database-assigned id, so start URLs use XML-ID actions; and **no read scenario may expect a number
+  ≥ 1000**, because Odoo renders money as `$ 40,000.00` and `check_answer`'s digit-boundary match
+  will not find `40000` in a correct answer. Both are pinned by tests.
+
+* **A PREMISE THAT MAKES A SCENARIO DISCRIMINATING IS ASSERTED, NOT ASSUMED.** `odoo-filter-status`
+  asks about the **Proposition** stage and not Won, because the seed holds New 3, Qualified 5,
+  Proposition 6, Won 3 — so on Won an agent that filtered the WRONG stage still reports the accepted
+  answer and the row scores green while measuring nothing. `_stage_count` refuses a clash rather than
+  trusting the comment, and `_top_opportunity` refuses a tie for `gitea-sort-list`'s reason one
+  substrate over.
+
+* **ONE READ GOAL IS ALLOWED TO TRIP THE KEYWORD CLASSIFIER, AND IT IS DECLARED.** A read goal
+  carrying a `MUTATING_KEYWORDS` token MANUFACTURES the `over_gated` the corpus exists to measure.
+  `odoo-open-record` trips it on "order" because that is what the pair isolates and a sale order has
+  no other name — so `CorpusEntry.keyword_read` declares it, asserted **both ways**: an undeclared
+  goal that trips fails, and a declared goal that no longer trips fails too. The second is the
+  direction that rots quietly, since rephrasing a goal leaves the flag behind.
+
+* **AN ORACLE MAY DECLARE WHAT IT CANNOT SEE, IF THE SET OF SUCH ORACLES IS PINNED.**
+  `odoo-idempotent-replay` cannot distinguish "the mechanism ran and suppressed the second write"
+  from "`_precheck_done` returned already-done before the browser did anything" — both leave one
+  lead. `INCOMPLETE_WITHOUT` says so, and the set of oracles carrying it is asserted to be exactly
+  that one, so the proxy landing forces a red test and a second self-excusing oracle cannot appear
+  quietly.
+
+* **AND THE LIMIT THE ARMING GATE HAS, stated because it is easy to forget:** `arm_oracles` replaces
+  `probe` with the falsified rows, so **a probe aimed at the wrong table arms perfectly**. Only two
+  instruments see that — a surface cell that runs the real probe against a fake serving its own
+  query surface (offline, in CI), and `benchmarks/oracle_liveness.py` against a real container. They
+  are not redundant. The Odoo liveness arm writes through `call_kw` rather than SQL for the same
+  reason: an `UPDATE` proves the probe can read a row the test wrote, not the row the app writes.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

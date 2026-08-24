@@ -1,33 +1,209 @@
 {
  "_comment": "WHERE THE PROGRAMME ACTUALLY IS. `docs/reshape-plan.md` is 800 lines of narrative with each step's status embedded in four different tables, and the status is what drifts: 2.1 (B2) merged as PR #189 on 2026-08-20 and the row naming it as NEXT still read 'never started' three days and six merged slices later, which is how it came within one instruction of being built twice. This file is the status of record; the STATUS INDEX in the plan is rendered from it, and `tests/test_plan_state.py` makes the TREE adjudicate every row.",
  "_artifact": "The one path (or `path::token`) whose presence means the step has shipped. `done` requires it present; `pending`/`held` requires it ABSENT — that second direction is the one that failed here, and it is the whole reason the field exists. THREE artifacts are FORWARD-DECLARED (0.5, 0.6, 0.7) because the plan names no file for them: if the slice that lands one picks a different name, the absent-direction stays quiet, and the DONE direction is what catches it when somebody flips the status. Say what you built; do not flip a status without its artifact.",
- "statuses": ["done", "pending", "held"],
+ "statuses": [
+  "done",
+  "pending",
+  "held"
+ ],
  "steps": [
-  {"id": "0",    "phase": 0, "title": "CI provisioning",                 "status": "done",    "landed": "2026-08-20", "artifact": "tests/test_ci_provisioning.py"},
-  {"id": "0.1",  "phase": 0, "title": "fast tier",                       "status": "done",    "landed": "#168 #170",  "artifact": "tests/_tiers.py"},
-  {"id": "0.2a", "phase": 0, "title": "B1's ten filed in the register",  "status": "done",    "landed": "#171",       "artifact": "docs/register/state.json::R4.53"},
-  {"id": "0.2b", "phase": 0, "title": "register as structured data",     "status": "done",    "landed": "#172",       "artifact": "scripts/render_register.py"},
-  {"id": "0.3",  "phase": 0, "title": "exit-set matrix over a fake engine", "status": "done", "landed": "#175",       "artifact": "tests/_fake_engine.py"},
-  {"id": "0.4a", "phase": 0, "title": "ratchets + red-proof",            "status": "done",    "landed": "0.4a",       "artifact": "scripts/ratchets.py"},
-  {"id": "0.4b", "phase": 0, "title": "RED-in-CI",                       "status": "done",    "landed": "0.115.0",    "artifact": "scripts/red_in_ci.py"},
-  {"id": "0.5",  "phase": 0, "title": "contract tests for the must-agree pairs", "status": "held", "trigger": "1.1", "trigger_fired": true, "artifact": "tests/test_must_agree_pairs.py", "forward_declared": true},
-  {"id": "0.6",  "phase": 0, "title": "scheduled mutation sweep",        "status": "held",    "trigger": "1.5", "trigger_fired": true, "artifact": ".github/workflows/mutation-sweep.yml", "forward_declared": true},
-  {"id": "0.7",  "phase": 0, "title": "shared fixture server",           "status": "held",    "trigger": "2.3", "trigger_fired": false, "artifact": "tests/_fixture_server.py", "forward_declared": true},
-  {"id": "0.8",  "phase": 0, "title": "tier marks from an observation",  "status": "done",    "landed": "2026-08-20", "artifact": "scripts/tier_marks.py"},
-
-  {"id": "1.1",  "phase": 1, "title": "keyword-only engine chain",       "status": "done",    "landed": "0.115.0",    "artifact": "tests/test_engine_chain_is_keyword_only.py"},
-  {"id": "1.2",  "phase": 1, "title": "`flow release` reaches `release()`", "status": "done", "landed": "0.109.0",    "artifact": "tests/test_flow_release.py"},
-  {"id": "1.3",  "phase": 1, "title": "a cannot-spend third state",      "status": "done",    "landed": "0.114.0",    "artifact": "tests/test_cannot_spend.py"},
-  {"id": "1.4a", "phase": 1, "title": "distinct refusal codes",          "status": "done",    "landed": "0.111.0",    "artifact": "tests/test_refusal_codes.py"},
-  {"id": "1.4b", "phase": 1, "title": "`outcome_of` + the tri-state readers", "status": "done", "landed": "#191",     "artifact": "tests/test_batch_row_evidence_golden.py"},
-  {"id": "1.5",  "phase": 1, "title": "the single-exit RunRecord sink",  "status": "done",    "landed": "0.110.0",    "artifact": "src/ultracua/flows.py::_RecordSink"},
-  {"id": "1.6",  "phase": 1, "title": "`WriteClass` + `FlowSpec.key`",   "status": "done",    "landed": "0.116.0",    "artifact": "tests/test_write_class.py"},
-  {"id": "1.7",  "phase": 1, "title": "the printed door policy table",   "status": "done",    "landed": "0.117.0",    "artifact": "tests/test_door_policy.py"},
-  {"id": "1.8",  "phase": 1, "title": "`RunOptions` / `RunHooks`",       "status": "done",    "landed": "0.118.0",    "artifact": "tests/goldens/hook_fire_counts.json"},
-
-  {"id": "2.1",  "phase": 2, "title": "B2 — substrates, reset, readiness, boundary ledger", "status": "done", "landed": "#189", "artifact": "benchmarks/substrates.py"},
-  {"id": "2.2",  "phase": 2, "title": "B3 — the outcome vocabulary",     "status": "done",    "landed": "0.113.0",    "artifact": "benchmarks/outcomes.py"},
-  {"id": "2.3",  "phase": 2, "title": "B4 — the 14-scenario corpus + server-side oracles", "status": "pending", "artifact": "benchmarks/customer_bench.py::CORPUS"},
-  {"id": "2.4",  "phase": 2, "title": "B5 — baseline, nightly, honesty page", "status": "pending", "artifact": "baselines/customer_v1.json"}
+  {
+   "id": "0",
+   "phase": 0,
+   "title": "CI provisioning",
+   "status": "done",
+   "landed": "2026-08-20",
+   "artifact": "tests/test_ci_provisioning.py"
+  },
+  {
+   "id": "0.1",
+   "phase": 0,
+   "title": "fast tier",
+   "status": "done",
+   "landed": "#168 #170",
+   "artifact": "tests/_tiers.py"
+  },
+  {
+   "id": "0.2a",
+   "phase": 0,
+   "title": "B1's ten filed in the register",
+   "status": "done",
+   "landed": "#171",
+   "artifact": "docs/register/state.json::R4.53"
+  },
+  {
+   "id": "0.2b",
+   "phase": 0,
+   "title": "register as structured data",
+   "status": "done",
+   "landed": "#172",
+   "artifact": "scripts/render_register.py"
+  },
+  {
+   "id": "0.3",
+   "phase": 0,
+   "title": "exit-set matrix over a fake engine",
+   "status": "done",
+   "landed": "#175",
+   "artifact": "tests/_fake_engine.py"
+  },
+  {
+   "id": "0.4a",
+   "phase": 0,
+   "title": "ratchets + red-proof",
+   "status": "done",
+   "landed": "0.4a",
+   "artifact": "scripts/ratchets.py"
+  },
+  {
+   "id": "0.4b",
+   "phase": 0,
+   "title": "RED-in-CI",
+   "status": "done",
+   "landed": "0.115.0",
+   "artifact": "scripts/red_in_ci.py"
+  },
+  {
+   "id": "0.5",
+   "phase": 0,
+   "title": "contract tests for the must-agree pairs",
+   "status": "held",
+   "trigger": "1.1",
+   "trigger_fired": true,
+   "artifact": "tests/test_must_agree_pairs.py",
+   "forward_declared": true
+  },
+  {
+   "id": "0.6",
+   "phase": 0,
+   "title": "scheduled mutation sweep",
+   "status": "held",
+   "trigger": "1.5",
+   "trigger_fired": true,
+   "artifact": ".github/workflows/mutation-sweep.yml",
+   "forward_declared": true
+  },
+  {
+   "id": "0.7",
+   "phase": 0,
+   "title": "shared fixture server",
+   "status": "held",
+   "trigger": "2.3",
+   "trigger_fired": false,
+   "artifact": "tests/_fixture_server.py",
+   "forward_declared": true
+  },
+  {
+   "id": "0.8",
+   "phase": 0,
+   "title": "tier marks from an observation",
+   "status": "done",
+   "landed": "2026-08-20",
+   "artifact": "scripts/tier_marks.py"
+  },
+  {
+   "id": "1.1",
+   "phase": 1,
+   "title": "keyword-only engine chain",
+   "status": "done",
+   "landed": "0.115.0",
+   "artifact": "tests/test_engine_chain_is_keyword_only.py"
+  },
+  {
+   "id": "1.2",
+   "phase": 1,
+   "title": "`flow release` reaches `release()`",
+   "status": "done",
+   "landed": "0.109.0",
+   "artifact": "tests/test_flow_release.py"
+  },
+  {
+   "id": "1.3",
+   "phase": 1,
+   "title": "a cannot-spend third state",
+   "status": "done",
+   "landed": "0.114.0",
+   "artifact": "tests/test_cannot_spend.py"
+  },
+  {
+   "id": "1.4a",
+   "phase": 1,
+   "title": "distinct refusal codes",
+   "status": "done",
+   "landed": "0.111.0",
+   "artifact": "tests/test_refusal_codes.py"
+  },
+  {
+   "id": "1.4b",
+   "phase": 1,
+   "title": "`outcome_of` + the tri-state readers",
+   "status": "done",
+   "landed": "#191",
+   "artifact": "tests/test_batch_row_evidence_golden.py"
+  },
+  {
+   "id": "1.5",
+   "phase": 1,
+   "title": "the single-exit RunRecord sink",
+   "status": "done",
+   "landed": "0.110.0",
+   "artifact": "src/ultracua/flows.py::_RecordSink"
+  },
+  {
+   "id": "1.6",
+   "phase": 1,
+   "title": "`WriteClass` + `FlowSpec.key`",
+   "status": "done",
+   "landed": "0.116.0",
+   "artifact": "tests/test_write_class.py"
+  },
+  {
+   "id": "1.7",
+   "phase": 1,
+   "title": "the printed door policy table",
+   "status": "done",
+   "landed": "0.117.0",
+   "artifact": "tests/test_door_policy.py"
+  },
+  {
+   "id": "1.8",
+   "phase": 1,
+   "title": "`RunOptions` / `RunHooks`",
+   "status": "done",
+   "landed": "0.118.0",
+   "artifact": "tests/goldens/hook_fire_counts.json"
+  },
+  {
+   "id": "2.1",
+   "phase": 2,
+   "title": "B2 — substrates, reset, readiness, boundary ledger",
+   "status": "done",
+   "landed": "#189",
+   "artifact": "benchmarks/substrates.py"
+  },
+  {
+   "id": "2.2",
+   "phase": 2,
+   "title": "B3 — the outcome vocabulary",
+   "status": "done",
+   "landed": "0.113.0",
+   "artifact": "benchmarks/outcomes.py"
+  },
+  {
+   "id": "2.3",
+   "phase": 2,
+   "title": "B4 — the 14-scenario corpus + server-side oracles",
+   "status": "pending",
+   "artifact": "benchmarks/idempotency_proxy.py",
+   "forward_declared": true,
+   "note": "shipping in five PRs: substrate foundation (#200), oracle machinery (#201), the Gitea seven (#202), the Odoo seven + `sale` (this one). The Idempotency-Key proxy and the scored run remain, and the artifact above is what `done` will require."
+  },
+  {
+   "id": "2.4",
+   "phase": 2,
+   "title": "B5 — baseline, nightly, honesty page",
+   "status": "pending",
+   "artifact": "baselines/customer_v1.json"
+  }
  ]
 }

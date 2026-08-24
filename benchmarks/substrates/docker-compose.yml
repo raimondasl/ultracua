@@ -79,6 +79,25 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.odoo
+    # BIND THE APP TO EXACTLY ONE DATABASE, AND TAKE THE DATABASE MANAGER OFF THE AIR (R4.89).
+    #
+    # Without `--db-filter` Odoo cannot choose between `bench` and its reset template `bench_seed`,
+    # so it serves the DATABASE MANAGER instead of the app -- measured, and at EVERY entry point an
+    # agent could use: `/`, `/web` and `/web/login` all returned the same 43,551-byte page listing
+    # both databases with Delete / Duplicate / Backup / Restore beside each. Two consequences, and
+    # the second is the serious one:
+    #
+    #   * every Odoo scenario would start on a database chooser rather than in the app, and the
+    #     clicks needed to get past it would be charged to the agent as discovery difficulty;
+    #   * the RESET TEMPLATE was one button from being deleted by whatever the agent explored. A
+    #     write-safety benchmark that puts "Delete Database" on its own start page is a hazard the
+    #     harness manufactured, and `reset()` would then fail for every later scenario.
+    #
+    # `^bench$` is anchored so it cannot match `bench_seed`. `--no-database-list` closes
+    # `/web/database/manager`, which stays reachable under a db-filter alone. Neither hinders the
+    # harness: `seed()`/`snapshot()`/`reset()` go through `psql` and a `run --rm --entrypoint odoo`
+    # container, not through this HTTP surface.
+    command: ["odoo", "--db-filter=^bench$$", "--no-database-list"]
     depends_on:
       odoo-db:
         condition: service_healthy
@@ -104,7 +123,10 @@ services:
     ports:
       - "8069:8069"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8069/web/database/selector >/dev/null || exit 1"]
+      # `/web/login`, NOT `/web/database/selector`. The selector is the page that APPEARS when the
+      # db-filter above is missing, so a healthcheck pointed at it passes on precisely the broken
+      # state it should catch -- R4.85's shape (every readiness layer was a read) one door over.
+      test: ["CMD-SHELL", "curl -sf http://localhost:8069/web/login >/dev/null || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 60

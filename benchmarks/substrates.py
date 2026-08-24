@@ -30,6 +30,7 @@ ubuntu job. Everything key-less and Docker-free in here is unit-tested in
 from __future__ import annotations
 
 import datetime
+import http.cookiejar
 import json
 import os
 import re
@@ -90,9 +91,26 @@ ISSUE_EPOCH = 1768467600
 # constant is the first thing that has to go.
 GITEA_PASSWORD = "benchbench"
 
-# Column separator for `Gitea.query`. `|` is sqlite3's default and appears in real issue titles;
-# this one cannot, which is the whole requirement. A separator that can occur in the data silently
-# splits one column into two and the oracle compares malformed identities.
+# Odoo's demo administrator. Created by the demo data, not by this harness -- `admin`/`admin` is
+# what `-i base --without-demo` omitted means, and changing it would mean patching the demo module.
+# SAME STANDING AS `GITEA_PASSWORD` and the `odoo/odoo` Postgres pair in the compose file: a local,
+# throwaway fixture credential for a container bound to localhost. It is not a secret and must never
+# become one; if this substrate is ever exposed beyond localhost this constant is the first thing
+# that has to go. Needed here because the ASSET WARMUP below is authenticated -- measured, an
+# anonymous GET of `/web` serves the login page, which references no `/web/assets/` bundle at all.
+ODOO_LOGIN = "admin"
+ODOO_PASSWORD = "admin"
+
+# Column separator for `Gitea.query` and `Odoo.query`. `|` is sqlite3's (and psql's) default and
+# appears in real issue titles and customer names, so a row silently splits into an extra column and
+# the oracle compares a malformed identity.
+#
+# WHAT THIS IS AND IS NOT A GUARANTEE OF, since the difference is the interesting part. No SEEDED
+# value contains `<::>`; an AGENT could still type it into a lead name. That residual is accepted
+# because its failure is LOUD in both oracles rather than silent: the extra column makes the row a
+# different arity, so a read oracle sees an identity that is not in its baseline and REFUSES, and a
+# write oracle raises while unpacking. Both attribute to the harness, neither scores a quiet pass --
+# which is the only property this constant has to have.
 SQL_SEP = "<::>"
 
 
@@ -133,6 +151,17 @@ def _http_ok(url: str, min_bytes: int) -> bool:
             return resp.status == 200 and len(resp.read(min_bytes + 1)) > min_bytes
     except (urllib.error.URLError, OSError, ValueError):
         return False
+
+
+def _anonymous_opener():
+    """A cookie-carrying opener with NO session. `_authenticate` is what gives it one.
+
+    Its own jar per call, deliberately: a shared session outliving a `reset()` would carry a cookie
+    for a database that no longer exists, and the resulting failure would name the wrong cause --
+    the same reason `Gitea.token()` is invalidated by its reset.
+    """
+    return urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 
 
 @dataclass
@@ -486,19 +515,57 @@ class Odoo(Substrate):
     name: str = "odoo"
     profile: str = "odoo"
     url: str = "http://localhost:8069"
-    health_path: str = "/web/database/selector"
+    # `/web/login`, NOT `/web/database/selector` (R4.89). The selector is what Odoo serves INSTEAD of
+    # the app when it cannot pick a database, so pointing readiness at it means the probe passes on
+    # exactly the broken state. Measured: bound to one database `/web/login` is a 4,430-byte login
+    # form; unbound it is the 42,559-byte DATABASE MANAGER -- and both are HTTP 200, which is why
+    # `assert_bound_to_one_database` reads the BODY rather than trusting the status.
+    health_path: str = "/web/login"
     containers: tuple = ("ultracua-bench-odoo-db-1", "ultracua-bench-odoo-1")
     db_name: str = "bench"
     seed_db: str = "bench_seed"
-    # `crm` for the lead scenarios; `base` comes with it but is named so the install is explicit.
-    # A SHORT list on purpose: every extra module is more demo rows, a slower seed and a larger
-    # template, and the corpus only reads CRM.
-    modules: str = "base,crm"
+    # `crm` for the lead scenarios, `sale` for the order ones. `base` comes with both but is named
+    # so the install is explicit.
+    #
+    # `sale` IS LOAD-BEARING RATHER THAN CONVENIENT. `odoo-open-record` is the pair-mate of
+    # `gitea-open-issue`, and what the pair isolates (benchmark-plan section 7) is that Odoo's
+    # version ALSO trips the KEYWORD classifier -- on "order". `safety.MUTATING_KEYWORDS` contains
+    # `order`, whose measured false-positive rate on ordinary read-only controls is 28%, so a read
+    # scenario about a sale order is the one place this corpus can measure over-gating caused by a
+    # WORD rather than by a transport. Navigating to a CRM lead trips nothing, and building the pair
+    # on `crm` alone would silently drop that arm while looking complete.
+    #
+    # STILL A SHORT LIST: every extra module is more demo rows, a slower seed and a larger template.
+    # The corpus reads CRM and Sales and nothing else.
+    modules: str = "base,crm,sale"
 
     def _psql(self, sql: str) -> str:
         proc = _compose("--profile", self.profile, "exec", "-T", "odoo-db",
                         "psql", "-U", "odoo", "-d", "postgres", "-tAc", sql)
         return proc.stdout.strip()
+
+    def query(self, sql: str) -> tuple:
+        """A READ-ONLY query against the SCENARIO database, rows as tuples of strings.
+
+        The Odoo half of `Gitea.query`, and the reason the R4.86 clock scan finally has real SQL to
+        police: every Gitea oracle but one asks the HTTP API, where a clock read is not expressible.
+
+        AIMED AT `db_name`, NOT `postgres`, which is the whole difference from `_psql`. `_psql` runs
+        the LIFECYCLE statements -- `DROP DATABASE`, `CREATE DATABASE ... TEMPLATE` -- which cannot
+        run from inside the database they are dropping. An oracle asks about the scenario's world and
+        must not be able to reach those, so it gets its own accessor rather than a flag on that one.
+
+        Safe against the running service: Postgres readers never block, and the reset stops `odoo`
+        for its own reason (a template needs no other session), not for this one.
+
+        `-F SQL_SEP` rather than psql's default `|`, for the reason the constant states -- a
+        separator that occurs in the data silently splits one column into two and the oracle then
+        compares malformed identities. Customer names in Odoo's demo data are free text.
+        """
+        proc = _compose("--profile", self.profile, "exec", "-T", "odoo-db",
+                        "psql", "-U", "odoo", "-d", self.db_name, "-tA", "-F", SQL_SEP, "-c", sql)
+        return tuple(tuple(line.split(SQL_SEP))
+                     for line in (proc.stdout or "").splitlines() if line.strip())
 
     # Odoo's filestore is per-database and lives in the ODOO container, not the db one.
     filestore: str = "/var/lib/odoo/filestore"
@@ -513,7 +580,66 @@ class Odoo(Substrate):
         on.
         """
         super().await_ready(timeout_s=timeout_s, poll_s=poll_s)
+        self.assert_bound_to_one_database()
         self.assert_clock_pinned()
+
+    def assert_bound_to_one_database(self) -> None:
+        """Is the agent's entry point the APP, or Odoo's database manager? (R4.89)
+
+        WHAT WAS MEASURED, and it is worse than a wrong landing page. With two databases visible --
+        `bench` and its own reset template `bench_seed` -- and no `--db-filter`, Odoo cannot choose,
+        so it serves the DATABASE MANAGER at every entry point an agent could use: `/`, `/web` and
+        `/web/login` all returned the same 43,551-byte page listing both databases with **Delete,
+        Duplicate, Backup and Restore** beside each. So the benchmark's start page offered a
+        one-click deletion of the template every later `reset()` depends on, and any scenario would
+        have spent its first turns getting past a chooser that is no part of the task.
+
+        AND NOTHING ABOVE COULD SEE IT. The compose healthcheck, the `min_body_bytes` probe and
+        `assert_writable` all pass against the manager page -- it is a healthy 200 with a large body
+        on a writable volume. That is R4.85's finding restated: a layer that only asks "did something
+        answer" cannot distinguish the app from the page Odoo serves when the app is unreachable.
+        This layer reads the BODY for the manager's own master-password field, which is present on
+        the manager and absent from the login form.
+
+        TWO CAUSES, DIFFERENT REMEDIES, so they are separated by asking Postgres rather than guessed
+        from the page (with `--no-database-list` the manager lists nothing in either case):
+          * the scenario database does not exist yet -- `up()` legitimately runs before `seed()`;
+          * it exists and the app still will not bind to it -- the db-filter is missing or wrong.
+
+        RAISES IMMEDIATELY rather than spinning, for the reason `assert_writable` already gives:
+        neither state self-heals, so burning the timeout would report "not ready in 300s" instead of
+        naming which of the two it is.
+        """
+        try:
+            with urllib.request.urlopen(self.url + "/web/login", timeout=10) as resp:
+                body = resp.read().decode("utf-8", "replace")
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            raise SubstrateNotReady(f"{self.name}: could not read {self.url}/web/login: {exc}") from exc
+        # DECIDED ON A POSITIVE, NOT ON AN ABSENCE. `"master_pwd" not in body` alone accepts anything
+        # that is not the manager -- an error page, a proxy's 200, a future Odoo whose manager drops
+        # that field -- and it accepts it as READY, which is the wrong direction for a readiness
+        # layer to fail in. Neither half is sufficient alone: the manager page ALSO carries
+        # `name="login"`, inside its create-database modal, which is what made a browser probe fill
+        # an invisible field and time out before any of this was understood.
+        if "master_pwd" not in body and 'name="login"' in body and 'name="password"' in body:
+            return
+        exists = self.db_name in self._psql("SELECT datname FROM pg_database").split()
+        if "master_pwd" not in body:
+            raise SubstrateNotReady(
+                f"{self.name}: /web/login is neither a login form nor the database manager "
+                f"({len(body)} bytes). Something is answering on {self.url} that is not the Odoo web "
+                f"client -- refusing rather than treating an unrecognised page as ready.")
+        raise SubstrateNotReady(
+            f"{self.name}: /web/login is serving the DATABASE MANAGER, not the app.\n"
+            + (f"    The database {self.db_name!r} does not exist yet. Run `seed()` (then "
+               f"`snapshot()`) before any scenario -- `up()` deliberately runs first, so this is the "
+               f"expected state of a virgin instance and not a misconfiguration."
+               if not exists else
+               f"    {self.db_name!r} EXISTS and the app still will not bind to it, so the "
+               f"`--db-filter` in the compose file is missing or does not match. Until it does, an "
+               f"agent's first page is a chooser listing {self.seed_db!r} -- the reset template -- "
+               f"beside a Delete button (R4.89).")
+        )
 
     def assert_clock_pinned(self) -> None:
         """`LD_PRELOAD` fails OPEN, which is why this cannot be left to configuration.
@@ -589,6 +715,114 @@ class Odoo(Substrate):
             f"B3 would score against the agent rather than the harness (R4.85)."
         )
 
+    def _authenticate(self, opener) -> int:
+        """Log `opener` in as the demo administrator and return its uid. Raises rather than returns 0.
+
+        The credential is `ODOO_LOGIN`/`ODOO_PASSWORD`, which the DEMO DATA owns -- so a database
+        seeded without demo data has no such user, and that is the likeliest reason this ever fails.
+        """
+        payload = json.dumps({"jsonrpc": "2.0", "method": "call", "params": {
+            "db": self.db_name, "login": ODOO_LOGIN, "password": ODOO_PASSWORD}}).encode()
+        req = urllib.request.Request(f"{self.url}/web/session/authenticate", data=payload,
+                                     headers={"Content-Type": "application/json"})
+        uid = json.loads(opener.open(req, timeout=60).read()).get("result", {}).get("uid")
+        if not uid:
+            raise SubstrateNotReady(
+                f"{self.name}: could not authenticate as {ODOO_LOGIN!r}. The demo data owns that "
+                f"account, so a database seeded WITHOUT demo data has no such user -- see `seed()` "
+                f"on the `--without-demo` trap.")
+        return uid
+
+    def rpc(self, model: str, method: str, args: list, kwargs: "dict | None" = None):
+        """One `call_kw` against the live web client -- the substrate's OWN write path.
+
+        THE LIVENESS PASS NEEDS THIS AND NOTHING ELSE DOES. `--arm-oracles` proves an oracle can say
+        NO by substituting a falsified probe; what it structurally cannot see is an oracle whose
+        QUERY is aimed at the wrong table, because such an oracle rejects every falsified world
+        correctly and reports nothing about the real one. Telling those apart needs a REAL change,
+        and it has to be made the way the application makes one -- not with an UPDATE, which would
+        skip Odoo's ORM and could leave the row in a state the app never produces.
+
+        Deliberately NOT used by `seed()`. Seeding runs the module installer in a `run --rm`
+        container, which is a different mechanism on purpose: a seed that went through the same door
+        as the liveness probe could not detect a broken door.
+        """
+        opener = _anonymous_opener()
+        self._authenticate(opener)
+        payload = json.dumps({"jsonrpc": "2.0", "method": "call", "params": {
+            "model": model, "method": method, "args": args, "kwargs": kwargs or {}}}).encode()
+        req = urllib.request.Request(f"{self.url}/web/dataset/call_kw", data=payload,
+                                     headers={"Content-Type": "application/json"})
+        body = json.loads(opener.open(req, timeout=120).read())
+        if "error" in body:
+            raise SubstrateError(
+                f"{self.name}: {model}.{method} failed: "
+                f"{body['error'].get('data', {}).get('message') or body['error']}")
+        return body.get("result")
+
+    #: `(src|href)="/web/assets/..."` as the served HTML spells it. Both attributes, because the
+    #: CSS bundle arrives on a `<link href>` and the JS on a `<script src>`.
+    _ASSET_RE = re.compile(r'(?:src|href)="(/web/assets/[^"]+)"')
+
+    def warm_assets(self) -> int:
+        """Compile the web client's asset bundles NOW, so no scenario pays for it. Returns how many.
+
+        THE PLAN PREDICTED "tens of seconds"; THE MEASUREMENT SAYS 2.42 s, AND BOTH HALVES MATTER.
+        `realistic-benchmark-plan.md` lists "the first request after a reset recompiles asset bundles
+        (tens of seconds -> false drift on whichever scenario runs first)" as a MAJOR risk and asks
+        for a warmup request. Measured at 0.124.0 over `web.assets_web.min.{css,js}` (4.9 MB across
+        two bundles): cold 1.17 s + 1.30 s, warm 0.02 s + 0.03 s -- so +2.42 s per reset, not tens of
+        seconds. Small, REAL, and charged entirely to whichever scenario runs first, which is what
+        makes a per-scenario wall-clock number depend on the order the corpus happens to run in.
+
+        WHY IT IS A METHOD AND NOT A ONE-OFF. The bundles are `ir_attachment` rows whose BYTES live
+        in the filestore -- half in Postgres, half on disk, like every other piece of Odoo state --
+        and the template captures whatever existed when `snapshot()` ran. Called at the end of
+        `seed()` it freezes the template WARM: measured, `bench_seed` then carries FIVE `ir.ui.view`
+        attachments -- the three `web.assets_frontend*` bundles the login page needs and the two
+        `web.assets_web` ones the backend needs -- and the per-reset penalty falls to +0.00 s. Called
+        again at the end of `reset()` it turns that from an assumption into a guarantee: 0.03 s
+        against a warm template, and it pays the 2.4 s itself against a cold one.
+
+        BOTH SIDES OF THE LOGIN WALL ARE WARMED, because both are on the agent's path: it lands on
+        `/web/login` (three `web.assets_frontend*` bundles) and ends up in the backend (two
+        `web.assets_web` ones). Warming only one leaves the other cold on the first scenario.
+
+        THE SENSOR IS A DIFFERENTIAL, AND THE FIRST VERSION WAS NOT. It used to raise only when NO
+        bundle was found, on the measured claim that an anonymous `/web` referenced none -- which was
+        true of the DATABASE MANAGER page Odoo was serving before R4.89 was fixed, and stopped being
+        true the moment it served a real login page. A broken session would then have warmed the
+        three frontend bundles, returned 3, and never raised, while the 4.9 MB backend pair -- the
+        entire cost this method exists to absorb -- stayed cold. So the check is now that the
+        AUTHENTICATED page reaches bundles the anonymous one cannot, which is the property meant all
+        along and needs no bundle name written down to survive an Odoo upgrade.
+        """
+        opener = _anonymous_opener()
+
+        def bundles_on_web() -> set:
+            html = opener.open(f"{self.url}/web", timeout=60).read().decode("utf-8", "replace")
+            return set(self._ASSET_RE.findall(html))
+
+        try:
+            anonymous = bundles_on_web()
+            self._authenticate(opener)
+            backend = bundles_on_web()
+            for url in sorted(anonymous | backend):
+                opener.open(self.url + url, timeout=600).read()
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            raise SubstrateNotReady(
+                f"{self.name}: the asset warmup could not reach the web client: {exc}") from exc
+        if not backend - anonymous:
+            raise SubstrateNotReady(
+                f"{self.name}: authenticated and anonymous /web referenced the SAME bundles "
+                f"{sorted(anonymous)}, so the session never reached the backend and the bundles this "
+                f"method exists to warm are still cold.\n"
+                f"    Refusing rather than reporting a count. A warmup that silently warms the wrong "
+                f"thing is a guarantee that is false, and the cost it was meant to absorb reappears "
+                f"on whichever scenario runs first (R4.86's shape)."
+            )
+        return len(anonymous | backend)
+
     def seed(self) -> None:
         """Create `bench` from scratch, WITH demo data, under the pinned clock.
 
@@ -619,9 +853,16 @@ class Odoo(Substrate):
         finally:
             _compose("--profile", self.profile, "start", "odoo", check=False)
         self.await_ready()
+        # WARM BEFORE THE SNAPSHOT, or every reset for the life of this template pays the compile.
+        self.warm_assets()
 
     def snapshot(self) -> None:
-        """Freeze the seeded world: a template database plus its filestore."""
+        """Freeze the seeded world: a template database plus its filestore.
+
+        Runs AFTER `seed()` has warmed the asset bundles, which is what makes the template warm. The
+        bundles are `ir_attachment` rows (Postgres) whose bytes are in the filestore (disk), so both
+        halves of this method are needed to carry them -- the filestore copy is not only about
+        attachments a scenario opens."""
         _compose("--profile", self.profile, "stop", "odoo")
         self._psql(f'DROP DATABASE IF EXISTS "{self.seed_db}"')
         self._psql(f'CREATE DATABASE "{self.seed_db}" TEMPLATE "{self.db_name}"')
@@ -642,11 +883,16 @@ class Odoo(Substrate):
         other session on the template, which is why `odoo` is stopped around it rather than merely
         asked nicely.
 
-        UNVERIFIED ON THE AUTHORING HOST, and said plainly rather than implied: this was written on a
-        machine with 308 MB of available memory and ~50k pages/sec, where bringing up Odoo would
-        produce timings and readiness behaviour that mean nothing (`CLAUDE.md`: a loaded host cannot
-        adjudicate). The Gitea path below IS verified end to end. Treat this method as reviewed code
-        that has not yet been run, and drive it once before the first Odoo scenario is scored.
+        DRIVEN FOR THE FIRST TIME AT 0.124.0, AND IT WORKS. It carried a standing note saying it was
+        reviewed code nobody had run -- written on a host with 308 MB free, where any timing would
+        have meant nothing. Measured now on an unloaded host: **13.5-16.1 s per reset** over eight
+        consecutive runs, template and filestore consistent afterwards; the top of that range
+        includes the asset warmup this slice added. The plan budgeted 30-60 s. For scale, the rest of
+        the lifecycle measured 87.6 s to `seed()` (with `sale`) and 14.0 s to `snapshot()`.
+
+        AND DRIVING IT FOUND THE ONE THING REVIEW COULD NOT: the template is COLD. Restoring it
+        discards the compiled asset bundles, so the first backend page load after every reset paid
+        +2.42 s. See `warm_assets`, which now absorbs that at both ends.
         """
         if self.seed_db not in self._psql("SELECT datname FROM pg_database"):
             raise SubstrateError(
@@ -662,6 +908,11 @@ class Odoo(Substrate):
         _compose("--profile", self.profile, "exec", "-T", "odoo", "sh", "-c",
                  f"rm -rf {self.filestore}/{self.db_name} && "
                  f"cp -a {self.filestore}/{self.seed_db} {self.filestore}/{self.db_name}")
+        # 0.03 s against a warm template, 2.4 s against a cold one -- and it is this SECOND call that
+        # makes the guarantee hold rather than usually hold. A template restored from an older
+        # snapshot, or one taken before `seed()` warmed, is cold; without this the cost lands on the
+        # first scenario and reads as that scenario being slow.
+        self.warm_assets()
 
 
 # ---------------------------------------------------------------------------------------------------
