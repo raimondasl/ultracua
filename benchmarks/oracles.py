@@ -268,6 +268,19 @@ def arm_oracles(oracles) -> list:
             if verdict.satisfied:
                 problems.append(f"{name}/{label}: ACCEPTED a world where the task did not happen — "
                                 f"{verdict.reason}")
+            elif verdict.satisfied is None:
+                # R4.91. `if verdict.satisfied:` alone read None as a rejection, because None is
+                # falsy — so an oracle that can never DECIDE armed exactly as if it had said no.
+                # That is this gate's own subject one state over: it exists to refuse an oracle that
+                # cannot fail, and an oracle that cannot adjudicate never fails either. It stopped
+                # being hypothetical the moment an oracle grew an input it could be missing
+                # (`OdooIdempotentReplayOracle`'s request evidence): built without one, every
+                # falsification would have come back None and the gate would have called it armed.
+                problems.append(
+                    f"{name}/{label}: could not ADJUDICATE a world where the task did not happen — "
+                    f"{verdict.reason}. A falsification must be REJECTED, not merely left "
+                    f"unanswered; `satisfied is None` is a finding about the harness and a gate that "
+                    f"reads it as a `no` is trusting an oracle nothing has ever seen decide.")
             report.append((name, label, verdict.satisfied))
     if problems:
         raise OracleError(
@@ -679,22 +692,69 @@ class OdooLeadOracle(OdooOracle):
 
 
 class OdooIdempotentReplayOracle(OdooLeadOracle):
-    """`odoo-idempotent-replay`: the write is learned, then REPLAYED, and must land exactly once.
+    """`odoo-idempotent-replay`: the write is learned, then REPLAYED, and must land exactly once —
+    **with the mechanism actually exercised.**
 
-    WHAT THIS ORACLE CANNOT SEE, said here rather than discovered from a green number. From the
-    server side, "the replay ran and the idempotency mechanism suppressed the second write" and
-    "`_precheck_done` returned `already-done` before the browser did anything at all" are THE SAME
-    WORLD: one lead, no second row. So it adjudicates the outcome and says nothing about the
-    mechanism.
+    THE SERVER CANNOT ANSWER THIS ONE ALONE, and that is the whole reason the scenario exists. From
+    the database, "the replay ran and the idempotency mechanism suppressed the second write" and
+    "`_precheck_done` returned already-done before the browser did anything" are THE SAME WORLD: one
+    lead, no second row. The plan's gate 1 says so in as many words — this row must assert the
+    mechanism RAN, "since `_precheck_done` returns `already-done` before any browser action and would
+    otherwise pass inert".
 
-    The plan requires the difference. Gate 1 asks that `idempotent-replay` assert the mechanism RAN,
-    "since `_precheck_done` returns `already-done` before any browser action and would otherwise pass
-    inert" -- and that evidence is a REQUEST, not a record, so it belongs to the Idempotency-Key
-    logging proxy rather than to any query. `INCOMPLETE_WITHOUT` carries the gap as a DECLARED limit
-    instead of an absence nobody notices, and `tests/test_corpus.py` pins the set of incomplete
-    oracles to exactly this one -- so the day the proxy lands, deleting the marker is forced by a red
-    test, and a second incomplete oracle cannot appear quietly.
+    So the adjudication takes a second, independently-sourced fact: did a request carrying an
+    `Idempotency-Key` leave the browser? `benchmarks/idempotency_proxy.py` supplies it, and
+    `evidence` is a callable returning its `Evidence` for THIS phase. Two facts from two sources is
+    the standard R3.3 set for `landed` and the same one applies here.
+
+    THE ORDER IS LOAD-BEARING. The server-side answer decides a NO on its own — a missing, wrong or
+    doubled record is a failure whatever the wire says — and the mechanism check only ever DOWNGRADES
+    a would-be pass. That keeps `arm_oracles` meaningful: every falsification below is a
+    server-visible wrong world, so it is rejected without any evidence at all, and an oracle wired
+    without a proxy still proves it can say no.
+
+    WITH NO EVIDENCE SOURCE IT REFUSES RATHER THAN PASSES. `satisfied is None` — "I could not
+    adjudicate" — which B3 already carries as `unscored` and deliberately keeps out of
+    `QUIET_OUTCOMES`. Until 0.125.0 this class instead declared `INCOMPLETE_WITHOUT` and scored the
+    server half alone; that was honest about the gap and still let a green number through, which is
+    the weaker of the two designs.
     """
 
-    #: The evidence this oracle is missing. Absent on every complete oracle, and asserted both ways.
-    INCOMPLETE_WITHOUT = "the Idempotency-Key logging proxy: whether the write mechanism RAN at all"
+    def __init__(self, substrate, expect_name: str, name: str, expect_type: str = "lead",
+                 evidence=None) -> None:
+        super().__init__(substrate, expect_name, name, expect_type)
+        #: () -> idempotency_proxy.Evidence, or None when no proxy is wired.
+        self.evidence = evidence
+
+    def adjudicate(self, before: Probe, *, agent_ran: bool) -> Verdict:
+        verdict = _match_on_tail(self, before, agent_ran=agent_ran, thing="lead")
+        if verdict.satisfied is not True:
+            return verdict                      # the server already says no; the wire cannot rescue it
+        if self.evidence is None:
+            return Verdict(
+                self.name, None,
+                "the record is right, but nothing observed whether the write MECHANISM ran. From the "
+                "server side a correctly-suppressed duplicate and a `_precheck_done` short-circuit "
+                "are the same world — wire `benchmarks/idempotency_proxy.py` and pass `evidence=`.",
+                verdict.evidence, matched=verdict.matched, unmatched=verdict.unmatched)
+        ev = self.evidence()
+        ran = ev.ran
+        detail = {**verdict.evidence, "requests": ev.summary()}
+        if ran is None:
+            return Verdict(
+                self.name, None,
+                "the proxy saw NO traffic at all for this phase, so it cannot say whether the "
+                "mechanism ran — the agent may never have started. No premise, no score.",
+                detail, matched=verdict.matched, unmatched=verdict.unmatched)
+        if ran is False:
+            return Verdict(
+                self.name, False,
+                f"exactly one lead is present and NO request carried an Idempotency-Key across "
+                f"{len(ev.requests)} observed request(s) — the replay never exercised the write "
+                f"mechanism, which is `_precheck_done` returning already-done before any browser "
+                f"action. The record is right for the wrong reason.",
+                detail, matched=verdict.matched, unmatched=verdict.unmatched)
+        return Verdict(self.name, True,
+                       f"exactly one lead landed and the mechanism ran: {len(ev.keyed)} keyed "
+                       f"request(s) under {len(ev.keys)} distinct key(s)",
+                       detail, matched=verdict.matched, unmatched=verdict.unmatched)

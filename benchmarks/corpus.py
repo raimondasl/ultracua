@@ -43,6 +43,7 @@ if str(ROOT) not in sys.path:
 from benchmarks import oracles as O                      # noqa: E402
 from benchmarks import substrates as S                   # noqa: E402
 from benchmarks.customer_bench import Scenario           # noqa: E402
+from benchmarks.outcomes import Oracle as BenchOracle    # noqa: E402
 from benchmarks.outcomes import ScenarioTruth            # noqa: E402
 
 
@@ -430,3 +431,37 @@ def for_substrate(name: str) -> tuple:
 def oracles_for(name: str, substrate) -> list:
     """The oracle set DERIVED from the corpus, so armed and consulted cannot be two different lists."""
     return [entry.oracle(substrate) for entry in for_substrate(name)]
+
+
+# --- the one join between an oracle's VERDICT and the outcome vocabulary --------------------------
+
+def bench_oracle(entry: "CorpusEntry", verdict: "O.Verdict", *, expected: str = "",
+                 answer: str = "") -> BenchOracle:
+    """Turn one oracle `Verdict` into the `outcomes.Oracle` B3 adjudicates on. ONE derivation.
+
+    WHY THIS EXISTS AT ALL, and why now. B3 fixed the contract (`outcomes.Oracle`), B4 built the
+    oracles that answer it (`oracles.Verdict`), and until 0.125.0 **nothing joined them** — every
+    construction of the B3 type lived in a test. The first scored run would have hand-written this
+    translation at its call site, and a hand-written translation between two representations is the
+    transcription class this register keeps re-filing: R4.88 was two lists of oracles, 1.6's
+    `flow_key` was 24 transcriptions of one key. So the join is a function, tested, before anything
+    calls it.
+
+    THE ONE CLAUSE THAT MATTERS. `verdict.satisfied is None` means the oracle could not adjudicate,
+    and that becomes `available=False` — B3 then scores the row `unscored`, which is deliberately
+    absent from `QUIET_OUTCOMES` and so cannot pass a gate. That is what closes the loop this slice
+    opened: a scored run that forgets to wire the proxy gets `odoo-idempotent-replay` refusing, which
+    becomes `unscored`, which fails the coverage channel unless a human acknowledges it by name.
+    Forgetting the instrument is LOUD rather than a quiet green.
+
+    `data_correct` is NOT the oracle's business and is passed in. A read oracle answers "the watched
+    surfaces did not change"; whether the agent's free text carried the fact is `check_answer`'s
+    question, and conflating the two would let a correct answer about a mutated world score `ok`.
+    A write takes no answer at all — it is adjudicated by what landed, which `CorpusEntry` already
+    refuses to let a corpus author override, so `expected`/`answer` are ignored for one.
+    """
+    if verdict.satisfied is None:
+        return BenchOracle(available=False, unavailable_reason=verdict.reason)
+    return BenchOracle(available=True,
+                       data_correct=None if entry.truth.mutating else check_answer(expected, answer),
+                       matched=tuple(verdict.matched), unmatched=tuple(verdict.unmatched))

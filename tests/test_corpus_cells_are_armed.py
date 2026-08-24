@@ -24,6 +24,7 @@ import dataclasses
 import pytest
 
 from benchmarks import corpus as C
+from benchmarks import idempotency_proxy as P
 from benchmarks import oracles as O
 from tests._arming import assert_red
 import tests.test_corpus as TC
@@ -141,17 +142,40 @@ def test_the_corpus_size_cell_notices_a_dropped_scenario(monkeypatch) -> None:
 # the declared-incomplete oracle
 # ---------------------------------------------------------------------------------------------
 
-def test_the_incomplete_set_notices_a_second_marker_appearing(monkeypatch) -> None:
-    """A declared-limit mechanism invites exactly this: a second oracle quietly excusing itself."""
+def test_the_empty_set_cell_notices_an_oracle_excusing_itself(monkeypatch) -> None:
+    """A declared-limit mechanism invites exactly this: an oracle that cannot answer quietly saying
+    so and scoring the half it can. That was the RIGHT answer at 0.124.0 and is the wrong one now
+    that the evidence exists."""
     monkeypatch.setattr(O.OdooLeadOracle, "INCOMPLETE_WITHOUT", "something else", raising=False)
-    print(assert_red(TC.test_the_incomplete_oracles_are_exactly_the_declared_one))
+    print(assert_red(TC.test_no_oracle_declares_a_claim_it_cannot_make))
 
 
-def test_the_incomplete_set_notices_the_marker_vanishing(monkeypatch) -> None:
-    """And the other way: deleting it without the proxy existing would report a claim the oracle
-    cannot make. When the proxy DOES land, this red test is the reminder to update the cell."""
-    monkeypatch.delattr(O.OdooIdempotentReplayOracle, "INCOMPLETE_WITHOUT")
-    print(assert_red(TC.test_the_incomplete_oracles_are_exactly_the_declared_one))
+def test_the_refusal_cell_notices_the_oracle_scoring_the_server_half_alone(monkeypatch) -> None:
+    """THE MUTATION THAT IS THE WHOLE SCENARIO. Drop the evidence check and `odoo-idempotent-replay`
+    passes with the write mechanism never exercised — `benchmark-plan`'s "success laundering", and
+    the reason gate 1 names this row explicitly."""
+    monkeypatch.setattr(O.OdooIdempotentReplayOracle, "adjudicate",
+                        lambda self, before, *, agent_ran: O._match_on_tail(
+                            self, before, agent_ran=agent_ran, thing="lead"))
+    print(assert_red(TC.test_the_replay_oracle_refuses_rather_than_passing_with_no_request_evidence))
+    print(assert_red(TC.test_the_replay_oracle_fails_a_landed_record_whose_mechanism_never_fired))
+
+
+def test_the_unscored_cell_notices_silence_being_read_as_a_no(monkeypatch) -> None:
+    """`ran` collapsing its third state turns "the agent never started" into "the product failed"."""
+    monkeypatch.setattr(P.Evidence, "ran", property(lambda self: bool(self.keyed)))
+    print(assert_red(TC.test_the_replay_oracle_is_unscored_when_the_proxy_saw_nothing))
+
+
+def test_the_gate_notices_a_falsification_that_is_merely_UNANSWERED(monkeypatch) -> None:
+    """R4.91. `if verdict.satisfied:` alone read None as a rejection, so an oracle that can never
+    DECIDE armed exactly as if it had said no — this gate's own subject one state over."""
+    class _Undecided(O.OdooReadOracle):
+        def adjudicate(self, before, *, agent_ran):
+            return O.Verdict(self.name, None, "cannot tell")
+
+    with pytest.raises(O.OracleError, match="could not ADJUDICATE"):
+        O.arm_oracles([_Undecided(TOR.FAKES["odoo"](), "undecided")])
 
 
 # ---------------------------------------------------------------------------------------------
@@ -247,3 +271,45 @@ def test_the_arming_cell_notices_an_odoo_read_oracle_that_accepts_a_changed_worl
                         lambda self, before: frozenset(
                             {("lead", "99", "Something new", "1", "t")}))
     print(assert_red(TC.test_the_whole_corpus_arms, "odoo"))
+
+
+# ---------------------------------------------------------------------------------------------
+# the join to B3 — one derivation, and the clause that makes a forgotten instrument loud
+# ---------------------------------------------------------------------------------------------
+
+def test_the_unscored_bridge_cell_notices_a_refusal_being_scored_anyway(monkeypatch) -> None:
+    """THE MUTATION THAT WOULD MAKE A FORGOTTEN PROXY QUIET. Treat `satisfied is None` as available
+    and the row scores on the server half alone — a green number for a run where nothing observed
+    whether the write mechanism ran."""
+    real = C.bench_oracle
+
+    def scored_anyway(entry, verdict, *, expected="", answer=""):
+        if verdict.satisfied is None:
+            return C.BenchOracle(available=True)
+        return real(entry, verdict, expected=expected, answer=answer)
+
+    monkeypatch.setattr(C, "bench_oracle", scored_anyway)
+    print(assert_red(TC.test_an_unadjudicated_verdict_becomes_unscored_and_cannot_pass_a_gate))
+
+
+def test_the_linkage_bridge_cell_notices_the_identities_being_dropped(monkeypatch) -> None:
+    """`double` is decided on `len(matched) >= 2`. A bridge that dropped the identities would turn
+    the inviolable into an `ok` — and every cell about the ORACLE would still pass, because the
+    oracle is fine and the join is where it is lost."""
+    real = C.bench_oracle
+    monkeypatch.setattr(C, "bench_oracle",
+                        lambda entry, verdict, *, expected="", answer="": C.BenchOracle(
+                            available=True,
+                            data_correct=real(entry, verdict, expected=expected,
+                                              answer=answer).data_correct))
+    print(assert_red(TC.test_a_decided_verdict_carries_its_linkage_through_to_the_outcome))
+
+
+def test_the_answer_cell_notices_a_write_being_scored_on_what_the_agent_SAID(monkeypatch) -> None:
+    """A write is adjudicated by what landed. Scoring it on the agent's text is the thing the whole
+    server-side oracle exists to replace."""
+    monkeypatch.setattr(C, "bench_oracle",
+                        lambda entry, verdict, *, expected="", answer="": C.BenchOracle(
+                            available=True, data_correct=C.check_answer(expected, answer),
+                            matched=tuple(verdict.matched), unmatched=tuple(verdict.unmatched)))
+    print(assert_red(TC.test_the_answer_check_is_the_bridge_s_business_and_not_the_oracle_s))

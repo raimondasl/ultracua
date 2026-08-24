@@ -89,9 +89,10 @@
    "title": "shared fixture server",
    "status": "held",
    "trigger": "2.3",
-   "trigger_fired": false,
+   "trigger_fired": true,
    "artifact": "tests/_fixture_server.py",
-   "forward_declared": true
+   "forward_declared": true,
+   "note": "trigger FIRED at 0.125.0 (2.3 done) and the step stays HELD deliberately. Its stated rationale -- 'landing it with B4 makes 14 new fixtures correct by construction' -- was refuted during #202: B4 added ZERO fixture handlers, because its scenarios run against live containers. Its other trigger (a fixture defect of R4.56's shape costing a SLICE) has still not fired, though R4.56 now has THREE occurrences, the last two in consecutive slices. Unholding is a decision, not an inference."
   },
   {
    "id": "0.8",
@@ -193,10 +194,10 @@
    "id": "2.3",
    "phase": 2,
    "title": "B4 — the 14-scenario corpus + server-side oracles",
-   "status": "pending",
+   "status": "done",
    "artifact": "benchmarks/idempotency_proxy.py",
-   "forward_declared": true,
-   "note": "shipping in five PRs: substrate foundation (#200), oracle machinery (#201), the Gitea seven (#202), the Odoo seven + `sale` (this one). The Idempotency-Key proxy and the scored run remain, and the artifact above is what `done` will require."
+   "note": "shipped in five PRs: substrate foundation (#200), oracle machinery (#201), the Gitea seven (#202), the Odoo seven + `sale` (#203), the Idempotency-Key proxy (this one). B4's deliverables — 14 scenarios, their server-side oracles and the proxy — all exist and are armed. The SCORED RUN is 2.4 (B5): it costs real LLM spend and produces the baseline.",
+   "landed": "0.125.0"
   },
   {
    "id": "2.4",
