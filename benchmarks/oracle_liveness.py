@@ -35,6 +35,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from benchmarks import corpus                     # noqa: E402
 from benchmarks import oracles as O                # noqa: E402
 from benchmarks import substrates as S             # noqa: E402
 
@@ -60,32 +61,65 @@ def _check(label: str, got, want) -> bool:
 
 
 def gitea(sub) -> bool:
-    """A real comment through the API; every oracle must move, then move back after a reset."""
-    read = O.GiteaReadOracle(sub, "gitea-read")
-    baseline = read.probe()
-    issues = [r for r in baseline.rows if r[0] == "issue"]
-    if not issues:
-        raise O.OracleError(
-            "the substrate has no issues, so every probe below would compare two empty sets and "
-            "pass vacuously. Seed it first: `Gitea().seed()` then `snapshot()`.")
-    target = issues[0][1]
-    comment = O.GiteaCommentOracle(sub, target, MARKER)
-    before = comment.premise()
+    """Every corpus oracle, against a REAL change made through the substrate's own API.
 
+    Drives the CORPUS set rather than a hand-picked pair, so an oracle added to the corpus is covered
+    here without editing this function — the same reason `oracles_for` derives from the corpus.
+    """
+    entries = corpus.for_substrate("gitea")
+    reads = [(e, e.oracle(sub)) for e in entries if not e.truth.mutating]
+    writes = {e.scenario.name: e.oracle(sub) for e in entries if e.truth.mutating}
     ok = True
-    ok &= _check("read oracle, world untouched", read.adjudicate(read.probe(), agent_ran=True).satisfied, True)
-    ok &= _check("comment oracle, premise is empty", before.count, 0)
 
-    sub._api(sub.token(), "POST",
-             f"/repos/{sub.user}/{sub.repo}/issues/{target}/comments", {"body": MARKER})
+    # 0. The corpus's own expected answers must be computable and non-empty. A read scenario whose
+    #    expected answer is blank scores every answer as correct.
+    for e, _ in reads:
+        want = e.expected_answer(sub)
+        ok &= _check(f"{e.scenario.name}: expected answer is a real fact", bool(str(want).strip()), True)
 
-    ok &= _check("comment oracle sees the REAL write", comment.adjudicate(before, agent_ran=True).satisfied, True)
-    ok &= _check("read oracle refuses the same world", read.adjudicate(baseline, agent_ran=True).satisfied, False)
-    ok &= _check("agent_ran=False is unscored", comment.adjudicate(before, agent_ran=False).satisfied, None)
+    # 1. Untouched world: every read oracle satisfied.
+    baselines = {e.scenario.name: o.premise() for e, o in reads}
+    for e, o in reads:
+        ok &= _check(f"{e.scenario.name}: untouched world",
+                     o.adjudicate(baselines[e.scenario.name], agent_ran=True).satisfied, True)
 
+    # 2. A REAL comment. The write oracle must see it; every read oracle must now refuse, because a
+    #    read that changed a watched surface is `incorrect_target` — an inviolable.
+    target = 1
+    comment = writes["gitea-comment"]
+    before_comment = comment.premise()
+    sub._api(sub.token(), "POST", f"/repos/{sub.user}/{sub.repo}/issues/{target}/comments",
+             {"body": "looks right to me"})
+    v = comment.adjudicate(before_comment, agent_ran=True)
+    ok &= _check("gitea-comment: sees the real write", v.satisfied, True)
+    ok &= _check("gitea-comment: exactly one identity matched", len(v.matched), 1)
+    for e, o in reads:
+        ok &= _check(f"{e.scenario.name}: refuses a world that moved",
+                     o.adjudicate(baselines[e.scenario.name], agent_ran=True).satisfied, False)
+
+    # 3. A DOUBLE, which is the inviolable R4.87 made visible. Identical body, different server id.
+    sub._api(sub.token(), "POST", f"/repos/{sub.user}/{sub.repo}/issues/{target}/comments",
+             {"body": "looks right to me"})
+    v2 = comment.adjudicate(before_comment, agent_ran=True)
+    ok &= _check("gitea-comment: the DOUBLE is two identities", len(v2.matched), 2)
+    ok &= _check("gitea-comment: and is not satisfied", v2.satisfied, False)
+
+    # 4. The timer, whose identity comes from the times endpoint rather than the id-less stopwatch.
+    timer = writes["gitea-start-timer"]
+    before_timer = timer.premise()
+    sub._api(sub.token(), "POST", f"/repos/{sub.user}/{sub.repo}/issues/{target}/stopwatch/start", None)
+    ok &= _check("gitea-start-timer: sees the real write",
+                 timer.adjudicate(before_timer, agent_ran=True).satisfied, True)
+
+    # 5. agent_ran=False is UNSCORED, never a quiet False (B2 rule 3).
+    ok &= _check("agent never ran is unscored",
+                 comment.adjudicate(before_comment, agent_ran=False).satisfied, None)
+
+    # 6. And the reset puts every watched surface back.
     sub.reset()
-    after = read.probe()
-    ok &= _check("reset restores the watched surfaces", after.identities, baseline.identities)
+    for e, o in reads:
+        ok &= _check(f"{e.scenario.name}: reset restores the world",
+                     o.probe().identities, baselines[e.scenario.name].identities)
     return ok
 
 

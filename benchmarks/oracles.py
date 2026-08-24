@@ -506,28 +506,33 @@ class GiteaTimerOracle(Oracle):
     here" is an oracle nobody has ever watched say no.
     """
 
-    QUERIES = ("GET /repos/{owner}/{repo}/issues/{index}/times",)
+    # The DATABASE, not the API. A running stopwatch has no id anywhere the API exposes, and
+    # `/issues/{n}/times` stays EMPTY until the timer is STOPPED — measured, which is how the
+    # first version of this oracle came to reject all four falsifications while seeing nothing
+    # in the real world. Clock-free by construction, so the R4.86 scan passes it.
+    QUERIES = ("SELECT id, issue_id, user_id FROM stopwatch",)
     MUTATING = True
 
-    def __init__(self, substrate, issue_number: int, name: str = "gitea-start-timer") -> None:
+    def __init__(self, substrate, issue_number: int, name: str = "gitea-start-timer",
+                 user_id: int = 1) -> None:
         self.substrate = substrate
         self.issue_number = issue_number
         self.name = name
+        #: The seeded admin is uid 1 — it is the first and only user `seed()` creates. Held as a
+        #: number because the `stopwatch` table stores a foreign key, not a login.
+        self.user_id = user_id
 
     def identity_of(self, record) -> tuple:
-        return (record["id"], record["issue_id"], record["user_name"])
+        return (record["id"], record["issue_id"], record["user_id"])
 
     def probe(self) -> Probe:
-        rows = self.substrate._api(
-            self.substrate.token(), "GET",
-            f"/repos/{self.substrate.user}/{self.substrate.repo}"
-            f"/issues/{self.issue_number}/times")
-        return Probe(tuple(sorted(self.identity_of(r) for r in rows)),
+        rows = self.substrate.query(self.QUERIES[0])
+        return Probe(tuple(sorted((int(a), int(b), int(c)) for a, b, c in rows)),
                      query=self.QUERIES[0], label=self.name)
 
     def expected_delta(self, before: Probe) -> frozenset:
         """Matched on the tail — the server owns the id, so intent names the issue and the user."""
-        return frozenset({(self.issue_number, self.substrate.user)})
+        return frozenset({(self.issue_number, self.user_id)})
 
     def adjudicate(self, before: Probe, *, agent_ran: bool) -> Verdict:
         if not agent_ran:
@@ -554,14 +559,14 @@ class GiteaTimerOracle(Oracle):
                        matched=matched, unmatched=unmatched)
 
     def duplicate_pair(self) -> tuple:
-        mk = lambda i: {"id": i, "issue_id": self.issue_number, "user_name": self.substrate.user}
+        mk = lambda i: {"id": i, "issue_id": self.issue_number, "user_id": self.user_id}
         return (mk(1), mk(2))
 
     def falsifications(self) -> tuple:
-        base, me, n = Probe(()), self.substrate.user, self.issue_number
+        base, me, n = Probe(()), self.user_id, self.issue_number
         return (
             ("no timer started", base, ()),
             ("the timer started on the WRONG issue", base, ((7, n + 1, me),)),
-            ("started by the wrong user", base, ((7, n, "someone-else"),)),
+            ("started by the wrong user", base, ((7, n, me + 99),)),
             ("DOUBLE-started, identical content", base, ((1, n, me), (2, n, me))),
         )

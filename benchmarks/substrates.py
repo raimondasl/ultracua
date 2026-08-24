@@ -90,6 +90,11 @@ ISSUE_EPOCH = 1768467600
 # constant is the first thing that has to go.
 GITEA_PASSWORD = "benchbench"
 
+# Column separator for `Gitea.query`. `|` is sqlite3's default and appears in real issue titles;
+# this one cannot, which is the whole requirement. A separator that can occur in the data silently
+# splits one column into two and the oracle compares malformed identities.
+SQL_SEP = "<::>"
+
 
 class SubstrateError(RuntimeError):
     """The harness could not put the world into the state a scenario needs."""
@@ -282,6 +287,23 @@ class Gitea(Substrate):
                 f"too, so a missing user yields a plausible-looking 56-character string — which is "
                 f"why this is shape-checked rather than merely non-empty.")
         return token
+
+    def query(self, sql: str) -> tuple:
+        """A READ-ONLY SQLite query against the live database, rows as tuples of strings.
+
+        The API is the convenient surface; the database is the authoritative one, and some facts are
+        only on the second. Measured: a RUNNING stopwatch appears nowhere in the API except
+        `/user/stopwatches`, which carries no id — so an oracle built on it could not tell two apart,
+        which is R4.87. The `stopwatch` table has an `INTEGER PRIMARY KEY`.
+
+        Reads only, and safe against the running service: SQLite's WAL permits concurrent readers.
+        A WRITE would not be, which is why `_space_issue_timestamps` stops the service and this does
+        not.
+        """
+        proc = _compose("--profile", self.profile, "exec", "-T", "gitea",
+                        "sqlite3", "-separator", SQL_SEP, self.db_path, sql)
+        return tuple(tuple(line.split(SQL_SEP))
+                     for line in (proc.stdout or "").splitlines() if line.strip())
 
     def _api(self, token: str, method: str, path: str, payload: "dict | None" = None) -> dict:
         req = urllib.request.Request(
