@@ -79,6 +79,11 @@ ISSUES = (
     ("Tooltip clips at the viewport edge",          "Right edge only.",                     False),
 )
 
+# The instant issue #1 is dated, each later issue one day after it. FIXED, so the corpus's "oldest
+# issue" has the same answer in March and in June — the same reason the Odoo clock is pinned. Set to
+# 2026-01-15 09:00:00 UTC to match FAKETIME_EPOCH, so both substrates describe one consistent world.
+ISSUE_EPOCH = 1768467600
+
 # A LOCAL, THROWAWAY FIXTURE CREDENTIAL for a container bound to localhost with registration
 # disabled — the same standing as the `odoo/odoo` Postgres pair already in the compose file. It is
 # not a secret and must never become one: if this substrate is ever exposed beyond localhost, this
@@ -321,6 +326,43 @@ class Gitea(Substrate):
                 self._api(token, "PATCH",
                           f"/repos/{self.user}/{self.repo}/issues/{issue['number']}",
                           {"state": "closed"})
+        self._space_issue_timestamps()
+
+    def _space_issue_timestamps(self) -> None:
+        """Give every issue a DISTINCT, fixed creation time, one day apart, oldest = #1.
+
+        WHY THIS IS NOT COSMETIC. The seed creates all seven issues in about a second, so six of them
+        shared a timestamp and `sort by oldest` was a TIE. Gitea's web UI happens to break that tie by
+        id, so the order looked right — but a corpus scenario whose expected answer depends on an
+        undocumented tie-break is one Gitea release away from flipping, and this corpus has to stay
+        comparable across months. Measured before the fix: 6 of 7 issues at `12:33:21`.
+
+        The API cannot do it — `created_at` is accepted in the request and IGNORED (measured: asked
+        for 2020-01-02, got the wall clock) — so this goes through SQLite directly, with the service
+        stopped. Stopped, not live: `snapshot()`'s docstring already explains what a copy under a
+        running server does to the WAL, and a write is worse than a copy.
+
+        NOTE the API's `sort` parameter is inert in 1.22 regardless — `oldest`, `mostcomment` and
+        `leastcomment` all return plain descending id, measured against genuinely distinct comment
+        counts. The WEB route sorts correctly, and that is the one the agent drives. An oracle must
+        therefore compute expected order from the underlying facts, never by asking the API to sort.
+        """
+        _compose("--profile", self.profile, "stop")
+        try:
+            # `[index]` and not `"index"`: `index` is a SQLite keyword, and the double quotes are
+            # stripped by the shell layers between here and sqlite3 — measured, it arrived as
+            # bare `index` and failed with `near "index": syntax error`. Square brackets are
+            # SQLite-legal and have no meaning to the shell.
+            sql = (f"UPDATE issue SET created_unix = {ISSUE_EPOCH} + ([index] - 1) * 86400, "
+                   f"updated_unix = {ISSUE_EPOCH} + ([index] - 1) * 86400 "
+                   f"WHERE repo_id = (SELECT id FROM repository WHERE lower_name = '{self.repo}');")
+            _compose("--profile", self.profile, "run", "--rm", "-T", "--entrypoint", "sh", "gitea",
+                     "-c", f"sqlite3 {self.db_path} \"{sql}\" && "
+                           f"chown \"$(stat -c %u:%g {self.data_dir})\" {self.db_path}")
+        finally:
+            _compose("--profile", self.profile, "start", check=False)
+        self._token = None
+        self.await_ready()
 
     def snapshot(self) -> None:
         """Freeze the CURRENT state as the world every scenario starts from."""
