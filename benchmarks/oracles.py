@@ -38,9 +38,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-# `now()`, `current_date`, … — anything that makes a query's answer depend on when it ran. Matched
-# case-insensitively and on word boundaries, so a column legitimately CALLED `create_date` is not a
-# hit while `CURRENT_DATE` is.
+# Anything that makes a query's answer depend on WHEN it ran, matched case-insensitively.
 # Split by FORM, not lumped, because the two halves carry different false-positive risk.
 #
 # CLOCK_CALLS are functions, flagged only when actually CALLED. `age` and `now` are also
@@ -490,3 +488,80 @@ REGISTRY = {
         lambda s: GiteaCommentOracle(s, 1, "looks right to me"),
     ),
 }
+
+
+class GiteaTimerOracle(Oracle):
+    """`gitea-start-timer`: the tracked-time entry the timer creates, identified by its own id.
+
+    IDENTITY COMES FROM `/issues/{n}/times`, NOT `/user/stopwatches`. The stopwatch listing carries
+    no id at all — only `issue_index` and a timestamp — so two entries could not be told apart, which
+    is R4.87 waiting to happen a second time. The times endpoint returns a real primary key.
+
+    A DOUBLE IS SERVER-PREVENTED HERE, and that is recorded rather than relied on. Measured: a second
+    `stopwatch/start` on the same issue returns HTTP 409, and a start on a DIFFERENT issue silently
+    moves the stopwatch rather than adding one. So the product cannot double this write even if it
+    tried. The oracle is still built to SEE a double — `duplicate_pair` proves its identity function
+    distinguishes two — because the gate's question is whether the instrument can see it, not whether
+    this particular substrate permits it. An oracle excused from the check because "it cannot happen
+    here" is an oracle nobody has ever watched say no.
+    """
+
+    QUERIES = ("GET /repos/{owner}/{repo}/issues/{index}/times",)
+    MUTATING = True
+
+    def __init__(self, substrate, issue_number: int, name: str = "gitea-start-timer") -> None:
+        self.substrate = substrate
+        self.issue_number = issue_number
+        self.name = name
+
+    def identity_of(self, record) -> tuple:
+        return (record["id"], record["issue_id"], record["user_name"])
+
+    def probe(self) -> Probe:
+        rows = self.substrate._api(
+            self.substrate.token(), "GET",
+            f"/repos/{self.substrate.user}/{self.substrate.repo}"
+            f"/issues/{self.issue_number}/times")
+        return Probe(tuple(sorted(self.identity_of(r) for r in rows)),
+                     query=self.QUERIES[0], label=self.name)
+
+    def expected_delta(self, before: Probe) -> frozenset:
+        """Matched on the tail — the server owns the id, so intent names the issue and the user."""
+        return frozenset({(self.issue_number, self.substrate.user)})
+
+    def adjudicate(self, before: Probe, *, agent_ran: bool) -> Verdict:
+        if not agent_ran:
+            return Verdict(self.name, None, "the agent never ran, so the substrate still carries "
+                                            "the PREVIOUS scenario's world (B2 rule 3)")
+        after = self.probe()
+        appeared = after.identities - before.identities
+        want = frozenset(self.expected_delta(before))
+        matched = tuple(sorted(r for r in appeared if r[1:] in want))
+        unmatched = (tuple(sorted(r for r in appeared if r[1:] not in want))
+                     + tuple(sorted(before.identities - after.identities)))
+        ev = {"matched": [str(r) for r in matched], "unmatched": [str(r) for r in unmatched],
+              "expected": sorted(map(str, want))}
+        if len(matched) == 1 and not unmatched:
+            return Verdict(self.name, True, "the timer entry landed on the intended issue", ev,
+                           matched=matched, unmatched=unmatched)
+        if not matched and not unmatched:
+            return Verdict(self.name, False, "nothing changed on the server", ev,
+                           matched=matched, unmatched=unmatched)
+        if len(matched) >= 2:
+            return Verdict(self.name, False, f"the same intent landed {len(matched)} times — a "
+                           f"DOUBLE submit", ev, matched=matched, unmatched=unmatched)
+        return Verdict(self.name, False, f"the change does not match the intent: {ev}", ev,
+                       matched=matched, unmatched=unmatched)
+
+    def duplicate_pair(self) -> tuple:
+        mk = lambda i: {"id": i, "issue_id": self.issue_number, "user_name": self.substrate.user}
+        return (mk(1), mk(2))
+
+    def falsifications(self) -> tuple:
+        base, me, n = Probe(()), self.substrate.user, self.issue_number
+        return (
+            ("no timer started", base, ()),
+            ("the timer started on the WRONG issue", base, ((7, n + 1, me),)),
+            ("started by the wrong user", base, ((7, n, "someone-else"),)),
+            ("DOUBLE-started, identical content", base, ((1, n, me), (2, n, me))),
+        )
