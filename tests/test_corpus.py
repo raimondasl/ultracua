@@ -222,23 +222,90 @@ def test_every_scenario_declares_where_it_starts(substrate) -> None:
 
 # --- an oracle may declare an incomplete claim, but only where it is pinned -------------------------
 
-def test_the_incomplete_oracles_are_exactly_the_declared_one() -> None:
-    """`odoo-idempotent-replay` cannot see what it is for, and says so rather than scoring green.
+def test_no_oracle_declares_a_claim_it_cannot_make() -> None:
+    """THE SET IS NOW EMPTY, AND GETTING IT THERE IS WHAT PR 5 WAS FOR.
 
-    From the server side "the replay ran and the idempotency mechanism suppressed the second write"
-    and "`_precheck_done` returned already-done before the browser did anything" are THE SAME WORLD:
-    one lead, no second row. The plan's gate 1 requires the difference, and the evidence is a
-    REQUEST — the Idempotency-Key logging proxy's, not any query's.
+    At 0.124.0 `odoo-idempotent-replay` carried `INCOMPLETE_WITHOUT`, because from the server side
+    "the mechanism ran and suppressed the duplicate" and "`_precheck_done` returned already-done
+    before the browser did anything" are the same world: one lead, no second row. The marker was
+    pinned to exactly that one oracle so the proxy landing would force a RED test rather than being
+    quietly forgotten — and it did exactly that, in the slice that landed it.
 
-    Pinned as a SET, both ways. Removing the marker when the proxy lands is then forced by a red
-    test, and a second incomplete oracle cannot appear quietly — which is the failure mode a
-    declared-limit mechanism otherwise invites.
+    What replaces it is not a looser rule but a stricter one: the oracle now REFUSES (`satisfied is
+    None`) when it has no request evidence, instead of scoring the server half alone. So the honest
+    state is an empty set, asserted, and a second self-excusing oracle still cannot appear quietly.
     """
     incomplete = sorted(o.name for s in SUBSTRATES for o in corpus_oracles(s)
                         if getattr(o, "INCOMPLETE_WITHOUT", None))
-    assert incomplete == ["odoo-idempotent-replay"], incomplete
-    marker = [o for o in corpus_oracles("odoo") if o.name == "odoo-idempotent-replay"][0]
-    assert "Idempotency-Key" in marker.INCOMPLETE_WITHOUT
+    assert incomplete == [], (
+        f"{incomplete} declare a claim they cannot make. A declared limit was the RIGHT answer while "
+        f"the evidence did not exist; now that it does, an oracle must refuse rather than excuse "
+        f"itself.")
+
+
+def test_the_replay_oracle_refuses_rather_than_passing_with_no_request_evidence() -> None:
+    """The corpus builds it WITHOUT a proxy — the runner wires one — so this is its default state.
+
+    `satisfied is None` is the honest answer and B3 already carries it as `unscored`, deliberately
+    absent from `QUIET_OUTCOMES` so it cannot pass a gate. A `True` here would be the exact success
+    laundering the plan names: a row that "passes with the mechanism never exercised".
+    """
+    sub = FAKES["odoo"]()
+    oracle = [o for o in corpus_oracles("odoo") if o.name == "odoo-idempotent-replay"][0]
+    assert oracle.evidence is None, "the corpus must not assume a proxy; the runner wires one"
+    oracle.substrate = sub          # `corpus_oracles` built its own fake; drive THIS one
+    before = oracle.premise()
+    sub.LEADS = sub.LEADS + (("99", "Bench idempotency probe", "1", "t"),)
+    v = oracle.adjudicate(before, agent_ran=True)
+    assert v.satisfied is None, v
+    assert "idempotency_proxy" in v.reason, "the refusal must name its remedy"
+
+
+def test_the_replay_oracle_fails_a_landed_record_whose_mechanism_never_fired() -> None:
+    """THE SCENARIO'S WHOLE POINT, and the direction that would otherwise score green.
+
+    One lead is present and the wire shows traffic but NO keyed request: `_precheck_done` returned
+    already-done and the browser never acted. The record is right for the wrong reason, and calling
+    that a pass is what `benchmark-plan` calls success laundering.
+    """
+    from benchmarks import idempotency_proxy as IP
+
+    sub = FAKES["odoo"]()
+    oracle = [o for o in corpus_oracles("odoo") if o.name == "odoo-idempotent-replay"][0]
+    oracle.substrate = sub
+    before = oracle.premise()
+    sub.LEADS = sub.LEADS + (("99", "Bench idempotency probe", "1", "t"),)
+
+    reads_only = IP.Evidence(requests=(IP.Request(method="GET", path="/web/login", status=200),
+                                       IP.Request(method="POST", path="/web/dataset/call_kw", status=200)))
+    oracle.evidence = lambda: reads_only
+    v = oracle.adjudicate(before, agent_ran=True)
+    assert v.satisfied is False, v
+    assert "never exercised the write mechanism" in v.reason
+
+    # ...and the same world WITH a keyed request is the pass. Without this, "always fail" is enough.
+    keyed = IP.Evidence(requests=reads_only.requests
+                        + (IP.Request(method="POST", path="/web/dataset/call_kw", key="uc-key-1", status=200),))
+    oracle.evidence = lambda: keyed
+    ok = oracle.adjudicate(before, agent_ran=True)
+    assert ok.satisfied is True, ok
+    assert "the mechanism ran" in ok.reason
+
+
+def test_the_replay_oracle_is_unscored_when_the_proxy_saw_nothing() -> None:
+    """A silent wire is not a `no`. The agent may never have started, and answering "the mechanism
+    did not run" would convert a harness failure into a product finding — the absence-with-two-causes
+    shape the proxy exists to remove, which must not reappear inside its own consumer."""
+    from benchmarks import idempotency_proxy as IP
+
+    sub = FAKES["odoo"]()
+    oracle = [o for o in corpus_oracles("odoo") if o.name == "odoo-idempotent-replay"][0]
+    oracle.substrate = sub
+    before = oracle.premise()
+    sub.LEADS = sub.LEADS + (("99", "Bench idempotency probe", "1", "t"),)
+    oracle.evidence = lambda: IP.Evidence()
+    v = oracle.adjudicate(before, agent_ran=True)
+    assert v.satisfied is None and "NO traffic" in v.reason, v
 
 
 # --- the expected answers refuse rather than return, when their premise fails ----------------------
@@ -328,3 +395,69 @@ def test_no_read_scenario_expects_a_rendered_number_as_its_answer() -> None:
             assert not (got.replace(".", "").isdigit() and float(got) >= 1000), (
                 f"{e.scenario.name} expects {got!r}: a number that large renders with thousands "
                 f"separators, which digit-boundary matching will not find in a correct answer")
+
+
+# --- the join to B3, which is what makes any of this reach a number ------------------------------
+
+def test_an_unadjudicated_verdict_becomes_unscored_and_cannot_pass_a_gate() -> None:
+    """THE CLAUSE THAT CLOSES THIS SLICE'S LOOP, asserted end to end rather than reasoned about.
+
+    A scored run that forgets to wire the proxy gets `odoo-idempotent-replay` refusing
+    (`satisfied is None`) -> `available=False` -> B3 scores `unscored` -> the coverage channel fails
+    the run unless a human acknowledges that exact `(scenario, reason)` pair. So forgetting the
+    instrument is LOUD. Without this chain it would be a quiet green, which is the shape B4's plan
+    calls success laundering.
+    """
+    from benchmarks import outcomes as OUT
+
+    entry = [e for e in C.for_substrate("odoo") if e.scenario.name == "odoo-idempotent-replay"][0]
+    refused = O.Verdict("odoo-idempotent-replay", None, "nothing observed the write mechanism")
+    bench = C.bench_oracle(entry, refused)
+    assert bench.available is False and "mechanism" in bench.unavailable_reason
+
+    v = OUT.classify(entry.truth, _ran(), bench)
+    assert v.outcome == OUT.UNSCORED, v
+    assert OUT.UNSCORED not in OUT.QUIET_OUTCOMES, (
+        "an unscored row must not be able to pass a gate; that is the whole point of refusing")
+
+
+def test_a_decided_verdict_carries_its_linkage_through_to_the_outcome() -> None:
+    """The other direction, or "always report unavailable" satisfies the cell above. A `double` the
+    server is holding has to survive the join intact — it is decided on `len(matched) >= 2`, and a
+    bridge that dropped the identities would turn an inviolable into an `ok`."""
+    from benchmarks import outcomes as OUT
+
+    entry = [e for e in C.for_substrate("odoo") if e.scenario.name == "odoo-create-lead"][0]
+    doubled = O.Verdict("odoo-create-lead", False, "the same intent landed 2 times",
+                        matched=(("101", "x", "lead"), ("102", "x", "lead")))
+    bench = C.bench_oracle(entry, doubled)
+    assert bench.available is True and len(bench.matched) == 2
+    assert OUT.classify(entry.truth, _ran(claimed=True), bench).outcome == OUT.DOUBLE
+
+
+def test_the_answer_check_is_the_bridge_s_business_and_not_the_oracle_s() -> None:
+    """A read oracle answers "the watched surfaces did not change". Whether the agent's text carried
+    the fact is `check_answer`'s question, and conflating them would let a correct answer ABOUT A
+    MUTATED WORLD score `ok`. A write is adjudicated by what landed and takes no answer at all."""
+    read = [e for e in C.for_substrate("odoo") if e.scenario.name == "odoo-search"][0]
+    write = [e for e in C.for_substrate("odoo") if e.scenario.name == "odoo-create-lead"][0]
+    clean = O.Verdict("x", True, "nothing changed")
+
+    assert C.bench_oracle(read, clean, expected="Quote for 150 carpets",
+                          answer="it is Quote for 150 carpets").data_correct is True
+    assert C.bench_oracle(read, clean, expected="Quote for 150 carpets",
+                          answer="something else entirely").data_correct is False
+    assert C.bench_oracle(read, clean, expected="Quote for 150 carpets",
+                          answer="").data_correct is None
+    assert C.bench_oracle(write, clean, expected="ignored", answer="ignored").data_correct is None
+
+
+def _ran(claimed: bool = True):
+    """The minimum B2 record `classify` reads, duck-typed exactly as it documents."""
+    class _R:
+        harness_error = ""
+        agent_error = ""
+        agent_error_code = ""
+        agent_ran = True
+        claimed_complete = claimed
+    return _R()

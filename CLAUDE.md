@@ -948,6 +948,75 @@ it broke.
   are not redundant. The Odoo liveness arm writes through `call_kw` rather than SQL for the same
   reason: an `UPDATE` proves the probe can read a row the test wrote, not the row the app writes.
 
+## B4's last piece: the proxy that answers "did the mechanism RUN?" (0.125.0)
+
+`odoo-idempotent-replay` could not be scored from the database, and said so. From the server side
+"the replay ran and the idempotency mechanism suppressed the duplicate" and "`_precheck_done`
+returned already-done before the browser did anything" are THE SAME WORLD: one lead, no second row.
+`benchmarks/idempotency_proxy.py` supplies the missing fact — whether a request left the browser
+carrying an `Idempotency-Key`.
+
+* **THE CHEAP ROUTE WAS WRONG FOR A CONCRETE REASON, AND CHECKING WHICH IS THE WHOLE LESSON.**
+  `run_cached` already takes `record_har_path`, threaded to the session, already used by the
+  WebArena arm — so a HAR looked like the obvious answer and needed no new component. It fails on
+  one fact: `_already_committed` opens its **own** `BrowserSession` with no `record_har_path`, so on
+  the precheck path the HAR is never written at all. The evidence would be an ABSENCE with two
+  causes ("the mechanism did not run" / "capture broke"), which is the shape half this register is
+  made of. A proxy is always listening, so "no keyed request against a busy log" is a POSITIVE
+  observation. The plan said "proxy" and the plan was right.
+
+* **A PAGE-LEVEL PROBE CANNOT SEE A SHARED WORKER.** The first draft REFUSED protocol upgrades, on
+  a measured claim that Odoo opened **zero** websockets — `page.on("websocket")` across a full login
+  and list view saw none. False, and the probe was watching the wrong object: Odoo 17 connects its
+  bus from a shared worker. Driving a browser THROUGH the proxy showed it at once —
+  `/websocket?version=17.0-3`, refused, **retried five times in eight seconds and climbing**. So the
+  "bounded, stated gap" was really a permanent reconnect loop on a host this repo already says
+  cannot adjudicate under load. Upgrades are tunnelled now; the retry count went 5 → 1.
+
+* **AND AN HTML PROBE ASKED THE WRONG LAYER TOO.** "Does the substrate emit self-absolute URLs?" was
+  measured across five served pages — gitea root/issues/issue, odoo login/backend — and came back
+  **0 of 5**, which read as "a proxy on its own port is transparent". Then a real browser failed to
+  log in: Odoo's form login answers `303 Location: http://localhost:8069/web`, absolute, in a
+  HEADER. Unrewritten, the browser leaves the proxy at the moment it authenticates and every later
+  request, including every write, is invisible. Two probes, two layers, and only the browser found
+  it. **`urlopen` also follows redirects by default**, which swallowed that 303 behind the browser's
+  back — a proxy that resolves redirects for its client is not a proxy.
+
+* **THE GATE READ "I CANNOT TELL" AS "NO" (R4.91).** `arm_oracles` judged each falsification with
+  `if verdict.satisfied:`, and `None` is falsy — so an oracle that can never ADJUDICATE armed
+  exactly as if it had said no. That is the gate's own subject one state over: it exists to refuse
+  an oracle that cannot fail, and one that cannot decide never fails either. Latent while every
+  oracle answered from one source; live the moment one grew an input it could be missing. Note the
+  suite did not have this hole — `test_the_whole_corpus_arms` asserts `satisfied is False` per row.
+  The OPERATOR GATE did, which is the same surface R4.88 was about.
+
+* **ORDER THE TWO SOURCES SO THE GATE STAYS MEANINGFUL.** `OdooIdempotentReplayOracle` consults the
+  server FIRST — a missing, wrong or doubled record is a NO whatever the wire says — and the request
+  evidence only ever DOWNGRADES a would-be pass. So every falsification is rejected without any
+  proxy at all, an oracle wired without one still proves it can say no, and the mechanism check
+  cannot be satisfied by refusing everything.
+
+* **`INCOMPLETE_WITHOUT` WAS RIGHT UNTIL IT WASN'T, AND IT FORCED ITS OWN REMOVAL.** PR 4 declared
+  the gap and pinned the set of self-excusing oracles to exactly one, "so the day the proxy lands,
+  deleting the marker is forced by a red test". It fired, in the slice that landed it. What replaces
+  it is stricter, not looser: the oracle now REFUSES (`satisfied is None`) rather than scoring the
+  server half alone.
+
+* **ONE JOIN BETWEEN THE ORACLE'S VERDICT AND B3's VOCABULARY.** B3 fixed `outcomes.Oracle`, B4 built
+  `oracles.Verdict`, and **nothing joined them** — every construction of the B3 type lived in a test,
+  and the first scored run would have hand-written the translation at its call site. That is R4.88's
+  shape (two representations, no derivation) waiting to happen. `corpus.bench_oracle` is the one
+  derivation, and its load-bearing clause closes this slice's loop: `satisfied is None` →
+  `available=False` → B3 scores `unscored` → the coverage channel fails the run unless a human
+  acknowledges that exact pair. **Forgetting to wire the proxy is LOUD, not a quiet green.**
+
+* **A SCAN THAT MATCHES ITS OWN PROSE, FOR THE THIRD TIME.** The cell forbidding a real substrate
+  port in the proxy tests failed on its own docstrings, then on its own needle tuple. Both were
+  CLAUDE.md's existing rule ("do not sed a file that is 40% prose about the shape you are removing")
+  wearing an assertion, and a third needle would only have moved the collision. The fix was to stop
+  scanning TEXT and assert the property instead — every `IdempotencyProxy(...)` in the file is
+  constructed with the loopback stub — which caught a real one on its first working run.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

@@ -21,7 +21,7 @@ second time.
 | 0.4b | 0 | done | 0.115.0 | RED-in-CI |
 | 0.5 | 0 | held | held → 1.1 (**fired**) | contract tests for the must-agree pairs |
 | 0.6 | 0 | held | held → 1.5 (**fired**) | scheduled mutation sweep |
-| 0.7 | 0 | held | held → 2.3 (not fired) | shared fixture server |
+| 0.7 | 0 | held | held → 2.3 (**fired**) | shared fixture server |
 | 0.8 | 0 | done | 2026-08-20 | tier marks from an observation |
 | 1.1 | 1 | done | 0.115.0 | keyword-only engine chain |
 | 1.2 | 1 | done | 0.109.0 | `flow release` reaches `release()` |
@@ -34,10 +34,10 @@ second time.
 | 1.8 | 1 | done | 0.118.0 | `RunOptions` / `RunHooks` |
 | 2.1 | 2 | done | #189 | B2 — substrates, reset, readiness, boundary ledger |
 | 2.2 | 2 | done | 0.113.0 | B3 — the outcome vocabulary |
-| 2.3 | 2 | pending | — | B4 — the 14-scenario corpus + server-side oracles |
+| 2.3 | 2 | done | 0.125.0 | B4 — the 14-scenario corpus + server-side oracles |
 | 2.4 | 2 | pending | — | B5 — baseline, nightly, honesty page |
 
-**19 of 24 steps done.** Every row is adjudicated against the tree by `tests/test_plan_state.py` — a `done` step must have its artifact and a `pending`/`held` step must not.
+**20 of 24 steps done.** Every row is adjudicated against the tree by `tests/test_plan_state.py` — a `done` step must have its artifact and a `pending`/`held` step must not.
 <!-- /generated:plan-status -->
 
 Researched 2026-08-16
@@ -773,7 +773,7 @@ failure §13 exists to correct.
 | 5 | **1.3 — cannot-spend** *(done, 0.114.0)* | completed the accounting story B3 consumes. The third state is DECLARED via `UsageTotals.cannot_spend()` rather than probed, and `accounting_failed` became a run-scoped COUNTER — a sticky bool cannot be deltaed, because two consecutive failures leave it True both times. Measured end to end: `drift_bench` now states its own total as a real `0.0` where it published `null` | 1 |
 | 6 | **0.4b + 1.1** *(done, 0.115.0)* | 1.1's own pin is RED-in-CI. 0.4b shipped `scripts/red_in_ci.py` and measured itself on 1.3: 34 new ids, 10 `guards`. The rows that came back `no_guard` name its two structural limits -- a scan that reads `src/` BY PATH (R4.75) and anything under `benchmarks/`/`scripts/`, which sit at `sys.path[0]` and cannot be swapped by PYTHONPATH at all (R4.77). 1.1 took `engine_positional_params` 98 -> 7, and 7 is the END STATE: each call's subject | 1 |
 | 7 | **1.6 -> 1.7 -> 1.8** *(done, 0.116.0 / 0.117.0 / 0.118.0 — **PHASE 1 COMPLETE**)* | unchanged; 1.6 is the largest ratchet consumer, 1.8 moves every call site and stays last | 2 / 0 / 1 |
-| 8 | **2.3 — B4** | **NEXT, and the only thing this table still has in it.** The 14-scenario paired corpus, its server-side oracles (SQL for Odoo, API for Gitea) and the Idempotency-Key logging proxy, on top of the substrates 2.1 already built and the vocabulary 2.2 already froze. §7 calls it the long pole and the one where the house rules bite hardest, so **0.7 lands with it** — the shared fixture server's payoff is proportional to fixtures written AFTER it exists, and 14 is by far the largest batch left. It is also the first step that spends real money (§6: ≈$60–250 of one-time core learns) and the first that needs both substrates running | **adversarial pass on this PR** |
+| 8 | **2.3 — B4** (done, 0.125.0) | **DONE.** The 14-scenario paired corpus, its server-side oracles (SQL for Odoo, API for Gitea) and the Idempotency-Key logging proxy, on top of the substrates 2.1 already built and the vocabulary 2.2 already froze. §7 calls it the long pole and the one where the house rules bite hardest, and it shipped in five PRs (#200 substrates, #201 oracle machinery, #202 the Gitea seven, #203 the Odoo seven, then the proxy). **0.7 did NOT land with it, and the stated reason was refuted rather than deferred**: B4 added ZERO fixture handlers, because its scenarios run against live containers, so the "14 new fixtures correct by construction" payoff does not exist. It did NOT spend the ≈$60–250 either — every slice was key-less; the core learns are 2.4's, and they need a human's go-ahead | **adversarial pass on this PR** |
 | 9 | **2.4 — B5** | baseline, the nightly, and the honesty page whose open-id list is pinned to the register's open set. Cheap once 2.3 exists, and worth nothing before it | 1 |
 
 **What changed from §12:** 0.8 inserted at the front on measured evidence; 2.1 promoted from "parallel
