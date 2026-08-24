@@ -148,14 +148,18 @@ Violating any of these is a blocking defect, not a trade-off:
   "~21 min" this line used to claim was stale). **CI shards it across two runners per OS** because it had
   reached 21m53s against a 25-minute job timeout, which was a deterministic failure approaching.
 - **Tiers: `--tier fast` before a commit, the whole suite before a MERGE.** `pytest --tier fast` runs the
-  **665 of 1165** tests that provably never launch Chromium — **~71 s at 0.4a**, against the full
-  suite's 32 minutes (the other 500 are browser tests; both numbers are derived by a probe, not
-  estimated). **The tier is getting slower and the trend is worth watching**: 46.8 s -> 58 s -> 71 s over
-  three slices, so it no longer meets the plan's "<60 s" acceptance. Roughly 8 s of the latest rise is
-  `test_ratchets.py`, which re-derives six AST ratchets over a scratch copy of `src/`; the obvious next
-  saving is a single-pass visitor instead of six `ast.walk`s per module, and it was NOT taken because
-  this host's own variance on the same tier measured 49-64 s in one afternoon, which is larger than the
-  saving. Re-measure on CI before optimising. It is not a skip-list: every
+  **1450 of 1957** tests that provably never launch Chromium — **89.4 s at 0.125.0**, against the full
+  suite's 32 minutes (the other 507 are browser tests; both numbers are derived by a probe, not
+  estimated). **The tier is getting slower and the trend is worth watching**: 46.8 s -> 58 s -> 71 s
+  -> 89 s, so it is now half again over the plan's "<60 s" acceptance. **Read the RATE, not the
+  total**: the fast population went 665 -> 1450 over the same span, so per-test cost actually FELL
+  (107 ms -> 62 ms) and the wall-clock rise is the suite growing, not the tier rotting. That matters
+  for what to do about it — trimming a slow cell is the wrong lever when the count is the driver, and
+  the honest options are sharding the fast job or accepting a new acceptance number. Roughly 8 s is
+  `test_ratchets.py`, which re-derives six AST ratchets over a scratch copy of `src/`; a single-pass
+  visitor instead of six `ast.walk`s per module is the obvious saving and was NOT taken, because this
+  host's own variance on the same tier measured 49-64 s in one afternoon — larger than the saving.
+  Re-measure on CI before optimising. It is not a skip-list: every
   Playwright entry point is wrapped on the CLASS in the ROOT `conftest.py`, so under the fast tier a launch
   **raises** — an unclassified test that launches fails loudly rather than quietly running slowly — and a
   collected test in NEITHER tier is a collection error naming it (`check_shard_coverage`'s property, one
