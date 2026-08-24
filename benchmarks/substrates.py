@@ -58,11 +58,30 @@ FAKETIME_EPOCH = "@2026-01-15 09:00:00"
 # (2026-08 against a 2026-01 epoch), not by days, so the tolerance costs nothing.
 CLOCK_DRIFT_TOLERANCE_S = 7 * 86400
 
-# Below this, an observation is a skeleton rather than a page. Not a guess: a served Gitea landing
-# page is ~13.5 kB of HTML with dozens of elements, and an Odoo web client shell before its registry
-# loads is a near-empty body. The number is a FLOOR for "something rendered", not a quality bar, and
-# it is deliberately far below any real page so it can only fire on the failure it names.
-SKELETON_ELEMENT_FLOOR = 3
+# Below this, an observation is a skeleton rather than a page.
+#
+# **THE OLD VALUE (3) COULD NOT FIRE ON THE CASE ITS OWN COMMENT CITED.** It said "an Odoo web client
+# shell before its registry loads is a near-empty body" and set the floor below that on the strength
+# of the word "near-empty". Measured at 0.126.0, driving all five Odoo reads with a real session: the
+# unrendered OWL shell snapshots **5 elements**, every time, and 5 > 3 — so R4.40's guard would have
+# passed an agent authoring against an unrendered page, on the very substrate the comment names. A
+# guard that passes for the wrong reason is worse than an absent one, because nothing downstream has
+# any reason to doubt it.
+#
+# The number now sits in a MEASURED GAP rather than resting on an adjective, and the two bounds are
+# named below so the relationship can be asserted instead of remembered. Direction of error matters
+# both ways: too low and it never fires (what happened), too high and it refuses a real page, which
+# is the D0 over-refusal shape aimed at readiness.
+#
+#: What an UNRENDERED page measures. Odoo's SPA shell, measured across all five read scenarios.
+MEASURED_SKELETON_ELEMENTS = 5
+#: What the SMALLEST rendered corpus page measures — `odoo-menu-nav` at 20; the four list views are
+#: 80. Gitea's pages are server-rendered and larger still.
+MEASURED_SMALLEST_RENDERED_ELEMENTS = 20
+# Strictly between the two, and `tests/test_substrates.py` asserts that rather than asserting a
+# literal — so a substrate whose real pages are small forces a rethink instead of silently
+# reintroducing a floor nothing can trip.
+SKELETON_ELEMENT_FLOOR = 12
 
 # Gitea's seeded world. FIXED CONTENT, because a scenario asserts against it: `gitea-filter-state`
 # needs both states present, `gitea-sort-list` needs a creation order that differs from alphabetical
