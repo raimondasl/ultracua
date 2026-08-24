@@ -239,10 +239,19 @@ def main(argv=None) -> int:
                     help="prove every oracle can say NO; a scored run refuses without this")
     args = ap.parse_args(argv)
 
-    scenarios = [s for s in SMOKE if s.substrate == args.substrate]
     if args.list:
-        for s in scenarios:
-            print(f"{s.name:14} {'write' if s.mutating else 'read ':5}  {s.goal}")
+        # THE CORPUS, NOT THE SMOKE PAIR. `SMOKE` is gitea-only, so `--list --substrate odoo` printed
+        # NOTHING and exited 0 — a quiet empty, which is the shape R3.9/CLI-1 is about: an operator
+        # surface that answers "there is nothing here" and "I looked in the wrong place" with the
+        # same silence. B4's corpus exists now, so this lists what a scored run would actually drive.
+        from benchmarks import corpus                      # local: see the gate below on the cycle
+
+        entries = corpus.for_substrate(args.substrate)
+        for e in entries:
+            kind = "write" if e.truth.mutating else "read "
+            flag = "  [keyword]" if e.keyword_read else ""
+            print(f"{e.scenario.name:24} {kind}  {e.scenario.goal}{flag}")
+        print(f"{len(entries)} scenario(s) on {args.substrate}.")
         return 0
 
     if args.arm_oracles:
@@ -251,8 +260,13 @@ def main(argv=None) -> int:
         # number downstream inherits it. Offline by construction — falsified probes rather than a
         # mutated substrate — so it costs nothing and can gate every run rather than a nightly one.
         substrate = SUBSTRATES[args.substrate]()
+        # IMPORTED HERE, NOT AT MODULE SCOPE: `corpus` imports `Scenario` from this module, so a
+        # top-level import would be a cycle. The direction is the honest one — the runner depends on
+        # the corpus, never the reverse — and this is the only place the runner needs it.
+        from benchmarks import corpus
+
         try:
-            report = oracles.arm_oracles(oracles.for_substrate(args.substrate, substrate))
+            report = oracles.arm_oracles(corpus.oracles_for(args.substrate, substrate))
         except oracles.OracleError as exc:
             print(str(exc), file=sys.stderr)
             return 1

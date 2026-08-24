@@ -19,10 +19,17 @@ PR. A `skipif` would be worse than an absence: a check that silently never runs 
 passes. So this is a module the nightly calls, and its absence from the suite is stated rather than
 disguised.
 
-THE FIRST RUN OF THIS PAID FOR IT. `GiteaReadOracle` claimed "a read must change NOTHING on the
-server" while probing only the issue list, so a posted comment left it reporting True. The code was
-right and the claim was wider than the check — R4.86's shape one module over, written an hour after
-R4.86 was fixed. The probe now covers `SURFACES` and the claim is exactly that wide.
+THE FIRST RUN OF THIS PAID FOR IT, TWICE. `GiteaReadOracle` claimed "a read must change NOTHING on
+the server" while probing only the issue list, so a posted comment left it reporting True — the code
+was right and the claim was wider than the check, R4.86's shape one module over. And
+`GiteaTimerOracle` rejected all four of its falsifications while seeing NOTHING in the real world,
+because `/issues/{n}/times` stays empty until a stopwatch is STOPPED. Neither was visible to
+`--arm-oracles`, and neither was a subtle bug: both were oracles pointed at the wrong surface.
+
+WHY THE ODOO ARM WRITES THROUGH `call_kw` RATHER THAN SQL. An UPDATE would prove the probe can read
+a row this module just wrote. It would prove nothing about the row the APPLICATION writes — Odoo's
+ORM computes stored fields, assigns a stage and fires triggers on create — and "does the probe watch
+where the app actually lands" is the entire question here.
 """
 
 from __future__ import annotations
@@ -123,7 +130,80 @@ def gitea(sub) -> bool:
     return ok
 
 
-CHECKS = {"gitea": gitea}
+def odoo(sub) -> bool:
+    """Every Odoo corpus oracle, against a REAL change made through the substrate's own web client.
+
+    THE CHANGE GOES THROUGH `call_kw`, NOT THROUGH SQL, and that is the point of the whole module.
+    An UPDATE would prove the probe can read a row this function just wrote; it would prove nothing
+    about whether the probe reads the row the APPLICATION writes. Odoo's ORM computes stored fields,
+    assigns stages and fires triggers on create, and an oracle aimed one table over from where the
+    app actually lands is exactly the blind oracle `--arm-oracles` cannot see -- it rejects every
+    falsified world correctly and reports nothing about the real one. That is not hypothetical here:
+    `GiteaTimerOracle` was written that way and the first run of this module caught it.
+    """
+    entries = corpus.for_substrate("odoo")
+    reads = [(e, e.oracle(sub)) for e in entries if not e.truth.mutating]
+    writes = {e.scenario.name: e.oracle(sub) for e in entries if e.truth.mutating}
+    ok = True
+
+    # 0. The corpus's own expected answers must be computable and non-empty. A read scenario whose
+    #    expected answer is blank scores every answer as correct -- and each of these functions
+    #    refuses rather than returns when its premise (a unique top, a unique stage count, a unique
+    #    search hit) does not hold, so this also drives those refusals against the real world.
+    for e, _ in reads:
+        want = e.expected_answer(sub)
+        ok &= _check(f"{e.scenario.name}: expected answer is a real fact", bool(str(want).strip()), True)
+        print(f"          -> {want!r}")
+
+    # 1. Untouched world: every read oracle satisfied.
+    baselines = {e.scenario.name: o.premise() for e, o in reads}
+    for e, o in reads:
+        ok &= _check(f"{e.scenario.name}: untouched world",
+                     o.adjudicate(baselines[e.scenario.name], agent_ran=True).satisfied, True)
+
+    # 2. A REAL lead, created the way the app creates one. The write oracle must see it; every read
+    #    oracle must now refuse, because a read that changed a watched surface is `incorrect_target`.
+    lead = writes["odoo-create-lead"]
+    before_lead = lead.premise()
+    sub.rpc("crm.lead", "create", [{"name": lead.expect_name, "type": lead.expect_type}])
+    v = lead.adjudicate(before_lead, agent_ran=True)
+    ok &= _check("odoo-create-lead: sees the real write", v.satisfied, True)
+    ok &= _check("odoo-create-lead: exactly one identity matched", len(v.matched), 1)
+    for e, o in reads:
+        ok &= _check(f"{e.scenario.name}: refuses a world that moved",
+                     o.adjudicate(baselines[e.scenario.name], agent_ran=True).satisfied, False)
+
+    # 3. A DOUBLE. Identical name and type, different server id -- the inviolable R4.87 made visible.
+    sub.rpc("crm.lead", "create", [{"name": lead.expect_name, "type": lead.expect_type}])
+    v2 = lead.adjudicate(before_lead, agent_ran=True)
+    ok &= _check("odoo-create-lead: the DOUBLE is two identities", len(v2.matched), 2)
+    ok &= _check("odoo-create-lead: and is not satisfied", v2.satisfied, False)
+
+    # 4. The replay oracle is a distinct scenario with its own intended record, so the lead above
+    #    must NOT satisfy it -- a write oracle that accepts a neighbouring scenario's record scores
+    #    `incorrect_target` as success.
+    replay = writes["odoo-idempotent-replay"]
+    before_replay = replay.premise()
+    ok &= _check("odoo-idempotent-replay: another scenario's lead does not satisfy it",
+                 replay.adjudicate(before_replay, agent_ran=True).satisfied, False)
+    sub.rpc("crm.lead", "create", [{"name": replay.expect_name, "type": replay.expect_type}])
+    ok &= _check("odoo-idempotent-replay: sees its own write",
+                 replay.adjudicate(before_replay, agent_ran=True).satisfied, True)
+
+    # 5. agent_ran=False is UNSCORED, never a quiet False (B2 rule 3).
+    ok &= _check("agent never ran is unscored",
+                 lead.adjudicate(before_lead, agent_ran=False).satisfied, None)
+
+    # 6. And the reset puts every watched surface back -- BOTH halves of it, since Odoo keeps state
+    #    in Postgres and on disk and restoring one is a half-reset.
+    sub.reset()
+    for e, o in reads:
+        ok &= _check(f"{e.scenario.name}: reset restores the world",
+                     o.probe().identities, baselines[e.scenario.name].identities)
+    return ok
+
+
+CHECKS = {"gitea": gitea, "odoo": odoo}
 
 
 def main(argv=None) -> int:

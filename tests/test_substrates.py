@@ -65,6 +65,53 @@ def _docker_is_not_available_to_unit_tests(monkeypatch, request):
 
     monkeypatch.setattr(S.subprocess, "run", _refuse)
 
+    # AND THE SAME AXIS OVER HTTP, which is how it arrived the SECOND time (0.124.0). `Odoo.seed()`
+    # and `Odoo.reset()` now end in `warm_assets()`, which fetches `/web` and its asset bundles --
+    # so four cells that mock `_compose` began reaching THIS HOST'S live Odoo on :8069 and passing
+    # for that reason. Measured by stopping the container: 4 failed, 22 passed. CI has no Odoo, so
+    # every one of them would have been red there and green here, which is R4.85's finding exactly,
+    # one transport over.
+    #
+    # Both entry points, because they are different objects: `_http_ok` calls `urlopen`, while
+    # `warm_assets` and `rpc` go through `build_opener(...).open`. Patching one leaves the other
+    # live, and a half-closed guard is worse than none -- it reads as closed.
+    def _refuse_http(self_or_url, *args, **kwargs):
+        # `urlopen(url)` puts the target first; `OpenerDirector.open(self, url)` puts it in `args`.
+        target = args[0] if isinstance(self_or_url, S.urllib.request.OpenerDirector) else self_or_url
+        target = getattr(target, "full_url", target)
+        raise AssertionError(
+            f"{request.node.name} tried to reach {str(target)[:80]!r} over HTTP.\n"
+            f"    Same axis as the Docker guard above: this host runs the substrates and CI does "
+            f"not, so a cell that reaches one is green here and red on both CI arms.\n"
+            f"    Use the `compose` fixture (it neutralises `warm_assets`), or patch the probe this "
+            f"cell is not about."
+        )
+
+    monkeypatch.setattr(S.urllib.request, "urlopen", _refuse_http)
+    monkeypatch.setattr(S.urllib.request.OpenerDirector, "open", _refuse_http)
+
+
+
+class _Body:
+    """A minimal `urlopen` result: enough for the readiness and warmup probes, and no more."""
+
+    def __init__(self, text: str, status: int = 200):
+        self._text, self.status = text, status
+
+    def read(self, n: int = -1) -> bytes:
+        return self._text.encode()[:None if n is None or n < 0 else n]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _Proc:
+    def __init__(self, stdout: str = "", returncode: int = 0):
+        self.stdout, self.stderr, self.returncode = stdout, "", returncode
+
 
 class _Obs:
     """Duck-typed stand-in: the bench holds no import of the agent's Observation type, deliberately."""
@@ -273,13 +320,16 @@ def compose(monkeypatch):
     `assert_clock_pinned` is neutralised alongside `await_ready` because `Odoo.seed()` calls it
     DIRECTLY rather than through readiness — deliberately, since seeding under an unpinned clock
     bakes the wrong dates in. Under the mock it would parse the canned `"yes"` as a date and refuse.
-    Both lists are derived for the same reason: the first version of this fixture named
-    `Substrate.await_ready` and stopped reaching Odoo the moment Odoo grew an override.
+    `warm_assets` joins them for the same reason at 0.124.0: `seed()` and `reset()` both end in it,
+    and it speaks HTTP rather than `docker compose`, so faking `_compose` alone left four cells
+    reaching this host's live Odoo. Every list is DERIVED, because the first version of this fixture
+    named `Substrate.await_ready` and stopped reaching Odoo the moment Odoo grew an override.
     """
     c = _Compose(stdout="yes")
     monkeypatch.setattr(S, "_compose", c)
     for name, stub in (("await_ready", lambda self, **kw: None),
-                       ("assert_clock_pinned", lambda self: None)):
+                       ("assert_clock_pinned", lambda self: None),
+                       ("warm_assets", lambda self: 0)):
         for cls in _classes_defining(name):
             monkeypatch.setattr(cls, name, stub)
     return c
@@ -292,6 +342,40 @@ def test_the_fixture_neutralises_every_readiness_override_not_just_the_base() ->
     assert "Substrate" in found, "the base defines await_ready; the derivation is broken"
     assert found >= {"Substrate", "Odoo"}, (
         f"a class overrides await_ready and the fixture would not neutralise it: {found}")
+
+
+def test_every_probe_the_lifecycle_calls_outside_compose_is_neutralised() -> None:
+    """DERIVED FROM THE SOURCE, because the list is what went stale. `seed()` and `reset()` reach
+    past `_compose` — for the clock, for writability, for the asset warmup — and each addition has
+    silently un-mocked the cells below until someone noticed. `warm_assets` is the one that did it
+    over HTTP, where the Docker guard could not see it."""
+    import inspect
+
+    called = set()
+    for cls in (S.Odoo, S.Gitea):
+        for meth in ("seed", "reset", "snapshot"):
+            if meth not in vars(cls):
+                continue
+            src = inspect.getsource(vars(cls)[meth])
+            called |= {n for n in ("warm_assets", "assert_clock_pinned", "await_ready",
+                                   "assert_writable", "assert_bound_to_one_database")
+                       if f"self.{n}(" in src}
+    neutralised = {"await_ready", "assert_clock_pinned", "warm_assets"}
+    # `assert_writable` and `assert_bound_to_one_database` are reached only THROUGH `await_ready`,
+    # which is stubbed, so they need no entry of their own — asserted rather than assumed.
+    assert called <= neutralised, (
+        f"the lifecycle calls {sorted(called - neutralised)} directly and the `compose` fixture does "
+        f"not neutralise it, so those cells will reach a real substrate")
+
+
+def test_the_http_guard_refuses_a_unit_test_that_reaches_a_substrate() -> None:
+    """The guard itself, armed. It is the only thing standing between a green local suite and a red
+    CI one for anything that speaks HTTP, and a guard nobody has watched refuse is a guard nobody
+    has watched."""
+    with pytest.raises(AssertionError, match="over HTTP"):
+        S._http_ok("http://localhost:8069/web/login", 1)
+    with pytest.raises(AssertionError, match="over HTTP"):
+        S.Odoo().warm_assets()
 
 
 def test_gitea_reset_removes_the_wal_before_restoring_the_seed(compose) -> None:
@@ -544,11 +628,17 @@ def test_the_odoo_seed_verifies_the_clock_before_it_creates_any_rows(monkeypatch
     monkeypatch.setattr(S.Odoo, "await_ready", lambda self, **kw: None)
     monkeypatch.setattr(S.Odoo, "assert_clock_pinned",
                         lambda self: order.append("CLOCK-CHECK"))
+    # This cell patches by hand rather than taking the `compose` fixture, so it owns the same list --
+    # and the autouse HTTP guard is what told it so, loudly, the moment `seed()` grew a warmup.
+    monkeypatch.setattr(S.Odoo, "warm_assets", lambda self: order.append("WARM") or 0)
     S.Odoo().seed()
     assert "CLOCK-CHECK" in order, "the seed never verified the clock"
     init = next(i for i, c in enumerate(order) if "--stop-after-init" in c)
     assert order.index("CLOCK-CHECK") < init, (
         f"the clock is checked AFTER the rows are created: {order}")
+    assert "WARM" in order and order.index("WARM") > init, (
+        f"the seed must warm the asset bundles AFTER the install, so `snapshot()` freezes a warm "
+        f"template and no scenario pays the 2.42 s compile: {order}")
 
 
 def test_the_odoo_seed_stops_the_service_around_the_drop(compose) -> None:
@@ -614,3 +704,181 @@ def test_no_seeded_title_trips_the_write_classifier() -> None:
     tripped = {t: [k for k in MUTATING_KEYWORDS if k in t.lower()] for t, _, _ in S.ISSUES}
     tripped = {t: k for t, k in tripped.items() if k}
     assert not tripped, f"seeded titles trip the write classifier: {tripped}"
+# --- R4.89: the agent's entry point must be the APP, not Odoo's database manager -----------------
+
+def test_the_compose_file_binds_odoo_to_exactly_one_database() -> None:
+    """WHAT WAS MEASURED, and it is worse than a wrong landing page.
+
+    With two databases visible -- `bench` and its own reset template `bench_seed` -- and no
+    `--db-filter`, Odoo cannot choose, so it serves the DATABASE MANAGER at every entry point an
+    agent could use: `/`, `/web` and `/web/login` all returned the same 43,551-byte page listing both
+    databases with Delete / Duplicate / Backup / Restore beside each. The benchmark's start page
+    offered one-click deletion of the template every later `reset()` depends on.
+
+    `--no-database-list` is the second half and not a belt-and-braces extra: with a db-filter alone
+    `/web/database/manager` stays reachable. Verified in the image's own source -- `exp_drop`,
+    `exp_create_database`, `exp_duplicate_database`, `exp_restore` and `exp_rename` all carry
+    `@check_db_management_enabled`, which raises `AccessDenied` when `list_db` is false.
+    """
+    text = S.COMPOSE.read_text(encoding="utf-8")
+    assert "--db-filter=^bench$$" in text, (
+        "the odoo service does not bind to one database. Unanchored or absent, Odoo serves its "
+        "database MANAGER instead of the app, listing the reset template beside a Delete button "
+        "(R4.89). `$$` is compose's escape for a literal `$`.")
+    assert "--no-database-list" in text, (
+        "`/web/database/manager` is still reachable, and its drop/restore forms act on the "
+        "benchmark's own databases")
+
+
+def test_the_odoo_healthcheck_is_not_pointed_at_the_page_that_means_it_is_broken() -> None:
+    """`/web/database/selector` is what Odoo serves INSTEAD of the app, so a probe aimed there passes
+    on exactly the state it should catch -- R4.85's finding (every readiness layer was a read) one
+    door over."""
+    # THE `test:` LINES, NOT THE BLOCK. The compose file now carries a COMMENT explaining why the
+    # selector is the wrong probe, so a scan over the raw text matches the prose and fails on the
+    # very edit that fixed it -- CLAUDE.md's "do not sed a file that is 40% prose about the shape you
+    # are removing", wearing an assertion. This cell got it wrong on its first run.
+    probes = [line.split("test:", 1)[1] for line in S.COMPOSE.read_text(encoding="utf-8").splitlines()
+              if line.strip().startswith("test:")]
+    assert probes, "no healthcheck commands found; the derivation is broken"
+    bad = [x for x in probes if "/web/database/selector" in x]
+    assert not bad, (
+        f"a healthcheck probes the database selector, which answers 200 whether or not the app is "
+        f"bound to a database: {bad}")
+    assert S.Odoo().health_path == "/web/login"
+
+
+def test_readiness_refuses_when_odoo_is_serving_its_database_manager(monkeypatch) -> None:
+    """The runtime half. Both pages are HTTP 200 with a large body, so status and `min_body_bytes`
+    cannot tell them apart -- measured, 4,430 bytes bound versus 42,559 unbound. The body is the
+    only discriminator, and `master_pwd` is the field the manager has and the login form does not."""
+    o = S.Odoo()
+    monkeypatch.setattr(o, "_psql", lambda sql: "bench bench_seed postgres")
+    monkeypatch.setattr(S.urllib.request, "urlopen",
+                        lambda *a, **k: _Body('<input name="master_pwd" type="password"/>'))
+    with pytest.raises(S.SubstrateNotReady) as exc:
+        o.assert_bound_to_one_database()
+    assert "DATABASE MANAGER" in str(exc.value)
+    assert "db-filter" in str(exc.value), "the refusal must name the remedy, not just the symptom"
+
+
+def test_a_virgin_instance_is_told_to_seed_rather_than_to_fix_its_config(monkeypatch) -> None:
+    """TWO CAUSES, DIFFERENT REMEDIES. `up()` legitimately runs before `seed()`, and with no `bench`
+    database Odoo serves the manager -- measured against a filter matching nothing. Telling that
+    operator the db-filter is wrong sends them to fix something that is not broken, which is the
+    attribution error this whole benchmark exists to avoid, aimed at a human."""
+    o = S.Odoo()
+    monkeypatch.setattr(o, "_psql", lambda sql: "postgres template0 template1")
+    monkeypatch.setattr(S.urllib.request, "urlopen", lambda *a, **k: _Body('name="master_pwd"'))
+    with pytest.raises(S.SubstrateNotReady) as exc:
+        o.assert_bound_to_one_database()
+    assert "does not exist yet" in str(exc.value) and "seed()" in str(exc.value)
+    assert "db-filter" not in str(exc.value)
+
+
+def test_a_bound_app_passes_readiness(monkeypatch) -> None:
+    """The other direction, or "refuse everything" satisfies both cells above."""
+    o = S.Odoo()
+    monkeypatch.setattr(S.urllib.request, "urlopen",
+                        lambda *a, **k: _Body('<input name="login"/><input name="password"/>'))
+    monkeypatch.setattr(o, "_psql", lambda sql: pytest.fail("a bound app must not need Postgres"))
+    o.assert_bound_to_one_database()
+
+
+# --- the asset warmup, which the plan asked for and nobody had measured --------------------------
+
+def test_the_reset_warms_the_asset_bundles_after_restoring_both_halves(compose, monkeypatch) -> None:
+    """Measured: a template restored cold costs +2.42 s on the first backend page load, charged to
+    whichever scenario happens to run first. `seed()` warms so the template is frozen warm; `reset()`
+    warms so that is a guarantee rather than an assumption about how the template was made."""
+    warmed = []
+    monkeypatch.setattr(S.Odoo, "warm_assets", lambda self: warmed.append(len(compose.calls)) or 0)
+    o = S.Odoo()
+    monkeypatch.setattr(o, "_psql", lambda sql: "bench_seed")
+    o.reset()
+    js = compose.joined()
+    filestore = next(i for i, c in enumerate(js) if "cp -a" in c)
+    assert warmed, "the reset never warmed the asset bundles"
+    assert warmed[0] > filestore, (
+        f"the warmup ran before the filestore was restored, so it warmed the OLD world: {js}")
+
+
+def test_the_warmup_refuses_a_session_that_never_reached_the_backend(monkeypatch) -> None:
+    """THE SENSOR IS A DIFFERENTIAL, and the first version was not.
+
+    It raised only when NO bundle was found, on the measured claim that an anonymous `/web`
+    referenced none -- true of the DATABASE MANAGER page Odoo served before R4.89 was fixed, and
+    false the moment it served a real login page (which carries three `web.assets_frontend*`
+    bundles). A broken session would then have warmed those three, returned 3, and never raised,
+    while the 4.9 MB backend pair this method exists for stayed cold.
+    """
+    o = S.Odoo()
+    same = '<script src="/web/assets/1/web.assets_frontend.min.js"></script>'
+    monkeypatch.setattr(S.urllib.request.OpenerDirector, "open", lambda self, *a, **k: _Body(same))
+    monkeypatch.setattr(S.Odoo, "_authenticate", lambda self, opener: 2)
+    with pytest.raises(S.SubstrateNotReady, match="never reached the backend"):
+        o.warm_assets()
+
+
+def test_the_warmup_accepts_a_session_that_reaches_further_than_an_anonymous_one(monkeypatch) -> None:
+    """Anti-vacuity: without this, "always refuse" passes the cell above."""
+    pages = iter(['<script src="/web/assets/1/frontend.js"></script>',
+                  '<script src="/web/assets/2/backend.js"></script>'])
+    fetched = []
+
+    def _open(self, target, *a, **k):
+        url = getattr(target, "full_url", target)
+        if url.endswith("/web"):
+            return _Body(next(pages))
+        fetched.append(url)
+        return _Body("bytes")
+
+    monkeypatch.setattr(S.urllib.request.OpenerDirector, "open", _open)
+    monkeypatch.setattr(S.Odoo, "_authenticate", lambda self, opener: 2)
+    assert S.Odoo().warm_assets() == 2
+    assert sorted(u.rsplit("/", 1)[-1] for u in fetched) == ["backend.js", "frontend.js"], (
+        f"both sides of the login wall must be fetched; got {fetched}")
+
+
+# --- the Odoo query surface, which is where the clock scan finally has SQL to police -------------
+
+def test_the_oracle_query_targets_the_scenario_database_and_not_postgres(monkeypatch) -> None:
+    """`_psql` runs the LIFECYCLE statements -- `DROP DATABASE`, `CREATE DATABASE ... TEMPLATE` --
+    which cannot run from inside the database they drop. An oracle must not be able to reach those,
+    so it gets its own accessor rather than a flag on that one."""
+    seen = []
+    monkeypatch.setattr(S, "_compose", lambda *a, **k: seen.append(a) or _Proc("1<::>x"))
+    rows = S.Odoo().query("SELECT id, name FROM crm_lead")
+    argv = " ".join(seen[0])
+    assert "-d bench " in argv + " " and "-d postgres" not in argv, argv
+    assert rows == (("1", "x"),)
+
+
+def test_the_odoo_query_separator_cannot_occur_in_the_data(monkeypatch) -> None:
+    """psql's default `|` appears in free text -- Odoo's customer and lead names are free text -- and
+    a separator that occurs in the data silently splits one column into two, so the oracle compares
+    malformed identities. Same requirement as `Gitea.query`, and the same constant."""
+    seen = []
+    monkeypatch.setattr(S, "_compose", lambda *a, **k: seen.append(a) or _Proc(""))
+    S.Odoo().query("SELECT 1")
+    assert S.SQL_SEP in seen[0], f"no explicit separator in {seen[0]}"
+    assert "|" not in S.SQL_SEP
+
+
+def test_an_rpc_error_is_a_substrate_error_and_not_a_silent_none(monkeypatch) -> None:
+    """`call_kw` answers HTTP 200 with an `error` member. Returning `result` unchecked would hand
+    the liveness pass a `None` and it would report the probe as seeing nothing -- a broken door
+    reported as a blind oracle."""
+    monkeypatch.setattr(S.Odoo, "_authenticate", lambda self, opener: 2)
+    monkeypatch.setattr(S.urllib.request.OpenerDirector, "open", lambda self, *a, **k: _Body(
+        '{"error": {"data": {"message": "Access Denied"}}}'))
+    with pytest.raises(S.SubstrateError, match="Access Denied"):
+        S.Odoo().rpc("crm.lead", "create", [{"name": "x"}])
+
+
+def test_the_odoo_module_list_installs_sale_beside_crm() -> None:
+    """`sale` is load-bearing rather than convenient: `odoo-open-record` is the one read the corpus
+    DECLARES will trip the keyword classifier, and it does so on the word "order". Navigating to a
+    CRM lead trips nothing, so building that pair on `crm` alone would silently drop the arm."""
+    mods = S.Odoo().modules.split(",")
+    assert "sale" in mods and "crm" in mods, mods

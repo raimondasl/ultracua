@@ -295,6 +295,46 @@ def _adjudicate_against(oracle: Oracle, before: Probe, after: Probe) -> Verdict:
         oracle.probe = original                # type: ignore[method-assign]
 
 
+def _match_on_tail(oracle, before: Probe, *, agent_ran: bool, thing: str) -> Verdict:
+    """The adjudication every write oracle shares: intent matched on the TAIL, the server's key
+    riding along so two identical landings stay two.
+
+    THIS IS R4.87's RULE, AND IT LIVES ONCE. `GiteaCommentOracle` and `GiteaTimerOracle` each wrote
+    it out, and the two copies had already drifted -- one built `unmatched` from a named `vanished`,
+    the other inline -- before a third oracle existed to copy either. An invariant enforced
+    per-subclass has as many holes as there are subclasses, which is the shape this repo keeps
+    re-filing; the `Oracle` base already puts the premise/adjudication rules in one place for exactly
+    this reason and the write half had escaped it.
+
+    The asymmetry is the whole point. `expected_delta` CANNOT name the server's key (the corpus
+    cannot predict an id), so intent is compared against `r[1:]`; the key stays in the identity, where
+    it can only ever turn one landed write into TWO -- never two into one.
+    """
+    if not agent_ran:
+        return Verdict(oracle.name, None, "the agent never ran, so the substrate still carries "
+                                          "the PREVIOUS scenario's world (B2 rule 3)")
+    after = oracle.probe()
+    appeared = after.identities - before.identities
+    vanished = before.identities - after.identities
+    want = frozenset(oracle.expected_delta(before))
+    matched = tuple(sorted(r for r in appeared if r[1:] in want))
+    unmatched = tuple(sorted(r for r in appeared if r[1:] not in want)) + tuple(sorted(vanished))
+    ev = {"matched": [str(r) for r in matched], "unmatched": [str(r) for r in unmatched],
+          "expected": sorted(map(str, want))}
+    if len(matched) == 1 and not unmatched:
+        return Verdict(oracle.name, True, f"exactly one {thing} matching the intent landed", ev,
+                       matched=matched, unmatched=unmatched)
+    if not matched and not unmatched:
+        return Verdict(oracle.name, False, "nothing changed on the server", ev,
+                       matched=matched, unmatched=unmatched)
+    if len(matched) >= 2:
+        return Verdict(oracle.name, False,
+                       f"the same intent landed {len(matched)} times -- a DOUBLE submit", ev,
+                       matched=matched, unmatched=unmatched)
+    return Verdict(oracle.name, False, f"the change does not match the intent: {ev}", ev,
+                   matched=matched, unmatched=unmatched)
+
+
 # ---------------------------------------------------------------------------------------------------
 # CONCRETE ORACLES. Two, deliberately: one read and one write, on the substrate whose lifecycle is
 # verified end to end. The 14-scenario corpus is PR 3 and slots into the machinery above; shipping
@@ -420,31 +460,7 @@ class GiteaCommentOracle(Oracle):
         return frozenset({(str(self.issue_number), self.substrate.user, self.expect_body)})
 
     def adjudicate(self, before: Probe, *, agent_ran: bool) -> Verdict:
-        """Identity carries the id; intent does not. So the comparison is on the tail, and the id
-        rides along so two otherwise-identical landings stay two."""
-        if not agent_ran:
-            return Verdict(self.name, None, "the agent never ran, so the substrate still carries "
-                                            "the PREVIOUS scenario's world (B2 rule 3)")
-        after = self.probe()
-        appeared = after.identities - before.identities
-        vanished = before.identities - after.identities
-        want = frozenset(self.expected_delta(before))
-        matched = tuple(sorted(r for r in appeared if r[1:] in want))
-        unmatched = tuple(sorted((r for r in appeared if r[1:] not in want))) + tuple(sorted(vanished))
-        evidence = {"matched": [str(r) for r in matched], "unmatched": [str(r) for r in unmatched],
-                    "expected": sorted(map(str, want))}
-        if len(matched) == 1 and not unmatched:
-            return Verdict(self.name, True, "exactly one record matching the intent landed", evidence,
-                           matched=matched, unmatched=unmatched)
-        if not matched and not unmatched:
-            return Verdict(self.name, False, "nothing changed on the server", evidence,
-                           matched=matched, unmatched=unmatched)
-        if len(matched) >= 2:
-            return Verdict(self.name, False,
-                           f"the same intent landed {len(matched)} times — a DOUBLE submit",
-                           evidence, matched=matched, unmatched=unmatched)
-        return Verdict(self.name, False, f"the change does not match the intent: {evidence}",
-                       evidence, matched=matched, unmatched=unmatched)
+        return _match_on_tail(self, before, agent_ran=agent_ran, thing="comment")
 
     def duplicate_pair(self) -> tuple:
         """The same comment, posted twice, exactly as the server returns it — same body, same author,
@@ -468,26 +484,17 @@ class GiteaCommentOracle(Oracle):
         )
 
 
-def for_substrate(name: str, substrate) -> list:
-    """Every oracle that applies to `name`, DERIVED from the registry rather than typed at a call site.
-
-    One place, because `--arm-oracles` and a scored run must see the SAME set: an oracle armed but not
-    consulted, or consulted but not armed, is the hole this module exists to close, and two hand-typed
-    lists is how that happens.
-    """
-    if name not in REGISTRY:
-        raise OracleError(f"no oracles registered for substrate {name!r}; known: {sorted(REGISTRY)}")
-    return [build(substrate) for build in REGISTRY[name]]
-
-
-#: substrate -> factories. B4's PR 3 adds the 14-scenario corpus's oracles here; the machinery above
-#: does not change for them, which is the point of shipping it first.
-REGISTRY = {
-    "gitea": (
-        lambda s: GiteaReadOracle(s, "gitea-read"),
-        lambda s: GiteaCommentOracle(s, 1, "looks right to me"),
-    ),
-}
+# THE ORACLE SET LIVES IN `benchmarks/corpus.py`, AND THIS FILE DELIBERATELY HOLDS NO SECOND COPY.
+#
+# It used to. `REGISTRY`/`for_substrate` here listed two oracles under names no scenario used, while
+# the corpus held seven — so `--arm-oracles`, the gate a scored run must pass, told the operator "the
+# oracle set is armed" over 2 of 7, and six structural cells in `tests/test_oracles.py` that say
+# "derived over the registry, so an oracle added tomorrow is covered" were covering neither the
+# `GiteaTimerOracle` nor its SQL, which is the only query the R4.86 clock scan had to police (R4.88).
+#
+# The set cannot live here, and that is structural rather than stylistic: an oracle set is a fact
+# about the CORPUS (which scenario is adjudicated by which oracle), and `corpus.py` imports this
+# module. One derivation, in the layer that knows both halves — `corpus.oracles_for`.
 
 
 class GiteaTimerOracle(Oracle):
@@ -535,28 +542,7 @@ class GiteaTimerOracle(Oracle):
         return frozenset({(self.issue_number, self.user_id)})
 
     def adjudicate(self, before: Probe, *, agent_ran: bool) -> Verdict:
-        if not agent_ran:
-            return Verdict(self.name, None, "the agent never ran, so the substrate still carries "
-                                            "the PREVIOUS scenario's world (B2 rule 3)")
-        after = self.probe()
-        appeared = after.identities - before.identities
-        want = frozenset(self.expected_delta(before))
-        matched = tuple(sorted(r for r in appeared if r[1:] in want))
-        unmatched = (tuple(sorted(r for r in appeared if r[1:] not in want))
-                     + tuple(sorted(before.identities - after.identities)))
-        ev = {"matched": [str(r) for r in matched], "unmatched": [str(r) for r in unmatched],
-              "expected": sorted(map(str, want))}
-        if len(matched) == 1 and not unmatched:
-            return Verdict(self.name, True, "the timer entry landed on the intended issue", ev,
-                           matched=matched, unmatched=unmatched)
-        if not matched and not unmatched:
-            return Verdict(self.name, False, "nothing changed on the server", ev,
-                           matched=matched, unmatched=unmatched)
-        if len(matched) >= 2:
-            return Verdict(self.name, False, f"the same intent landed {len(matched)} times — a "
-                           f"DOUBLE submit", ev, matched=matched, unmatched=unmatched)
-        return Verdict(self.name, False, f"the change does not match the intent: {ev}", ev,
-                       matched=matched, unmatched=unmatched)
+        return _match_on_tail(self, before, agent_ran=agent_ran, thing="timer entry")
 
     def duplicate_pair(self) -> tuple:
         mk = lambda i: {"id": i, "issue_id": self.issue_number, "user_id": self.user_id}
@@ -570,3 +556,145 @@ class GiteaTimerOracle(Oracle):
             ("started by the wrong user", base, ((7, n, me + 99),)),
             ("DOUBLE-started, identical content", base, ((1, n, me), (2, n, me))),
         )
+
+
+# ---------------------------------------------------------------------------------------------------
+# ODOO. The first oracles here whose questions are real SQL, which is what makes the R4.86 clock scan
+# more than a rule written in prose: every Gitea oracle but one asks the HTTP API, where a clock read
+# is not even expressible.
+#
+# ONE DEFENCE THAT LOOKS LIKE FUSSINESS AND IS NOT: every text column is stripped of CR and LF inside
+# the SQL. `Odoo.query` splits rows on newlines, so ONE record whose name contains a line break
+# becomes TWO malformed identities -- a linkage set that silently GAINS a member is the same class of
+# fault as one that silently loses a member (R4.87), and a lead name is free text an agent can write.
+
+class OdooOracle(Oracle):
+    """Base for the Odoo oracles: how to ask, and nothing else.
+
+    Deliberately holds no `falsifications`, so `arm_oracles` refuses it rather than trusting it --
+    the same reason `GiteaIssueOracle` is a base and not an oracle.
+    """
+
+    def __init__(self, substrate, name: str) -> None:
+        self.substrate = substrate
+        self.name = name
+
+    def _rows(self, sql: str) -> tuple:
+        return self.substrate.query(sql)
+
+
+class OdooReadOracle(OdooOracle):
+    """A read must leave the WATCHED SURFACES unchanged -- and the watched set is stated, not implied.
+
+    THE CLAIM IS EXACTLY AS WIDE AS `SURFACES`, which is what `GiteaReadOracle` learned the hard way:
+    its first draft claimed "a read must change NOTHING on the server" while watching only the issue
+    list, so a comment posted during a read left it reporting True. Here the corpus can mutate two
+    models -- `crm.lead` (both write scenarios) and `sale.order` (the record the keyword-tripping read
+    opens) -- and both are watched.
+
+    WHAT IT STILL CANNOT SAY, stated rather than left to be discovered: this is not a proof that
+    nothing changed anywhere in an ERP. Odoo writes `res_users.login_date` on every login and
+    `mail_message` / `bus_bus` as a matter of course, and a complete watch over a real application is
+    not achievable. A read oracle is a bounded claim about named surfaces; treating it as more is how
+    a benchmark starts believing its own gaps.
+    """
+
+    SURFACES = ("crm.lead", "sale.order")
+    QUERIES = (
+        "SELECT id, replace(replace(name, chr(13), ' '), chr(10), ' '), "
+        "coalesce(stage_id, 0), active FROM crm_lead ORDER BY id",
+        "SELECT id, replace(replace(name, chr(13), ' '), chr(10), ' '), "
+        "state, coalesce(partner_id, 0) FROM sale_order ORDER BY id",
+    )
+
+    def probe(self) -> Probe:
+        rows = [("lead",) + tuple(r) for r in self._rows(self.QUERIES[0])]
+        rows += [("order",) + tuple(r) for r in self._rows(self.QUERIES[1])]
+        return Probe(tuple(sorted(rows)), query=" ; ".join(self.QUERIES), label=self.name)
+
+    def expected_delta(self, before: Probe) -> frozenset:
+        return frozenset()
+
+    def falsifications(self) -> tuple:
+        base = Probe((("lead", "1", "Quote for 12 Tables", "1", "t"),
+                      ("order", "18", "S00018", "sale", "9")))
+        return (
+            ("a lead appeared", base, base.rows + (("lead", "99", "Something new", "1", "t"),)),
+            ("a lead vanished", base, base.rows[:1]),
+            ("a lead moved stage", base,
+             (("lead", "1", "Quote for 12 Tables", "4", "t"), base.rows[1])),
+            # THE ONE A LEAD-ONLY PROBE COULD NOT SEE -- the analogue of the comment that defeated
+            # `GiteaReadOracle`'s first draft. `odoo-open-record` opens a sale order, so an
+            # accidental write lands HERE, nowhere near `crm_lead`.
+            ("an ORDER changed state during a read", base,
+             (base.rows[0], ("order", "18", "S00018", "cancel", "9"))),
+        )
+
+
+class OdooLeadOracle(OdooOracle):
+    """`odoo-create-lead`: exactly one lead, with the intended name, of the intended type.
+
+    THE ID IS IN THE IDENTITY AND THAT IS R4.87. Without it two identical leads collapse to one
+    member of a set, B3 reads `len(matched) == 1`, and a write that fired twice scores `true` -- the
+    inviolable invisible in the oracle built to catch it.
+
+    THE WHOLE `crm_lead` TABLE IS PROBED, not only rows carrying the intended name. A probe narrowed
+    to the expected name cannot see a record created with the WRONG one, which is `incorrect_target`
+    -- also an inviolable, and the likeliest way a write goes wrong on a list of similar records.
+    """
+
+    QUERIES = ("SELECT id, replace(replace(name, chr(13), ' '), chr(10), ' '), type FROM crm_lead",)
+    MUTATING = True
+
+    def __init__(self, substrate, expect_name: str, name: str, expect_type: str = "lead") -> None:
+        super().__init__(substrate, name)
+        self.expect_name = expect_name
+        self.expect_type = expect_type
+
+    def identity_of(self, record) -> tuple:
+        return (str(record["id"]), str(record["name"]), str(record["type"]))
+
+    def probe(self) -> Probe:
+        rows = tuple(sorted((str(a), str(b), str(c)) for a, b, c in self._rows(self.QUERIES[0])))
+        return Probe(rows, query=self.QUERIES[0], label=self.name)
+
+    def expected_delta(self, before: Probe) -> frozenset:
+        return frozenset({(self.expect_name, self.expect_type)})
+
+    def adjudicate(self, before: Probe, *, agent_ran: bool) -> Verdict:
+        return _match_on_tail(self, before, agent_ran=agent_ran, thing="lead")
+
+    def duplicate_pair(self) -> tuple:
+        mk = lambda i: {"id": i, "name": self.expect_name, "type": self.expect_type}
+        return (mk(101), mk(102))
+
+    def falsifications(self) -> tuple:
+        base, n, ty = Probe(()), self.expect_name, self.expect_type
+        return (
+            ("no lead at all", base, ()),
+            ("a lead with the WRONG name", base, (("101", n + " (not this)", ty),)),
+            ("the wrong record type", base, (("101", n, "opportunity" if ty == "lead" else "lead"),)),
+            ("DOUBLE-submitted, identical content", base, (("101", n, ty), ("102", n, ty))),
+        )
+
+
+class OdooIdempotentReplayOracle(OdooLeadOracle):
+    """`odoo-idempotent-replay`: the write is learned, then REPLAYED, and must land exactly once.
+
+    WHAT THIS ORACLE CANNOT SEE, said here rather than discovered from a green number. From the
+    server side, "the replay ran and the idempotency mechanism suppressed the second write" and
+    "`_precheck_done` returned `already-done` before the browser did anything at all" are THE SAME
+    WORLD: one lead, no second row. So it adjudicates the outcome and says nothing about the
+    mechanism.
+
+    The plan requires the difference. Gate 1 asks that `idempotent-replay` assert the mechanism RAN,
+    "since `_precheck_done` returns `already-done` before any browser action and would otherwise pass
+    inert" -- and that evidence is a REQUEST, not a record, so it belongs to the Idempotency-Key
+    logging proxy rather than to any query. `INCOMPLETE_WITHOUT` carries the gap as a DECLARED limit
+    instead of an absence nobody notices, and `tests/test_corpus.py` pins the set of incomplete
+    oracles to exactly this one -- so the day the proxy lands, deleting the marker is forced by a red
+    test, and a second incomplete oracle cannot appear quietly.
+    """
+
+    #: The evidence this oracle is missing. Absent on every complete oracle, and asserted both ways.
+    INCOMPLETE_WITHOUT = "the Idempotency-Key logging proxy: whether the write mechanism RAN at all"
