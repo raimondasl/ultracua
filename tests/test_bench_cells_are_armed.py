@@ -34,6 +34,7 @@ import tests.test_scored_run as TSR
 import tests.test_bench_record as TR
 import tests.test_login_discrimination as TLD
 import tests.test_search_premise as TSP
+import tests.test_no_actions_outcome as TNA
 
 
 # ---------------------------------------------------------------------------------------------
@@ -702,10 +703,24 @@ def test_the_coverage_channel_notices_a_deleted_corpus_gating_green(monkeypatch)
 
 
 def test_the_coverage_channel_notices_it_becoming_unacknowledgeable(monkeypatch) -> None:
-    """A channel nobody can discharge gets switched off wholesale — R3.9/CLI-1's second lesson."""
+    """A channel nobody can discharge gets switched off wholesale — R3.9/CLI-1's second lesson.
+
+    ANCHORED ON THE UNSCORED LOOP, not on the `findings.append` alone. Channel 0 gained a second,
+    textually identical append when `no_actions_needed` landed, and the bare needle then matched
+    TWICE — reported by the harness as a stale mutation rather than as a pass, which is the rule
+    that keeps a mutation from silently attacking the wrong line.
+    """
     mutate_function(monkeypatch, "gate_bench_record",
-                    '        findings.append({"channel": "coverage", "regressed": pair not in ack,',
-                    '        findings.append({"channel": "coverage", "regressed": True,')
+                    '        pair = (row["scenario"], row["reason"])\n'
+                    '        findings.append({"channel": "coverage", "regressed": pair not in ack,\n'
+                    '                         "acknowledged": pair in ack, **row})\n'
+                    '\n'
+                    '    # SAME CHANNEL',
+                    '        pair = (row["scenario"], row["reason"])\n'
+                    '        findings.append({"channel": "coverage", "regressed": True,\n'
+                    '                         "acknowledged": pair in ack, **row})\n'
+                    '\n'
+                    '    # SAME CHANNEL')
     print(assert_red(TR.test_an_unscored_scenario_can_be_acknowledged_like_an_inviolable_one))
 
 
@@ -928,3 +943,58 @@ def test_the_premise_notices_an_answer_another_scenario_already_expects(monkeypa
     what makes it isolate THIS cell rather than tripping the others first."""
     mutate_corpus_value(monkeypatch, "SEARCH_TERM", "distinctive")
     print(assert_red(TSP.test_the_search_target_is_not_another_scenarios_answer))
+
+
+# ---------------------------------------------------------------------------------------------
+# `no_actions_needed` (R4.101, half two)
+#
+# The first three attack the MINTING; the last two attack the ARITHMETIC, which is where the first
+# draft of this outcome was actually wrong.
+# ---------------------------------------------------------------------------------------------
+
+def test_the_outcome_notices_the_step_count_alone_minting_it(monkeypatch) -> None:
+    """Drop the `learn_found` half and a genuine discovery failure — zero steps because the agent
+    never found the control — is republished as a task that needed no work. `gitea-start-timer` is
+    that row, measured: 40 turns, $0.58, nothing found."""
+    mutate_function(monkeypatch, "classify",
+                    'and getattr(run, "learn_found", None) is True',
+                    'and True')
+    print(assert_red(TNA.test_zero_steps_alone_is_not_enough_and_the_corpus_holds_the_control))
+
+
+def test_the_outcome_notices_a_missing_observation_being_read_as_zero(monkeypatch) -> None:
+    """`== 0` becomes a falsy test, so an arm that reports NOTHING (both fields None) starts minting
+    the outcome — inference from absence, which is the rule R4.96 set."""
+    mutate_function(monkeypatch, "classify",
+                    'and getattr(run, "recipe_steps", None) == 0',
+                    'and not getattr(run, "recipe_steps", None)')
+    print(assert_red(TNA.test_a_missing_step_count_is_not_read_as_zero))
+
+
+def test_the_outcome_notices_a_write_being_scored_with_it(monkeypatch) -> None:
+    """A write IS an action. The clause lives in the shared `classify`, so only the read guard keeps
+    it read-only."""
+    mutate_function(monkeypatch, "classify",
+                    "            and not truth.mutating):",
+                    "            and True):")
+    print(assert_red(TNA.test_no_write_scenario_can_be_scored_no_actions_needed))
+
+
+def test_the_arithmetic_notices_the_row_leaving_the_denominator(monkeypatch) -> None:
+    """THE DRAFT THAT SHIPPED FIRST INSIDE THIS SLICE. Excluding the row raises availability from
+    0.5 to 1.0 over the same two scenarios — R4.96's flattering shape, reached by analogy with
+    `expect_refusal`, which is not analogous because it is declared before the run."""
+    mutate_function(monkeypatch, "build_bench_record",
+                    "    task = lambda s: not s.truth.expect_refusal",
+                    "    task = lambda s: not s.truth.expect_refusal and "
+                    "s.verdict.outcome != NO_ACTIONS_NEEDED")
+    print(assert_red(TNA.test_it_is_counted_as_a_zero_and_does_not_leave_the_denominator))
+
+
+def test_the_gate_notices_the_row_no_longer_being_reported(monkeypatch) -> None:
+    """Counted-as-zero is only half of it: without the enumeration the gate cannot name the row, an
+    operator cannot sign for it, and the adjusted rate cannot be computed from the record."""
+    mutate_function(monkeypatch, "build_bench_record",
+                    'if s.verdict.scored and s.verdict.outcome == NO_ACTIONS_NEEDED]',
+                    'if False]')
+    print(assert_red(TNA.test_the_gate_fails_on_it_and_a_human_can_sign_for_it))
