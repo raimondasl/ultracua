@@ -204,12 +204,17 @@ async def score_one(name: str, *, reset: bool = True, headless: bool = True,
         # write demands approval, mints an Idempotency-Key and runs the mutation gate on a task that
         # was only ever a read. A runner that paid for the learn and stopped would have measured
         # everything except the thing this benchmark exists to measure.
-        out["gate"] = _gate_evidence(spec, cache)
         if out.get("learned"):
             proxy.reset()                  # the replay is a separate PHASE; B2's rule 3, for evidence
+            # WHICH COMPONENT SAID NO (R4.92). `flow.py` sets `meta["gate"]` in exactly one place and
+            # only inside `if step.mutating:`, so a trace carrying it means the MUTATION GATE refused
+            # — as opposed to an ordinary step drifting, which is healed rather than refused. Both
+            # raise `DriftError` with code `drift`, so the code cannot tell them apart and this is the
+            # only structured signal that can. Read from a field, never from the message.
+            traces: list = []
             with BoundaryLedger() as rl:
                 try:
-                    result = await replay(spec, cache=cache)
+                    result = await replay(spec, cache=cache, on_step=traces.append)
                     out["replay"] = {"ok": True, "result": result}
                 except Exception as exc:   # noqa: BLE001 - a refusal IS the measurement here
                     o = flows.outcome_of(exc)
@@ -218,12 +223,15 @@ async def score_one(name: str, *, reset: bool = True, headless: bool = True,
                     replay_code = o.code
                 else:
                     replay_code = ""
+            gate_refused = any((getattr(tr, "meta", None) or {}).get("gate") == "drift"
+                               for tr in traces)
+            out["replay"]["gate_refused"] = gate_refused
             ru = rl.usage()
             out["replay"]["llm_calls"] = ru.calls
             out["replay"]["zero_llm"] = ru.calls == 0
             out["replay"]["requests"] = proxy.evidence().summary()
         else:
-            replay_code = ""
+            replay_code, gate_refused = "", False
         out["wall_s"] = round(time.monotonic() - started, 1)
         out["llm_calls"] = usage.calls
         out["tokens"] = {"in": usage.input_tokens, "out": usage.output_tokens}
@@ -237,6 +245,13 @@ async def score_one(name: str, *, reset: bool = True, headless: bool = True,
 
         verdict = oracle.adjudicate(before, agent_ran=agent_ran)
         out["oracle"] = {"satisfied": verdict.satisfied, "reason": verdict.reason}
+
+        # AFTER the replay, because two of its five facts are about the RUN rather than the recipe.
+        # `substrate_pinned` is the harness affirming that the world the replay saw is the world the
+        # flow was learned against — true here because `score_one` resets to the template and this
+        # arm never varies the substrate version. Arm 2 (drift) must NOT set it, and the default is
+        # the safe one: forgetting costs a `refused`, never an inflated `over_gated`.
+        out["gate"] = _gate_evidence(spec, cache, gate_refused=gate_refused, pinned=reset)
 
         expected = "" if entry.truth.mutating else str(entry.expected_answer(substrate))
         out["expected"] = expected or None
@@ -266,7 +281,7 @@ async def score_one(name: str, *, reset: bool = True, headless: bool = True,
     return out
 
 
-def _gate_evidence(spec, cache) -> dict:
+def _gate_evidence(spec, cache, *, gate_refused: bool = False, pinned: bool = False) -> dict:
     """What the product DID to this flow, read off the cached recipe rather than inferred.
 
     `over_gated` is the benchmark's headline and B3 refuses to mint it from a refusal code alone —
@@ -283,7 +298,8 @@ def _gate_evidence(spec, cache) -> dict:
     meta = getattr(cached, "meta", None)
     return {"present": True, "mutating_steps": len(marked), "mutating_sources": sources,
             "approved": getattr(meta, "approved", None),
-            "declares_write": spec.write.declares_write}
+            "declares_write": spec.write.declares_write,
+            "mutation_gate_refused": gate_refused, "substrate_pinned": pinned}
 
 
 class _Record:

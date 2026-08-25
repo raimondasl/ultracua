@@ -282,6 +282,31 @@ class GateEvidence:
     mutating_sources: tuple = ()     # provenance marks for those steps (keyword? wire? human?)
     approved: Optional[bool] = None  # FlowMeta.approved
     declares_write: Optional[bool] = None   # `spec.mutate is not None` -- the flow SAYS it writes
+    #: Did the MUTATION GATE refuse this run? R4.92.
+    #:
+    #: A replay reports `drift` two ways that mean different things. An ordinary step that will not
+    #: resolve drifts and is HEALED; a step carrying `mutating=True` goes through the mutation gate,
+    #: which never heals -- "on drift a mutating step FAILS LOUD" -- and refuses. Both surface as
+    #: `DriftError`, code `drift`, family PAGE, so the code alone cannot tell "the page moved" from
+    #: "the write machinery blocked a read".
+    #:
+    #: The runner reads it from `StepTrace.meta["gate"]`, which `flow.py` sets in EXACTLY ONE PLACE
+    #: and only inside `if step.mutating:` -- so this is a fact about WHICH COMPONENT said no, not a
+    #: message scraped for a substring (`reshape-plan` 2.2 forbids the latter by name).
+    mutation_gate_refused: bool = False
+    #: Is the substrate the SAME world the flow was learned against? R4.92's boundary.
+    #:
+    #: `over_gated` below requires this to be AFFIRMED, and the default is the safe one. On arm 1 the
+    #: substrate is reset to a fixed template between learn and replay, so a "drift" reported by the
+    #: gate is not drift at all and blaming the write machinery is sound. On arm 2 -- the DRIFT arm,
+    #: which replays against a deliberately different version -- the gate refuses for a real reason,
+    #: and minting `over_gated` there would attribute genuine drift to over-gating.
+    #:
+    #: Affirmative rather than a `drift_expected` opt-out, because the direction of error decides the
+    #: default: forgetting to set this costs a `refused` (understating the finding), while forgetting
+    #: to set an opt-out would inflate the benchmark's headline against the product. This module's
+    #: own comment says the bench flattering its own thesis is the failure mode to design against.
+    substrate_pinned: bool = False
 
     @property
     def marked_as_a_write(self) -> bool:
@@ -519,6 +544,37 @@ def _classify_read(truth, run, oracle, gate, code, fam, ev) -> Verdict:
         # otherwise). The engine believed it was writing on a read task and nothing landed.
         return _verdict(REFUSED, f"a read task reached the write machinery and refused ({code})",
                         ev)
+
+    # THE MUTATION GATE REFUSED A READ (R4.92). Placed AFTER the two family clauses and before the
+    # fallback, so it catches the refusals whose CODE says nothing -- which is the commonest
+    # over-gating path there is, and the one the first live run landed on.
+    #
+    # WHY THE CODE SAYS NOTHING. On Odoo every list read is a JSON-RPC POST, so `is_write_request`
+    # (method-based) marks the steps mutating from observed traffic. `flow.py` makes that trade
+    # deliberately and prices it in its own comment -- "gating them is not [D0's regression]: it
+    # costs recovery features, not the flow ... every gated step loses self-heal and suffix-replan"
+    # -- so the product is not confused, and this outcome is what that decision COSTS. Measured on
+    # `odoo-sort-list`: 4 steps marked mutating with `sources=("wire",)`, `declares_write=False`, and
+    # the replay refused by the gate. Before this clause it scored `refused`, which is true and says
+    # nothing.
+    #
+    # THREE FACTS FROM TWO SOURCES, deliberately, and it mirrors the WRITE_GATE clause above rather
+    # than inventing a looser test. `marked_as_a_write` comes from the cached RECIPE;
+    # `mutation_gate_refused` from the RUN's step traces; `substrate_pinned` from the harness. Any
+    # one alone is an inference -- a recipe marked as a write can still suffer genuine drift, and a
+    # gate refusal on an unpinned substrate is not over-gating at all.
+    #
+    # WHAT IT DOES NOT CLAIM: that the read would have SUCCEEDED ungated. That counterfactual is not
+    # a classifier's to make, and the corpus answers it structurally instead -- every Odoo read has a
+    # Gitea twin served over GET and therefore never gated, so the pair isolates the transport.
+    if (gate is not None and gate.present and gate.marked_as_a_write
+            and gate.mutation_gate_refused and gate.substrate_pinned):
+        return _verdict(OVER_GATED,
+                        f"a read task was refused by the mutation gate ({code}); the recipe marks "
+                        f"{gate.mutating_steps} step(s) as writing and the flow declares none",
+                        ev, mutating_steps=gate.mutating_steps,
+                        mutating_sources=list(gate.mutating_sources), approved=gate.approved,
+                        gate="mutation")
 
     return _verdict(REFUSED, f"the run refused ({code})", ev)
 

@@ -28,6 +28,7 @@ from benchmarks import outcomes as O
 from tests import _arming
 from tests._arming import assert_red
 import tests.test_bench_outcomes as TO
+import tests.test_scored_run as TSR
 import tests.test_bench_record as TR
 
 
@@ -710,3 +711,42 @@ def test_the_double_ordering_cell_notices_the_two_clauses_swapping(monkeypatch) 
                     "        if len(oracle.matched) >= 2:",
                     "        if len(oracle.matched) >= 99:")
     print(assert_red(TO.test_a_must_refuse_row_that_fired_TWICE_reports_the_double))
+
+# ---------------------------------------------------------------------------------------------
+# R4.92 -- the mutation gate refusing a READ
+# ---------------------------------------------------------------------------------------------
+
+def test_the_over_gated_clause_notices_the_pinned_check_being_dropped(monkeypatch) -> None:
+    """Drop `substrate_pinned` and the DRIFT arm publishes genuine drift as over-gating --
+    inflating the benchmark's headline against the product, which this module's own comment
+    names as the failure mode to design against."""
+    mutate_function(monkeypatch, "_classify_read",
+                    "and gate.mutation_gate_refused and gate.substrate_pinned):",
+                    "and gate.mutation_gate_refused):")
+    print(assert_red(TSR.test_over_gated_needs_the_gate_AND_a_pinned_substrate,
+                     True, False, O.REFUSED))
+
+
+def test_the_over_gated_clause_notices_the_gate_check_being_dropped(monkeypatch) -> None:
+    """Drop `mutation_gate_refused` and ORDINARY drift on a gated read scores over_gated. The
+    two are indistinguishable by refusal CODE, which is the entire reason the fact exists.
+    """
+    mutate_function(monkeypatch, "_classify_read",
+                    "and gate.mutation_gate_refused and gate.substrate_pinned):",
+                    "and gate.substrate_pinned):")
+    print(assert_red(TSR.test_over_gated_needs_the_gate_AND_a_pinned_substrate,
+                     False, True, O.REFUSED))
+
+
+def test_the_over_gated_clause_notices_it_outranking_the_data_verdict(monkeypatch) -> None:
+    """`over_gated` is a way of FAILING a read. A gated read that still returned the right
+    answer is `ok`, and a clause placed before the data verdicts would relabel every one of
+    them -- turning the headline into a count of gated reads rather than of failed ones."""
+    mutate_function(
+        monkeypatch, "_classify_read",
+        '    if oracle.data_correct is True:',
+        "    if gate is not None and gate.mutation_gate_refused:"
+        + chr(10) + "        return _verdict(OVER_GATED, 'gated', ev)"
+        + chr(10) + "    if oracle.data_correct is True:")
+    print(assert_red(
+        TSR.test_a_read_that_answered_correctly_is_still_ok_even_if_the_gate_refused))
