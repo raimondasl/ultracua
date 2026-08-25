@@ -25,11 +25,13 @@ import pytest
 
 from benchmarks import customer_bench as CB
 from benchmarks import outcomes as O
+from benchmarks import scored_run as SR
 from tests import _arming
 from tests._arming import assert_red
 import tests.test_bench_outcomes as TO
 import tests.test_scored_run as TSR
 import tests.test_bench_record as TR
+import tests.test_login_discrimination as TLD
 
 
 # ---------------------------------------------------------------------------------------------
@@ -46,6 +48,11 @@ def mutate_function(monkeypatch, name: str, find: str, repl: str) -> None:
 
 def mutate_value(monkeypatch, name: str, value) -> None:
     _arming.mutate_value(monkeypatch, O, name, value)
+
+
+def mutate_scored_run(monkeypatch, name: str, find: str, repl: str) -> None:
+    """The same harness aimed at `benchmarks/scored_run.py` — the RUNNER, not the vocabulary."""
+    _arming.mutate_function(monkeypatch, SR, name, find, repl)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -785,3 +792,85 @@ def test_the_inference_cell_notices_not_authored_being_minted_from_absence(monke
                     '    if getattr(run, "authored", None) is False:',
                     '    if not getattr(run, "authored", None):')
     print(assert_red(TSR.test_not_authored_is_never_minted_by_inference))
+
+
+# ---------------------------------------------------------------------------------------------
+# THE LOGIN GUARD AND THE PHASE BOUNDARY (R4.97, R4.98, R4.99, R4.100)
+#
+# Every one of these mutations RESTORES a defect that really shipped, so a green row here says the
+# guard would have caught the thing it was written for rather than merely existing beside it.
+# ---------------------------------------------------------------------------------------------
+
+def test_the_login_guard_notices_a_submit_selector_that_matches_nothing(monkeypatch) -> None:
+    """R4.97 restored: drop the zero-match refusal and a login that cannot be driven runs anyway."""
+    mutate_scored_run(monkeypatch, "assert_login_discriminates",
+                      "    if submits == 0:", "    if False:")
+    print(assert_red(TLD.test_a_submit_selector_matching_nothing_is_refused_before_authenticating,
+                     monkeypatch))
+
+
+def test_the_login_guard_notices_a_success_selector_true_while_logged_out(monkeypatch) -> None:
+    """R4.98 restored — the one that would have run all five Gitea reads anonymously and green."""
+    mutate_scored_run(monkeypatch, "assert_login_discriminates",
+                      "    if anon_hits:", "    if False:")
+    print(assert_red(TLD.test_a_success_selector_true_while_logged_out_is_refused, monkeypatch))
+
+
+def test_the_login_guard_notices_a_session_that_does_not_stick(monkeypatch) -> None:
+    """The affirmative half. Without it the guard passes for a login that authenticates nobody."""
+    mutate_scored_run(monkeypatch, "assert_login_discriminates",
+                      "    if auth_hits == 0:", "    if False:")
+    print(assert_red(TLD.test_a_session_that_does_not_stick_is_refused, monkeypatch))
+
+
+def test_the_login_guard_notices_the_differential_collapsing_to_one_world(monkeypatch) -> None:
+    """THE MUTATION THE OTHER THREE CANNOT SEE: keep every refusal, but observe the AUTHENTICATED
+    page twice. Each individual check still reads a plausible number and the guard stops being a
+    differential — which is the whole mechanism."""
+    mutate_scored_run(monkeypatch, "assert_login_discriminates",
+                      "await _login_page_facts(url, None, cfg, headless)",
+                      "await _login_page_facts(url, storage_state, cfg, headless)")
+    print(assert_red(
+        TLD.test_a_login_that_discriminates_is_accepted_and_both_halves_are_measured, monkeypatch))
+
+
+def test_the_harness_attribution_notices_the_field_going_back_to_a_constant(monkeypatch) -> None:
+    """R4.99 restored exactly: `harness_error` hard-coded empty makes the family unreachable."""
+    mutate_scored_run(monkeypatch, "_Record",
+                      "self.harness_error = harness_error", 'self.harness_error = ""')
+    print(assert_red(TLD.test_the_record_carries_the_harness_field_the_classifier_reads))
+
+
+def test_the_ceiling_pin_notices_the_captured_steps_form_coming_back(monkeypatch) -> None:
+    """R4.100 restored: counting the RECIPE instead of the turns, which reads 0 for an agent that
+    spent the whole budget and recorded nothing."""
+    mutate_scored_run(monkeypatch, "score_one",
+                      'out["hit_step_ceiling"] = usage.calls >= budget',
+                      'out["hit_step_ceiling"] = len(out.get("steps") or ()) >= budget')
+    print(assert_red(TLD.test_the_step_ceiling_is_measured_in_turns_not_captured_steps))
+
+
+def test_the_reset_attribution_notices_the_inter_phase_reset_losing_its_try(monkeypatch) -> None:
+    """The residual this slice's own adversarial pass found: a crash there discards a PAID record."""
+    # THE MUTATION MUST COMPILE. Swapping `try:` for `if True:` leaves a dangling `except`, and the
+    # harness reports a SyntaxError — a broken mutation, not a survivor, but also not a kill. Moving
+    # the call OUT of the try restores the defect exactly and parses.
+    # It must also actually restore THE DEFECT: deleting the call would leave the property holding
+    # vacuously (no unguarded call exists), which is a mutation that proves nothing. This MOVES it
+    # out of the try, which is what the defect was.
+    mutate_scored_run(
+        monkeypatch, "score_one",
+        '                    out["harness_error"] = harness_error\n'
+        '            out["replay_world"]',
+        '                    out["harness_error"] = harness_error\n'
+        '                await refresh_auth(spec, headless=headless)\n'
+        '            out["replay_world"]')
+    print(assert_red(TLD.test_the_inter_phase_reset_is_attributed_to_the_harness_too))
+
+
+def test_the_replay_gate_notices_a_failed_reset_replaying_anyway(monkeypatch) -> None:
+    """Scoring the replay against a world the harness could not restore adjudicates the wrong phase."""
+    mutate_scored_run(monkeypatch, "score_one",
+                      'if out.get("learned") and not harness_error:',
+                      'if out.get("learned"):')
+    print(assert_red(TLD.test_a_failed_inter_phase_reset_skips_the_replay))
