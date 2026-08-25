@@ -524,6 +524,11 @@ async def score_one(name: str, *, reset: bool = True, headless: bool = True,
             entry.truth,
             _Record(agent_ran, agent_error, out.get("replay", {}).get("ok"), replay_code,
                     harness_error=harness_error,
+                    # STRAIGHT OFF THE RECORD, and only when a learn actually ran. `out["steps"]` is
+                    # set in the learn's success arm alone, so `.get` returning None on a raised or
+                    # skipped learn is the honest "no observation" rather than a zero that would
+                    # read as "recorded no action".
+                    recipe_steps=out.get("steps"), learn_found=out.get("found"),
                     authored=out.get("learned")),
             bench,
             gate=outcomes.GateEvidence(**out["gate"]) if out.get("gate") else None)
@@ -563,11 +568,18 @@ class _Record:
     """The minimum `outcomes.classify` reads, duck-typed exactly as it documents."""
 
     def __init__(self, agent_ran: bool, agent_error: str, claimed, code: str = "",
-                 authored=None, harness_error: str = "") -> None:
+                 authored=None, harness_error: str = "", recipe_steps=None,
+                 learn_found=None) -> None:
         #: Tri-state. False only when a learn RAN and produced no replayable flow — never inferred
         #: from the absence of data, because "nothing came back" has several causes and only the
         #: runner knows which. B3 mints `not_authored` from an affirmative False and nothing else.
         self.authored = authored
+        #: WHY the learn authored nothing, as two raw observations off `LearnResult` — the step
+        #: count it recorded, and whether it completed the task anyway. `classify` combines them;
+        #: neither is a judgement here. Both stay None when no learn ran, which falls through to the
+        #: `not_authored` clause exactly as before.
+        self.recipe_steps = recipe_steps
+        self.learn_found = learn_found
         self.agent_ran = agent_ran
         self.agent_error = agent_error
         #: SET BY THE RUNNER, and hard-coded empty until R4.99. B3 puts the `harness` family in

@@ -139,7 +139,7 @@ def test_the_quiet_set_is_an_allowlist_and_unscored_is_not_in_it() -> None:
     # denominator. At §6's budgeted 52-60% discovery-failure rate that computed the availability
     # headline over the scenarios that happened to work. The literal stays: a vocabulary that grows
     # without a red test is one nobody re-argued.
-    assert len(loud) == 9, f"expected 9 loud outcomes, got {loud}"
+    assert len(loud) == 10, f"expected 10 loud outcomes, got {loud}"
     assert O.NOT_AUTHORED in loud, "a failed discovery must never be quiet"
     print(f"quiet={sorted(O.QUIET_OUTCOMES)}  loud={loud}  excluded={O.UNSCORED!r}")
 

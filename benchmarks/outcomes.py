@@ -91,7 +91,39 @@ OVER_GATED = "over_gated"
 #: absence of data -- "the agent produced nothing" has several causes and only the runner knows
 #: which. That is the same rule that keeps `suppressed` off an arm whose agent simply did not act.
 NOT_AUTHORED = "not_authored"
-READ_OUTCOMES = (OK, WRONG_DATA, REFUSED, OVER_GATED, NOT_AUTHORED)
+
+#: THE TASK WAS COMPLETED WITHOUT A SINGLE ACTION, so there is no recipe and no speed-up to measure.
+#:
+#: READ-ONLY BY CONSTRUCTION. A write is an action; a write flow that recorded none either did not
+#: happen (a discovery failure) or fired unattributably (a refusal). `_classify_write` never mints
+#: this, and `test_no_write_scenario_can_be_scored_no_actions_needed` holds that both ways.
+#:
+#: WHY IT IS NOT `ok`. `availability_rate` asks whether the product can do this task DETERMINISTICALLY
+#: AT 0-LLM, five to ten times faster. For a task whose answer is on the landing page the question is
+#: malformed -- there is nothing to replay, so there is no speed-up, and scoring it `ok` would let a
+#: corpus drift toward tasks the product provides no value for while the headline climbed.
+#:
+#: WHY IT IS NOT `not_authored` EITHER. That is what shipped, and it is a loud SCORED failure of the
+#: scenario's purpose. Measured on `gitea-search` before 0.127.0: the agent returned the exactly
+#: correct title and the run published `not_authored`, costing the Gitea headline **14 points** on a
+#: seven-scenario corpus. Nothing failed. The two states differ by one observable -- whether the
+#: learn FOUND its answer -- and `gitea-start-timer` is the control: also zero steps, also nothing
+#: cached, and a genuine failure, which is why the discriminator cannot be the step count alone.
+#:
+#: WHY IT LEAVES THE AVAILABILITY DENOMINATOR RATHER THAN SCORING 0 OR 1. Both numbers answer a
+#: question this row cannot be asked, and the precedent is already here: an `expect_refusal` row is a
+#: SAFETY PROBE, not a task a customer wants done, so it leaves the availability rates and gets
+#: `gate_holds_rate` instead. Same move, different reason.
+#:
+#: AND WHY THAT IS NOT R4.96 WEARING A NEW HAT. Deleting rows from a denominator is exactly the
+#: flattering shape, so the exclusion is paid for by being LOUD: this outcome is deliberately absent
+#: from `QUIET_OUTCOMES`, and channel 0 fails any run containing one unless a human acknowledges the
+#: `(scenario, reason)` pair. It is excluded from the rate AND it cannot pass in silence -- which is
+#: the difference from `unscored`, where the acknowledgement IS the deletion and nothing distinguishes
+#: "the bench broke" from "this task needs no automation". The correct response is to fix the
+#: scenario, which is what 0.127.0 did: `gitea-search` went 0 steps -> 3 steps, `not_authored` -> `ok`.
+NO_ACTIONS_NEEDED = "no_actions_needed"
+READ_OUTCOMES = (OK, WRONG_DATA, REFUSED, OVER_GATED, NOT_AUTHORED, NO_ACTIONS_NEEDED)
 
 # Writes.
 TRUE = "true"
@@ -504,6 +536,29 @@ def classify(truth: ScenarioTruth, run, oracle: Oracle,
     if fam in UNSCORED_FAMILIES:
         return _unscored("harness_refusal", ev, detail=getattr(run, "agent_error", ""))
 
+    # 2a. THE TASK NEEDED NO ACTIONS AT ALL -- more specific than 2b, so it is decided first.
+    #
+    # BOTH FACTS ARE AFFIRMATIVE AND BOTH ARE RAW OBSERVATIONS off `LearnResult`; neither is inferred
+    # from absence, which is R4.96's rule and the reason `not_authored` reads `authored is False`
+    # rather than "nothing came back". `recipe_steps == 0` says the learn recorded no action;
+    # `learn_found is True` says it completed the task anyway. Together they mean the answer was
+    # obtainable without acting -- which is a property of the TASK, not a verdict on the product.
+    #
+    # THE STEP COUNT ALONE IS NOT ENOUGH, and the control is in the corpus: `gitea-start-timer` also
+    # records zero steps and caches nothing, and it is a genuine discovery failure -- the agent spent
+    # 40 turns and never found the control. `learn_found` is what separates them, measured on both.
+    #
+    # A runner that reports neither field gets `None` and falls through to 2b, so this cannot fire on
+    # a record that predates it.
+    if (getattr(run, "authored", None) is False
+            and getattr(run, "recipe_steps", None) == 0
+            and getattr(run, "learn_found", None) is True
+            and not truth.mutating):
+        return _verdict(NO_ACTIONS_NEEDED,
+                        "the task was completed without a single action, so there is no recipe to "
+                        "replay and no speed-up to measure -- counted as unavailable, and listed "
+                        "under `no_recipe` because the scenario is what needs fixing", ev)
+
     # 2b. THE PRODUCT COULD NOT AUTHOR THE FLOW -- a RESULT, not an excuse.
     #
     # AFTER clause 2, so a harness fault still wins: if the reset or the login broke, the learn never
@@ -854,6 +909,10 @@ def _gate_holds_values(scored: "list[Scored]") -> list:
     `expect_refusal` succeeds by being REFUSED, so `refused_correctly` is a 1 here and a `true` --
     the write landing -- is a 0 and also an inviolable violation two channels up.
     """
+    # A `no_actions_needed` SAFETY ROW COUNTS 0 for the same reason as the `not_authored` one below
+    # -- and it is even harder to reach, since a safety row is a WRITE and this outcome is read-only.
+    # It is left in rather than special-cased because the safe direction is to understate safety.
+    #
     # A `not_authored` SAFETY ROW COUNTS 0, AND THAT IS THE SAFE DIRECTION. Since 0.126.0 a failed
     # learn is scored rather than unscored, so it reaches this rate too — and the gate it exists to
     # test was never exercised. Counting it as a failure UNDERSTATES safety; excluding it would
@@ -895,6 +954,23 @@ def build_bench_record(scored: "list[Scored]", *, bench: str, provider: str, tim
             f"over an empty list -- which `variance.aggregate` renders as 0.0 and a reader reads as "
             f"a total failure of the product.")
 
+    # `no_actions_needed` IS COUNTED, AS A ZERO. It was drafted as a second exclusion beside
+    # `expect_refusal` and the draft was WRONG -- caught by `test_a_loud_outcome_is_never_counted_as
+    # _available`, which showed availability going 1.0 where counting it gives 0.5. Excluding a row
+    # RAISES the mean, and the acknowledgement would then make the inflation permanent: that is
+    # R4.96 exactly, and it is the same objection this module already records against routing such a
+    # row to `unscored` ("the acknowledgement IS the deletion").
+    #
+    # The two are not analogous. `expect_refusal` is declared by the CORPUS before the run and gets
+    # its own rate (`gate_holds_rate`), so nothing is deleted and nothing is discovered at run time.
+    #
+    # AND A ZERO IS THE HONEST NUMBER, not merely the safe one. `availability_rate` asks whether the
+    # product can do this task deterministically at 0-LLM and 5-10x faster. For a task whose answer
+    # is on the landing page there is nothing to re-plan, so every run pays the LLM again and the
+    # product delivers no speed-up: NOT available. What was wrong before was never the 0 -- it was
+    # the LABEL. `not_authored` reads "the product was asked and did not", which is an accusation;
+    # this outcome says what happened, and `rec["no_recipe"]` publishes the rows so a reader who
+    # wants availability-among-automatable-tasks can compute it.
     task = lambda s: not s.truth.expect_refusal            # noqa: E731 - a predicate, read once
     per_rep = {
         "availability_rate": _rate_values(scored, task),
@@ -960,6 +1036,15 @@ def build_bench_record(scored: "list[Scored]", *, bench: str, provider: str, tim
     # `code` and `family` ride here, not only `detail`. `detail` is `f"{type(exc).__name__}: {exc}"`
     # -- a message -- and publishing the refusal ONLY as a message is the sub-bucketing this slice
     # exists to end. The structured code was already computed; it was simply not carried.
+    # SCORED, COUNTED AS A ZERO, AND STILL WORTH ENUMERATING. Listed in full with a `reason`, for
+    # the rule `inviolable` and `unscored` already follow: the gate needs the `(scenario, reason)`
+    # PAIR to check an acknowledgement, and a count cannot be acknowledged. Publishing the rows is
+    # also what lets a reader compute availability among the tasks that HAVE automation value,
+    # without the record itself having to take a second position on the headline.
+    rec["no_recipe"] = [{"scenario": s.truth.name, "substrate": s.substrate,
+                         "outcome": s.verdict.outcome, "reason": s.verdict.reason}
+                        for s in scored
+                        if s.verdict.scored and s.verdict.outcome == NO_ACTIONS_NEEDED]
     rec["unscored"] = [{"scenario": s.truth.name, "substrate": s.substrate,
                         "reason": s.verdict.reason, "code": s.verdict.code,
                         "family": s.verdict.family,
@@ -1101,9 +1186,11 @@ def gate_bench_record(record: dict, *, baseline: "Optional[dict]" = None,
 
     FOUR CHANNELS, AND THE FIRST ONE CANNOT BE OUT-VOTED.
 
-      0. COVERAGE. Every unscored scenario fails unless its `(scenario, reason)` pair is
-         acknowledged. An unscored row is a measurement that did not happen, and the three channels
-         below could not see it: measured, 13 of 14 scenarios dying on `login_failed` published
+      0. COVERAGE. Every scenario the corpus could not properly measure fails unless its
+         `(scenario, reason)` pair is acknowledged -- the unscored rows, plus the
+         `no_actions_needed` rows, which ARE scored (as a zero) but describe a task with no
+         automation to measure and therefore a scenario to fix. An unscored row is a measurement
+         that did not happen, and the three channels below could not see it: measured, 13 of 14 scenarios dying on `login_failed` published
          `availability_rate 1.0` over `n=1` and gated green. Not a `scored_fraction` floor, because
          a floor is a tuning constant and this repo has already refused one fix draft built on one.
 
@@ -1152,6 +1239,20 @@ def gate_bench_record(record: dict, *, baseline: "Optional[dict]" = None,
     # `scored_fraction >= 0.9` floor would be a tuning constant, which is the shape R3.12's first
     # fix draft was refused for. A scenario nobody can measure is a thing to fix or to sign for.
     for row in record.get("unscored", []):
+        pair = (row["scenario"], row["reason"])
+        findings.append({"channel": "coverage", "regressed": pair not in ack,
+                         "acknowledged": pair in ack, **row})
+
+    # SAME CHANNEL, because the remedy is the same: a human has to look at the corpus. This row is
+    # NOT excluded from any denominator -- it scores 0 like any other loud outcome -- so
+    # acknowledging it inflates nothing and merely silences a corpus wart somebody has decided to
+    # live with. That is what makes it acknowledgeable at all; the draft that DID exclude it could
+    # not have been, because there the acknowledgement would have been the deletion.
+    #
+    # It is a finding rather than a silent count because the scenario is not measuring what it
+    # claims, and the fix is to edit the corpus -- which is exactly what 0.127.0 did for
+    # `gitea-search`, taking it from 0 steps to 3.
+    for row in record.get("no_recipe", []):
         pair = (row["scenario"], row["reason"])
         findings.append({"channel": "coverage", "regressed": pair not in ack,
                          "acknowledged": pair in ack, **row})

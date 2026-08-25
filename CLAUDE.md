@@ -1116,6 +1116,42 @@ search at all while being named for one.
   Worth knowing twice over: a reviewer reading the flag alone would conclude the row cannot
   manufacture over-gating, and this is the first Gitea row that can reach that path at all.
 
+## `no_actions_needed`, and why EXCLUDING a row is not the neutral choice (0.128.0)
+
+R4.101 half two. A task whose answer is on its landing page is completed with no actions, so nothing
+is cached and there is no speed-up to measure. That published `not_authored` — "the product was asked
+to author this flow and did not" — for a run returning the exactly correct answer, costing the Gitea
+headline **14 points**.
+
+* **THE FIRST DRAFT MADE THE ROW LEAVE THE AVAILABILITY DENOMINATOR, AND AN EXISTING GUARD KILLED
+  IT.** By analogy with `expect_refusal`, which leaves the availability rates and gets
+  `gate_holds_rate`. `test_a_loud_outcome_is_never_counted_as_available` showed availability going
+  **1.0 where counting the row gives 0.5**. **Excluding a row RAISES the mean** — it is not the
+  neutral option it reads as — and an acknowledged exclusion makes the inflation permanent, which is
+  R4.96 and is the same objection this codebase already records against routing such a row to
+  `unscored`: *the acknowledgement IS the deletion*. `expect_refusal` is not analogous because the
+  corpus DECLARES it before the run and it keeps a rate of its own; nothing is discovered at run time
+  and nothing is deleted.
+* **AND THE ZERO IS THE HONEST NUMBER, not merely the safe one.** `availability_rate` asks whether
+  the product can do the task deterministically at 0-LLM and 5-10x faster. With nothing to re-plan,
+  every run pays the LLM again — no speed-up, so not available. **What was wrong was never the 0; it
+  was the LABEL.** `rec["no_recipe"]` enumerates the rows so availability-among-automatable-tasks
+  stays computable, and channel 0 reports them — acknowledgeable precisely BECAUSE nothing is
+  excluded.
+* **MINTED FROM TWO AFFIRMATIVE OBSERVATIONS, never from absence.** `recipe_steps == 0` (the learn
+  recorded no action) and `learn_found is True` (it completed the task anyway). The step count alone
+  is not enough and the corpus holds the control: `gitea-start-timer` is also zero steps and nothing
+  cached, after 40 turns and $0.58, and is a genuine discovery failure.
+* **TWO OF THE SLICE'S OWN CELLS PASSED FOR THE WRONG REASON, AND THE ARMING HARNESS SAID SO.** The
+  zero-steps control used a WRITE, so the read-only guard blocked the mutation rather than the clause
+  under test. The missing-observation cell set both fields to None, so the sibling conjunct covered
+  it — the mutation's real victim is a **pure-LLM arm that answers correctly while recording no step
+  count**, where reading `None` as falsy republishes every success as "this task needed no work".
+  A survivor here is a hole in the CELL as often as in the code.
+* **A SECOND IDENTICAL `findings.append` MADE AN OLD MUTATION AMBIGUOUS.** Channel 0 now has two, so
+  a needle matching the append alone matched twice and was reported STALE rather than passing. That
+  is the rule working; anchor a mutation on enough context to name one site.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

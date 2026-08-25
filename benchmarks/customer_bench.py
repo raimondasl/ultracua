@@ -135,6 +135,23 @@ class ScenarioRun:
     # default would switch the clause off for the whole corpus in silence, which is what
     # `test_classify_reads_only_fields_the_real_record_carries` exists to catch, and did.
     authored: Optional[bool] = None
+    # WHY THE LEARN AUTHORED NOTHING -- the two raw observations that separate a task with no
+    # automation to measure from a genuine discovery failure. Both come straight off `LearnResult`;
+    # neither is a judgement, and `classify` is the only thing that combines them.
+    #
+    # `recipe_steps == 0` says the learn recorded no ACTION. `learn_found is True` says it completed
+    # the task anyway, so the answer was obtainable without acting. Together they are
+    # `no_actions_needed`; `recipe_steps == 0` with `learn_found` False is `not_authored`, and the
+    # corpus holds the control for each -- `gitea-search` before 0.127.0 for the first (correct
+    # answer, zero steps, and it published `not_authored`, costing the Gitea headline 14 points) and
+    # `gitea-start-timer` for the second (zero steps after 40 turns, nothing found).
+    #
+    # `None` on both is the honest default for an arm that does not learn, and it falls through to
+    # the `not_authored` clause exactly as before -- so no existing record changes meaning.
+    # They live HERE rather than being read with a `getattr` default for the reason the field above
+    # records: a default silently switches the clause off for the whole corpus.
+    recipe_steps: Optional[int] = None
+    learn_found: Optional[bool] = None
     # No `outcome` field, and B3 arriving did not change that. B2 records FACTS and B3 mints the
     # verdict onto an `outcomes.Scored` beside this record, never into it — so nothing that reads a
     # raw scenario record can mistake an adjudication for an observation.
