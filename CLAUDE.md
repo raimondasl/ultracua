@@ -1152,6 +1152,34 @@ headline **14 points**.
   a needle matching the append alone matched twice and was reported STALE rather than passing. That
   is the rule working; anchor a mutation on enough context to name one site.
 
+## The timer failure was never about reasoning: below the fold is invisible (R4.102, 0.129.0)
+
+`gitea-start-timer` spent **40 turns and $0.58** recording **zero steps** on a two-click task. The
+diagnosis cost **nothing** and took three probes, because the first question was the free one.
+
+* **ASK WHAT THE AGENT COULD SEE BEFORE ASKING WHY IT FAILED.** The page holds the control -- a real
+  `<button>`, "Start Timer", `aria-label="Start Time Tracking"`, `is_visible` True -- and the agent's
+  observation of that page holds **73 elements and no timer at all**. Scroll and re-snapshot and it
+  appears at once. Forty turns of not finding it was a grounding limit, and no budget would ever have
+  helped; R4.100's corrected ceiling sensor is what had already ruled budget out.
+* **THE VIEWPORT BOUND IS NOT THE DEFECT.** `snapshot.py` drops `r.top > innerHeight` deliberately
+  and says so. What is missing is any SIGNAL: `Observation` carries `url`, `title`, `elements`,
+  `text`, `webmcp_tools`, `fingerprint` and nothing about off-screen content, so the agent cannot
+  tell "this is the page" from "this is the top third of it". `scroll` is an available action; there
+  is simply no reason to use it.
+* **THE OBVIOUS FIX IS INERT ON HALF THE CORPUS, and that is the part worth carrying.** A hint from
+  `document.body.scrollHeight > innerHeight` fires on Gitea and NOT on Odoo, which keeps
+  `docH == vpH == 720` and scrolls an INNER container -- measured, `odoo-sort-list` shows a 720px
+  body in a 720px viewport with **12** controls outside it. A sensor here must count off-screen
+  ELEMENTS, not compare heights. Two layouts, one of which makes the intuitive test silently useless.
+* **BLAST RADIUS: 5 of 7 distinct start pages hide interactable controls** (`gitea-comment` 15,
+  `odoo-sort-list` 12, `odoo-create-lead` 8, `gitea-sort-list` 4, `odoo-open-record` 2). Latent
+  wherever the target happens to be above the fold, fatal when it is not -- which is why exactly one
+  scenario has failed for it and the rest scored `ok` while carrying the same hazard.
+* **THE INSTRUMENT SHIPPED WITH THE DIAGNOSIS** (`benchmarks/fold_probe.py`), which is R4.100's rule
+  applied on purpose rather than learned again: a fix has to be validated against the same count that
+  found the defect, and a number recovered from terminal scrollback is not a baseline.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
