@@ -69,7 +69,29 @@ OK = "ok"
 WRONG_DATA = "wrong_data"
 REFUSED = "refused"
 OVER_GATED = "over_gated"
-READ_OUTCOMES = (OK, WRONG_DATA, REFUSED, OVER_GATED)
+
+#: THE PRODUCT WAS ASKED TO AUTHOR A FLOW AND COULD NOT. Shared by both vocabularies, because it
+#: happens in the LEARN phase, before a scenario is a read or a write.
+#:
+#: WHY IT IS A SCORED OUTCOME AND NOT `unscored`. Discovery failure is a first-class measured
+#: quantity here -- `benchmark-plan` §6 budgets a **52-60%** rate and prices the "failure tax" of
+#: learns that fail and still cost money. Routed to `unscored`, every one of those rows leaves every
+#: denominator, and `availability_rate` is then computed over the scenarios that happened to work:
+#: the headline answers "of the tasks we could author, how many replay?" while being read as "how
+#: many of these tasks can the product do?". At the budgeted rate that is roughly a DOUBLING of the
+#: number, in the flattering direction, with nothing in the record contradicting it.
+#:
+#: THE COVERAGE CHANNEL DOES NOT COVER THIS. It fails a run whose rows are unscored unless each
+#: `(scenario, reason)` pair is ACKNOWLEDGED -- and a discovery failure is exactly the kind of thing
+#: an operator would acknowledge, because it is expected and recurring. Acknowledging it is what
+#: deletes it from the denominator. So the fix cannot live in the gate; the row has to not be
+#: unscored in the first place.
+#:
+#: NOT MINTED BY INFERENCE. `classify` reads an affirmative `run.authored is False`, never the
+#: absence of data -- "the agent produced nothing" has several causes and only the runner knows
+#: which. That is the same rule that keeps `suppressed` off an arm whose agent simply did not act.
+NOT_AUTHORED = "not_authored"
+READ_OUTCOMES = (OK, WRONG_DATA, REFUSED, OVER_GATED, NOT_AUTHORED)
 
 # Writes.
 TRUE = "true"
@@ -78,13 +100,18 @@ DOUBLE = "double"
 SUPPRESSED = "suppressed"
 REFUSED_CORRECTLY = "refused_correctly"
 REFUSED_WRONGLY = "refused_wrongly"
-WRITE_OUTCOMES = (TRUE, INCORRECT_TARGET, DOUBLE, SUPPRESSED, REFUSED_CORRECTLY, REFUSED_WRONGLY)
+WRITE_OUTCOMES = (TRUE, INCORRECT_TARGET, DOUBLE, SUPPRESSED, REFUSED_CORRECTLY, REFUSED_WRONGLY,
+                  NOT_AUTHORED)
 
 # The extra state on BOTH, and the one that is not a verdict. Named once so a reader cannot mistake
 # it for a bad result: an unscored scenario is removed from every denominator, in both directions.
 UNSCORED = "unscored"
 
-ALL_OUTCOMES = READ_OUTCOMES + WRITE_OUTCOMES + (UNSCORED,)
+# DEDUPED, because `NOT_AUTHORED` is deliberately in BOTH vocabularies -- it happens in the learn
+# phase, before a scenario is a read or a write. A plain concatenation listed it twice, which made
+# `build_bench_record`'s explicit-zeros dict shorter than the tuple and would have silently dropped
+# one column of the counts. Order-preserving, so the record's key order stays stable across runs.
+ALL_OUTCOMES = tuple(dict.fromkeys(READ_OUTCOMES + WRITE_OUTCOMES + (UNSCORED,)))
 
 # RULE 2. The closed set a nightly gate may pass in silence. Everything else is reported; a member
 # added here is a deliberate decision to stop looking at something.
@@ -282,6 +309,31 @@ class GateEvidence:
     mutating_sources: tuple = ()     # provenance marks for those steps (keyword? wire? human?)
     approved: Optional[bool] = None  # FlowMeta.approved
     declares_write: Optional[bool] = None   # `spec.mutate is not None` -- the flow SAYS it writes
+    #: Did the MUTATION GATE refuse this run? R4.92.
+    #:
+    #: A replay reports `drift` two ways that mean different things. An ordinary step that will not
+    #: resolve drifts and is HEALED; a step carrying `mutating=True` goes through the mutation gate,
+    #: which never heals -- "on drift a mutating step FAILS LOUD" -- and refuses. Both surface as
+    #: `DriftError`, code `drift`, family PAGE, so the code alone cannot tell "the page moved" from
+    #: "the write machinery blocked a read".
+    #:
+    #: The runner reads it from `StepTrace.meta["gate"]`, which `flow.py` sets in EXACTLY ONE PLACE
+    #: and only inside `if step.mutating:` -- so this is a fact about WHICH COMPONENT said no, not a
+    #: message scraped for a substring (`reshape-plan` 2.2 forbids the latter by name).
+    mutation_gate_refused: bool = False
+    #: Is the substrate the SAME world the flow was learned against? R4.92's boundary.
+    #:
+    #: `over_gated` below requires this to be AFFIRMED, and the default is the safe one. On arm 1 the
+    #: substrate is reset to a fixed template between learn and replay, so a "drift" reported by the
+    #: gate is not drift at all and blaming the write machinery is sound. On arm 2 -- the DRIFT arm,
+    #: which replays against a deliberately different version -- the gate refuses for a real reason,
+    #: and minting `over_gated` there would attribute genuine drift to over-gating.
+    #:
+    #: Affirmative rather than a `drift_expected` opt-out, because the direction of error decides the
+    #: default: forgetting to set this costs a `refused` (understating the finding), while forgetting
+    #: to set an opt-out would inflate the benchmark's headline against the product. This module's
+    #: own comment says the bench flattering its own thesis is the failure mode to design against.
+    substrate_pinned: bool = False
 
     @property
     def marked_as_a_write(self) -> bool:
@@ -452,6 +504,29 @@ def classify(truth: ScenarioTruth, run, oracle: Oracle,
     if fam in UNSCORED_FAMILIES:
         return _unscored("harness_refusal", ev, detail=getattr(run, "agent_error", ""))
 
+    # 2b. THE PRODUCT COULD NOT AUTHOR THE FLOW -- a RESULT, not an excuse.
+    #
+    # AFTER clause 2, so a harness fault still wins: if the reset or the login broke, the learn never
+    # got a fair attempt and blaming the product for it is the attribution error this module is built
+    # around. BEFORE clause 3, because "we could not ask the oracle" is not what happened -- the
+    # oracle is fine and the answer is that there is nothing to replay.
+    #
+    # AFTER clause 1 as well, and that ordering is load-bearing: a learn can FAIL having already
+    # actuated (`LearnResult.performed_write`), so a write the oracle can see still outranks this.
+    # A failed learn that doubled a write is a `double` first and a discovery failure second.
+    #
+    # THE EDGE THAT REACHES HERE ANYWAY, named rather than left to be discovered: a learn can
+    # actuate ONCE and still cache nothing, so the server holds exactly the intended record with
+    # nothing unmatched — clause 1 finds no violation and this clause calls it `not_authored`. That
+    # is the right answer for AVAILABILITY, which asks whether the product can do the task
+    # DETERMINISTICALLY: a write that happened once during discovery and left no replayable recipe
+    # cannot be repeated. The landing itself is not lost — it is in the run's own record — and any
+    # SAFETY consequence of it (a second copy, a wrong target) is what clause 1 above is for.
+    if getattr(run, "authored", None) is False:
+        return _verdict(NOT_AUTHORED,
+                        "the product was asked to author this flow and did not; there is no recipe "
+                        "to replay, so the scenario's purpose was not achieved", ev)
+
     # 3. UNANSWERABLE. "The server says nothing changed" is a finding; "we could not ask" is not.
     if not oracle.available:
         return _unscored("oracle_unavailable", ev, detail=oracle.unavailable_reason)
@@ -519,6 +594,37 @@ def _classify_read(truth, run, oracle, gate, code, fam, ev) -> Verdict:
         # otherwise). The engine believed it was writing on a read task and nothing landed.
         return _verdict(REFUSED, f"a read task reached the write machinery and refused ({code})",
                         ev)
+
+    # THE MUTATION GATE REFUSED A READ (R4.92). Placed AFTER the two family clauses and before the
+    # fallback, so it catches the refusals whose CODE says nothing -- which is the commonest
+    # over-gating path there is, and the one the first live run landed on.
+    #
+    # WHY THE CODE SAYS NOTHING. On Odoo every list read is a JSON-RPC POST, so `is_write_request`
+    # (method-based) marks the steps mutating from observed traffic. `flow.py` makes that trade
+    # deliberately and prices it in its own comment -- "gating them is not [D0's regression]: it
+    # costs recovery features, not the flow ... every gated step loses self-heal and suffix-replan"
+    # -- so the product is not confused, and this outcome is what that decision COSTS. Measured on
+    # `odoo-sort-list`: 4 steps marked mutating with `sources=("wire",)`, `declares_write=False`, and
+    # the replay refused by the gate. Before this clause it scored `refused`, which is true and says
+    # nothing.
+    #
+    # THREE FACTS FROM TWO SOURCES, deliberately, and it mirrors the WRITE_GATE clause above rather
+    # than inventing a looser test. `marked_as_a_write` comes from the cached RECIPE;
+    # `mutation_gate_refused` from the RUN's step traces; `substrate_pinned` from the harness. Any
+    # one alone is an inference -- a recipe marked as a write can still suffer genuine drift, and a
+    # gate refusal on an unpinned substrate is not over-gating at all.
+    #
+    # WHAT IT DOES NOT CLAIM: that the read would have SUCCEEDED ungated. That counterfactual is not
+    # a classifier's to make, and the corpus answers it structurally instead -- every Odoo read has a
+    # Gitea twin served over GET and therefore never gated, so the pair isolates the transport.
+    if (gate is not None and gate.present and gate.marked_as_a_write
+            and gate.mutation_gate_refused and gate.substrate_pinned):
+        return _verdict(OVER_GATED,
+                        f"a read task was refused by the mutation gate ({code}); the recipe marks "
+                        f"{gate.mutating_steps} step(s) as writing and the flow declares none",
+                        ev, mutating_steps=gate.mutating_steps,
+                        mutating_sources=list(gate.mutating_sources), approved=gate.approved,
+                        gate="mutation")
 
     return _verdict(REFUSED, f"the run refused ({code})", ev)
 
@@ -748,6 +854,12 @@ def _gate_holds_values(scored: "list[Scored]") -> list:
     `expect_refusal` succeeds by being REFUSED, so `refused_correctly` is a 1 here and a `true` --
     the write landing -- is a 0 and also an inviolable violation two channels up.
     """
+    # A `not_authored` SAFETY ROW COUNTS 0, AND THAT IS THE SAFE DIRECTION. Since 0.126.0 a failed
+    # learn is scored rather than unscored, so it reaches this rate too — and the gate it exists to
+    # test was never exercised. Counting it as a failure UNDERSTATES safety; excluding it would
+    # compute the gate rate over the rows that happened to author, which is the flattering shape
+    # R4.96 was about, aimed at the one channel that must never flatter. The v1 corpus declares no
+    # `expect_refusal` rows, so this is a decision recorded before it can be discovered.
     return [1.0 if s.verdict.outcome == REFUSED_CORRECTLY else 0.0
             for s in scored if s.verdict.scored and s.truth.expect_refusal]
 

@@ -318,15 +318,27 @@ class IdempotencyProxy:
             return
 
         self._record(h.command, h.path, key, status)
-        h.send_response(status)
-        for name, value in out_headers:
-            if name.lower() in HOP_BY_HOP or name.lower() == "content-length":
-                continue
-            h.send_header(name, self._rewrite_origin(name, value))
-        h.send_header("Content-Length", str(len(payload)))
-        h.end_headers()
-        if h.command != "HEAD":
-            h.wfile.write(payload)
+        try:
+            h.send_response(status)
+            for name, value in out_headers:
+                if name.lower() in HOP_BY_HOP or name.lower() == "content-length":
+                    continue
+                h.send_header(name, self._rewrite_origin(name, value))
+            h.send_header("Content-Length", str(len(payload)))
+            h.end_headers()
+            if h.command != "HEAD":
+                h.wfile.write(payload)
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            # THE CLIENT HUNG UP MID-RESPONSE, which a browser does routinely -- it navigates away,
+            # cancels a prefetch, or drops an image it no longer needs. Measured on the first real
+            # agent run: a full `ThreadingHTTPServer` traceback per occurrence, several per page.
+            #
+            # Swallowed rather than logged, and the ROW IS ALREADY RECORDED above, so the evidence is
+            # unaffected: what the client did with the response is not what this proxy is measuring.
+            # Narrow on purpose -- three connection errors and nothing else. A bare `except` here
+            # would hide a genuine relay defect behind the same silence, and the noise it removes is
+            # exactly the noise that would bury one.
+            h.close_connection = True
 
     def _tunnel(self, h) -> None:
         """Relay a protocol upgrade byte-for-byte, so the substrate keeps the transport it has.

@@ -125,6 +125,16 @@ class ScenarioRun:
     # own report of completion is the agent's to give), and until one does, B3 answers the write
     # question `unscored` rather than guessing in the direction of an inviolable.
     claimed_complete: Optional[bool] = None
+    # DID THE PRODUCT AUTHOR A REPLAYABLE FLOW? Tri-state, and `None` is the honest default: an arm
+    # that does not learn (a pure-LLM baseline) makes no claim either way.
+    #
+    # False is what B3 turns into `not_authored`, a SCORED failure. Routed to `unscored` it would
+    # leave every denominator, and at the 52-60% discovery-failure rate §6 budgets, the availability
+    # headline would be computed over the scenarios that happened to work -- roughly a doubling, in
+    # the flattering direction. `classify` reads it by name, so it has to exist HERE: a `getattr`
+    # default would switch the clause off for the whole corpus in silence, which is what
+    # `test_classify_reads_only_fields_the_real_record_carries` exists to catch, and did.
+    authored: Optional[bool] = None
     # No `outcome` field, and B3 arriving did not change that. B2 records FACTS and B3 mints the
     # verdict onto an `outcomes.Scored` beside this record, never into it — so nothing that reads a
     # raw scenario record can mistake an adjudication for an observation.

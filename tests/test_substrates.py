@@ -145,13 +145,17 @@ def test_a_skeleton_first_observation_is_a_harness_error_not_a_score() -> None:
 
 
 def test_the_skeleton_floor_is_a_floor_and_not_a_quality_bar() -> None:
-    """The boundary, exactly, because a floor that drifts upward silently starts rejecting real pages.
+    """The boundary, exactly, because a floor that drifts silently changes what readiness means.
 
-    Set far below any served page (a Gitea landing page is ~13.5 kB with dozens of elements) so it can
-    only fire on the failure it names. If someone raises it to "improve" detection, this goes red and
-    they have to argue for it.
+    **THIS CELL WORKED.** It pinned the floor at 3 and said "if someone raises it to improve
+    detection, this goes red and they have to argue for it". At 0.126.0 someone did, and the argument
+    is a measurement rather than an intuition: an unrendered Odoo shell snapshots 5 elements, so the
+    old floor sat BELOW the skeleton and R4.40's guard could not fire on the substrate its own comment
+    cited. The literal stays here — a floor that moves without a red test is a floor nobody re-argued
+    — and `test_the_skeleton_floor_sits_in_the_measured_gap` is what makes the number defensible
+    rather than merely current.
     """
-    assert S.SKELETON_ELEMENT_FLOOR == 3, "the floor moved; re-argue it against a real page's size"
+    assert S.SKELETON_ELEMENT_FLOOR == 12, "the floor moved; re-argue it against MEASURED pages"
     with pytest.raises(S.SubstrateNotReady):
         S.assert_not_a_skeleton(_Obs(S.SKELETON_ELEMENT_FLOOR - 1), substrate="x", scenario="y")
     S.assert_not_a_skeleton(_Obs(S.SKELETON_ELEMENT_FLOOR), substrate="x", scenario="y")
@@ -882,3 +886,35 @@ def test_the_odoo_module_list_installs_sale_beside_crm() -> None:
     CRM lead trips nothing, so building that pair on `crm` alone would silently drop the arm."""
     mods = S.Odoo().modules.split(",")
     assert "sale" in mods and "crm" in mods, mods
+
+
+def test_the_skeleton_floor_sits_in_the_measured_gap() -> None:
+    """THE OLD FLOOR COULD NOT FIRE ON THE CASE ITS OWN COMMENT CITED.
+
+    It was 3, on the strength of "an Odoo web client shell ... is a near-empty body". Measured at
+    0.126.0 by driving all five Odoo reads with a real session, the unrendered OWL shell snapshots
+    **5** elements — so R4.40's guard would have passed an agent authoring against an unrendered
+    page, on the very substrate the comment named.
+
+    Asserted as a RELATIONSHIP rather than as a literal: the floor must be strictly above what a
+    skeleton measures and strictly below the smallest page the corpus actually renders. A substrate
+    whose real pages are small then forces a rethink here, instead of silently reintroducing a floor
+    nothing can trip. Both bounds are measurements and are named as such.
+    """
+    assert S.MEASURED_SKELETON_ELEMENTS < S.SKELETON_ELEMENT_FLOOR, (
+        f"the floor ({S.SKELETON_ELEMENT_FLOOR}) is at or below a measured skeleton "
+        f"({S.MEASURED_SKELETON_ELEMENTS}), so R4.40's guard cannot fire on the failure it names")
+    assert S.SKELETON_ELEMENT_FLOOR < S.MEASURED_SMALLEST_RENDERED_ELEMENTS, (
+        f"the floor ({S.SKELETON_ELEMENT_FLOOR}) is at or above the smallest RENDERED corpus page "
+        f"({S.MEASURED_SMALLEST_RENDERED_ELEMENTS}), so readiness would refuse a page that is fine "
+        f"— the D0 over-refusal shape, aimed at the harness")
+
+
+def test_a_real_odoo_skeleton_is_refused_and_a_real_page_is_not() -> None:
+    """The guard driven at the two measured populations, so the numbers above are not just ordered
+    but ACTED on. Without this, the relationship could hold while `assert_not_a_skeleton` read some
+    other constant entirely."""
+    with pytest.raises(S.SubstrateNotReady, match="had not rendered"):
+        S.assert_not_a_skeleton(_Obs(S.MEASURED_SKELETON_ELEMENTS), substrate="odoo", scenario="x")
+    S.assert_not_a_skeleton(_Obs(S.MEASURED_SMALLEST_RENDERED_ELEMENTS), substrate="odoo",
+                            scenario="x")

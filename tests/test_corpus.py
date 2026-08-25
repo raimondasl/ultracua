@@ -461,3 +461,59 @@ def _ran(claimed: bool = True):
         agent_ran = True
         claimed_complete = claimed
     return _R()
+
+
+# --- the write declaration, asserted both ways -----------------------------------------------------
+
+@pytest.mark.parametrize("substrate", SUBSTRATES)
+def test_every_write_declares_how_the_product_knows_it_landed(substrate) -> None:
+    """`MutateSpec` requires at least one confirm — "a write that cannot be confirmed is
+    fire-and-hope" — so a write scenario without one cannot be learned at all, and the failure would
+    arrive after the reset and the login had already been paid for."""
+    for e in C.for_substrate(substrate):
+        if not e.truth.mutating:
+            continue
+        c = e.write_confirm or {}
+        assert c.get("text") or c.get("selector"), (
+            f"{e.scenario.name} declares no confirm; the engine refuses to learn such a flow")
+
+
+@pytest.mark.parametrize("substrate", SUBSTRATES)
+def test_no_read_declares_a_write_confirm(substrate) -> None:
+    """The direction that manufactures the finding. The runner builds a `MutateSpec` from this, and
+    a read carrying one would be learned as a WRITE — producing exactly the over-gating this corpus
+    exists to MEASURE, from the corpus's own declaration."""
+    for e in C.for_substrate(substrate):
+        if not e.truth.mutating:
+            assert not e.write_confirm, f"{e.scenario.name} is a read and declares a write confirm"
+
+
+def test_a_write_without_a_confirm_is_refused_at_construction() -> None:
+    with pytest.raises(O.OracleError, match="declares no `write_confirm`"):
+        C.CorpusEntry(scenario=Scenario(name="x", substrate="odoo", goal="g", mutating=True),
+                      truth=ScenarioTruth(name="x", mutating=True), oracle=lambda s: None)
+
+
+def test_a_read_that_declares_a_write_confirm_is_refused_at_construction() -> None:
+    with pytest.raises(O.OracleError, match="a READ declares"):
+        C.CorpusEntry(scenario=Scenario(name="x", substrate="odoo", goal="g"),
+                      truth=ScenarioTruth(name="x"), oracle=lambda s: None,
+                      expected_answer=lambda s: "a", write_confirm={"text": "t"})
+
+
+def test_exactly_one_scenario_keeps_the_world_its_learn_left_behind() -> None:
+    """`benchmark-plan` §4 replays WITH RESETS BETWEEN, so one landed record means one write.
+    `odoo-idempotent-replay` is the exception by definition — resetting would delete the already-done
+    state whose suppression it exists to measure. Pinned as a SET: a second scenario opting out would
+    silently start scoring its replay against the previous phase's leftovers."""
+    keep = sorted(e.scenario.name for s in SUBSTRATES for e in C.for_substrate(s)
+                  if e.replay_needs_the_learned_world)
+    assert keep == ["odoo-idempotent-replay"], keep
+
+
+def test_only_the_scenario_about_a_precheck_declares_one() -> None:
+    """A precheck makes a replay SKIP when the end-state is present. On any other write that would
+    make "the replay wrote once" and "the replay did nothing" the same observation."""
+    with_precheck = sorted(e.scenario.name for s in SUBSTRATES for e in C.for_substrate(s)
+                           if (e.write_confirm or {}).get("precheck_path"))
+    assert with_precheck == ["odoo-idempotent-replay"], with_precheck
