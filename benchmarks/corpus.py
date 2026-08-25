@@ -68,6 +68,16 @@ class CorpusEntry:
     #: DECLARED goal that does not trip is a scenario no longer measuring what it claims -- and that
     #: direction is the one that rots silently, because rephrasing a goal is exactly the sort of
     #: tidy-up nobody re-checks.
+    #:
+    #: IT SPEAKS FOR THE GOAL ONLY, AND A STEP IS A DIFFERENT SURFACE. `keyword_read=False` does NOT
+    #: mean the row cannot manufacture over-gating: the classifier also runs over what a STEP
+    #: touches, and nothing here declares that. Measured on `gitea-search`, which is
+    #: `keyword_read=False` and whose learned recipe still carries `mutating_steps: 1` from source
+    #: `keyword` -- the `press Enter` that submits the search. The mutation gate did not refuse it,
+    #: so this is a recorded fact rather than a defect (D0: a `mutating` mark is a GUESS; be
+    #: conservative because of one, never refuse a flow for one). It is written down because a
+    #: reviewer reading the flag alone would conclude the opposite, and because it makes this the
+    #: first Gitea row that can exercise the over-gating path at all.
     keyword_read: bool = False
     #: WRITES ONLY: how the product knows the write LANDED, and (opt-in) how it knows it already had.
     #:
@@ -189,14 +199,54 @@ def _issue_title(n: int):
                                 f"/repos/{sub.user}/{sub.repo}/issues/{n}")["title"]
 
 
+#: THE TERM `gitea-search` LOOKS FOR, and the reason it is a constant rather than a literal typed
+#: into two places. It appears in the goal AND in the expected-answer helper; if those two drift the
+#: scenario silently asks for one thing and grades another.
+#:
+#: WHY IT IS A BODY TERM (R4.101). It used to be "marmalade", which is in issue 3's TITLE — so the
+#: answer was visible on the start page, the agent read it off without acting, and the run produced a
+#: **zero-step** flow. Nothing was cached (`flow.py` caches only `if success and steps:`), and the
+#: benchmark scored `not_authored`: a loud, product-blaming verdict for a task the agent got exactly
+#: right. Worse, the scenario measured no search at all while being named for one.
+#:
+#: MEASURED, and the two facts that make the premise hold:
+#:   * the issue LIST renders titles only — 0 occurrences of any seeded body string on that page;
+#:   * Gitea's issue search DOES reach bodies — `?q=16-bit` returns issue 2 and nothing else.
+#: So the answer cannot be had from the start page and at least one action is required, whether the
+#: agent searches or clicks through the issues. Either strategy is a pass; the point is that a
+#: recipe EXISTS to replay.
+#:
+#: `16-bit` was chosen over the other body terms for three reasons, all checked:
+#:   * it occurs in exactly one body and in **no title** (asserted offline against `substrates.ISSUES`);
+#:   * its issue is OPEN, so the answer survives an agent that drops the `state=all` filter while
+#:     searching — a closed target would have made this scenario secretly test two things;
+#:   * its title is not any OTHER scenario's expected answer, so a lucky constant cannot score twice.
+SEARCH_TERM = "16-bit"
+
+
 def _search_title(term: str):
+    """The title of the ONE issue mentioning `term`, matched over title AND body.
+
+    IT DOES NOT ASK THE API TO SEARCH, and that is the correction R4.101's fix forced. `?q=` on the
+    issues API matches **titles only**; the web UI's issue search also reaches BODIES — measured,
+    `?q=16-bit` returns issue 2 in the browser and nothing at all through the API. So the oracle and
+    the agent were consulting two different indexes, and they agreed only because the old term lived
+    in a title. The moment the term moved into a body to make the scenario discriminating, the
+    expected answer became uncomputable — loudly, which is why this was caught in seconds rather
+    than mis-grading a live run.
+
+    The server is still the source of truth: every issue is fetched from it, with its real body. What
+    moved into the harness is the MATCHING, which is the corpus's own definition of the task and not
+    something the substrate has to agree with.
+    """
     def go(sub) -> str:
-        hits = _issues(sub, q=term)
+        hits = [i for i in _issues(sub)
+                if term.lower() in f"{i['title']} {i.get('body') or ''}".lower()]
         if len(hits) != 1:
             raise O.OracleError(
-                f"the corpus expects exactly one issue matching {term!r}; the substrate holds "
-                f"{len(hits)}. A search scenario whose answer is not unique cannot distinguish a "
-                f"correct answer from a lucky one.")
+                f"the corpus expects exactly one issue whose title or body mentions {term!r}; "
+                f"the substrate holds {len(hits)}. A search scenario whose answer is not unique "
+                f"cannot distinguish a correct answer from a lucky one.")
         return hits[0]["title"]
     return go
 
@@ -224,12 +274,29 @@ GITEA = (
         oracle=lambda s: O.GiteaReadOracle(s, "gitea-open-issue"),
         expected_answer=_issue_title(3)),
     CorpusEntry(
+        # THE ANSWER MUST NOT BE ON THE START PAGE, or this measures extraction and calls it search
+        # (R4.101). `SEARCH_TERM` lives in a body, and the list renders titles only — both measured.
+        #
+        # AND THE EVIDENCE MUST BE ON THE SAME FINAL PAGE AS THE ANSWER. Two wordings failed here
+        # before this one, both by ending on the filtered LIST — and measured, there is no list state
+        # where both facts are present: the search term lives in the input's `value` (not in the
+        # page text) and the body is not rendered at all, so `?q=16-bit` shows exactly one row and
+        # nothing on the page ties it to "16-bit". The product then refused rather than asserting a
+        # match it could not verify, which is inviolable #2 working. Ending on the ISSUE page fixes
+        # it: `/issues/2` carries the term 3x and the title 4x. The rule generalises — an extraction
+        # task must finish somewhere that holds the evidence AND the answer.
+        # The two refusals, quoted because they are the product being RIGHT: "No issue mentioning
+        # 16-bit sources on this page; only 'Alpha channel lost on export' is listed", then "No
+        # search results for '16-bit'; the only listed issue is 'Alpha channel lost on export'".
+        # Both name the correct row and decline to claim it matches. That is not a bug to route
+        # around; it is the reason the scenario has to end on a page that can settle the question.
         scenario=Scenario(name="gitea-search", substrate="gitea",
-                          goal="find the issue about marmalade and report its title",
+                          goal=f'find the issue whose description mentions "{SEARCH_TERM}", '
+                               f'open it, and report its title',
                           url_path="/bench/acme/issues?state=all"),
         truth=ScenarioTruth(name="gitea-search"),
         oracle=lambda s: O.GiteaReadOracle(s, "gitea-search"),
-        expected_answer=_search_title("marmalade")),
+        expected_answer=_search_title(SEARCH_TERM)),
     CorpusEntry(
         # THE IN-SUBSTRATE CONTROL GROUP. Its Odoo twin is the navigation Odoo does not promote; here
         # it is the plainest possible read. If this one fails, the failure is not about drift or

@@ -62,6 +62,19 @@ class _Fake:
             # DERIVED FROM THE NUMBER, so a cell that supplies its own issues does not have to know
             # this field exists — and `oldest` still means `#1`, as the real seed makes it mean.
             i.setdefault("created_at", f"2026-01-{15 + i['number']:02d}T09:00:00Z")
+            # THE REAL API RETURNS A BODY, so the fake must too. It did not, and that was invisible
+            # until the search term moved into one (R4.101): `_search_title` then matched over
+            # `title + body` and every cell using this fake started computing a blank answer.
+            i.setdefault("body", "")
+        if issues is None:
+            # THE SEARCH TOKEN LIVES IN A BODY, exactly where the real seed puts it, and is taken
+            # from the corpus rather than retyped. A literal here would be a second place to edit,
+            # and the failure mode is silent: the fake would still serve three plausible issues and
+            # the corpus's search answer would simply become uncomputable. Imported lazily for the
+            # reason `corpus_oracles` does it — this module is imported by `test_corpus`, which the
+            # corpus does not import back, and the deferral keeps that one-way.
+            from benchmarks.corpus import SEARCH_TERM
+            self.issues[1]["body"] = f"Only for {SEARCH_TERM} sources."
         #: {issue number: [(login, body), …]}
         self.comments = dict(comments or {})
 

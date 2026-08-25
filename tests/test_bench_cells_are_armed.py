@@ -25,6 +25,7 @@ import pytest
 
 from benchmarks import customer_bench as CB
 from benchmarks import outcomes as O
+from benchmarks import corpus as C
 from benchmarks import scored_run as SR
 from tests import _arming
 from tests._arming import assert_red
@@ -32,6 +33,7 @@ import tests.test_bench_outcomes as TO
 import tests.test_scored_run as TSR
 import tests.test_bench_record as TR
 import tests.test_login_discrimination as TLD
+import tests.test_search_premise as TSP
 
 
 # ---------------------------------------------------------------------------------------------
@@ -53,6 +55,16 @@ def mutate_value(monkeypatch, name: str, value) -> None:
 def mutate_scored_run(monkeypatch, name: str, find: str, repl: str) -> None:
     """The same harness aimed at `benchmarks/scored_run.py` — the RUNNER, not the vocabulary."""
     _arming.mutate_function(monkeypatch, SR, name, find, repl)
+
+
+def mutate_corpus_value(monkeypatch, name: str, value) -> None:
+    """Rebind a constant in `benchmarks/corpus.py`.
+
+    `SEARCH_TERM` is the only one so far, and mutating it is the honest test: the scenario's GOAL is
+    an f-string evaluated at import, so rebinding the constant afterwards leaves the goal frozen —
+    which is precisely how the two drift apart in real life.
+    """
+    _arming.mutate_value(monkeypatch, C, name, value)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -874,3 +886,45 @@ def test_the_replay_gate_notices_a_failed_reset_replaying_anyway(monkeypatch) ->
                       'if out.get("learned") and not harness_error:',
                       'if out.get("learned"):')
     print(assert_red(TLD.test_a_failed_inter_phase_reset_skips_the_replay))
+
+
+# ---------------------------------------------------------------------------------------------
+# `gitea-search` MUST REQUIRE A SEARCH (R4.101, half one)
+#
+# Each mutation is a term that really could be chosen, and each breaks the premise a DIFFERENT way.
+# The first restores the shipped defect exactly.
+# ---------------------------------------------------------------------------------------------
+
+def test_the_premise_notices_a_term_that_lives_in_a_title(monkeypatch) -> None:
+    """THE SHIPPED DEFECT: "marmalade" is issue 3's title, so the answer is on the start page, the
+    agent acts zero times, nothing is cached and a correct answer scores `not_authored`."""
+    mutate_corpus_value(monkeypatch, "SEARCH_TERM", "marmalade")
+    print(assert_red(TSP.test_the_search_term_appears_in_no_title))
+
+
+def test_the_premise_notices_a_term_matching_more_than_one_issue(monkeypatch) -> None:
+    """A non-unique answer cannot tell a correct reply from a lucky one."""
+    mutate_corpus_value(monkeypatch, "SEARCH_TERM", "the")
+    print(assert_red(TSP.test_the_search_term_appears_in_exactly_one_body))
+
+
+def test_the_premise_notices_a_target_that_is_closed(monkeypatch) -> None:
+    """"cursor" is in issue 6's body and issue 6 is CLOSED — the row would then also be testing
+    whether the agent preserved `state=all`, and a failure would not say which thing broke."""
+    mutate_corpus_value(monkeypatch, "SEARCH_TERM", "cursor")
+    print(assert_red(TSP.test_the_target_issue_is_open))
+
+
+def test_the_premise_notices_the_goal_and_the_term_drifting_apart(monkeypatch) -> None:
+    """The goal is built from the term at IMPORT, so rebinding it afterwards is exactly the drift:
+    the scenario asks for one thing and is graded on another, both halves looking reasonable."""
+    mutate_corpus_value(monkeypatch, "SEARCH_TERM", "staging")
+    print(assert_red(TSP.test_the_goal_and_the_expected_answer_use_the_same_term))
+
+
+def test_the_premise_notices_an_answer_another_scenario_already_expects(monkeypatch) -> None:
+    """"distinctive" is issue 3's body — and issue 3's title is `gitea-open-issue`'s expected answer,
+    so one constant reply would score two rows. It is in no title and in exactly one body, which is
+    what makes it isolate THIS cell rather than tripping the others first."""
+    mutate_corpus_value(monkeypatch, "SEARCH_TERM", "distinctive")
+    print(assert_red(TSP.test_the_search_target_is_not_another_scenarios_answer))

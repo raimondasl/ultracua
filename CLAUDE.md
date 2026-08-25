@@ -1078,6 +1078,44 @@ six combined, because a failing learn spends its whole budget before returning n
   stop scanning text, assert the property. A cell comparing two source offsets to pin handler ORDER
   went red on the comment explaining the fix. Handler order is a fact about the AST; read it there.
 
+## A search scenario that required no search — and an extraction task must end where the evidence is (0.127.0)
+
+R4.101 half one. `gitea-search` looked for "marmalade", which is in an issue TITLE, so the answer was
+on the start page: the agent answered correctly in **0 steps**, `flow.py` caches only
+`if success and steps:`, and a correct answer scored **`not_authored`**. The scenario measured no
+search at all while being named for one.
+
+* **THE PREMISE IS ASSERTED OFFLINE, AGAINST THE COMMITTED SEED.** `SEARCH_TERM` is single-sourced
+  (the goal is an f-string over it, so the goal and the expected answer cannot drift), and
+  `tests/test_search_premise.py` derives five facts from `substrates.ISSUES` with no container: the
+  term is in **no title**, in **exactly one body**, its issue is **OPEN**, its title is **no other
+  scenario's answer**, and the goal still names it. That is the Odoo rule — *a premise that makes a
+  scenario discriminating is ASSERTED, not assumed* — finally written for Gitea.
+* **AN EXTRACTION TASK MUST END ON A PAGE HOLDING BOTH THE EVIDENCE AND THE ANSWER.** Two wordings
+  failed before the third, both by ending on the filtered LIST, and **no list state can satisfy
+  them**: the search term lives in the input's `value` rather than the page text, and bodies are not
+  rendered. So `?q=16-bit` shows exactly one row with nothing tying it to the term, and the product
+  refused both times — *"the only listed issue is 'Alpha channel lost on export'"*, naming the right
+  row and declining to claim it matched. **That is inviolable #2 working, not an obstacle to route
+  around.** Ending on the ISSUE page settles it (term 3x, title 4x). Measured: **0 steps /
+  `not_authored` -> 3 steps / `ok`**.
+* **THE ORACLE AND THE AGENT WERE SEARCHING DIFFERENT INDEXES, and only a title term hid it.**
+  `_search_title` asked the API to search; `?q=` on the issues API matches **titles only**, while the
+  web UI reaches BODIES — `?q=16-bit` returns issue 2 in a browser and nothing at all through the
+  API. Agreement was a coincidence of the old term. The fix keeps the server as the source of truth
+  (fetch every issue, real bodies) and moves the MATCHING into the harness, where the corpus's own
+  definition of the task belongs.
+* **A FAKE THAT OMITS A FIELD IS A FAKE THAT AGREES BY ACCIDENT.** `tests/test_oracles.py`'s Gitea
+  fake served issues with no `body` at all. Invisible while matching was title-only; the moment the
+  term moved, every cell using it computed a blank expected answer. The fake now carries bodies and
+  takes the token from `corpus.SEARCH_TERM` rather than retyping it.
+* **`keyword_read` SPEAKS FOR THE GOAL, NOT FOR A STEP.** `gitea-search` is `keyword_read=False` and
+  its learned recipe still carries `mutating_steps: 1` from source `keyword` — the `press Enter` that
+  submits the search. The gate did not refuse, so this is D0 territory (a `mutating` mark is a GUESS;
+  be conservative because of one, never refuse a flow for one) and it is recorded rather than fixed.
+  Worth knowing twice over: a reviewer reading the flag alone would conclude the row cannot
+  manufacture over-gating, and this is the first Gitea row that can reach that path at all.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
