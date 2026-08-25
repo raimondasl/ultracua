@@ -1021,6 +1021,63 @@ carrying an `Idempotency-Key`.
   scanning TEXT and assert the property instead — every `IdempotencyProxy(...)` in the file is
   constructed with the loopback stub — which caught a real one on its first working run.
 
+## Gitea runs, and the login was lying in the safe direction (0.126.0)
+
+Seven of the fourteen corpus scenarios had never been driven. Driving them cost **$1.12** across eight runs and found
+five defects, three of them in the bench's own login. The six non-timer learns mean **$0.044**,
+which confirms the previous slice's guess that Gitea would be cheaper than Odoo's $0.101 — the
+DOM is smaller. The two `gitea-start-timer` runs cost **$0.86 between them**, more than the other
+six combined, because a failing learn spends its whole budget before returning nothing.
+
+* **A SELECTOR LIST MATCHES IF ANY BRANCH DOES, WHICH IS HOW A CHECK GETS DISARMED BY A HELPFUL
+  FALLBACK (R4.98).** Gitea's `success_selector` was `".dashboard, #navbar"`, and `#navbar` is on
+  the logged-OUT page — measured 1. So `_login_succeeded` returned True having authenticated nobody,
+  `storage_state` carried no session, and every scenario would have run ANONYMOUSLY. **The blast
+  radius is the asymmetry this register keeps re-filing:** the issue list serves HTTP 200 with all
+  14 issue-row links to an anonymous visitor, so **all five Gitea reads would have scored green**;
+  only the writes bite (the time-tracker control: 0 matches anonymously). Reads unaffected, writes
+  fatal — the same sentence as 1.8's premise ordering and R4.90's HTTP leak. Its sibling (R4.97)
+  was the opposite error in the same dict: `button[type=submit]` matched **nothing**, because Gitea's
+  control is a `<button>` with no `type` and a CSS attribute selector matches the ATTRIBUTE, not the
+  HTML default.
+* **SO THE SENSOR IS A DIFFERENTIAL AND TAKES NO NEW DECLARATION.**
+  `assert_login_discriminates` interrogates the SAME `success_selector` the product uses, on the
+  same page, with and without the session: absent anonymously, present authenticated, and the submit
+  control reachable. One function rather than two callable halves, precisely so both always run —
+  R4.86's `warm_assets` lesson on a third surface. A `,` in a `success_selector` is ALSO pinned
+  offline, because the live half needs a container and the mechanism can be refused at edit time.
+* **ATTRIBUTE BY WHERE IT HAPPENED, NOT BY EXCEPTION TYPE (R4.99).** `_Record.harness_error` was
+  hard-coded `""` and nothing ever set it, so B3's whole `harness` family was unreachable from this
+  runner: a broken login published **`not_authored`**, a loud SCORED verdict blaming the product for
+  the bench's own misdeclaration. `classify` had the right clause all along — "a harness fault still
+  wins: if the reset or the login broke" — and it could not fire. The fix is a PHASE, not another
+  `except`: authenticate-and-observe is its own `try` that records `harness_error` and skips the
+  learn, so a fault added tomorrow is attributed by position. **Check both directions when you touch
+  this** — a fix that routed everything to `harness` would pass its own cell while silently
+  reverting R4.96.
+* **SHIP THE INSTRUMENT THE DIAGNOSIS USED (R4.100).** R4.94 was diagnosed by counting **LLM calls**
+  against the budget, and the sensor that shipped read `len(res.steps)` — the CAPTURED steps. They
+  agree only while the agent records an action per turn, and disagree exactly when it records none,
+  which is the case the sensor exists for. Measured: `llm_calls` 20, `step_budget` 20, `steps` 0,
+  `hit_step_ceiling` **false**. The evidence was already in the previous slice's own artifact and
+  was read past. It paid for itself the same hour: the corrected sensor is what let budget
+  starvation be RULED OUT as the cause of `gitea-start-timer` failing, rather than assumed.
+* **THE SUBSTRATE CONTRAST IS REAL AND IT IS LARGE.** Gitea reads: `mutating_steps` **0**, no
+  gating, four of five `ok`. Odoo reads: 3-4 mutating steps from JSON-RPC POSTs, the mutation gate
+  refusing every 0-LLM replay, `over_gated`. And `gitea-comment` is the first scenario anywhere in
+  this benchmark to demonstrate the whole product claim end to end — a real write, learned in 2
+  steps, **replayed at 0 LLM calls**, gate not refusing, server holding exactly one comment.
+* **A ZERO-ACTION TASK PRODUCES NO RECIPE, AND THE VOCABULARY CALLS THAT A PRODUCT FAILURE
+  (R4.101, OPEN).** `gitea-search` answers correctly in **0 steps** — the target issue is already on
+  the start page — so nothing is cached and the run scores `not_authored`. Two problems that must
+  not be fixed together: the scenario cannot measure search (and with 7 issues on one page, no
+  `url_path` makes it), and `not_authored` reads as the product failing when the truth is that the
+  task has no automation value to measure. **Settle it before `baselines/customer_v1.json` is
+  written** — it is a permanent 1-in-7 on Gitea's availability that is not a product failure.
+* **A SCAN MATCHED ITS OWN PROSE FOR THE FOURTH TIME**, and the fix is the one already written down:
+  stop scanning text, assert the property. A cell comparing two source offsets to pin handler ORDER
+  went red on the comment explaining the fix. Handler order is a fact about the AST; read it there.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

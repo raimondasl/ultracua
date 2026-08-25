@@ -84,10 +84,23 @@ LOGIN = {
     "odoo": dict(path="/web/login", user=S.ODOO_LOGIN, password=S.ODOO_PASSWORD,
                  username_selector="input[name=login]", password_selector="input[name=password]",
                  submit_selector="button[type=submit]", success_selector=".o_web_client"),
+    # BOTH SELECTORS HERE WERE WRONG, IN THE TWO DIRECTIONS A LOGIN CAN BE WRONG (R4.97, R4.98).
+    #
+    # `submit_selector` was `button[type=submit]`, which matches NOTHING: Gitea's control is
+    # `<button class="ui primary button">` with no `type` attribute. A `<button>` inside a form
+    # submits by default per HTML semantics, but a CSS attribute selector matches the ATTRIBUTE, not
+    # the computed default. Measured: 0 matches, and `_form_login` raised — correctly, naming this
+    # exact remedy in its message.
+    #
+    # `success_selector` was `".dashboard, #navbar"`, which matches ALWAYS: `#navbar` is on the
+    # logged-OUT login page. A selector LIST matches if any branch does, so the fallback branch
+    # disarmed the check entirely and the login could only ever report success. `.dashboard` alone
+    # is the discriminator — measured 0 logged out, 1 logged in.
     "gitea": dict(path="/user/login", user="bench", password=S.GITEA_PASSWORD,
                   username_selector="input[name=user_name]",
                   password_selector="input[name=password]",
-                  submit_selector="button[type=submit]", success_selector=".dashboard, #navbar"),
+                  submit_selector="form button.ui.primary.button",
+                  success_selector=".dashboard"),
 }
 
 
@@ -148,6 +161,80 @@ def spec_for(entry, base_url: str, storage_state: str, max_steps: int = MAX_STEP
                         submit_selector=cfg["submit_selector"],
                         success_selector=cfg["success_selector"]),
     )
+
+
+class _PreflightFailed(RuntimeError):
+    """The harness could not get the run to a fair starting line, so the learn is SKIPPED.
+
+    A private control-flow signal, not an outcome: `harness_error` is already recorded when this is
+    raised, and `classify` reads that field. It exists so the skip travels through the same `try`
+    the learn uses without being mistaken for the agent failing — the mistake R4.99 was.
+    """
+
+
+async def _login_page_facts(url: str, storage_state, cfg, headless: bool) -> tuple:
+    """Count what the declared selectors match on the login page. Pure observation, no judgement."""
+    session = await BrowserSession(headless=headless, storage_state=storage_state).start()
+    try:
+        await session.goto(url)
+        page = session.page
+        return (await page.locator(cfg["success_selector"]).count(),
+                await page.locator(cfg["submit_selector"]).count())
+    finally:
+        await session.close()
+
+
+async def assert_login_discriminates(cfg, base_url: str, *, substrate: str, authenticate,
+                                     storage_state: str, headless: bool = True) -> None:
+    """Prove the declared login selectors can tell the two worlds apart — BOTH directions (R4.98).
+
+    THE DEFECT THIS EXISTS FOR CANNOT BE SEEN FROM ONE SIDE. Gitea's `success_selector` was
+    `".dashboard, #navbar"` and `#navbar` is on the logged-OUT page, so `_login_succeeded` returned
+    True having authenticated nobody. Everything downstream then ran ANONYMOUSLY with a
+    `storage_state` carrying no session — and `/bench/acme/issues?state=all` serves HTTP 200 with
+    every issue row to an anonymous visitor, so all five Gitea READS would have scored green. Only
+    the writes would have bitten (the time-tracker control: 0 matches anonymously). Reads
+    unaffected, writes fatal, which is exactly why it would have survived to the first write.
+
+    SO THE SENSOR IS A DIFFERENTIAL, and it is one function rather than two callable halves
+    precisely so both always run — the same reason R4.86's `warm_assets` guard had to compare an
+    authenticated page against an anonymous one instead of counting what it found. It takes NO new
+    declaration: both halves interrogate the SAME `success_selector` the product itself uses, on the
+    same page, with and without the session. A substrate added tomorrow is covered because the facts
+    come from the `LOGIN` table rather than from a list maintained here.
+
+    It runs BEFORE the spend, so a misdeclared login costs a browser launch and not a learn, and it
+    raises `SubstrateNotReady` — a HARNESS fault, which R4.99 makes the runner attribute correctly
+    instead of blaming the agent for it.
+    """
+    url = base_url + cfg["path"]
+
+    anon_hits, submits = await _login_page_facts(url, None, cfg, headless)
+    if submits == 0:
+        raise S.SubstrateNotReady(
+            f"{substrate}: submit_selector {cfg['submit_selector']!r} matches NOTHING on "
+            f"{url}.\n    The login cannot be driven, so no scenario on this substrate can run. "
+            f"Check the served page — a `<button>` with no `type` attribute is not matched by "
+            f"`button[type=submit]` (R4.97).")
+    if anon_hits:
+        raise S.SubstrateNotReady(
+            f"{substrate}: success_selector {cfg['success_selector']!r} already matches "
+            f"{anon_hits} element(s) on {url} while LOGGED OUT.\n    It cannot distinguish a "
+            f"successful login from a failed one, so the login would report success having "
+            f"authenticated nobody and every scenario would run anonymously (R4.98). Pick a "
+            f"selector that is absent before login — and note a selector LIST matches if ANY "
+            f"branch does, which is how this one was disarmed.")
+
+    await authenticate()
+
+    auth_hits, _ = await _login_page_facts(url, storage_state, cfg, headless)
+    if auth_hits == 0:
+        raise S.SubstrateNotReady(
+            f"{substrate}: the login reported success, but {url} fetched WITH the stored session "
+            f"still does not match success_selector {cfg['success_selector']!r}.\n    The session "
+            f"did not stick, so the run would proceed anonymously. This is the affirmative half of "
+            f"the check: refusing here costs a browser launch, and not refusing costs a scored "
+            f"number that measures the wrong world.")
 
 
 async def _first_observation(url: str, storage_state: str, headless: bool = True):
@@ -218,14 +305,51 @@ async def score_one(name: str, *, reset: bool = True, headless: bool = True,
         cache = FlowCache(root=Path(cache_dir) if cache_dir else Path(tmp) / "cache")
 
         started = time.monotonic()
+        # --- THE PREFLIGHT IS ITS OWN PHASE, AND THAT IS THE WHOLE FIX (R4.99) -------------------
+        #
+        # Authenticating and observing the start page are the HARNESS's job. They used to sit inside
+        # the learn's `try`, whose handler says "a failing agent IS a result" — so a broken login, an
+        # unrendered page or a failed reset set `agent_error`, `learned` stayed false, and the record
+        # published `not_authored`: a LOUD, SCORED verdict blaming the PRODUCT for the bench's own
+        # fault. Reproduced against the real `classify` before fixing, for both a read and a write.
+        #
+        # `classify` always had the right clause — "a harness fault still wins: if the reset or the
+        # login broke, the learn never got a fair attempt" — and it could not fire, because nothing
+        # ever set `harness_error`. That is CLAUDE.md's stated predictor: a guard that exists on a
+        # sibling path (B2's arm sets the field) and was never applied to this mechanism.
+        #
+        # ATTRIBUTION BY POSITION, NOT BY EXCEPTION TYPE. Anything that fails in here is the
+        # harness's, so a fault added tomorrow is attributed by WHERE it happened and needs no new
+        # `except` clause to classify it — which is the shape this register keeps asking for instead
+        # of one more per-case branch.
+        harness_error = ""
+        # BOUND BEFORE THE PHASES, because a skipped learn now assigns NEITHER arm. Until R4.99 both
+        # of the learn's exits set these, so the absence of an initialiser was invisible; adding a
+        # third exit (`except _PreflightFailed: pass`) made it a NameError on the first harness
+        # failure — i.e. exactly the run this slice exists to make work. False is the honest value:
+        # the agent did not run.
+        agent_ran, agent_error = False, ""
         with BoundaryLedger() as ledger:
             try:
                 # Deterministic and BEFORE the spend: a login that fails must not cost a learn.
-                await refresh_auth(spec, headless=headless)
+                await assert_login_discriminates(
+                    LOGIN[entry.scenario.substrate], proxy.base_url,
+                    substrate=entry.scenario.substrate, headless=headless,
+                    storage_state=spec.storage_state,
+                    authenticate=lambda: refresh_auth(spec, headless=headless))
                 obs = await _first_observation(spec.start_url, spec.storage_state,
                                                headless=headless)
                 S.assert_not_a_skeleton(obs, substrate=entry.scenario.substrate, scenario=name)
                 out["first_observation_elements"] = len(getattr(obs, "elements", ()) or ())
+            except Exception as exc:              # noqa: BLE001 - the HARNESS failed, not the agent
+                harness_error = f"{type(exc).__name__}: {exc}"
+                out["harness_error"] = harness_error
+
+            try:
+                if harness_error:
+                    # NOT a learn. Skipping the spend is the point: the preflight exists so a
+                    # misconfigured substrate costs a browser launch rather than an LLM run.
+                    raise _PreflightFailed(harness_error)
 
                 # THE PREMISE BELONGS TO THE PHASE THAT IS SCORED, and for a WRITE that is not
                 # this one. A learn PERFORMS the write, so a premise taken before it and adjudicated
@@ -253,14 +377,33 @@ async def score_one(name: str, *, reset: bool = True, headless: bool = True,
                 # the artifact instead of needing a substrate query and a config lookup to recover.
                 out["steps"] = len(res.steps or ())
                 out["step_budget"] = spec.max_steps
-                out["hit_step_ceiling"] = len(res.steps or ()) >= (spec.max_steps or MAX_STEPS)
                 if res.cached:
                     approve(spec, cache=cache)
                 agent_ran, agent_error = True, ""
+            except _PreflightFailed:
+                # The harness already recorded why. `agent_ran` stays False because the agent was
+                # never given a fair attempt — which is precisely what `classify`'s clause 2 reads.
+                pass
             except Exception as exc:              # noqa: BLE001 - a failing agent IS a result
                 agent_ran, agent_error = True, f"{type(exc).__name__}: {exc}"
                 out["agent_error"] = agent_error
         usage = ledger.usage()
+        # THE CEILING IS MEASURED IN TURNS CONSUMED, NOT IN STEPS CAPTURED (R4.100).
+        #
+        # R4.94 diagnosed the budget defect by counting LLM CALLS — "both write learns used exactly 8
+        # against `settings.max_steps` = 8" — and then shipped the sensor reading `len(res.steps)`.
+        # Those two agree only when the agent captures an action per turn, and they disagree in
+        # exactly the case the sensor exists for: an agent that spends the whole budget and records
+        # NOTHING. Measured on `gitea-start-timer`: `llm_calls` 20, `step_budget` 20, `steps` 0, and
+        # `hit_step_ceiling` reported **false**. The evidence was already in the previous slice's own
+        # artifact (`steps: 0, step_budget: 3, hit_step_ceiling: false`) and was read past.
+        #
+        # `steps` stays what it is — the length of the RECIPE, which is what replay would re-drive.
+        # The ceiling is a fact about the RUN, so it is computed here, where the run's turns are
+        # known, rather than inside the learn where only the recipe is.
+        budget = spec.max_steps or MAX_STEPS
+        out["hit_step_ceiling"] = usage.calls >= budget
+        out.setdefault("step_budget", budget)
         # --- THE REPLAY, WHICH IS FREE AND IS WHERE THE HEADLINE NUMBER LIVES -------------------
         #
         # The learn is the spend; the REPLAY is the product's actual claim — 0-LLM, deterministic,
@@ -275,14 +418,30 @@ async def score_one(name: str, *, reset: bool = True, headless: bool = True,
             # replay is scored against a clean world and one landed record means one write.
             # `odoo-idempotent-replay` declares the exception: resetting would delete the already-
             # done state whose suppression it exists to measure, turning it into an ordinary create.
+            #
+            # AND THE INTER-PHASE RESET IS A HARNESS STEP TOO — found by this slice's own
+            # adversarial pass, which mapped every call to its enclosing `try` and found this one
+            # inside NONE. A failure here propagated out of `score_one` and killed the process,
+            # which would be tolerable before the spend and is not tolerable here: the learn has
+            # already been PAID FOR, so the crash discards a record that cost money and says
+            # nothing about why. It also aborts a 14-scenario run at row 3 instead of marking that
+            # row unscored and continuing, which is B3's "second door where the agent never ran".
+            #
+            # Attribution by position again: whatever fails in here is the harness's, the replay is
+            # skipped, and the record keeps every fact the learn produced.
             if reset and not entry.replay_needs_the_learned_world:
-                substrate.reset()
-                substrate.await_ready()
-                # The reset restored the database under the session; re-authenticating is free and
-                # makes the replay's starting condition identical to the learn's.
-                await refresh_auth(spec, headless=headless)
+                try:
+                    substrate.reset()
+                    substrate.await_ready()
+                    # The reset restored the database under the session; re-authenticating is free
+                    # and makes the replay's starting condition identical to the learn's.
+                    await refresh_auth(spec, headless=headless)
+                except Exception as exc:      # noqa: BLE001 - the HARNESS failed, not the agent
+                    harness_error = f"inter-phase reset: {type(exc).__name__}: {exc}"
+                    out["harness_error"] = harness_error
             out["replay_world"] = ("as the learn left it"
                                    if entry.replay_needs_the_learned_world else "reset")
+        if out.get("learned") and not harness_error:
             before = oracle.premise()
             out["premise_rows"] = before.count
             proxy.reset()                  # the replay is a separate PHASE; B2's rule 3, for evidence
@@ -364,6 +523,7 @@ async def score_one(name: str, *, reset: bool = True, headless: bool = True,
         scored = outcomes.classify(
             entry.truth,
             _Record(agent_ran, agent_error, out.get("replay", {}).get("ok"), replay_code,
+                    harness_error=harness_error,
                     authored=out.get("learned")),
             bench,
             gate=outcomes.GateEvidence(**out["gate"]) if out.get("gate") else None)
@@ -403,14 +563,19 @@ class _Record:
     """The minimum `outcomes.classify` reads, duck-typed exactly as it documents."""
 
     def __init__(self, agent_ran: bool, agent_error: str, claimed, code: str = "",
-                 authored=None) -> None:
+                 authored=None, harness_error: str = "") -> None:
         #: Tri-state. False only when a learn RAN and produced no replayable flow — never inferred
         #: from the absence of data, because "nothing came back" has several causes and only the
         #: runner knows which. B3 mints `not_authored` from an affirmative False and nothing else.
         self.authored = authored
         self.agent_ran = agent_ran
         self.agent_error = agent_error
-        self.harness_error = ""
+        #: SET BY THE RUNNER, and hard-coded empty until R4.99. B3 puts the `harness` family in
+        #: `UNSCORED_FAMILIES`, so a truthy value here deletes the row from every denominator rather
+        #: than scoring it — the correct answer when the bench, not the product, is what failed.
+        #: The direction of the old defect is worth keeping in mind: it did not flatter the product,
+        #: it BLAMED it, publishing `not_authored` for a login the bench had misdeclared.
+        self.harness_error = harness_error
         # The REPLAY's refusal code, not the learn's: the replay is the product's real claim, and a
         # read refused there by the write machinery is exactly `over_gated`.
         self.agent_error_code = code
