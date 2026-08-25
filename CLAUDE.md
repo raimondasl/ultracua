@@ -1180,6 +1180,46 @@ diagnosis cost **nothing** and took three probes, because the first question was
   applied on purpose rather than learned again: a fix has to be validated against the same count that
   found the defect, and a number recovered from terminal scrollback is not a baseline.
 
+## The corpus runs end to end, and one pass is not a baseline (B5, 0.130.0)
+
+`benchmarks/corpus_run.py` loops the corpus, mints one bench record and gates it. Both substrates
+completed for the first time. **$2.32 across three passes**, one of which was thrown away.
+
+* **THE SUBSTRATE CONTRAST IS THE HEADLINE, and it is large.** Gitea `availability_rate` **0.857**
+  (reads **1.000** over 5, writes 0.500), Odoo **0.143** (reads 0.200, writes 0.000), with
+  `over_gated` on three Odoo reads carrying code `drift` -- R4.27's JSON-RPC misfiling, priced.
+* **BUT THE ODOO NUMBERS ARE SUSPECT BY THE CORPUS'S OWN RULE.** `odoo-menu-nav` is the declared
+  in-substrate CONTROL GROUP -- "if this one fails, the failure is not about drift or saturation,
+  and every other number on this substrate is suspect" -- and it failed, 0 steps at the ceiling.
+  Three of seven Odoo scenarios hit `MAX_STEPS`. Read the control before reading the mean.
+* **ONE PASS CANNOT BE A BASELINE, and this is the measurement rather than the principle.**
+  `odoo-create-lead` learned in **6 steps** in an isolated run at 0.125.0 and captured **0 steps**
+  here at the same budget. Same scenario, same corpus, same `MAX_STEPS`. That is the flake-versus-
+  regression question B3 refuses to gate a single flip over, arriving with a number attached.
+* **A DEAD ROW MUST NOT VANISH.** A scenario that raises is recorded as a HARNESS row, so the
+  denominator always equals the corpus. Dropping it would raise the mean -- R4.96 one level up, with
+  a dead container as the cause instead of a failed learn. `build_bench_record` also REFUSES a
+  corpus in which nothing was scored, which is what turned a total crash into a loud error rather
+  than a published 0.0.
+* **A STUB CANNOT SEE A CHANGED RETURN TYPE.** `score_one` moved from `classify` (returns a
+  `Verdict`) to `adjudicate` (returns a `Scored` wrapping one) and kept reading `.outcome` off the
+  wrapper. Every scenario raised -- AFTER paying for its learn, because that read is the last
+  statement -- and **~$0.60 was discarded**. The batch's own cells script `score_one`, so they
+  exercised the shape intended rather than the shape produced. The guard that replaces them derives
+  from the AST and the real class, with no stub between. Note its first draft cried wolf: two
+  `adjudicate` methods are in scope and `oracle.adjudicate()` legitimately has `.satisfied`, so the
+  match is on the RECEIVER, not the method name.
+* **A GUARD BUILT ON A REDIRECT ASSUMPTION BLOCKED A WHOLE SUBSTRATE.** `assert_login_discriminates`
+  required the success marker to be PRESENT on a logged-in fetch of the login path. Gitea redirects
+  `/user/login` to `/`; **Odoo re-serves `/web/login`**, where `.o_web_client` is never present --
+  measured at 0.0/0.5/1/2/3/5 s, zero throughout, so not a settle. All 7 Odoo rows refused at
+  preflight for **$0.00**, which is the phase boundary working. The half was REMOVED: `refresh_auth`
+  already raises `LoginFailedError` on the page the submit LANDED on, so the product owns the
+  affirmative check and the removed code was re-asking it on the wrong page. **And every cheap
+  portable replacement passes for the wrong reason** -- the only authenticated-ONLY cookies are
+  `lang` (Gitea) and `cids` (Odoo), a locale preference and a UI setting, while the real session
+  cookies are set for anonymous visitors on both.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
