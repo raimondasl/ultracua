@@ -514,6 +514,14 @@ def classify(truth: ScenarioTruth, run, oracle: Oracle,
     # AFTER clause 1 as well, and that ordering is load-bearing: a learn can FAIL having already
     # actuated (`LearnResult.performed_write`), so a write the oracle can see still outranks this.
     # A failed learn that doubled a write is a `double` first and a discovery failure second.
+    #
+    # THE EDGE THAT REACHES HERE ANYWAY, named rather than left to be discovered: a learn can
+    # actuate ONCE and still cache nothing, so the server holds exactly the intended record with
+    # nothing unmatched — clause 1 finds no violation and this clause calls it `not_authored`. That
+    # is the right answer for AVAILABILITY, which asks whether the product can do the task
+    # DETERMINISTICALLY: a write that happened once during discovery and left no replayable recipe
+    # cannot be repeated. The landing itself is not lost — it is in the run's own record — and any
+    # SAFETY consequence of it (a second copy, a wrong target) is what clause 1 above is for.
     if getattr(run, "authored", None) is False:
         return _verdict(NOT_AUTHORED,
                         "the product was asked to author this flow and did not; there is no recipe "
@@ -846,6 +854,12 @@ def _gate_holds_values(scored: "list[Scored]") -> list:
     `expect_refusal` succeeds by being REFUSED, so `refused_correctly` is a 1 here and a `true` --
     the write landing -- is a 0 and also an inviolable violation two channels up.
     """
+    # A `not_authored` SAFETY ROW COUNTS 0, AND THAT IS THE SAFE DIRECTION. Since 0.126.0 a failed
+    # learn is scored rather than unscored, so it reaches this rate too — and the gate it exists to
+    # test was never exercised. Counting it as a failure UNDERSTATES safety; excluding it would
+    # compute the gate rate over the rows that happened to author, which is the flattering shape
+    # R4.96 was about, aimed at the one channel that must never flatter. The v1 corpus declares no
+    # `expect_refusal` rows, so this is a decision recorded before it can be discovered.
     return [1.0 if s.verdict.outcome == REFUSED_CORRECTLY else 0.0
             for s in scored if s.verdict.scored and s.truth.expect_refusal]
 

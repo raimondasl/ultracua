@@ -121,7 +121,7 @@ def _mutate_spec(entry, base_url: str):
     return MutateSpec(**kwargs)
 
 
-def spec_for(entry, base_url: str, storage_state: str) -> FlowSpec:
+def spec_for(entry, base_url: str, storage_state: str, max_steps: int = MAX_STEPS) -> FlowSpec:
     """A `FlowSpec` for one corpus entry, pointed at `base_url`.
 
     `base_url` is the PROXY, not the substrate: only the agent goes through it, so the evidence sees
@@ -139,7 +139,7 @@ def spec_for(entry, base_url: str, storage_state: str) -> FlowSpec:
         goal=entry.scenario.goal,
         extract=None if entry.truth.mutating else entry.scenario.goal,
         mutate=_mutate_spec(entry, base_url),
-        max_steps=MAX_STEPS,
+        max_steps=max_steps,
         storage_state=storage_state,
         headless=True,
         login=LoginSpec(url=base_url + cfg["path"], username_env=USER_ENV, password_env=PASS_ENV,
@@ -184,7 +184,7 @@ async def _first_observation(url: str, storage_state: str, headless: bool = True
 
 
 async def score_one(name: str, *, reset: bool = True, headless: bool = True,
-                    cache_dir: "str | None" = None) -> dict:
+                    cache_dir: "str | None" = None, max_steps: "int | None" = None) -> dict:
     entry = next((e for s in ("gitea", "odoo") for e in corpus.for_substrate(s)
                   if e.scenario.name == name), None)
     if entry is None:
@@ -207,7 +207,8 @@ async def score_one(name: str, *, reset: bool = True, headless: bool = True,
             # The runner wires it; the corpus deliberately does not assume a proxy exists.
             oracle.evidence = proxy.evidence
 
-        spec = spec_for(entry, proxy.base_url, str(Path(tmp) / "auth.json"))
+        spec = spec_for(entry, proxy.base_url, str(Path(tmp) / "auth.json"),
+                        max_steps=max_steps or MAX_STEPS)
         # PERSISTENT WHEN ASKED, because `benchmark-plan` §4 is "learn once, replay N times" and a
         # throwaway cache makes every re-score pay for another learn. The flow key is derived from
         # goal+start_url+scope, and `start_url` carries the proxy's EPHEMERAL port — so a reused cache
@@ -251,8 +252,8 @@ async def score_one(name: str, *, reset: bool = True, headless: bool = True,
                 # while reading as the latter. Recording the pair makes the difference legible in
                 # the artifact instead of needing a substrate query and a config lookup to recover.
                 out["steps"] = len(res.steps or ())
-                out["step_budget"] = MAX_STEPS
-                out["hit_step_ceiling"] = len(res.steps or ()) >= MAX_STEPS
+                out["step_budget"] = spec.max_steps
+                out["hit_step_ceiling"] = len(res.steps or ()) >= (spec.max_steps or MAX_STEPS)
                 if res.cached:
                     approve(spec, cache=cache)
                 agent_ran, agent_error = True, ""
@@ -422,11 +423,14 @@ def main(argv=None) -> int:
     ap.add_argument("--no-reset", action="store_true")
     ap.add_argument("--headed", action="store_true")
     ap.add_argument("--cache", default=None, help="persist the learned flow here (see score_one)")
+    ap.add_argument("--max-steps", type=int, default=None, dest="max_steps",
+                    help="override the declared step budget (see MAX_STEPS)")
     ap.add_argument("--out", default=None,
                     help="append the record as one JSON line, so a paid run survives the terminal")
     args = ap.parse_args(argv)
     result = asyncio.run(score_one(args.scenario, reset=not args.no_reset,
-                                   headless=not args.headed, cache_dir=args.cache))
+                                   headless=not args.headed, cache_dir=args.cache,
+                                   max_steps=args.max_steps))
     if args.out:
         # ONE LINE, APPENDED. A run that cost real money and exists only in a scrollback is a
         # measurement you will re-buy: four `odoo-sort-list` records had to be recovered by grepping
