@@ -69,6 +69,29 @@ class CorpusEntry:
     #: direction is the one that rots silently, because rephrasing a goal is exactly the sort of
     #: tidy-up nobody re-checks.
     keyword_read: bool = False
+    #: WRITES ONLY: how the product knows the write LANDED, and (opt-in) how it knows it already had.
+    #:
+    #: A `MutateSpec` requires at least one `confirm_*` -- "a write that can't be confirmed is
+    #: fire-and-hope" -- so a write scenario that declares none cannot be learned at all. Held here
+    #: rather than in the runner because it is a fact about the SCENARIO, exactly like the goal and
+    #: the expected answer, and the runner is meant to drive the corpus rather than annotate it.
+    #:
+    #: DECLARATIVE, not `MutateSpec` kwargs, so `corpus.py` stays free of engine types and
+    #: `precheck_path` can stay relative -- the absolute URL depends on which base the AGENT is
+    #: pointed at, and under the evidence proxy that is an ephemeral port. Keys: `text`, `selector`,
+    #: `precheck_path`, `precheck_text`. Every value below was MEASURED against a live substrate
+    #: before it was written down; `gitea-start-timer`'s was wrong by one character of case on the
+    #: first attempt ("Stop timer" for "Stop Timer"), which would have turned a write learn into a
+    #: paid failure.
+    write_confirm: Optional[dict] = None
+    #: Must the REPLAY see the world the LEARN left behind?
+    #:
+    #: False for every scenario but one, and the default is the common case: the harness resets
+    #: between phases so the replay writes onto a clean world and the oracle sees exactly one record.
+    #: `odoo-idempotent-replay` is the exception BY DEFINITION -- it exists to check that a replay
+    #: over an ALREADY-DONE write suppresses the duplicate, so resetting first would delete the very
+    #: state it is about and turn the scenario into an ordinary create.
+    replay_needs_the_learned_world: bool = False
 
     def __post_init__(self) -> None:
         if self.scenario.name != self.truth.name:
@@ -85,6 +108,20 @@ class CorpusEntry:
             raise O.OracleError(
                 f"{self.scenario.name}: a write declares an expected ANSWER. A write is adjudicated "
                 f"by what landed on the server, not by what the agent said about it.")
+        if self.truth.mutating and not self.write_confirm:
+            raise O.OracleError(
+                f"{self.scenario.name}: a write declares no `write_confirm`. `MutateSpec` requires at "
+                f"least one confirm — a write that cannot be confirmed is fire-and-hope, and the "
+                f"engine refuses to learn one.")
+        if not self.truth.mutating and self.write_confirm:
+            raise O.OracleError(
+                f"{self.scenario.name}: a READ declares `write_confirm`. Asserted both ways because "
+                f"the runner builds a `MutateSpec` from it, and a read that carried one would be "
+                f"learned as a WRITE — manufacturing the over-gating this corpus exists to measure.")
+        if self.replay_needs_the_learned_world and not self.truth.mutating:
+            raise O.OracleError(
+                f"{self.scenario.name}: a read asks the replay to see the learn's world. Nothing a "
+                f"read leaves behind can matter, so this is a declaration nobody can act on.")
         if not self.truth.mutating and self.expected_answer is None:
             raise O.OracleError(
                 f"{self.scenario.name}: a read declares no expected answer, so `data_correct` would "
@@ -211,7 +248,9 @@ GITEA = (
                           goal='comment "looks right to me" on issue 1',
                           url_path="/bench/acme/issues/1", mutating=True),
         truth=ScenarioTruth(name="gitea-comment", mutating=True),
-        oracle=lambda s: O.GiteaCommentOracle(s, 1, "looks right to me", "gitea-comment")),
+        oracle=lambda s: O.GiteaCommentOracle(s, 1, "looks right to me", "gitea-comment"),
+        # The comment body itself is on the issue page once it lands. Measured.
+        write_confirm={"text": "looks right to me"}),
     CorpusEntry(
         # A REAL WRITE WITH NO ENCLOSING FORM — the plan's reason for including it. The product
         # cannot see it via `form_method`, and "Start timer" does not trip the keyword classifier
@@ -221,7 +260,12 @@ GITEA = (
                           goal="start the time tracker on issue 1",
                           url_path="/bench/acme/issues/1", mutating=True),
         truth=ScenarioTruth(name="gitea-start-timer", mutating=True),
-        oracle=lambda s: O.GiteaTimerOracle(s, 1, "gitea-start-timer")),
+        oracle=lambda s: O.GiteaTimerOracle(s, 1, "gitea-start-timer"),
+        # A STRUCTURAL confirm, and the reason is a measurement. A running stopwatch shows none of
+        # the obvious words -- the visible label is "Stop Timer", and the first attempt guessed
+        # "Stop timer", wrong by one character of case. Diffing the issue page with and without a
+        # running timer gave `.issue-stop-time`, which is immune to both that and to i18n.
+        write_confirm={"selector": ".issue-stop-time"}),
 )
 
 
@@ -399,7 +443,10 @@ ODOO = (
                           goal='create a new lead named "Bench probe lead"',
                           url_path=ODOO_LEADS, mutating=True),
         truth=ScenarioTruth(name="odoo-create-lead", mutating=True),
-        oracle=lambda s: O.OdooLeadOracle(s, "Bench probe lead", "odoo-create-lead")),
+        oracle=lambda s: O.OdooLeadOracle(s, "Bench probe lead", "odoo-create-lead"),
+        # NO PRECHECK, deliberately: this scenario measures a write landing, and a precheck would
+        # make a replay over a reset world indistinguishable from one that skipped.
+        write_confirm={"text": "Bench probe lead"}),
     CorpusEntry(
         # REPLAY OF A LANDED WRITE. Its oracle carries `INCOMPLETE_WITHOUT`: from the server side,
         # "the mechanism ran and suppressed the second write" and "`_precheck_done` returned
@@ -410,7 +457,16 @@ ODOO = (
                           url_path=ODOO_LEADS, mutating=True),
         truth=ScenarioTruth(name="odoo-idempotent-replay", mutating=True),
         oracle=lambda s: O.OdooIdempotentReplayOracle(
-            s, "Bench idempotency probe", "odoo-idempotent-replay")),
+            s, "Bench idempotency probe", "odoo-idempotent-replay"),
+        # THE PRECHECK IS THE SUBJECT. `_precheck_done` visits `precheck_url` and skips the write if
+        # the end-state is already there -- and the whole point of this row is that skipping is
+        # indistinguishable, from the server, from a correctly suppressed duplicate. Measured: the
+        # Leads action lists a freshly created lead by name (the Opportunities action does NOT, since
+        # a new lead is `type=lead`), so the precheck must be pointed at the former.
+        write_confirm={"text": "Bench idempotency probe",
+                       "precheck_path": ODOO_LEADS,
+                       "precheck_text": "Bench idempotency probe"},
+        replay_needs_the_learned_world=True),
 )
 
 CORPORA = {"gitea": GITEA, "odoo": ODOO}

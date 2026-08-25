@@ -268,3 +268,64 @@ def test_the_marker_scan_notices_it_moving_outside_the_mutating_branch() -> None
     """)
     sites, guarded = _gate_marker_sites(real)
     assert len(sites) == 1 and guarded, "the real shape must read as guarded"
+
+
+# ---------------------------------------------------------------------------------------------
+# the MutateSpec the runner builds
+# ---------------------------------------------------------------------------------------------
+
+def test_a_read_gets_no_mutate_spec_at_all() -> None:
+    """`spec.mutate is None` is what keeps `declares_write` False and the whole write machinery off
+    a read flow. A read that acquired one would manufacture the over-gating the corpus measures."""
+    assert SR._mutate_spec(_entry("odoo-sort-list"), "http://x") is None
+    assert SR.spec_for(_entry("odoo-sort-list"), "http://x", "/tmp/a").write.declares_write is False
+
+
+def test_a_write_gets_a_confirm_and_declares_itself() -> None:
+    spec = SR.spec_for(_entry("odoo-create-lead"), "http://x", "/tmp/a")
+    assert spec.write.declares_write is True
+    assert spec.mutate.confirm_text_contains == "Bench probe lead"
+    assert spec.mutate.precheck_url is None, "only the precheck scenario may declare one"
+
+
+def test_the_precheck_url_is_built_on_the_SAME_base_the_agent_uses() -> None:
+    """The agent is pointed at the evidence proxy, whose port is ephemeral. A precheck URL that
+    named a different origin would send `_already_committed` to look for the end-state somewhere the
+    run never touched — and it would report `already-done` never, or always, for the wrong reason."""
+    spec = SR.spec_for(_entry("odoo-idempotent-replay"), "http://127.0.0.1:5555", "/tmp/a")
+    assert spec.mutate.precheck_url.startswith("http://127.0.0.1:5555")
+    assert spec.start_url.startswith("http://127.0.0.1:5555")
+
+
+def test_the_selector_confirm_survives_the_translation() -> None:
+    """`gitea-start-timer` confirms structurally, because a running stopwatch shows no obvious text
+    — the visible label is "Stop Timer" and the first guess was wrong by one character of case."""
+    spec = SR.spec_for(_entry("gitea-start-timer"), "http://x", "/tmp/a")
+    assert spec.mutate.confirm_selector == ".issue-stop-time"
+    assert spec.mutate.confirm_text_contains is None
+
+
+def test_the_approval_is_read_from_the_sidecar_and_not_from_the_cached_flow() -> None:
+    """`approve()` writes through `_update_meta`, so the flag never lands on the CachedFlow. The
+    first draft read `cached.meta` and published `approved: null` for a flow it had just approved.
+
+    It changed no outcome on the run that exposed it, which is exactly why it needs a cell:
+    `GateEvidence.approved` is what separates "a lifecycle gate refused this read" from "the write
+    machinery did", and a wrong value there misdiagnoses the next `not_approved` run rather than the
+    one that produced it.
+    """
+    src = inspect.getsource(SR._gate_evidence)
+    assert "_load_meta" in src, "the approval is being read from the wrong object again"
+    assert 'getattr(cached, "meta"' not in src
+
+
+def test_the_step_budget_is_declared_by_the_bench_and_recorded() -> None:
+    """`settings.max_steps` is 8, and BOTH attempts at `odoo-create-lead` used exactly 8 calls and
+    cached nothing — a harness limit that read as the agent failing the task. The budget is the
+    bench's to declare, and every record carries it plus whether the run ended AT it."""
+    assert SR.MAX_STEPS > 8, "the budget must not silently inherit the global that caused this"
+    spec = SR.spec_for(_entry("odoo-create-lead"), "http://x", "/tmp/a")
+    assert spec.max_steps == SR.MAX_STEPS
+    src = inspect.getsource(SR.score_one)
+    for field in ("hit_step_ceiling", "step_budget"):
+        assert field in src, f"a run no longer records {field!r}"
