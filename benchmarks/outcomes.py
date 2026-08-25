@@ -69,7 +69,29 @@ OK = "ok"
 WRONG_DATA = "wrong_data"
 REFUSED = "refused"
 OVER_GATED = "over_gated"
-READ_OUTCOMES = (OK, WRONG_DATA, REFUSED, OVER_GATED)
+
+#: THE PRODUCT WAS ASKED TO AUTHOR A FLOW AND COULD NOT. Shared by both vocabularies, because it
+#: happens in the LEARN phase, before a scenario is a read or a write.
+#:
+#: WHY IT IS A SCORED OUTCOME AND NOT `unscored`. Discovery failure is a first-class measured
+#: quantity here -- `benchmark-plan` §6 budgets a **52-60%** rate and prices the "failure tax" of
+#: learns that fail and still cost money. Routed to `unscored`, every one of those rows leaves every
+#: denominator, and `availability_rate` is then computed over the scenarios that happened to work:
+#: the headline answers "of the tasks we could author, how many replay?" while being read as "how
+#: many of these tasks can the product do?". At the budgeted rate that is roughly a DOUBLING of the
+#: number, in the flattering direction, with nothing in the record contradicting it.
+#:
+#: THE COVERAGE CHANNEL DOES NOT COVER THIS. It fails a run whose rows are unscored unless each
+#: `(scenario, reason)` pair is ACKNOWLEDGED -- and a discovery failure is exactly the kind of thing
+#: an operator would acknowledge, because it is expected and recurring. Acknowledging it is what
+#: deletes it from the denominator. So the fix cannot live in the gate; the row has to not be
+#: unscored in the first place.
+#:
+#: NOT MINTED BY INFERENCE. `classify` reads an affirmative `run.authored is False`, never the
+#: absence of data -- "the agent produced nothing" has several causes and only the runner knows
+#: which. That is the same rule that keeps `suppressed` off an arm whose agent simply did not act.
+NOT_AUTHORED = "not_authored"
+READ_OUTCOMES = (OK, WRONG_DATA, REFUSED, OVER_GATED, NOT_AUTHORED)
 
 # Writes.
 TRUE = "true"
@@ -78,13 +100,18 @@ DOUBLE = "double"
 SUPPRESSED = "suppressed"
 REFUSED_CORRECTLY = "refused_correctly"
 REFUSED_WRONGLY = "refused_wrongly"
-WRITE_OUTCOMES = (TRUE, INCORRECT_TARGET, DOUBLE, SUPPRESSED, REFUSED_CORRECTLY, REFUSED_WRONGLY)
+WRITE_OUTCOMES = (TRUE, INCORRECT_TARGET, DOUBLE, SUPPRESSED, REFUSED_CORRECTLY, REFUSED_WRONGLY,
+                  NOT_AUTHORED)
 
 # The extra state on BOTH, and the one that is not a verdict. Named once so a reader cannot mistake
 # it for a bad result: an unscored scenario is removed from every denominator, in both directions.
 UNSCORED = "unscored"
 
-ALL_OUTCOMES = READ_OUTCOMES + WRITE_OUTCOMES + (UNSCORED,)
+# DEDUPED, because `NOT_AUTHORED` is deliberately in BOTH vocabularies -- it happens in the learn
+# phase, before a scenario is a read or a write. A plain concatenation listed it twice, which made
+# `build_bench_record`'s explicit-zeros dict shorter than the tuple and would have silently dropped
+# one column of the counts. Order-preserving, so the record's key order stays stable across runs.
+ALL_OUTCOMES = tuple(dict.fromkeys(READ_OUTCOMES + WRITE_OUTCOMES + (UNSCORED,)))
 
 # RULE 2. The closed set a nightly gate may pass in silence. Everything else is reported; a member
 # added here is a deliberate decision to stop looking at something.
@@ -476,6 +503,21 @@ def classify(truth: ScenarioTruth, run, oracle: Oracle,
         return _unscored("harness_error", ev, detail=run.harness_error)
     if fam in UNSCORED_FAMILIES:
         return _unscored("harness_refusal", ev, detail=getattr(run, "agent_error", ""))
+
+    # 2b. THE PRODUCT COULD NOT AUTHOR THE FLOW -- a RESULT, not an excuse.
+    #
+    # AFTER clause 2, so a harness fault still wins: if the reset or the login broke, the learn never
+    # got a fair attempt and blaming the product for it is the attribution error this module is built
+    # around. BEFORE clause 3, because "we could not ask the oracle" is not what happened -- the
+    # oracle is fine and the answer is that there is nothing to replay.
+    #
+    # AFTER clause 1 as well, and that ordering is load-bearing: a learn can FAIL having already
+    # actuated (`LearnResult.performed_write`), so a write the oracle can see still outranks this.
+    # A failed learn that doubled a write is a `double` first and a discovery failure second.
+    if getattr(run, "authored", None) is False:
+        return _verdict(NOT_AUTHORED,
+                        "the product was asked to author this flow and did not; there is no recipe "
+                        "to replay, so the scenario's purpose was not achieved", ev)
 
     # 3. UNANSWERABLE. "The server says nothing changed" is a finding; "we could not ask" is not.
     if not oracle.available:

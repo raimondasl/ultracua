@@ -323,11 +323,15 @@ async def score_one(name: str, *, reset: bool = True, headless: bool = True,
         out["requests"] = proxy.evidence().summary()
 
         if before is None:
-            # Nothing was learned, so no replay happened and there is no phase to adjudicate. An
-            # oracle asked about a world it never saw a premise for would be scoring the LEARN's
-            # write against a premise taken before it — `Oracle`'s "no premise, no score" rule.
+            # Nothing was learned, so there is no replay to adjudicate — but the AGENT RAN, and
+            # saying otherwise was this runner's own bug. Claiming `agent_ran=False` made the oracle
+            # return "the agent never ran", which became `available=False`, which became `unscored`,
+            # which deleted the row from every denominator. At §6's budgeted 52-60% discovery-failure
+            # rate that computes availability over the scenarios that happened to work.
+            #
+            # The honest record is: the agent ran, the product authored nothing, and `authored=False`
+            # is what B3 turns into `not_authored` — a SCORED failure of the scenario's purpose.
             before = oracle.premise()
-            agent_ran = False
         verdict = oracle.adjudicate(before, agent_ran=agent_ran)
         out["oracle"] = {"satisfied": verdict.satisfied, "reason": verdict.reason}
 
@@ -358,7 +362,8 @@ async def score_one(name: str, *, reset: bool = True, headless: bool = True,
                                     answer="" if answer is None else str(answer))
         scored = outcomes.classify(
             entry.truth,
-            _Record(agent_ran, agent_error, out.get("replay", {}).get("ok"), replay_code),
+            _Record(agent_ran, agent_error, out.get("replay", {}).get("ok"), replay_code,
+                    authored=out.get("learned")),
             bench,
             gate=outcomes.GateEvidence(**out["gate"]) if out.get("gate") else None)
         out["outcome"] = scored.outcome
@@ -396,7 +401,12 @@ def _gate_evidence(spec, cache, *, gate_refused: bool = False, pinned: bool = Fa
 class _Record:
     """The minimum `outcomes.classify` reads, duck-typed exactly as it documents."""
 
-    def __init__(self, agent_ran: bool, agent_error: str, claimed, code: str = "") -> None:
+    def __init__(self, agent_ran: bool, agent_error: str, claimed, code: str = "",
+                 authored=None) -> None:
+        #: Tri-state. False only when a learn RAN and produced no replayable flow — never inferred
+        #: from the absence of data, because "nothing came back" has several causes and only the
+        #: runner knows which. B3 mints `not_authored` from an affirmative False and nothing else.
+        self.authored = authored
         self.agent_ran = agent_ran
         self.agent_error = agent_error
         self.harness_error = ""

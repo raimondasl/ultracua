@@ -134,7 +134,13 @@ def test_the_quiet_set_is_an_allowlist_and_unscored_is_not_in_it() -> None:
         "an unscored scenario would read as a pass, so a run where nothing could be adjudicated "
         "would gate green")
     loud = sorted(set(O.ALL_OUTCOMES) - O.QUIET_OUTCOMES - {O.UNSCORED})
-    assert len(loud) == 8, f"expected 8 loud outcomes, got {loud}"
+    # NINE SINCE 0.126.0. `not_authored` joined both vocabularies -- the product being asked to
+    # author a flow and failing is a RESULT, and routing it to `unscored` deleted it from every
+    # denominator. At §6's budgeted 52-60% discovery-failure rate that computed the availability
+    # headline over the scenarios that happened to work. The literal stays: a vocabulary that grows
+    # without a red test is one nobody re-argued.
+    assert len(loud) == 9, f"expected 9 loud outcomes, got {loud}"
+    assert O.NOT_AUTHORED in loud, "a failed discovery must never be quiet"
     print(f"quiet={sorted(O.QUIET_OUTCOMES)}  loud={loud}  excluded={O.UNSCORED!r}")
 
 

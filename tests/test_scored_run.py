@@ -164,12 +164,13 @@ def test_a_WRITE_scenario_never_reaches_the_over_gated_clause() -> None:
 
 
 class _Run:
-    def __init__(self, code=""):
+    def __init__(self, code="", authored=None, harness=""):
         self.agent_ran = True
         self.agent_error = "DriftError: ..." if code else ""
-        self.harness_error = ""
+        self.harness_error = harness
         self.agent_error_code = code
         self.claimed_complete = None
+        self.authored = authored
 
 
 # ---------------------------------------------------------------------------------------------
@@ -329,3 +330,59 @@ def test_the_step_budget_is_declared_by_the_bench_and_recorded() -> None:
     src = inspect.getsource(SR.score_one)
     for field in ("hit_step_ceiling", "step_budget"):
         assert field in src, f"a run no longer records {field!r}"
+
+
+# ---------------------------------------------------------------------------------------------
+# a failed learn is a RESULT, not a row that leaves the denominator
+# ---------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("mutating", [False, True])
+def test_a_failed_learn_is_scored_rather_than_deleted_from_the_denominator(mutating) -> None:
+    """THE FLATTERING BUG, both vocabularies.
+
+    `unscored` removes a row from every rate. §6 budgets a 52-60% discovery-failure rate, so routing
+    failed learns there computes `availability_rate` over the scenarios that happened to work —
+    answering "of the tasks we could author, how many replay?" while being read as "how many of
+    these tasks can the product do?". Roughly a doubling, in the flattering direction.
+
+    And the coverage channel does not save it: that fails a run unless each unscored `(scenario,
+    reason)` pair is ACKNOWLEDGED, and a recurring, expected discovery failure is exactly what an
+    operator would acknowledge — which is the act that deletes it.
+    """
+    v = O.classify(O.ScenarioTruth(name="x", mutating=mutating),
+                   _Run(authored=False), O.Oracle(available=True))
+    assert v.outcome == O.NOT_AUTHORED
+    assert v.scored is True, "a discovery failure must stay in the denominator"
+    assert v.outcome not in O.QUIET_OUTCOMES, "and it must not read as a pass"
+
+
+def test_a_harness_fault_still_outranks_a_failed_learn() -> None:
+    """If the reset or the login broke, the learn never got a fair attempt, and blaming the product
+    for it is the attribution error this whole module is arranged against."""
+    v = O.classify(O.ScenarioTruth(name="x"), _Run(authored=False, harness="reset failed"),
+                   O.Oracle(available=True))
+    assert v.outcome == O.UNSCORED and "harness" in v.reason
+
+
+def test_a_violation_the_oracle_can_see_still_outranks_a_failed_learn() -> None:
+    """A learn can FAIL having already actuated (`LearnResult.performed_write`), so a write the
+    server is holding is the more specific statement about what the product did."""
+    v = O.classify(O.ScenarioTruth(name="x", mutating=True), _Run(authored=False),
+                   O.Oracle(available=True, matched=("a", "b")))
+    assert v.outcome == O.DOUBLE
+
+
+def test_not_authored_is_never_minted_by_inference() -> None:
+    """`authored` is tri-state and `None` means "no claim". An arm that does not learn at all — a
+    pure-LLM baseline — must not have every scenario relabelled a discovery failure."""
+    v = O.classify(O.ScenarioTruth(name="x"), _Run(authored=None),
+                   O.Oracle(available=False, unavailable_reason="no proxy"))
+    assert v.outcome == O.UNSCORED
+
+
+def test_the_runner_reports_what_it_learned_and_never_claims_the_agent_did_not_run() -> None:
+    """The runner's own half. Its first draft set `agent_ran=False` for a failed learn — a statement
+    that is simply false, and the route by which the row reached `unscored`."""
+    src = inspect.getsource(SR.score_one)
+    assert "authored=out.get(\"learned\")" in src, "the runner no longer reports what it authored"
+    assert "agent_ran = False" not in src, "the runner claims the agent did not run again"

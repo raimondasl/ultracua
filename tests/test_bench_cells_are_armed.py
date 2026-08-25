@@ -750,3 +750,38 @@ def test_the_over_gated_clause_notices_it_outranking_the_data_verdict(monkeypatc
         + chr(10) + "    if oracle.data_correct is True:")
     print(assert_red(
         TSR.test_a_read_that_answered_correctly_is_still_ok_even_if_the_gate_refused))
+
+# ---------------------------------------------------------------------------------------------
+# a failed learn must not leave the denominator
+# ---------------------------------------------------------------------------------------------
+
+def test_the_denominator_cell_notices_a_failed_learn_going_back_to_unscored(monkeypatch) -> None:
+    """THE MUTATION THAT IS THE BUG. Route discovery failure to `unscored` and every one of those
+    rows leaves every rate -- at section 6's budgeted 52-60% failure rate, `availability_rate` is
+    then computed over the scenarios that happened to work, roughly doubling the headline in the
+    flattering direction."""
+    mutate_function(monkeypatch, "classify",
+                    '        return _verdict(NOT_AUTHORED,',
+                    '        return _unscored("not_authored", ev) or _verdict(NOT_AUTHORED,')
+    print(assert_red(TSR.test_a_failed_learn_is_scored_rather_than_deleted_from_the_denominator,
+                     False))
+
+
+def test_the_ordering_cell_notices_a_failed_learn_outranking_a_harness_fault(monkeypatch) -> None:
+    """If the reset broke, the learn never had a fair attempt. Hoisting this clause above clause 2
+    publishes the bench's own breakage as a product discovery failure."""
+    mutate_function(monkeypatch, "classify",
+                    '    if getattr(run, "harness_error", ""):',
+                    '    if getattr(run, "authored", None) is False:'
+                    + chr(10) + '        return _verdict(NOT_AUTHORED, "no recipe", ev)'
+                    + chr(10) + '    if getattr(run, "harness_error", ""):')
+    print(assert_red(TSR.test_a_harness_fault_still_outranks_a_failed_learn))
+
+
+def test_the_inference_cell_notices_not_authored_being_minted_from_absence(monkeypatch) -> None:
+    """`authored` is tri-state and `None` means no claim. Reading it as falsy would relabel every
+    scenario of a pure-LLM arm -- which never learns at all -- a product discovery failure."""
+    mutate_function(monkeypatch, "classify",
+                    '    if getattr(run, "authored", None) is False:',
+                    '    if not getattr(run, "authored", None):')
+    print(assert_red(TSR.test_not_authored_is_never_minted_by_inference))
