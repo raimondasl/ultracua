@@ -53,6 +53,7 @@ from ultracua.flows import (                                  # noqa: E402
 from ultracua.browser import BrowserSession                   # noqa: E402
 
 from benchmarks import corpus                                  # noqa: E402
+from benchmarks.customer_bench import ScenarioRun             # noqa: E402
 from benchmarks import outcomes                                # noqa: E402
 from benchmarks import substrates as S                         # noqa: E402
 from benchmarks.boundary_ledger import BoundaryLedger          # noqa: E402
@@ -196,15 +197,32 @@ async def assert_login_discriminates(cfg, base_url: str, *, substrate: str, auth
     the writes would have bitten (the time-tracker control: 0 matches anonymously). Reads
     unaffected, writes fatal, which is exactly why it would have survived to the first write.
 
-    SO THE SENSOR IS A DIFFERENTIAL, and it is one function rather than two callable halves
-    precisely so both always run — the same reason R4.86's `warm_assets` guard had to compare an
-    authenticated page against an anonymous one instead of counting what it found. It takes NO new
-    declaration: both halves interrogate the SAME `success_selector` the product itself uses, on the
-    same page, with and without the session. A substrate added tomorrow is covered because the facts
-    come from the `LOGIN` table rather than from a list maintained here.
+    WHAT IT CHECKS is that the declared selectors can DISCRIMINATE: the submit control must exist,
+    and the success marker must be ABSENT on the anonymous login page. It takes no new declaration --
+    it interrogates the same `success_selector` the product itself uses.
+
+    IT USED TO ALSO RE-FETCH THE LOGIN PAGE WITH THE SESSION and require the marker to be PRESENT,
+    and that half was REMOVED at 0.130.0 because it was built on a false premise. It assumed a
+    logged-in visit to the login path lands somewhere that shows the marker. Gitea does redirect
+    `/user/login` to `/`; **Odoo does not** -- it re-serves `/web/login`, where `.o_web_client` is
+    never present. Measured at 0.0s, 0.5s, 1s, 2s, 3s and 5s: zero throughout, so it was not a settle
+    problem either. The result was a false refusal that blocked the ENTIRE Odoo corpus at preflight.
+
+    AND NOTHING WAS LOST, which is the only reason removing a guard is the right move here.
+    `refresh_auth` raises `LoginFailedError` when `_login_succeeded` is False, and that check runs on
+    the page the submit LANDED on -- `/web` for Odoo, where the marker is present. Given the
+    anonymous half above guarantees the selector discriminates, the product's own check IS the
+    affirmative half. The removed code was re-asking the same question on the wrong page.
+
+    THE CHEAP PORTABLE ALTERNATIVES WERE MEASURED AND ALL PASS FOR THE WRONG REASON. A cookie
+    differential looks obvious and is worthless: the only authenticated-ONLY cookie is `lang` on
+    Gitea and `cids` on Odoo -- a locale preference and a UI setting -- while the real session
+    cookies (`i_like_gitea`, `session_id`) are set for ANONYMOUS visitors on both. A check that
+    passes because of a locale cookie is the defect class this benchmark keeps filing, one instrument
+    over.
 
     It runs BEFORE the spend, so a misdeclared login costs a browser launch and not a learn, and it
-    raises `SubstrateNotReady` — a HARNESS fault, which R4.99 makes the runner attribute correctly
+    raises `SubstrateNotReady` -- a HARNESS fault, which R4.99 makes the runner attribute correctly
     instead of blaming the agent for it.
     """
     url = base_url + cfg["path"]
@@ -225,16 +243,11 @@ async def assert_login_discriminates(cfg, base_url: str, *, substrate: str, auth
             f"selector that is absent before login — and note a selector LIST matches if ANY "
             f"branch does, which is how this one was disarmed.")
 
+    # AND THEN JUST AUTHENTICATE. `refresh_auth` raises `LoginFailedError` if `_login_succeeded`
+    # is False, and it evaluates the SAME `success_selector` on the page the submit actually landed
+    # on -- so with the check above guaranteeing that selector discriminates, the product's own
+    # check is the affirmative half. There is nothing left for this function to add.
     await authenticate()
-
-    auth_hits, _ = await _login_page_facts(url, storage_state, cfg, headless)
-    if auth_hits == 0:
-        raise S.SubstrateNotReady(
-            f"{substrate}: the login reported success, but {url} fetched WITH the stored session "
-            f"still does not match success_selector {cfg['success_selector']!r}.\n    The session "
-            f"did not stick, so the run would proceed anonymously. This is the affirmative half of "
-            f"the check: refusing here costs a browser launch, and not refusing costs a scored "
-            f"number that measures the wrong world.")
 
 
 async def _first_observation(url: str, storage_state: str, headless: bool = True):
@@ -520,21 +533,45 @@ async def score_one(name: str, *, reset: bool = True, headless: bool = True,
         out["scored_phase"] = "replay"
         bench = corpus.bench_oracle(entry, verdict, expected=expected,
                                     answer="" if answer is None else str(answer))
-        scored = outcomes.classify(
-            entry.truth,
-            _Record(agent_ran, agent_error, out.get("replay", {}).get("ok"), replay_code,
-                    harness_error=harness_error,
-                    # STRAIGHT OFF THE RECORD, and only when a learn actually ran. `out["steps"]` is
-                    # set in the learn's success arm alone, so `.get` returning None on a raised or
-                    # skipped learn is the honest "no observation" rather than a zero that would
-                    # read as "recorded no action".
-                    recipe_steps=out.get("steps"), learn_found=out.get("found"),
-                    authored=out.get("learned")),
-            bench,
+        # THE REAL `ScenarioRun`, NOT A DUCK-TYPE. It used to be a private `_Record` carrying only
+        # what `classify` reads, which was right while nothing else consumed it. A corpus RUN needs
+        # the same object to carry the SPEND as well (`build_bench_record` prices every row through
+        # `_usage_of`), and rebuilding a second object from this function's JSON dict would be two
+        # representations of one run with no derivation between them -- R4.88's shape. `ScenarioRun`
+        # is a strict superset of what `_Record` supplied, so the duck-type became a FACTORY for
+        # this same class (see below) rather than a parallel one.
+        run = ScenarioRun(
+            scenario=name, substrate=entry.scenario.substrate,
+            wall_s=out.get("wall_s", 0.0) or 0.0,
+            llm_calls=usage.calls, input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            per_model={m: tuple(v) for m, v in (getattr(usage, "per_model", None) or {}).items()},
+            accounting_failed=bool(getattr(usage, "accounting_failed", False)),
+            # THE LEDGER'S OWN VERDICT, not a guess: an unobserved router makes the cost UNKNOWN and
+            # `_cost_of` REFUSES rather than publishing a confident zero (1.3).
+            llm_accounting="observed" if ledger.observed else "unknown",
+            harness_error=harness_error,
+            agent_error=agent_error, agent_error_code=replay_code, agent_ran=agent_ran,
+            claimed_complete=out.get("replay", {}).get("ok"),
+            # STRAIGHT OFF THE RECORD, and only when a learn actually ran. `out["steps"]` is
+            # set in the learn's success arm alone, so `.get` returning None on a raised or
+            # skipped learn is the honest "no observation" rather than a zero that would
+            # read as "recorded no action".
+            recipe_steps=out.get("steps"), learn_found=out.get("found"),
+            authored=out.get("learned"))
+        scored = outcomes.adjudicate(
+            entry.truth, run, bench,
             gate=outcomes.GateEvidence(**out["gate"]) if out.get("gate") else None)
-        out["outcome"] = scored.outcome
-        out["outcome_reason"] = scored.reason
-    return out
+        # `.verdict.outcome`, NOT `.outcome`. `adjudicate` returns a `Scored` (truth + run +
+        # verdict); `classify`, which this used to call, returns the `Verdict` itself. Reading the
+        # verdict's fields off the wrapper raised `AttributeError` for every scenario in the first
+        # corpus run — AFTER each learn had been paid for, because this is the last statement.
+        out["outcome"] = scored.verdict.outcome
+        out["outcome_reason"] = scored.verdict.reason
+        return out, scored
+    # Nothing was adjudicated -- the caller gets the facts and no verdict, which is what an unscored
+    # row IS. A corpus run turns this into a `harness` family row rather than inventing one.
+    return out, None
 
 
 def _gate_evidence(spec, cache, *, gate_refused: bool = False, pinned: bool = False) -> dict:
@@ -564,34 +601,24 @@ def _gate_evidence(spec, cache, *, gate_refused: bool = False, pinned: bool = Fa
             "mutation_gate_refused": gate_refused, "substrate_pinned": pinned}
 
 
-class _Record:
-    """The minimum `outcomes.classify` reads, duck-typed exactly as it documents."""
+def _Record(agent_ran: bool, agent_error: str, claimed, code: str = "", authored=None,
+            harness_error: str = "", recipe_steps=None, learn_found=None,
+            scenario: str = "t", substrate: str = "gitea"):
+    """A `ScenarioRun` carrying only the fields `classify` reads. A FACTORY, not a second type.
 
-    def __init__(self, agent_ran: bool, agent_error: str, claimed, code: str = "",
-                 authored=None, harness_error: str = "", recipe_steps=None,
-                 learn_found=None) -> None:
-        #: Tri-state. False only when a learn RAN and produced no replayable flow — never inferred
-        #: from the absence of data, because "nothing came back" has several causes and only the
-        #: runner knows which. B3 mints `not_authored` from an affirmative False and nothing else.
-        self.authored = authored
-        #: WHY the learn authored nothing, as two raw observations off `LearnResult` — the step
-        #: count it recorded, and whether it completed the task anyway. `classify` combines them;
-        #: neither is a judgement here. Both stay None when no learn ran, which falls through to the
-        #: `not_authored` clause exactly as before.
-        self.recipe_steps = recipe_steps
-        self.learn_found = learn_found
-        self.agent_ran = agent_ran
-        self.agent_error = agent_error
-        #: SET BY THE RUNNER, and hard-coded empty until R4.99. B3 puts the `harness` family in
-        #: `UNSCORED_FAMILIES`, so a truthy value here deletes the row from every denominator rather
-        #: than scoring it — the correct answer when the bench, not the product, is what failed.
-        #: The direction of the old defect is worth keeping in mind: it did not flatter the product,
-        #: it BLAMED it, publishing `not_authored` for a login the bench had misdeclared.
-        self.harness_error = harness_error
-        # The REPLAY's refusal code, not the learn's: the replay is the product's real claim, and a
-        # read refused there by the write machinery is exactly `over_gated`.
-        self.agent_error_code = code
-        self.claimed_complete = claimed
+    It was a private dataclass until 0.130.0 -- "the minimum `classify` reads, duck-typed exactly as
+    it documents" -- which was right while nothing else consumed it. A corpus run needs the same
+    object to carry the SPEND too, and two objects describing one run with no derivation between
+    them is R4.88's shape. So the run itself is a real `ScenarioRun` now and this is a shorthand for
+    building one with the classification fields set and the usage fields left at zero.
+
+    Kept because the alternative is spelling out eleven keyword arguments in every classification
+    cell, where the whole point is which THREE of them differ between neighbouring rows.
+    """
+    return ScenarioRun(
+        scenario=scenario, substrate=substrate, agent_ran=agent_ran, agent_error=agent_error,
+        agent_error_code=code, claimed_complete=claimed, authored=authored,
+        harness_error=harness_error, recipe_steps=recipe_steps, learn_found=learn_found)
 
 
 def main(argv=None) -> int:
@@ -605,9 +632,9 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default=None,
                     help="append the record as one JSON line, so a paid run survives the terminal")
     args = ap.parse_args(argv)
-    result = asyncio.run(score_one(args.scenario, reset=not args.no_reset,
-                                   headless=not args.headed, cache_dir=args.cache,
-                                   max_steps=args.max_steps))
+    result, _scored = asyncio.run(score_one(
+        args.scenario, reset=not args.no_reset, headless=not args.headed,
+        cache_dir=args.cache, max_steps=args.max_steps))
     if args.out:
         # ONE LINE, APPENDED. A run that cost real money and exists only in a scrollback is a
         # measurement you will re-buy: four `odoo-sort-list` records had to be recovered by grepping

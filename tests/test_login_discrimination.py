@@ -77,17 +77,24 @@ def _drive(monkeypatch, cfg, *, anon: dict, authed: dict, authenticate=None):
 CFG = dict(path="/login", submit_selector="button.go", success_selector=".inside")
 
 
-def test_a_login_that_discriminates_is_accepted_and_both_halves_are_measured(monkeypatch):
-    """The happy path — and it must actually LOOK at both worlds, not just return."""
+def test_the_guard_interrogates_the_anonymous_page_and_then_authenticates(monkeypatch):
+    """The happy path. It observes ONE world — the anonymous one — and then hands off.
+
+    IT USED TO OBSERVE BOTH and require the marker PRESENT on a logged-in fetch of the login path.
+    That half was removed at 0.130.0: Gitea redirects `/user/login` to `/`, **Odoo does not**, and
+    the false refusal blocked the entire Odoo corpus at preflight. The affirmative check already
+    exists in the product — `refresh_auth` raises `LoginFailedError` when `_login_succeeded` is
+    False, evaluated on the page the submit LANDED on.
+    """
     seen, calls, pages = _drive(monkeypatch, CFG,
                                 anon={"button.go": 1, ".inside": 0},
                                 authed={"button.go": 0, ".inside": 1})
-    assert calls["auth"] == 1, "the guard must actually authenticate between its two halves"
-    assert seen["launches"] == 2, "one observation per world; a single launch cannot differential"
-    assert seen["storage_states"] == [None, "/tmp/auth.json"], (
-        "the ANONYMOUS half must carry no session and the authenticated half must carry one — "
-        "swapping them is how the check silently stops discriminating")
-    assert ".inside" in pages["anon"].asked and ".inside" in pages["authed"].asked
+    assert calls["auth"] == 1, "the guard must still authenticate — it is the caller's only login"
+    assert seen["launches"] == 1, "one observation, of the ANONYMOUS page"
+    assert seen["storage_states"] == [None], (
+        "the observation must carry NO session; done with one it cannot tell the worlds apart, "
+        "which is the whole of R4.98")
+    assert ".inside" in pages["anon"].asked
 
 
 def test_a_submit_selector_matching_nothing_is_refused_before_authenticating(monkeypatch):
@@ -112,13 +119,20 @@ def test_a_success_selector_true_while_logged_out_is_refused(monkeypatch):
         "the message must name the mechanism, because the next person will write another list")
 
 
-def test_a_session_that_does_not_stick_is_refused(monkeypatch):
-    """The affirmative half. Without it the guard is satisfied by a login that authenticates nobody
-    so long as the selector is absent — which is R4.98 reached from the other side."""
-    with pytest.raises(S.SubstrateNotReady) as e:
+def test_the_product_owns_the_affirmative_check(monkeypatch):
+    """WHAT REPLACED the removed half, asserted rather than assumed.
+
+    The guard no longer re-fetches the login page with the session. That is only safe because
+    `refresh_auth` raises when `_login_succeeded` is False — so this pins that the guard's job ends
+    at "the selector discriminates" and the LOGIN is what proves it stuck. If `authenticate` raises,
+    the guard must not swallow it.
+    """
+    async def boom():
+        raise RuntimeError("LoginFailedError stands in for the product's own refusal")
+
+    with pytest.raises(RuntimeError, match="LoginFailedError"):
         _drive(monkeypatch, CFG, anon={"button.go": 1, ".inside": 0},
-               authed={"button.go": 1, ".inside": 0})
-    assert "did not stick" in str(e.value)
+               authed={".inside": 1}, authenticate=boom)
 
 
 def test_the_guard_cannot_be_satisfied_by_refusing_everything(monkeypatch):
@@ -130,7 +144,7 @@ def test_the_guard_cannot_be_satisfied_by_refusing_everything(monkeypatch):
     seen, calls, _ = _drive(monkeypatch, CFG,
                             anon={"button.go": 3, ".inside": 0},
                             authed={".inside": 2})
-    assert calls["auth"] == 1 and seen["launches"] == 2
+    assert calls["auth"] == 1 and seen["launches"] == 1
 
 
 @pytest.mark.parametrize("substrate", sorted(SR.LOGIN))
@@ -193,6 +207,30 @@ def test_the_record_carries_the_harness_field_the_classifier_reads():
     rec = SR._Record(True, "boom", None, code="", authored=False, harness_error="the reset failed")
     assert rec.harness_error == "the reset failed"
     assert "harness" in outcomes.UNSCORED_FAMILIES
+
+
+def test_the_runner_threads_the_harness_error_into_the_record_it_builds():
+    """R4.99's defect in its CURRENT shape.
+
+    It used to be `self.harness_error = ""` hard-coded in a private dataclass. Since 0.130.0 the
+    runner builds a real `ScenarioRun`, so the same defect is now the construction site simply not
+    passing the field — the classifier would then read the dataclass default, which is `""`, and the
+    harness family would be unreachable again with nothing looking different.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    fn = ast.parse(textwrap.dedent(inspect.getsource(SR.score_one))).body[0]
+    builds = [n for n in ast.walk(fn)
+              if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "ScenarioRun"]
+    assert builds, "score_one no longer builds a ScenarioRun; this guard needs re-deriving"
+    for call in builds:
+        passed = {k.arg: ast.unparse(k.value) for k in call.keywords}
+        assert passed.get("harness_error") == "harness_error", (
+            f"the ScenarioRun is built with harness_error={passed.get('harness_error')!r}; the "
+            f"preflight's finding must reach the classifier or the harness family is unreachable "
+            f"and a broken login is scored against the product (R4.99)")
 
 
 def test_the_preflight_sentinel_is_not_mistaken_for_an_agent_failure():

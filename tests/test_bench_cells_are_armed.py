@@ -843,29 +843,26 @@ def test_the_login_guard_notices_a_success_selector_true_while_logged_out(monkey
     print(assert_red(TLD.test_a_success_selector_true_while_logged_out_is_refused, monkeypatch))
 
 
-def test_the_login_guard_notices_a_session_that_does_not_stick(monkeypatch) -> None:
-    """The affirmative half. Without it the guard passes for a login that authenticates nobody."""
-    mutate_scored_run(monkeypatch, "assert_login_discriminates",
-                      "    if auth_hits == 0:", "    if False:")
-    print(assert_red(TLD.test_a_session_that_does_not_stick_is_refused, monkeypatch))
-
-
 def test_the_login_guard_notices_the_differential_collapsing_to_one_world(monkeypatch) -> None:
-    """THE MUTATION THE OTHER THREE CANNOT SEE: keep every refusal, but observe the AUTHENTICATED
-    page twice. Each individual check still reads a plausible number and the guard stops being a
-    differential — which is the whole mechanism."""
+    """THE MUTATION THE OTHERS CANNOT SEE: keep every refusal, but observe the page WITH the
+    session. Each check still reads a plausible number and the guard stops discriminating — which is
+    the whole mechanism, and is R4.98 restored."""
     mutate_scored_run(monkeypatch, "assert_login_discriminates",
                       "await _login_page_facts(url, None, cfg, headless)",
                       "await _login_page_facts(url, storage_state, cfg, headless)")
     print(assert_red(
-        TLD.test_a_login_that_discriminates_is_accepted_and_both_halves_are_measured, monkeypatch))
+        TLD.test_the_guard_interrogates_the_anonymous_page_and_then_authenticates, monkeypatch))
 
 
 def test_the_harness_attribution_notices_the_field_going_back_to_a_constant(monkeypatch) -> None:
     """R4.99 restored exactly: `harness_error` hard-coded empty makes the family unreachable."""
-    mutate_scored_run(monkeypatch, "_Record",
-                      "self.harness_error = harness_error", 'self.harness_error = ""')
-    print(assert_red(TLD.test_the_record_carries_the_harness_field_the_classifier_reads))
+    # RE-AIMED at the RUNNER, because that is where the defect was and where it can return. It
+    # used to target a private `_Record` dataclass; that became a factory for the real
+    # `ScenarioRun` at 0.130.0 and the old needle went STALE — reported as an error, not a pass,
+    # which is the rule that stops a moved mutation reading as a healthy one.
+    mutate_scored_run(monkeypatch, "score_one",
+                      "            harness_error=harness_error,", "")
+    print(assert_red(TLD.test_the_runner_threads_the_harness_error_into_the_record_it_builds))
 
 
 def test_the_ceiling_pin_notices_the_captured_steps_form_coming_back(monkeypatch) -> None:
