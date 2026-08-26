@@ -1,9 +1,12 @@
 """Mutations for step 1.3 — the cannot-spend third state and run-scoped accounting failures.
 
-    uv run --no-sync python scripts/prove_red.py tests/mutations/cannot_spend.py \
-        --tests tests/test_cannot_spend.py tests/test_run_record.py tests/test_obs.py
+    uv run --no-sync python scripts/prove_red.py tests/mutations/cannot_spend.py
 
-Each entry is `(id, path-under-src/ultracua, find, replace, why)`. A `find` that no longer matches
+(No `--tests`. The killer suite is DECLARED below as `KILLED_BY` since 0.6 — it used to ride on this
+command line and in `ci.yml`, where the reviewer of a new mutation could not see it.)
+
+Each entry is `(id, path-under-src/ultracua, find, replace, why)`, with an optional sixth element
+naming a killer suite for that mutant alone. A `find` that no longer matches
 is an ERROR rather than a survivor: a stale mutation silently reports the suite as stronger than it
 is, and this file exists to make the opposite claim checkable.
 
@@ -12,6 +15,20 @@ WHAT IS NOT HERE, and it is a limit of the instrument rather than a hole in the 
 cannot reach `benchmarks/variance.py` or `benchmarks/drift_bench.py` — the two READERS 1.3 fixes.
 That is R4.77. Their guards are armed in-process at the foot of `tests/test_cannot_spend.py`.
 """
+
+# THE KILLER SUITE, DECLARED HERE rather than typed into `ci.yml`.
+#
+# It used to be a `--tests` flag on the CI command line, which is two problems in one line. It was
+# invisible to whoever wrote or reviewed this registry -- the reviewer of a new mutation could not
+# see what would be run against it -- and it made the registry list in `ci.yml` a SECOND source of
+# truth about which registries exist. Nothing asserted the two agreed, so a registry added here and
+# not there would simply never run, with every job green. `scripts/mutation_sweep.py` now derives
+# the set from this directory and each registry supplies its own killers.
+KILLED_BY = [
+    "tests/test_cannot_spend.py",
+    "tests/test_run_record.py",
+    "tests/test_obs.py",
+]
 
 MUTANTS = [
     # ---- the third state: the declaration channel itself ------------------------------------

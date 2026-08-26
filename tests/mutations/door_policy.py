@@ -13,6 +13,18 @@ can reach, and therefore which doors can re-perform a write by re-authoring a fl
 (id, module-relative path, find, replace, why it must not survive)
 """
 
+# THE KILLER SUITE, DECLARED HERE rather than typed into `ci.yml`.
+#
+# It used to be a `--tests` flag on the CI command line, which is two problems in one line. It was
+# invisible to whoever wrote or reviewed this registry -- the reviewer of a new mutation could not
+# see what would be run against it -- and it made the registry list in `ci.yml` a SECOND source of
+# truth about which registries exist. Nothing asserted the two agreed, so a registry added here and
+# not there would simply never run, with every job green. `scripts/mutation_sweep.py` now derives
+# the set from this directory and each registry supplies its own killers.
+KILLED_BY = [
+    "tests/test_door_policy.py",
+]
+
 MUTANTS = [
     (
         "the_grounding_check_goes_back_to_one_equality",

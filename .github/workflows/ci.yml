@@ -4,6 +4,16 @@ on:
   push:
     branches: [main]
   pull_request:
+  # A BUTTON. Added 2026-08-26 after a run had to be nudged by closing and reopening a PR:
+  # GitHub's dispatch of the `pull_request` trigger lagged by several minutes and there was no
+  # other way to ASK for one, so the choice was a false negative on the merge gate or a
+  # PR-lifecycle event used as a retry button. `workflow_dispatch` runs against a chosen ref.
+  #
+  # `red-in-ci` is `if: github.event_name == 'pull_request'` and simply does not run on a
+  # dispatch -- correctly, since there is no base to difference against that means anything.
+  # A dispatched run is therefore the merge gate MINUS that job, which is worth knowing before
+  # reading one as a full green.
+  workflow_dispatch:
 
 # Cancel an in-flight run when new commits land on the same ref.
 concurrency:
@@ -52,15 +62,18 @@ jobs:
         timeout-minutes: 9
         run: uv run --group bench --group providers --group mcp pytest -q --tier fast
 
-  # RED-PROOF. The matrix's whole claim is a NUMBER — eleven mutations of the record plumbing that
-  # survived the entire 1100-test suite (R4.48) are now killed — and a claim nobody re-measures is how a
-  # green instrument stays green while covering less. This applies each mutation to a SCRATCH COPY of
-  # src/ and fails if any survives unregistered, or if a mutation has gone STALE (its find-text no longer
-  # matches), because a stale mutation silently reports the suite as stronger than it is.
+  # RED-PROOF. Every matrix here makes its claim as a NUMBER — eleven mutations of the record
+  # plumbing that survived the entire 1100-test suite (R4.48) are now killed, seven type-silent
+  # mis-keyings of the engine chain, four attacks on the price table in both directions — and a claim
+  # nobody re-measures is how a green instrument stays green while covering less. Each mutation is
+  # applied to a SCRATCH COPY of src/, and the job fails if one survives unregistered or has gone
+  # STALE (its find-text no longer matches), because a stale mutation silently reports the suite as
+  # stronger than it is.
   #
-  # No browser: the killer suite is the browser-free exit-set matrix, so this costs ~2 min.
+  # No browser, which is what bounds WHICH registries reach this job rather than the weekly sweep.
+  # It costs ~2 min.
   red-proof:
-    name: the wiring mutants stay dead
+    name: every browser-free mutation registry stays red
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -78,60 +91,23 @@ jobs:
         uses: astral-sh/setup-uv@v8.2.0
         with:
           enable-cache: true
-      - name: Apply every wiring mutation
+      # THE WHOLE FAST HALF OF THE SWEEP, one step. This replaced SIX hand-typed
+      # `prove_red.py <registry> --tests ...` invocations, and what was wrong with them could
+      # not fail a test: the registry SET lived here rather than in `tests/mutations/`, so a
+      # seventh registry added there and not here would simply never run, with every job green.
+      # That is the "quiet is an allowlist" defect (R3.9/CLI-1) wearing a CI hat.
+      #
+      # `--tier fast` selects the registries whose killer suites launch no browser, DERIVED from
+      # the tier manifest rather than declared -- this job installs no Playwright on purpose (a
+      # killer-suite leg with a browser cell fails EVERY mutant's baseline: measured on CI at 8
+      # failed / 135 passed on both arms, while green locally). The rest run weekly in
+      # `mutation-sweep.yml`, which does install one. `tests/test_mutation_sweep.py` asserts the
+      # two jobs partition the registry set, so neither side can silently drop one.
+      - name: Prove every browser-free registry red
         timeout-minutes: 14
-        run: uv run --group bench --group providers --group mcp python scripts/prove_red.py tests/mutations/b1_wiring.py
-
-      # A SECOND registry rather than a longer first one: these mutate `obs.py`, and the suite that
-      # kills them is three small files rather than the exit-set matrix. One invocation per (what is
-      # mutated, what kills it) pair keeps a failure naming both.
-      - name: Apply every cannot-spend mutation
-        timeout-minutes: 10
         run: >
-          uv run --group bench --group providers --group mcp python scripts/prove_red.py
-          tests/mutations/cannot_spend.py
-          --tests tests/test_cannot_spend.py tests/test_run_record.py tests/test_obs.py
-
-      # A THIRD registry, same reasoning as the second. These mis-key the engine chain's internal
-      # forwards, and three of the seven are TYPE-SILENT swaps the arity pin is fully satisfied by --
-      # which is the whole reason step 1.1 shipped a forwarding sensor beside the arity one.
-      - name: Apply every keyword-only-chain mutation
-        timeout-minutes: 10
-        run: >
-          uv run --group bench --group providers --group mcp python scripts/prove_red.py
-          tests/mutations/keyword_only_chain.py
-          --tests tests/test_engine_chain_is_keyword_only.py
-
-      # A FOURTH registry. These attack the named write questions — three of them widen or narrow a
-      # question by one clause, which is a behaviour change smuggled into a rename, and three collapse
-      # the DECLARATION / RECIPE split, which is R3.5 itself.
-      - name: Apply every write-class mutation
-        timeout-minutes: 10
-        run: >
-          uv run --group bench --group providers --group mcp python scripts/prove_red.py
-          tests/mutations/write_class.py
-          --tests tests/test_write_class.py tests/test_auth_retry_truth_table.py
-
-      # A FIFTH registry. These attack the door Policy table's load-bearing claims and the daemon's
-      # closed sets — in BOTH directions, because a validator that refuses everything satisfies every
-      # "is it refused?" cell ever written and takes the daemon offline.
-      - name: Apply every door-policy mutation
-        timeout-minutes: 10
-        run: >
-          uv run --group bench --group providers --group mcp python scripts/prove_red.py
-          tests/mutations/door_policy.py
-          --tests tests/test_door_policy.py
-
-      # A SIXTH registry. These attack the cost table in BOTH directions -- an absent price makes a
-      # paid run unpriceable, and a DEFAULT price turns an unknown bill into a confident wrong number,
-      # which is 1.3's `or 0.0` one layer down. Two of the four mutate `config.py` rather than the
-      # table, because the defect was DRIFT between two lists that different slices edit.
-      - name: Apply every model-pricing mutation
-        timeout-minutes: 10
-        run: >
-          uv run --group bench --group providers --group mcp python scripts/prove_red.py
-          tests/mutations/model_pricing.py
-          --tests tests/test_obs.py
+          uv run --group bench --group providers --group mcp python scripts/mutation_sweep.py
+          --tier fast
 
   # RED-IN-CI (reshape-plan 0.4b). "Verify a regression test fails against the old code" has been in
   # CLAUDE.md since round 1 and has caught several no-op fixes BY HAND. This is the hand-check as a job:

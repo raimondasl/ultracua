@@ -22,10 +22,16 @@ TWO PROPERTIES, and they are deliberately narrow.
      ones -- applied to a workflow file: a step added tomorrow is budgeted by default, and buying
      silence costs an allowlist entry with a written reason.
 
-  2. The browser install is ONE step, shared by both OSes, and runs no apt. This pins the CLASS
-     ("unbounded network provisioning on the critical path"), not the instance. Deleting
-     `--with-deps` without this cell would leave a fix that any future slice could silently revert
-     while every other test in the suite stayed green.
+  2. The browser install is ONE step per job, byte-identical across jobs AND across workflow
+     files, and runs no apt. This pins the CLASS ("unbounded network provisioning on the
+     critical path"), not the instance. Deleting `--with-deps` without this cell would leave a
+     fix that any future slice could silently revert while every other test stayed green.
+
+  3. Both of the above run over EVERY workflow file, not over `ci.yml`. That was one file until
+     0.6 added the weekly mutation sweep -- which installs a browser and runs on a schedule,
+     i.e. is precisely this file's subject -- and single-file was an unstated assumption rather
+     than a decision. The set is derived from the directory and asserted to be covered, because
+     a glob that quietly matches nothing passes every cell here.
 
 WHAT THESE CELLS DO NOT CLAIM. They do not claim that a job-level `cancelled` can only mean the
 suite over-ran. It cannot be made to mean that: the `always()`/`failure()` tail runs past the wall
@@ -34,7 +40,8 @@ on a failing job, and GitHub injects steps of its own (`Set up job`, `Post Insta
 converse, with a worked sum, and the sum was wrong on the failure path. The honest property is the
 forward one only.
 
-Nothing here launches a browser -- it is text over one file, and belongs in the fast tier.
+Nothing here launches a browser -- it is text over the workflow files, and belongs in the fast
+tier.
 """
 
 from __future__ import annotations
@@ -45,7 +52,24 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-CI = ROOT / ".github" / "workflows" / "ci.yml"
+WORKFLOW_DIR = ROOT / ".github" / "workflows"
+CI = WORKFLOW_DIR / "ci.yml"
+
+
+def workflows() -> "list[Path]":
+    """EVERY workflow file, derived from the directory.
+
+    This read `ci.yml` alone until 0.6 added `mutation-sweep.yml`, and single-file was never a
+    simplification -- it was an unstated assumption that there would only ever be one. The moment a
+    second file existed, every property below applied to one of two workflows while READING as
+    though it applied to CI. That the second file installs a browser and runs on a schedule is
+    exactly the surface these cells were written for, and it would have been entirely unscanned.
+
+    Derived rather than listed for the reason the mutation registries are: a third workflow added
+    tomorrow is scanned by construction, and a hand-written list is only as good as its worst entry.
+    """
+    return sorted(p for p in WORKFLOW_DIR.glob("*.y*ml"))
+
 
 # A step begins at this indent inside `steps:`. Nothing else may.
 _STEP_START = re.compile(r"^      - (?P<key>[a-z-]+):\s*(?P<rest>.*)$")
@@ -84,7 +108,8 @@ DELIBERATE_PROVISIONING: dict[tuple[str, str], str] = {}
 class Step:
     """One authored step, with the raw block that follows it."""
 
-    def __init__(self, job: str, line_no: int, block: list[str]) -> None:
+    def __init__(self, job: str, line_no: int, block: list[str], file: str = "ci.yml") -> None:
+        self.file = file
         self.job = job
         self.line_no = line_no
         self.block = block
@@ -141,12 +166,17 @@ class Step:
                     out.append(payload)
         return "\n".join(out)
 
+    @property
+    def where(self) -> str:
+        """`file:line`, because a bare line number stopped identifying a step at the second file."""
+        return f"{self.file}:{self.line_no}"
+
     def __repr__(self) -> str:  # pragma: no cover - diagnostics only
-        return f"<{self.job}:{self.line_no} {self.label!r}>"
+        return f"<{self.file}:{self.job}:{self.line_no} {self.label!r}>"
 
 
-def parse_steps(text: str) -> list[Step]:
-    """Every authored step in `ci.yml`, TOTALLY.
+def parse_steps(text: str, file: str = "ci.yml") -> list[Step]:
+    """Every authored step in ONE workflow file, TOTALLY.
 
     Totality is asserted, not hoped for: a `      - ` line whose key is not one of name/run/uses
     RAISES rather than being skipped. A parser that silently omits the steps it was built to
@@ -165,18 +195,28 @@ def parse_steps(text: str) -> list[Step]:
             s = _STEP_START.match(line)
             if s is None or s.group("key") not in _STEP_KEYS:
                 raise AssertionError(
-                    f"{CI.name}:{i + 1} starts a step with an unrecognised key: {line.strip()!r}. "
+                    f"{file}:{i + 1} starts a step with an unrecognised key: {line.strip()!r}. "
                     f"This parser claims to enumerate EVERY step; teach it the new key rather than "
                     f"letting it skip one silently."
                 )
-            assert job is not None, f"{CI.name}:{i + 1} is a step outside any job"
+            assert job is not None, f"{file}:{i + 1} is a step outside any job"
             starts.append((job, i))
 
     steps = []
     for n, (job, i) in enumerate(starts):
         end = starts[n + 1][1] if n + 1 < len(starts) else len(lines)
-        steps.append(Step(job, i + 1, lines[i:end]))
+        steps.append(Step(job, i + 1, lines[i:end], file=file))
     return steps
+
+
+def uncovered(steps: "list[Step]") -> "list[str]":
+    """Workflow files that exist and contributed NO step — the ONE definition of the predicate.
+
+    Shared by the cell that enforces it and by the arming cell that proves the cell can fail, for
+    the reason `refused_hits` is: two copies of a predicate is how an arming proof ends up proving
+    something the real check does not do.
+    """
+    return sorted({w.name for w in workflows()} - {s.file for s in steps})
 
 
 def unbudgeted(steps: list[Step]) -> list[Step]:
@@ -200,20 +240,24 @@ def refused_hits(steps: list[Step]) -> list[tuple[Step, str]]:
 
 @pytest.fixture(scope="module")
 def steps() -> list[Step]:
-    return parse_steps(CI.read_text(encoding="utf-8"))
+    """Every authored step in EVERY workflow file -- see `workflows()` for why not just `ci.yml`."""
+    out: list[Step] = []
+    for wf in workflows():
+        out.extend(parse_steps(wf.read_text(encoding="utf-8"), file=wf.name))
+    return out
 
 
 def test_every_authored_step_is_budgeted_or_allowlisted(steps: list[Step]) -> None:
     """Quiet is an allowlist. A step added tomorrow is LOUD by default."""
     assert len(steps) >= 10, (
-        f"only {len(steps)} steps parsed out of {CI}; the parser has probably stopped matching and "
-        f"every cell in this file would pass vacuously"
+        f"only {len(steps)} steps parsed out of {[w.name for w in workflows()]}; the parser has "
+        f"probably stopped matching and every cell in this file would pass vacuously"
     )
     missing = unbudgeted(steps)
     assert not missing, (
         "these CI steps run unbounded, so an over-run in one of them dies at the anonymous job wall "
         "instead of naming itself:\n"
-        + "\n".join(f"  {CI.name}:{s.line_no} [{s.job}] {s.label}" for s in missing)
+        + "\n".join(f"  {s.where} [{s.job}] {s.label}" for s in missing)
         + "\n\nAdd `timeout-minutes:` generous enough that only a hang fires it, or -- if the step's "
         "DURATION is the signal being measured -- add it to DURATION_IS_THE_SIGNAL with the reason."
     )
@@ -229,12 +273,41 @@ def test_no_allowlist_entry_names_a_step_that_walked_away(steps: list[Step]) -> 
     labels = {s.label for s in steps}
     stale = sorted(set(DURATION_IS_THE_SIGNAL) - labels)
     assert not stale, (
-        f"DURATION_IS_THE_SIGNAL names {stale}, which no step in {CI.name} matches any more. The "
+        f"DURATION_IS_THE_SIGNAL names {stale}, which no step in any workflow matches any more. The "
         f"step was renamed or removed; update the allowlist rather than leaving a dead entry that "
         f"a future step could inherit."
     )
     for label, reason in DURATION_IS_THE_SIGNAL.items():
         assert len(reason) > 40, f"the allowlist entry {label!r} has no stated reason"
+
+
+def test_every_workflow_file_is_actually_scanned(steps: list[Step]) -> None:
+    """The cells above are worth exactly what their INPUT is worth, so check the input.
+
+    Two ways this file could pass while scanning nothing, both of them silent:
+
+      * the fixture reverts to reading `ci.yml` alone (which is what it did until 0.6), so a second
+        workflow's unbudgeted steps and apt-carrying installs are simply invisible;
+      * `workflows()`'s glob stops matching -- a renamed directory, a `.github` move -- and every
+        cell here passes over an empty list.
+
+    The first is the one that has a precedent: this file scanned one file for its whole life and
+    read as though it scanned the workflows. Asserted as a set EQUALITY, so a file that exists and
+    contributes nothing is as loud as a file that vanished.
+    """
+    found = workflows()
+    assert len(found) >= 2, (
+        f"only {[w.name for w in found]} matched under {WORKFLOW_DIR}. Either the glob has stopped "
+        f"matching -- in which case every cell in this file is passing over an empty list -- or the "
+        f"weekly mutation sweep's workflow was deleted, which is reshape-plan step 0.6 walking away."
+    )
+    missing = uncovered(steps)
+    assert not missing, (
+        f"these workflow files exist and contributed NO step to the scan: {missing}. Every property "
+        f"in this file is then silently not asserted about them -- including the browser install and "
+        f"the step budgets, which is the entire subject here. The fixture read `ci.yml` alone until "
+        f"0.6; check it has not been reverted to that."
+    )
 
 
 def test_the_browser_install_is_one_step_shared_by_both_oses(steps: list[Step]) -> None:
@@ -247,7 +320,7 @@ def test_the_browser_install_is_one_step_shared_by_both_oses(steps: list[Step]) 
     """
     installs = [s for s in steps if "playwright install" in s.run]
     assert installs, (
-        f"no step in {CI.name} installs a browser, but the suite drives real headless Chromium. "
+        f"no step in any workflow installs a browser, but the suite drives real headless Chromium. "
         f"Either this cell's matcher has gone stale or CI has stopped installing the browser."
     )
 
@@ -265,7 +338,7 @@ def test_the_browser_install_is_one_step_shared_by_both_oses(steps: list[Step]) 
     split = {j: v for j, v in per_job.items() if len(v) > 1}
     assert not split, (
         "the browser install is split WITHIN a job: "
-        + "; ".join(f"{j} -> " + ", ".join(f"{CI.name}:{s.line_no} ({s.label})" for s in v)
+        + "; ".join(f"{j} -> " + ", ".join(f"{s.where} ({s.label})" for s in v)
                     for j, v in split.items())
         + ". It was two OS-conditional steps until reshape-plan step 0, and the Linux one carried "
         "`--with-deps`; keeping them collapsed is what makes windows a usable CONTROL for the linux arm."
@@ -279,13 +352,13 @@ def test_the_browser_install_is_one_step_shared_by_both_oses(steps: list[Step]) 
 
     for step in installs:
         assert not any("if:" in line and "runner.os" in line for line in step.block), (
-            f"{CI.name}:{step.line_no} makes the browser install OS-conditional again. The two arms "
+            f"{step.where} makes the browser install OS-conditional again. The two arms "
             f"must run the byte-identical command, or a failure on one stops being evidence about "
             f"the other."
         )
         for bad, why in REFUSED_PROVISIONING.items():
             assert bad not in step.run, (
-                f"{CI.name}:{step.line_no} reintroduces {bad!r} on the critical path: {why}. "
+                f"{step.where} reintroduces {bad!r} on the critical path: {why}. "
                 f"See docs/ci-provisioning.md for the measurement, and note that a missing shared "
                 f"library fails LOUD (Chromium cannot launch, so every browser test dies at once) "
                 f"whereas this flag's cost is silent and unbounded."
@@ -400,6 +473,16 @@ def test_every_scan_in_this_file_goes_red_when_armed() -> None:
     doubled = text.replace(one_install, one_install + one_install, 1)
     with pytest.raises(AssertionError, match="split WITHIN a job"):
         test_the_browser_install_is_one_step_shared_by_both_oses(parse_steps(doubled))
+
+    # (h) SCAN ONLY `ci.yml` AGAIN -- the shape this file had for its whole life before 0.6, and
+    # the one that would make every cell above quietly stop applying to the weekly sweep's workflow.
+    # Armed through `uncovered`, the same predicate the real cell calls.
+    single_file = parse_steps(text, file=CI.name)
+    assert uncovered(single_file), (
+        "reverting the fixture to `ci.yml` alone left NOTHING uncovered, so "
+        "test_every_workflow_file_is_actually_scanned cannot fail for it. Either a second workflow "
+        "file no longer exists or `uncovered` has stopped comparing against the directory."
+    )
 
     # (e) THE QUIET DIRECTION, pinned as hard as the loud one. `ci.yml` is ~35% comments and several
     # of them discuss `apt-get` by name -- including the paragraph explaining why it is gone. A scan

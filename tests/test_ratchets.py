@@ -382,6 +382,20 @@ def test_prove_reds_killer_suite_is_browser_free() -> None:
     Derived from the manifest rather than declared: a file is browser-free when the tier manifest
     holds no browser mark for any of its ids. So a killer-suite leg that starts launching a browser
     fails HERE, in the fast tier, instead of on CI one push later.
+
+    RE-EXPRESSED AT 0.6, because the killer suite moved. It used to be `--tests`' argparse default
+    plus every `--tests` flag typed into `ci.yml`; it is now `prove_red.DEFAULT_KILLERS` plus each
+    registry's own `KILLED_BY` and per-mutant override. The hazard is unchanged and so is the
+    measurement behind it — what changed is that a registry may now legitimately name browser
+    killers (`known_nine.py` does; its properties are page-side), which is safe ONLY because the
+    merge gate passes `--tier fast` and the derivation keeps those registries out of it. So this
+    cell asserts both halves: the legs a fast-tier sweep can select are browser-free, and the merge
+    gate really does pass the flag that bounds the selection.
+
+    THIS IS A SECOND SENSOR CLASS, not a duplicate of `tests/test_mutation_sweep.py`. That file
+    computes the split through `mutation_sweep`'s own functions; this one reads `scripts/` and
+    `tests/mutations/` BY PATH with `ast`, so it still fires if the derivation itself is wrong —
+    the same relationship `scripts/ratchets.py` has with the pins that import.
     """
     import ast
     import json
@@ -392,51 +406,82 @@ def test_prove_reds_killer_suite_is_browser_free() -> None:
         f"the manifest lists only {len(browser_ids)} browser tests — it is not loaded, and this cell "
         f"would pass over anything")
 
+    def _strings(node) -> list:
+        return [e.value for e in getattr(node, "elts", []) if isinstance(e, ast.Constant)]
+
+    def _browserish(leg: str) -> list:
+        return sorted(i for i in browser_ids if i.startswith(leg + "::"))
+
+    # (1) the fallback, read from `prove_red.py` by PATH. `b1_wiring.py` declares no `KILLED_BY` and
+    # is scored by this, so it is a live default and not a leftover.
     src = (ROOT / "scripts" / "prove_red.py").read_text(encoding="utf-8")
-    legs = []
+    default_legs: list = []
     for node in ast.walk(ast.parse(src)):
-        if (isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "add_argument"
-                and any(isinstance(a, ast.Constant) and a.value == "--tests" for a in node.args)):
-            for kw in node.keywords:
-                if kw.arg == "default":
-                    legs = [e.value for e in kw.value.elts if isinstance(e, ast.Constant)]
-    assert legs, "could not derive `--tests`'s default from prove_red.py — this cell is inert"
+        if (isinstance(node, ast.Assign)
+                and any(getattr(t, "id", None) == "DEFAULT_KILLERS" for t in node.targets)):
+            default_legs = _strings(node.value)
+    assert default_legs, (
+        "could not derive `DEFAULT_KILLERS` from prove_red.py — this cell is inert. It was the "
+        "`--tests` argparse default until 0.6; if it has moved again, follow it.")
 
-    # AND EVERY `--tests` THE WORKFLOW PASSES EXPLICITLY. The default is only half the exposure:
-    # 1.3 added a second `red-proof` invocation with its own killer suite, which this scan could not
-    # see, so the hazard it was written for would have come back through a door beside it.
-    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8").split()
-    # EVERY occurrence, not the first. `ci.index("--tests")` finds one, and a second `red-proof`
-    # invocation added below it would be silently unchecked — the exact hazard this cell exists for,
-    # walking in through a door beside the one it is watching. Counted, so "the workflow stopped
-    # spelling them out" fails loudly rather than covering nothing.
-    seen_flags = 0
-    from_ci: list = []
-    for i, tok in enumerate(ci):
-        if tok != "--tests":
+    # (2) every registry's own legs, also by PATH. A registry whose legs are ALL browser-free is
+    # selected by `--tier fast`; one with any browser leg is not, and is excluded here for exactly
+    # that reason rather than waved through.
+    per_registry: dict = {}
+    for reg in sorted((ROOT / "tests" / "mutations").glob("*.py")):
+        if reg.name.startswith("_"):
             continue
-        seen_flags += 1
-        j = i + 1
-        while j < len(ci) and ci[j].endswith(".py"):
-            from_ci.append(ci[j])
-            j += 1
-    assert seen_flags >= 1, (
-        "no `--tests` in ci.yml at all — either the `red-proof` job stopped passing an explicit "
-        "killer suite, or it now spells it in a YAML form `.split()` cannot see (a block list, a "
-        "line continuation). Either way this half of the cell covers nothing.")
-    assert len(from_ci) >= 3, (
-        f"only {from_ci} picked up from {seen_flags} `--tests` flag(s) in ci.yml — a leg that is no "
-        f"longer on one whitespace-separated line is a leg this cell no longer checks")
-    legs.extend(from_ci)
+        legs: list = []
+        for node in ast.walk(ast.parse(reg.read_text(encoding="utf-8"))):
+            if (isinstance(node, ast.Assign)
+                    and any(getattr(t, "id", None) == "KILLED_BY" for t in node.targets)):
+                legs += _strings(node.value)
+            if isinstance(node, ast.Tuple) and len(node.elts) == 6:
+                legs += _strings(node.elts[5])
+        per_registry[reg.name] = sorted(set(legs))
+    assert len(per_registry) >= 6, f"only {sorted(per_registry)} registries found — this cell is inert"
 
+    # THREE BUCKETS, NOT TWO. A registry that declares NO legs is scored by `DEFAULT_KILLERS`, which
+    # is checked above — it is not browser-side and must not be reported as such. The first draft of
+    # this re-expression folded it in with `if legs and ...` and printed "2 browser-side" where the
+    # truth is one, which is a confident wrong number in a cell whose whole job is to be believed.
+    undeclared = {name for name, legs in per_registry.items() if not legs}
+    fast_side = {name: legs for name, legs in per_registry.items()
+                 if legs and not any(_browserish(leg) for leg in legs)}
+    browser_side = set(per_registry) - undeclared - set(fast_side)
+    assert fast_side, (
+        "NO registry has an all-browser-free killer suite, so the merge gate's sweep would select "
+        "nothing and this cell covers nothing")
+    # AND THE ARMING, in one line and for free. If `_browserish` went inert — a manifest path that
+    # stopped matching, an id format that changed — every leg would look browser-free, `known_nine`
+    # would fall into `fast_side`, and this cell would pass while checking a predicate that answers
+    # False to everything. A registry IS browser-side today, so requiring one is a live check that
+    # the predicate can still say yes.
+    assert browser_side, (
+        "no registry is browser-side, which is either a real change (then update this cell) or "
+        "`_browserish` answering False to everything — in which case every assertion below is "
+        "vacuous and a browser leg in the merge gate's suite would pass unnoticed")
+
+    checked = list(default_legs) + [leg for legs in fast_side.values() for leg in legs]
     offenders = {}
-    for leg in legs:
+    for leg in sorted(set(checked)):
         assert (ROOT / leg).exists(), f"killer-suite leg {leg} does not exist"
-        hits = sorted(i for i in browser_ids if i.startswith(leg + "::"))
+        hits = _browserish(leg)
         if hits:
             offenders[leg] = hits[:3]
     assert not offenders, (
         f"these killer-suite legs contain BROWSER tests: {offenders}. The `red-proof` job installs no "
         f"Playwright, so every mutant's baseline run would fail on a missing Chromium — loudly, but "
         f"naming the browser rather than the mutation. Move the browser-free cells to their own file.")
-    print(f"\n  killer suite: {len(legs)} leg(s), all browser-free")
+
+    # (3) THE OTHER HALF, and without it the exclusion above is a hole rather than a design: a
+    # browser-side registry is only safe because the merge gate bounds its own selection.
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "mutation_sweep.py" in ci and "--tier fast" in ci, (
+        "ci.yml's merge gate no longer runs `mutation_sweep.py --tier fast`. Every registry would "
+        "then be selected in a job with no Chromium, including the ones whose killers are page-side "
+        "by design — which is this cell's own hazard, arriving through the selection instead of "
+        "through a leg.")
+    print(f"\n  killer suite: {len(set(checked))} leg(s), all browser-free — "
+          f"{len(fast_side)} registr(ies) declaring their own, {len(undeclared)} on DEFAULT_KILLERS "
+          f"{sorted(undeclared)}; {len(browser_side)} browser-side and excluded {sorted(browser_side)}")

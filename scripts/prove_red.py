@@ -42,6 +42,49 @@ def _load(path: Path):
     return mod
 
 
+# THE EXIT CODES, named, because `scripts/mutation_sweep.py` turns each into a different REMEDY and a
+# number in three places is a number that drifts.
+#
+# `SUITE_DEAD` exists because of a live observation on 0.6's own first full run: a version bump
+# without `uv sync --all-groups` made `test_obs.py` fail on the UNMUTATED tree, the baseline guard
+# caught it exactly as designed — and both affected registries were then reported to the operator as
+# "an UNREGISTERED SURVIVOR, a stale KNOWN_SURVIVORS entry, or a dead killer suite". Three causes,
+# one word, and only one of them is a hole in the matrix. That is this repo's own reporting rule
+# (enumerate the outcomes; a single overloaded verdict is what made a CI `cancelled` unreadable)
+# arriving inside the instrument that enforces it.
+SURVIVORS = 1
+BROKEN = 2
+SUITE_DEAD = 3
+
+# The killer suite a registry gets when it declares none. It is the exit-set matrix plus the two 1.4b
+# evidence goldens plus the ledger arming property — the set `b1_wiring.py` was written against, kept
+# as the default so that registry needs no `KILLED_BY` and the flag's removal from `ci.yml` changed
+# nothing about what it is scored by.
+#
+# BROWSER-FREE, and that is load-bearing rather than incidental: the `red-proof` merge-gate job
+# installs no Playwright, so a killer-suite leg with a browser cell fails EVERY mutant's baseline —
+# measured on CI, 8 failed / 135 passed on both arms, while green locally.
+DEFAULT_KILLERS = (
+    "tests/test_replay_exit_matrix.py",
+    "tests/test_batch_row_evidence_golden.py",
+    "tests/test_write_question_golden.py",
+    "tests/test_ledger_arm_property.py",
+)
+
+
+def killers_of(mod, mutant: tuple) -> "tuple[str, ...]":
+    """The killer suite for ONE mutant: its own 6th element, else the registry's, else the default.
+
+    A LIST, because the properties these mutants attack no longer live in one file. 1.4b's write
+    answer is decided in `_replay_body` (the exit matrix's territory) and PROJECTED onto a batch row
+    (which the exit matrix cannot see), so a single-path killer suite reported four honest cells as
+    SURVIVORS.
+    """
+    if len(mutant) > 5:
+        return tuple(mutant[5])
+    return tuple(getattr(mod, "KILLED_BY", DEFAULT_KILLERS))
+
+
 _BASELINE_CHECKED: dict = {}
 
 
@@ -73,21 +116,23 @@ def _require_a_live_killer_suite(tests: "list[str]") -> None:
             [sys.executable, "-m", "pytest", one, "-q", "--collect-only", "-p", "no:cacheprovider"],
             cwd=ROOT, capture_output=True, text=True, env=env)
         if solo.returncode != 0:
-            raise SystemExit(
+            print(
                 f"killer-suite path {one!r} collects NOTHING (pytest exit {solo.returncode}). Every "
                 f"mutant would run against a suite missing this leg, and a mutant only it kills would "
                 f"be reported as a SURVIVOR — a hole in the matrix — rather than as a dead path.\n"
                 f"{solo.stdout[-2000:]}")
+            raise SystemExit(SUITE_DEAD)
 
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", *tests, "-q", "--tb=no", "-p", "no:cacheprovider"],
         cwd=ROOT, capture_output=True, text=True, env=env)
     if proc.returncode != 0:
-        raise SystemExit(
+        print(
             f"the killer suite {tests!r} does not pass on the UNMUTATED tree (exit "
             f"{proc.returncode}), so every mutant below would be scored 'killed' by a suite that is "
             f"broken or collects nothing. Fix the suite or the --tests path first.\n"
             + (proc.stdout or "")[-2000:] + (proc.stderr or "")[-2000:])
+        raise SystemExit(SUITE_DEAD)
     _BASELINE_CHECKED[key] = True
 
 
@@ -98,28 +143,35 @@ def main() -> int:
     # answer is decided in `_replay_body` (the exit matrix's territory) and PROJECTED onto a batch row
     # (which the exit matrix cannot see), so a single-path killer suite reported four honest cells as
     # SURVIVORS. Splatted into argv rather than joined, which is the failure the guard below names.
-    ap.add_argument("--tests", nargs="+",
-                    default=["tests/test_replay_exit_matrix.py",
-                             "tests/test_batch_row_evidence_golden.py",
-                             "tests/test_write_question_golden.py",
-                             # BROWSER-FREE ONLY. The `red-proof` job does not install Playwright, so
-                             # a killer-suite leg with a browser cell fails EVERY mutant's baseline —
-                             # measured on CI, 8 failed / 135 passed on both arms, while green locally.
-                             "tests/test_ledger_arm_property.py"],
-                    help="what to run against each mutant (default: the exit-set matrix + the two "
-                         "1.4b evidence goldens)")
+    ap.add_argument("--tests", nargs="+", default=None,
+                    help="OVERRIDE every mutant's declared killer suite with this one. Ad-hoc use "
+                         "only: a registry declares its own killers (see `killers_of`), which is "
+                         "what lets `scripts/mutation_sweep.py` run a registry it has never heard of")
     args = ap.parse_args()
 
     mod = _load(args.registry)
     mutants, known = mod.MUTANTS, dict(getattr(mod, "KNOWN_SURVIVORS", {}))
-    print(f"{len(mutants)} mutant(s) from {args.registry.name}; killer suite: {args.tests}\n")
+    # PER MUTANT, not per registry, and the override is explicit. Before this the killer suite was a
+    # `--tests` flag typed into `ci.yml` — invisible to whoever wrote the registry, and structurally
+    # unable to say that mutant 3 is killed by one file and mutant 7 by another. That mattered twice
+    # over: the 0.75.0 measurement's own headline finding was that four of nine mutations were caught
+    # by exactly ONE test, which a per-registry suite cannot express; and a registry whose killers
+    # need a browser cannot share an invocation with one whose killers must not have any.
+    plan = [(m[0], m[1], m[2], m[3], m[4], tuple(args.tests) if args.tests else killers_of(mod, m))
+            for m in mutants]
+    print(f"{len(plan)} mutant(s) from {args.registry.name}")
+    for suite in sorted({p[5] for p in plan}):
+        print(f"  killed by {list(suite)}: {[p[0] for p in plan if p[5] == suite]}")
+    print()
 
-    # BEFORE any mutation, against the UNMUTATED tree. A `--tests` path that does not collect makes
-    # pytest exit non-zero for every mutant and this script report a perfect score.
-    _require_a_live_killer_suite(args.tests)
+    # BEFORE any mutation, against the UNMUTATED tree, ONCE PER DISTINCT KILLER SUITE. A `--tests`
+    # path that does not collect makes pytest exit non-zero for every mutant and this script report a
+    # perfect score.
+    for suite in sorted({p[5] for p in plan}):
+        _require_a_live_killer_suite(list(suite))
 
     killed, survived, broken = [], [], []
-    for mid, rel, find, repl, why in mutants:
+    for mid, rel, find, repl, why, suite in plan:
         with tempfile.TemporaryDirectory(prefix=f"mut-{mid}-") as tmp:
             scratch = Path(tmp) / "src"
             shutil.copytree(ROOT / "src", scratch)
@@ -140,7 +192,7 @@ def main() -> int:
             for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
                 env[k] = ""
             proc = subprocess.run(
-                [sys.executable, "-m", "pytest", *args.tests, "-q", "-x", "--tb=no",
+                [sys.executable, "-m", "pytest", *suite, "-q", "-x", "--tb=no",
                  "-p", "no:cacheprovider"],
                 cwd=ROOT, capture_output=True, text=True, env=env)
             if proc.returncode != 0:
@@ -157,7 +209,7 @@ def main() -> int:
         print("\nBROKEN mutations (fix the registry — a stale one silently reports the suite as strong):")
         for mid, why in broken:
             print(f"  {mid}: {why}")
-        return 2
+        return BROKEN
 
     unexpected = [m for m in survived if m not in known]
     if unexpected:
@@ -165,14 +217,14 @@ def main() -> int:
         print("Add a cell that kills it, or list it in KNOWN_SURVIVORS with a reason and a register id:")
         for m in unexpected:
             print(f"  {m}")
-        return 1
+        return SURVIVORS
 
     stale = [m for m in known if m not in survived]
     if stale:
         print("\nKNOWN_SURVIVORS lists mutants that are now KILLED — remove them so the list only shrinks:")
         for m in stale:
             print(f"  {m}")
-        return 1
+        return SURVIVORS
 
     print("\nevery registered mutation is accounted for")
     return 0

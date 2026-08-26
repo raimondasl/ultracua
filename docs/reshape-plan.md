@@ -20,7 +20,7 @@ second time.
 | 0.4a | 0 | done | 0.4a | ratchets + red-proof |
 | 0.4b | 0 | done | 0.115.0 | RED-in-CI |
 | 0.5 | 0 | held | held → 1.1 (**fired**) | contract tests for the must-agree pairs |
-| 0.6 | 0 | held | held → 1.5 (**fired**) | scheduled mutation sweep |
+| 0.6 | 0 | done | 0.136.0 | scheduled mutation sweep |
 | 0.7 | 0 | held | held → 2.3 (**fired**) | shared fixture server |
 | 0.8 | 0 | done | 2026-08-20 | tier marks from an observation |
 | 1.1 | 1 | done | 0.115.0 | keyword-only engine chain |
@@ -35,9 +35,9 @@ second time.
 | 2.1 | 2 | done | #189 | B2 — substrates, reset, readiness, boundary ledger |
 | 2.2 | 2 | done | 0.113.0 | B3 — the outcome vocabulary |
 | 2.3 | 2 | done | 0.125.0 | B4 — the 14-scenario corpus + server-side oracles |
-| 2.4 | 2 | pending | — | B5 — baseline, nightly, honesty page |
+| 2.4 | 2 | pending | — | B5 — baseline, weekly run, honesty page |
 
-**20 of 24 steps done.** Every row is adjudicated against the tree by `tests/test_plan_state.py` — a `done` step must have its artifact and a `pending`/`held` step must not.
+**21 of 24 steps done.** Every row is adjudicated against the tree by `tests/test_plan_state.py` — a `done` step must have its artifact and a `pending`/`held` step must not.
 <!-- /generated:plan-status -->
 
 Researched 2026-08-16
@@ -360,7 +360,7 @@ change.
 | 0.3 | done #175 | **Exit-set matrix over a fake engine.** `tests/_fake_engine.py` installed by patching the bindings `flows.py` holds — `run_cached`, `_precheck_done`, `refresh_auth`, `learn`, and **(critic)** `_make_finalize`/`_make_pre_write` so the `out` dict is scripted explicitly; all six added to a module-bindings AST pin. Drives `replay()` through every exit **derived by AST** over its own `raise`/`return` nodes — **(critic)** not a hand list — including preflight refusal, `on_step` raising inside the auth-refresh retry, and record reuse across calls. Fidelity cells for read **and write** shapes against the real engine on existing fixtures. The ten B1 defects become strict-xfail cells RED against main; the vacuous cell gets specific values; the 11 wiring mutants registered and proved killed | g; RED-first for 1.5 | every derived exit hit ≥1 cell (printed); premise counts per cell; fidelity cells; `prove_red` 11/11; xfails machine-checked RED | M · 3–5 d |
 | 0.4 | **done** (0.4a; 0.4b at 0.115.0) | **RED-in-CI + red-proof + ratchets.** Run each PR's *new* test ids against main's `src/` in a worktree; a src-touching PR whose new tests all pass against main fails. **(critic)** ImportError-against-main is *inconclusive*, not a label-shaped opt-out — a PR adding a src module ships a registered mutant instead; the job's self-test is a unit test of its verdict function. `assert_ratchet(name, derived_sites)` fails on growth **and** staleness | g, f | the job asserts it found ≥1 new test when the diff adds `def test_`; each ratchet asserts a minimum hit count first | S · 1.5 d |
 | 0.5 | held -> 1.1 — **TRIGGER FIRED** (1.1 landed 0.115.0 without it); `_SDK_CTORS` taken at 0.4a | **Contract tests for every "must agree" pair**; `node --check` over every assembled `*_JS` payload; add `Client` to `_SDK_CTORS` and raise the anti-vacuity threshold (test-only) | l, f | each pair asserts a minimum match count before equality; delta sets frozen | S · 1 d |
-| 0.6 | held -> after 1.5 — **TRIGGER FIRED** (1.5 landed 0.110.0, five slices ago) | **Scheduled mutation sweep (S16).** The nine known mutants + the 11 B1 wiring mutants + generic operators on a frozen hot-file list, one at a time on a scratch copy; weekly; a survivor not in `known_survivors` fails | g, a | `known_survivors` only shrinks; the nine known mutants must be killed every run | M · 2 d |
+| 0.6 | **done, 0.136.0** | **Scheduled mutation sweep (S16).** Delivered: the nine known mutants as `tests/mutations/known_nine.py` (**9 killed, 0 survived** — the first time the 0.75.0 measurement has been reproducible, and SIX of the nine sites had moved and were re-expressed against the property rather than the line number); `scripts/mutation_sweep.py`, which DERIVES the registry set from `tests/mutations/` and the tier split from the tier manifest; and `.github/workflows/mutation-sweep.yml`, weekly plus `workflow_dispatch`. Seventy-five mutants across seven registries. **The generic-operator half is REFUSED on measurement and filed as R4.108** — 2848 mutants over the six hot files, 70.4 h serial against the fast tier against a 6 h job cap, and, worse, a narrow killer measured at 38% survival on the best-case file with **all six of those survivors killed by the fast tier**. The missing component is a coverage-derived killer selection, not more mutants | g, a | `known_survivors` only shrinks; the nine known mutants killed every run | M · 2 d |
 | 0.7 | held -> 2.3 — not fired; §13 row 8 lands it there | **Shared fixture server** — `serve()` owning the protocol version, the `Content-Length` framing and the synchronous-reveal discipline, plus a `Site` recorder with a `saves` count and the common stubs; migrate ~8 files as proof. **Now evidence-backed (R4.56):** 38 files define a fixture handler, **8 of them write a body with no `Content-Length`**, and a sub-resource that silently fails to load surfaces as a JS `ReferenceError` inside the page rather than as a connection error. That is why the one-line sweep is REFUSED — measured, `HTTP/1.1` buys 8→6 connections per page load (25%) and would leave those 8 files hanging on an unframed body. The seam is the fix: correct by construction for every future fixture, and the 38 migrate as they are touched | g, n | ratchet on files defining their own handler class (only shrinks); collection count unchanged; the `serve()` self-test asserts framing + HTTP/1.1 + a `reveal_sync` page's state present on the FIRST snapshot | M · 3 d |
 
 ### Phase 1 — bounded `src/` changes (~20–30 days incl. audits)
@@ -599,10 +599,12 @@ Neither is re-opened here — that is a call to make with a slice in hand, not i
   `llm.build_client` provably the choke point for inviolable #1. Verified safe to widen — the only
   `Client(` construction in `src/` is `genai.Client()` at `llm/gemini.py:101`, inside a leaf adapter, so
   the pin lands green.
-* **0.6 — the scheduled mutation sweep.** Its per-PR half already exists: the `red-proof` job re-applies
-  all eleven wiring mutants on every PR. What is missing is *generic* operators on hot files, whose value
-  is highest while `src/` is being edited — so it lands **after 1.5**, when the first large src change has
-  happened, rather than before it.
+* **0.6 — the scheduled mutation sweep. DONE at 0.136.0, and the reasoning here was half right.**
+  It correctly said the per-PR half already existed and that the missing piece was the part a merge
+  gate cannot afford. It named that part as *generic operators*, and the part that actually shipped is
+  the **nine known mutants** — whose killers are page-side properties needing a browser, which is why
+  they could never have lived in `red-proof` (it installs no Playwright deliberately). The generic half
+  was sized and refused: see R4.108, and the row above.
 * **0.7 — the shared fixture server.** Held to **2.3 (B4)**. Its payoff is proportional to the number of
   fixtures WRITTEN after it exists, and B4's 14-scenario paired corpus is by far the largest such batch.
   Landing it now migrates 8 files and prevents nothing; landing it with B4 makes 14 new fixtures correct
@@ -774,14 +776,16 @@ failure §13 exists to correct.
 | 6 | **0.4b + 1.1** *(done, 0.115.0)* | 1.1's own pin is RED-in-CI. 0.4b shipped `scripts/red_in_ci.py` and measured itself on 1.3: 34 new ids, 10 `guards`. The rows that came back `no_guard` name its two structural limits -- a scan that reads `src/` BY PATH (R4.75) and anything under `benchmarks/`/`scripts/`, which sit at `sys.path[0]` and cannot be swapped by PYTHONPATH at all (R4.77). 1.1 took `engine_positional_params` 98 -> 7, and 7 is the END STATE: each call's subject | 1 |
 | 7 | **1.6 -> 1.7 -> 1.8** *(done, 0.116.0 / 0.117.0 / 0.118.0 — **PHASE 1 COMPLETE**)* | unchanged; 1.6 is the largest ratchet consumer, 1.8 moves every call site and stays last | 2 / 0 / 1 |
 | 8 | **2.3 — B4** (done, 0.125.0) | **DONE.** The 14-scenario paired corpus, its server-side oracles (SQL for Odoo, API for Gitea) and the Idempotency-Key logging proxy, on top of the substrates 2.1 already built and the vocabulary 2.2 already froze. §7 calls it the long pole and the one where the house rules bite hardest, and it shipped in five PRs (#200 substrates, #201 oracle machinery, #202 the Gitea seven, #203 the Odoo seven, then the proxy). **0.7 did NOT land with it, and the stated reason was refuted rather than deferred**: B4 added ZERO fixture handlers, because its scenarios run against live containers, so the "14 new fixtures correct by construction" payoff does not exist. It did NOT spend the ≈$60–250 either — every slice was key-less; the core learns are 2.4's, and they need a human's go-ahead | **adversarial pass on this PR** |
-| 9 | **2.4 — B5** | baseline, the nightly, and the honesty page whose open-id list is pinned to the register's open set. Cheap once 2.3 exists, and worth nothing before it | 1 |
+| 9 | **0.6 — the scheduled mutation sweep** *(done, 0.136.0)* | held behind 1.5 since the order was written and its trigger fired at 0.110.0; taken here because **2.4's weekly run is specified as sharing this workflow**, so the workflow has to exist first. It also lands the instrument that would catch a bad write-rail fix BEFORE the write-rail fix arrives (Phase 3's D6, whose trigger fired at 0.134.0) — the plan's own "strengthen the net before relying on it" rule, arriving for free rather than by design. Delivered 9/9 on the nine known mutants, a DERIVED registry list, and a measured refusal of the generic-operator half (R4.108) | 1 |
+| 10 | **2.4 — B5** | the Odoo half, the WEEKLY run (decided 2026-08-26: not nightly — ~$1.72 a pass is ~$52/month, against an Odoo column at std 0.203 that is not baselined, and 0.6's workflow carries a `workflow_dispatch` for the ad-hoc case), and the honesty page whose open-id list is pinned to the register's open set. Then **D6**, the mutation-gate narrowing, which R4.105 sequences after this | 1 |
 
 **What changed from §12:** 0.8 inserted at the front on measured evidence; 2.1 promoted from "parallel
 someday" to explicitly next, because it is the goal and carries no audit cost; 1.3 moves after B3
 rather than before it. The tail is unchanged, and its reasons are unchanged.
 
-**Rows 8 and 9 were added on 2026-08-22**, when this table ran out of unfinished rows and the only
-place left saying what came next was §5's design table. A table that stops naming the next step is the
+**The 2.3 and 2.4 rows were added on 2026-08-22**, when this table ran out of unfinished rows and the only
+place left saying what came next was §5's design table. (0.6 was inserted before 2.4 on 2026-08-26,
+which is why the numbering below runs past nine.) A table that stops naming the next step is the
 same failure as a row that stops being true; both were found in the same reading.
 
 **Two of §12's three held steps have had their triggers fire, and neither was acted on** (line below

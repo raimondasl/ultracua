@@ -412,6 +412,13 @@ Violating any of these is a blocking defect, not a trade-off:
   five were wrong (grep counts the shape inside COMMENTS: `spec.mutate is not None` appears in three
   findings' prose, inflating 27 to 33). Derive, then cite.
 
+- **The mutants must stay dead, and NOBODY TYPES THE LIST (0.6).** `python scripts/mutation_sweep.py`
+  runs every registry under `tests/mutations/` — the set is derived from the DIRECTORY, each registry
+  declares its own `KILLED_BY` (a mutant may override it), and the TIER SPLIT comes from the tier
+  manifest. `--tier fast` is the merge gate's half (**66 mutants, 2m59s**, no browser);
+  the weekly `mutation-sweep.yml` runs everything including the nine known mutants, whose killers are
+  page-side and need Chromium. Both are asserted to partition the set, so neither can silently drop a
+  registry — which the six hand-typed `ci.yml` steps this replaced could not (R4.107).
 - **The wiring mutants must stay dead.** `scripts/prove_red.py tests/mutations/b1_wiring.py` applies each
   of R4.48's eleven record-plumbing mutations to a scratch copy of `src/` and reports which are killed:
   **0 of 11 before the matrix, 11 of 11 after**. At 1.5 all seventeen went STALE at once — the sites they named ceased to exist — and were reported as ERRORS, not survivors; re-expressed against the sink they are **16 killed, 0 survived**, and two of the rewrites SURVIVED first, naming two properties no cell drove, and the `red-proof` CI job keeps it that way. A mutation
@@ -1345,6 +1352,71 @@ of it was free — the 21 records the series had already bought.
 * **A COIN-FLIP ROW IS RECORDED AS NOT PASSING.** `gitea-sort-list` gave three different outcomes in
   three passes; recording its tie as the quiet one would make `_flip_findings` report a flip on most
   future runs, and a channel that cries wolf gets ignored.
+
+## The nine known mutants run again, and a CI job's list was never a list (0.6, 0.136.0)
+
+reshape-plan step 0.6, held behind 1.5 since the order was written and fired at 0.110.0. Taken now
+because 2.4's weekly run is specified as sharing this workflow, so the workflow has to exist first.
+
+* **9 KILLED, 0 SURVIVED -- AND IT IS A RE-MEASUREMENT, NOT A RE-RUN.** The nine were applied by hand
+  at 0.75.0, each in its own git worktree, all nine caught; the result is quoted in `CLAUDE.md`,
+  `docs/correctness-survey.md` and `docs/reshape-plan.md`, and until now **nothing could reproduce
+  it**. That is `prove_red`'s own rule one instrument out: a claim nobody re-measures is how a green
+  instrument stays green while covering less. **SIX of the nine sites had MOVED** -- the R3.2 refusal
+  migrated out of `flows.py` into `flow._learn`, which is what makes it cover `ultracua run` and the
+  daemon rather than one caller of three; the row-identity check moved behind `resolve`'s single
+  funnel; the promotion loop grew its attributed-but-failed arm. Each mutation states the PROPERTY,
+  and a find-text that no longer matches is an ERROR -- which is what forces re-expression instead of
+  nine quiet no-ops.
+* **WHAT IT DOES NOT RE-MEASURE, stated because the 0.75.0 record is quoted three times:** *"four of
+  the nine were caught by exactly ONE test"*. Each mutant here is scored by ONE killer FILE chosen for
+  it, so this proves each is still killed and says nothing about by how many cells.
+* **A CI JOB'S LIST WAS THE HOLE, TWICE IN ONE FILE (R4.107).** Six registries were six hand-typed
+  `prove_red.py <registry> --tests ...` steps in `ci.yml`, so a seventh added under `tests/mutations/`
+  and not there would never have run -- every job green, and nothing in the suite able to fail for it.
+  And `tests/test_ci_provisioning.py` read `ci.yml` ALONE, which was an unstated assumption that there
+  would only ever be one workflow file: the first second file is the one that installs a browser and
+  runs on a schedule, i.e. precisely that file's subject, and it would have been entirely unscanned by
+  the budget pin, the apt pin and the byte-identical-install pin. Both sets are DERIVED now, and both
+  directions are asserted -- a registry named in a workflow `run:` fails, and a workflow file
+  contributing no step fails.
+* **THE TIER SPLIT CANNOT BE A DECLARATION.** `red-proof` installs no Playwright deliberately, and a
+  killer-suite leg with a browser cell fails EVERY mutant's baseline (measured on CI: 8 failed / 135
+  passed on both arms, green locally), which reads as a hole in the matrix rather than as a missing
+  browser. So which side a registry lands on is read out of the TIER MANIFEST: browser-side if ANY id
+  in ANY of its killer files is a browser test -- the conservative direction, because a killer
+  DESELECTED by the fast tier would report its mutant as a survivor. An unknown killer file RAISES
+  rather than defaulting: guess `browser` and it leaves the merge gate silently, guess `fast` and it
+  launches in a job whose conftest raises.
+* **THE ACKNOWLEDGEMENT ALREADY EXISTED, WHICH IS THE ONLY REASON THIS ALERT CAN STAY ON.** Before
+  making anything alert, ask what the operator does when they cannot fix it -- a loud channel with no
+  discharge gets `|| true`d and takes everything else dark (R3.9/CLI-1). Here a survivor goes into
+  that registry's `KNOWN_SURVIVORS` with a reason and a finding id: a reviewed diff, not a silenced
+  alarm, and `prove_red` fails in the OTHER direction the day it starts being killed again, so the
+  list can only shrink.
+* **THE GENERIC-OPERATOR HALF IS REFUSED ON MEASUREMENT, AND THE CHEAP DESIGN IS WRONG RATHER THAN
+  MERELY EXPENSIVE (R4.108).** Sized by AST over the six hot files: **2848 mutants**, which is
+  **70.4 h serial** against the fast tier -- the only killer broad enough -- against a 6 h job cap.
+  The runtime is the lesser problem. Against a NARROW killer it is cheap (3.6 h) and actively
+  misleading: the `if` family on `safety.py`, the best case in this repository, gives **6 survivors of
+  16 (38%)** and **all six are killed by the fast tier**. Extrapolated that is on the order of a
+  THOUSAND false holes, each wanting a hand-typed `KNOWN_SURVIVORS` reason. **The missing component is
+  a COVERAGE-DERIVED killer selection** -- run only the tests that execute the mutated line -- not
+  more mutants.
+* **A SURVIVOR AGAINST A KILLER YOU CHOSE IS A STATEMENT ABOUT YOUR CHOICE.** `if slot_values:` ->
+  False in `safety.idempotency_key` reads as a live inviolable-#3 defect: two rows of a parameterized
+  write mint the SAME key, so a backend dedupe silently drops rows 2..N. It is fully guarded -- seven
+  fast cells in `tests/test_slots.py` reach it -- and it was one edit from being filed as a finding.
+* **A SCAN MATCHED ITS OWN PROSE FOR THE FIFTH TIME, and the fix is the one already written here.** A
+  cell grepping the workflow TEXT for `--tier fast` went red on the comment explaining why the merge
+  gate passes it. Stop scanning text, assert the property: `test_ci_provisioning.Step.run` already
+  takes a YAML block scalar's body BY INDENT so a comment between two steps cannot leak in, and
+  reusing it beat a sixth needle that would only have moved the collision.
+* **AND THE ARMING HARNESS CAUGHT MY OWN MUTATION BEING WRONG.** The arming for that cell did
+  `text.replace("--tier fast", ..., 1)` and hit the COMMENT four lines above the step -- so it added a
+  registry name to prose, the cell correctly ignored it, and `assert_red` reported the cell as
+  unguarded. The harness was right and the mutation was wrong. Anchor a mutation on enough context to
+  name ONE site.
 
 ## The pattern that predicts the next bug
 
