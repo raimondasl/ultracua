@@ -183,15 +183,30 @@ def parse_steps(text: str, file: str = "ci.yml") -> list[Step]:
     enumerate, while reporting that it enumerated everything, is the silent-negative shape this
     file exists to close -- one level down, which CLAUDE.md names as the thing to be most
     suspicious of here.
+
+    A STEP IS A `      - ` LINE INSIDE A `    steps:` BLOCK, and the second half of that sentence is
+    not decoration. Six-space indent alone means "third level of nesting", which a step shares with
+    `on: > pull_request: > paths:` -- and the moment 2.4 added a path filter to this file, the
+    totality assert above fired on `- 'benchmarks/**'`, correctly, because by its own rule that line
+    was an unrecognised step. Widening `_STEP_KEYS` would have been the wrong fix twice over: it
+    would have admitted a non-step AND blunted the assert that caught it. Note `_JOB_START` matches
+    the top-level `on:` key too, so tracking `steps:` is what keeps a trigger block out of a job.
     """
     lines = text.splitlines()
     starts: list[tuple[str, int]] = []
     job = None
+    in_steps = False
     for i, line in enumerate(lines):
         m = _JOB_START.match(line)
         if m:
-            job = m.group("job")
+            job, in_steps = m.group("job"), False
+        elif line.startswith("    ") and not line.startswith("     ") and line.strip():
+            # Any other key at the job's own level closes a `steps:` block -- there is nothing after
+            # `steps:` in a job that could be mistaken for one, but saying so costs one branch.
+            in_steps = line.strip() == "steps:"
         if line.startswith("      - "):
+            if not in_steps:
+                continue                     # a trigger's path list, a matrix entry: not a step
             s = _STEP_START.match(line)
             if s is None or s.group("key") not in _STEP_KEYS:
                 raise AssertionError(
@@ -473,6 +488,26 @@ def test_every_scan_in_this_file_goes_red_when_armed() -> None:
     doubled = text.replace(one_install, one_install + one_install, 1)
     with pytest.raises(AssertionError, match="split WITHIN a job"):
         test_the_browser_install_is_one_step_shared_by_both_oses(parse_steps(doubled))
+
+    # (i) A `      - ` LINE OUTSIDE A `steps:` BLOCK MUST BE IGNORED — the quiet direction of the
+    # `in_steps` gate, and the one that would silently inflate the step count rather than raise.
+    # Armed against a REAL construct: `mutation-sweep.yml`'s `pull_request: paths:` list sits at the
+    # same six-space indent a step does, and firing the totality assert on it is exactly what
+    # happened when 2.4 added it. Both halves are asserted — it must not raise, and it must not be
+    # counted — because "no exception" alone is satisfied by a parser that quietly counts it.
+    weekly = next((w for w in workflows() if w.name != CI.name), None)
+    assert weekly is not None, "no second workflow file — this arming has nothing to parse"
+    weekly_text = weekly.read_text(encoding="utf-8")
+    assert "\n      - 'benchmarks/**'" in weekly_text, (
+        "the mutation is STALE: the path filter this arms against has moved or changed quoting, so "
+        "the `in_steps` gate is no longer being exercised by a real construct"
+    )
+    parsed = parse_steps(weekly_text, file=weekly.name)     # must not raise
+    assert not [s for s in parsed if "benchmarks/**" in s.label], (
+        f"a trigger's path filter was counted as a STEP: "
+        f"{[s.label for s in parsed if 'benchmarks/**' in s.label]}. It would then be reported as "
+        f"unbudgeted, and every count in this file would be inflated by the size of an `on:` block."
+    )
 
     # (h) SCAN ONLY `ci.yml` AGAIN -- the shape this file had for its whole life before 0.6, and
     # the one that would make every cell above quietly stop applying to the weekly sweep's workflow.

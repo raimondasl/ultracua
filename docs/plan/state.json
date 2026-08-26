@@ -198,12 +198,21 @@
    "landed": "0.125.0"
   },
   {
-   "id": "2.4",
+   "id": "2.4a",
    "phase": 2,
-   "title": "B5 — baseline, weekly run, honesty page",
+   "title": "B5 — the weekly run, baseline gating, the honesty page",
+   "status": "done",
+   "landed": "0.137.0",
+   "artifact": ".github/workflows/mutation-sweep.yml::customer-bench",
+   "note": "SPLIT FROM 2.4 because the Odoo half is blocked and the rest is not. Delivered: the `customer-bench` job on the weekly workflow (gated against `baselines/customer_v1_gitea.json`), a free `substrates` preflight that runs on every pull request, `corpus_run --baseline` with four refusals so the three comparative gate channels cannot be silently off, and the honesty page's open-id block machine-checked against the register in both directions. WEEKLY, not nightly (repo owner, 2026-08-26). The job REFUSES rather than skips when no ANTHROPIC_API_KEY secret is configured."
+  },
+  {
+   "id": "2.4b",
+   "phase": 2,
+   "title": "B5 — the Odoo half of the baseline",
    "status": "pending",
-   "artifact": "baselines/customer_v1.json",
-   "note": "WEEKLY, not nightly -- decided by the repo owner on 2026-08-26, with ad-hoc runs available. A full corpus pass costs ~$1.72, so nightly is ~$52/month against a substrate whose Odoo half is std 0.203 and not baselined. The run shares 0.6's workflow, which now exists and carries a `workflow_dispatch` trigger for exactly the ad-hoc case."
+   "artifact": "baselines/customer_v1_odoo.json",
+   "note": "NOT held on a plan STEP, which is why the status is `pending` rather than `held`: it waits on R4.27's over-marking, addressed by correctness-plan decision D6, and D6 is not a row in this table. Odoo measured mean 0.181, std 0.203 over three reps, with 58% of its replay refusals being the mutation gate refusing a step R4.27 misfiled as a write (R4.105). A baseline cut now would be dominated by a filed defect and invalidated the moment it is fixed. The artifact is FORWARD-DECLARED, like 0.5/0.7: if the slice that lands it picks another name, the absent-direction stays quiet and the done-direction is what catches it."
   }
  ]
 }

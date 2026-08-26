@@ -35,9 +35,10 @@ second time.
 | 2.1 | 2 | done | #189 | B2 — substrates, reset, readiness, boundary ledger |
 | 2.2 | 2 | done | 0.113.0 | B3 — the outcome vocabulary |
 | 2.3 | 2 | done | 0.125.0 | B4 — the 14-scenario corpus + server-side oracles |
-| 2.4 | 2 | pending | — | B5 — baseline, weekly run, honesty page |
+| 2.4a | 2 | done | 0.137.0 | B5 — the weekly run, baseline gating, the honesty page |
+| 2.4b | 2 | pending | — | B5 — the Odoo half of the baseline |
 
-**21 of 24 steps done.** Every row is adjudicated against the tree by `tests/test_plan_state.py` — a `done` step must have its artifact and a `pending`/`held` step must not.
+**22 of 25 steps done.** Every row is adjudicated against the tree by `tests/test_plan_state.py` — a `done` step must have its artifact and a `pending`/`held` step must not.
 <!-- /generated:plan-status -->
 
 Researched 2026-08-16
@@ -383,7 +384,8 @@ change.
 | 2.1 | **B2** — substrates (Odoo + Gitea), reset, readiness hook, harness skeleton, and the **boundary ledger**: derive every module-level binding of `build_client`/`build_router`/`get_provider` from the live import graph and wrap them, so cost is metered where `Router.complete` meters it (`llm/base.py:71-75`), never from `RunRecord`. **(critic)** score with `count` and derive the 0-LLM claim per call *site* — a data replay legitimately extracts once, so a blanket `refuse` mode would bucket every extracting read as `llm_reached`, which is over-refusal in the instrument | nothing in `src/` | vision/gemini configs refused as a **stated bound** until the SDK pin covers them |
 | 2.2 | **B3** — outcome vocabulary + record/baseline format; QUIET as an allowlist; the aggregator **fails** on cost `None`; `refused` sub-buckets derive from 1.4's codes, never message labels; `RunRecord` consumed only as a cross-check → a `record_disagrees` bucket | 1.4 | if 1.4 slips, sub-labels are reported unbucketed and re-derived later |
 | 2.3 | **B4** — the 14-scenario paired corpus + server-side oracles + the key-logging proxy; write oracles assert the changed record's **linkage/identity**, never a count; `--arm-oracles` shows every oracle RED before any scored run; a scenario with zero premise counters is not scored | 2.2 | the long pole; adversarial pass on this PR |
-| 2.4 | **B5** — baseline, nightly (sharing 0.6's workflow), and an honesty page whose open-id list is pinned to the register's open set | 2.3 | ubuntu-only nightly is a documented blind spot |
+| 2.4a | **B5** — the WEEKLY run (sharing 0.6's workflow, as specified), gated against `baselines/customer_v1_gitea.json`, plus a free `substrates` preflight on every PR and an honesty page whose open-id list is machine-checked against the register in BOTH directions | 2.3 | ubuntu-only weekly is a documented blind spot; the run REFUSES without a key rather than skipping |
+| 2.4b | **B5** — the Odoo half. Blocked, not deferred: 58% of Odoo's replay refusals are the mutation gate refusing a step R4.27 misfiled as a write, so a baseline cut now is dominated by a filed defect (R4.105) | D6 | not a plan step, hence `pending` rather than `held` |
 
 ### Phase 3 — un-committed, one at a time, only when a number indicts it (~26 days)
 
@@ -777,7 +779,8 @@ failure §13 exists to correct.
 | 7 | **1.6 -> 1.7 -> 1.8** *(done, 0.116.0 / 0.117.0 / 0.118.0 — **PHASE 1 COMPLETE**)* | unchanged; 1.6 is the largest ratchet consumer, 1.8 moves every call site and stays last | 2 / 0 / 1 |
 | 8 | **2.3 — B4** (done, 0.125.0) | **DONE.** The 14-scenario paired corpus, its server-side oracles (SQL for Odoo, API for Gitea) and the Idempotency-Key logging proxy, on top of the substrates 2.1 already built and the vocabulary 2.2 already froze. §7 calls it the long pole and the one where the house rules bite hardest, and it shipped in five PRs (#200 substrates, #201 oracle machinery, #202 the Gitea seven, #203 the Odoo seven, then the proxy). **0.7 did NOT land with it, and the stated reason was refuted rather than deferred**: B4 added ZERO fixture handlers, because its scenarios run against live containers, so the "14 new fixtures correct by construction" payoff does not exist. It did NOT spend the ≈$60–250 either — every slice was key-less; the core learns are 2.4's, and they need a human's go-ahead | **adversarial pass on this PR** |
 | 9 | **0.6 — the scheduled mutation sweep** *(done, 0.136.0)* | held behind 1.5 since the order was written and its trigger fired at 0.110.0; taken here because **2.4's weekly run is specified as sharing this workflow**, so the workflow has to exist first. It also lands the instrument that would catch a bad write-rail fix BEFORE the write-rail fix arrives (Phase 3's D6, whose trigger fired at 0.134.0) — the plan's own "strengthen the net before relying on it" rule, arriving for free rather than by design. Delivered 9/9 on the nine known mutants, a DERIVED registry list, and a measured refusal of the generic-operator half (R4.108) | 1 |
-| 10 | **2.4 — B5** | the Odoo half, the WEEKLY run (decided 2026-08-26: not nightly — ~$1.72 a pass is ~$52/month, against an Odoo column at std 0.203 that is not baselined, and 0.6's workflow carries a `workflow_dispatch` for the ad-hoc case), and the honesty page whose open-id list is pinned to the register's open set. Then **D6**, the mutation-gate narrowing, which R4.105 sequences after this | 1 |
+| 10 | **2.4a — B5's runnable half** *(done, 0.137.0)* | the WEEKLY run (decided 2026-08-26: not nightly — ~$1.72 a pass is ~$52/month), gated against the Gitea baseline, plus the honesty page's machine-checked open-id block. **The Odoo half SPLIT OUT as 2.4b** rather than holding the whole step: it is blocked on R4.27 and everything else was ready. Two things this slice measured rather than assumed — the gate's tolerance (a weekly pass must land ≥4/7 against the baseline's Wilson bound, versus 5/7, 5/7, 6/7 observed) and whether CI has a Docker daemon at all (R4.109) | 1 |
+| 11 | **D6 — the mutation-gate narrowing** | correctness-plan Phase 3, trigger fired at 0.134.0. Opens with a ~$0.10 measurement of which action types Odoo's failing steps are, BEFORE any `src/` change. **2.4b unblocks behind it** | its own adversarial pass |
 
 **What changed from §12:** 0.8 inserted at the front on measured evidence; 2.1 promoted from "parallel
 someday" to explicitly next, because it is the goal and carries no audit cost; 1.3 moves after B3

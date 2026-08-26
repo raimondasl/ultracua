@@ -10,12 +10,19 @@ WHAT IT ADDS OVER `scored_run`, which drives one scenario: the LOOP, the RECORD 
 `build_bench_record` needs one `Scored` per scenario and `gate_bench_record` needs the whole record,
 so neither could be reached from a runner that returns a dict about a single row.
 
-IT DOES NOT WRITE A BASELINE, and that is deliberate rather than unfinished. `baselines/customer_v1
-.json` is 2.4's artifact and one pass cannot be it: B3 already refuses to gate a single flipped
-scenario (`FLIP_IS_GATED = False`) precisely because one pass per scenario cannot separate "this flow
-stopped working" from "this flow is flaky". `--reps` runs the corpus N times and writes N records so
-that question can be ASKED; promoting a record to `baselines/` stays a human act, with the stability
-across those reps in front of you.
+IT READS A BASELINE AND NEVER WRITES ONE, and both halves are deliberate.
+
+READS: `--baseline` is what turns on three of `gate_bench_record`'s five channels — cost, rate and
+flip run only `if baseline is not None`. Without it the gate is ABSOLUTE ONLY, and a scheduled run
+that failed to find its baseline would print `GATE: PASS` having compared against nothing. The file
+is loaded and validated BEFORE the first scenario is paid for, which is R4.99's phase ordering.
+
+NEVER WRITES: one pass cannot be a baseline. B3 refuses to gate a single flipped scenario
+(`FLIP_IS_GATED = False`) precisely because one pass per scenario cannot separate "this flow stopped
+working" from "this flow is flaky" — and 0.130.0 measured that with a number, `odoo-create-lead`
+learning in 6 steps and 0 steps on identical configuration. `--reps` runs the corpus N times and
+writes N records so the question can be ASKED; `corpus_aggregate --baseline` folds them; promoting
+the result to `baselines/` stays a human act, with the stability across those reps in front of you.
 
 A ROW THAT RAISES IS NOT A ROW THAT VANISHES. `score_one` already attributes its own failures
 (harness vs agent, R4.99), but it can still raise outright -- a container that dies mid-run, a
@@ -111,6 +118,45 @@ def _print_report(rec: dict, verdict: dict) -> None:
     print("=" * 78)
 
 
+def _require_a_comparable_baseline(baseline: dict, substrate: str) -> None:
+    """Refuse a baseline that is not about THIS corpus, before anything is paid for.
+
+    THE FAILURE THIS PREVENTS IS SILENT AND FLATTERING. `_rate_findings` compares metric NAMES and
+    `_flip_findings` compares scenario NAMES; hand it the Gitea baseline for an Odoo run and the
+    scenario sets are disjoint, so `_flip_findings` finds nothing to flip and `_rate_findings`
+    compares `availability_rate` across two different corpora as though they were the same
+    population. The verdict is a confident PASS built on a comparison nobody made — which is this
+    register's recurring shape (a bucket that absorbs what nobody classified) wearing a gate.
+
+    `bench` is `customer-<substrate>`, minted by `build_bench_record` and carried by `as_baseline`,
+    so the check needs no new field. The scenario-set equality is the belt: a corpus that GREW since
+    the baseline was cut is a real event and the operator should re-cut rather than be told the two
+    are comparable.
+    """
+    want = f"customer-{substrate}"
+    got = baseline.get("bench")
+    if got != want:
+        raise SystemExit(
+            f"the baseline is {got!r} but this run is {want!r}. Comparing them would gate a rate "
+            f"against a DIFFERENT corpus — and it would look like a pass, because the scenario sets "
+            f"are disjoint and the flip channel finds nothing to report.")
+    if baseline.get("kind") != "corpus-baseline":
+        raise SystemExit(
+            f"{got!r} has kind {baseline.get('kind')!r}, not 'corpus-baseline'. Only "
+            f"`corpus_aggregate.as_baseline` output carries the (mean, n) the Wilson bound needs; a "
+            f"single pass promoted by hand would gate against n=7 and read as far more evidence "
+            f"than it is.")
+    live = {e.scenario.name for e in corpus.CORPORA[substrate]}
+    missing = sorted(set(baseline.get("scenarios", {})) - live)
+    added = sorted(live - set(baseline.get("scenarios", {})))
+    if missing or added:
+        raise SystemExit(
+            f"the corpus has moved since this baseline was cut: {len(added)} scenario(s) added "
+            f"{added}, {len(missing)} gone {missing}. Re-cut the baseline — a rate over a changed "
+            f"corpus is not comparable to one over the old, which is `baselines/README.md`'s "
+            f"standing rule.")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--substrate", required=True, choices=sorted(corpus.CORPORA))
@@ -123,10 +169,24 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default=None, help="append each rep's record here, one JSON per line")
     ap.add_argument("--acknowledge", default=None,
                     help="JSON file holding [[scenario, reason], ...] pairs the gate may pass")
+    ap.add_argument("--baseline", default=None,
+                    help="a committed baseline to compare against (baselines/customer_v1_*.json). "
+                         "Without it the gate is ABSOLUTE ONLY — the inviolables, coverage, and "
+                         "nothing about regression.")
     args = ap.parse_args(argv)
 
     ack = tuple(tuple(x) for x in json.loads(Path(args.acknowledge).read_text(encoding="utf-8"))) \
         if args.acknowledge else ()
+    # THE THREE COMPARATIVE CHANNELS ARE OFF UNTIL A BASELINE IS NAMED, and that asymmetry is the
+    # whole reason this flag exists rather than a default path. `gate_bench_record` runs cost, rate
+    # and flip only `if baseline is not None`, so a scheduled run that quietly failed to find its
+    # baseline would still print a GATE: PASS having compared against nothing — the absolute
+    # channels alone. Loading it HERE means a missing or malformed file raises before a single
+    # scenario is paid for, which is the same phase-ordering rule R4.99 put on the login.
+    baseline = None
+    if args.baseline:
+        baseline = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
+        _require_a_comparable_baseline(baseline, args.substrate)
     only = tuple(s for s in args.only.split(",") if s)
 
     worst = 0
@@ -144,7 +204,7 @@ def main(argv=None) -> int:
         rec = outcomes.build_bench_record(scored, bench=f"customer-{args.substrate}",
                                           provider="anthropic", timestamp=stamp)
         rec["scenario_rows"] = rows
-        verdict = outcomes.gate_bench_record(rec, acknowledged=ack)
+        verdict = outcomes.gate_bench_record(rec, baseline=baseline, acknowledged=ack)
         _print_report(rec, verdict)
         if args.out:
             with open(args.out, "a", encoding="utf-8") as fh:
