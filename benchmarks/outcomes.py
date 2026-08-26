@@ -550,8 +550,15 @@ def classify(truth: ScenarioTruth, run, oracle: Oracle,
     #
     # A runner that reports neither field gets `None` and falls through to 2b, so this cannot fire on
     # a record that predates it.
+    # `actions_taken`, NOT `recipe_steps` (R4.103). The first draft read the CACHED RECIPE's length,
+    # which is 0 whenever nothing was cached -- true both for a task that needed no work and for a
+    # learn that acted and then failed verify-by-replay. The second is a real authoring failure, and
+    # calling it `no_actions_needed` deletes it from the product's account in the flattering
+    # direction. `recipe_steps == 0` is KEPT as well: a cached recipe means there IS something to
+    # replay, so the outcome cannot apply however few actions were taken.
     if (getattr(run, "authored", None) is False
             and getattr(run, "recipe_steps", None) == 0
+            and getattr(run, "actions_taken", None) == 0
             and getattr(run, "learn_found", None) is True
             and not truth.mutating):
         return _verdict(NO_ACTIONS_NEEDED,
