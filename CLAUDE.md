@@ -1251,6 +1251,35 @@ code shipped three slices earlier and corrected a claim in a finding filed one s
   the product**, and one `grep` at `browser.py:_sel` was the difference between a filed finding and
   a filed fiction.
 
+## The Odoo control group was one word away from working (R4.104, 0.132.0)
+
+`odoo-menu-nav` failed at 21 actions and, by its own comment's rule, made the whole Odoo column
+unreadable. The navigation was never the problem.
+
+* **DRIVE A CONTROL THE WAY THE PRODUCT DRIVES IT, OR YOU ARE TESTING NOTHING.** Three probes of the
+  app switcher failed on `has-text` and `get_by_role(name=…)` and told me only that my probe was
+  wrong. `BrowserSession.act` resolves by `[data-ultracua-ref]`; driving `Home Menu` that way works
+  first time and offers CRM / Calendar / Contacts / Dashboards / Invoicing / Settings.
+* **THE WORD "CONFIGURED" WAS THE DEFECT.** It points at CRM -> Configuration -> Stages, and
+  `Configuration` is **absent from the observation** on a deep-linked CRM action (80 elements, zero
+  matches, `.o_menu_sections` 0). The answer was on the PIPELINE BOARD the whole time, two clicks
+  away. Note the asymmetry that hid it: arriving via the app switcher DOES restore the menu bar, so
+  the same app shows different affordances depending on how you got there.
+* **AND THE FIRST REWORDING WAS STILL WRONG, WHICH ONLY THE LIVE RUN CAUGHT.** "How many stages does
+  the board show" scored `data: 5` against `expected: 4` — and the agent was right to: the board has
+  four TITLED groups plus one `o_column_quick_create` placeholder, which is column-shaped. **A
+  control group must have ONE reading**, so it asks for the last stage's NAME, which the placeholder
+  cannot be confused with. Measured: `data: "Won"` == `expected: "Won"`.
+* **TWO RESIDUALS, RECORDED.** It passed at **21 actions against a 20-step ceiling** — no headroom,
+  and an earlier wording took 13, so this row will sit near the ceiling and may flake. And its
+  OUTCOME is `over_gated` like every Odoo read, so the control cannot be read from the verdict: the
+  signal is `data` vs `expected`, and a reader checking only the outcome will think it still fails.
+* **A CELL I WROTE IN THIS SLICE WAS DELETED IN IT.** A pairing assertion ("both control groups ask
+  `how many`") was refuted by the live run, relaxed — and then PASSED against the mutation written
+  to kill it. What remained was already enforced by `CorpusEntry.__post_init__`, so it could not
+  fail. Removed rather than kept as decoration: this project's own rule is that a cell which cannot
+  fail is worse than none.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

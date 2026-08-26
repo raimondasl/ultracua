@@ -398,6 +398,29 @@ def _top_opportunity(sub) -> str:
     return top[0]
 
 
+def _last_stage_name(sub) -> str:
+    """The name of the pipeline's final stage, by sequence -- the control group's answer.
+
+    A NAME RATHER THAN A COUNT, because the board's count has two readings. Measured on the live
+    board: four titled groups plus one `o_column_quick_create` placeholder, so a careful viewer can
+    say four or five and the row would score a correct answer as wrong. The placeholder carries no
+    title, so the LAST NAMED column is unambiguous.
+
+    Ordered by `sequence`, which is what the board orders its columns by -- asking the database for
+    the same ordering the UI uses is the whole point, and `_oldest_title` one function up exists
+    because a different ordering silently answered a different question.
+    """
+    rows = sub.query("SELECT name FROM crm_stage ORDER BY sequence DESC LIMIT 1")
+    if not rows:
+        raise O.OracleError("the substrate holds no crm_stage rows; the pipeline board would be "
+                            "empty and this row could not be answered at all")
+    # Odoo stores translatable names as a JSON map; the board renders the en_US value.
+    raw = str(rows[0][0] if isinstance(rows[0], (list, tuple)) else rows[0])
+    if '"en_US"' in raw:
+        raw = raw.split('"en_US":', 1)[1].strip().strip("{}").strip().strip('"')
+    return raw.strip().strip('"')
+
+
 def _stage_count(sub) -> str:
     """How many opportunities sit in `ODOO_STAGE` -- refusing if another stage holds the same number.
 
@@ -491,17 +514,36 @@ ODOO = (
         oracle=lambda s: O.OdooReadOracle(s, "odoo-search"),
         expected_answer=_opportunity_matching("carpet")),
     CorpusEntry(
-        # THE IN-SUBSTRATE CONTROL GROUP -- the navigation Odoo does not promote to a write. Two menu
-        # hops (CRM -> Configuration -> Stages) and a small exact answer. Deliberately EASY: if this
-        # row fails, the failure is not about drift or saturation and every other Odoo number is
-        # suspect. Its answer is small enough to be guessable, which is a real limit and is the same
-        # limit `gitea-menu-nav` carries; the pair is what is being read, not either number alone.
+        # THE IN-SUBSTRATE CONTROL GROUP. Deliberately EASY: if this row fails, the failure is not
+        # about drift or saturation and every other Odoo number is suspect. Its answer is small
+        # enough to be guessable, which is a real limit and is the same limit `gitea-menu-nav`
+        # carries; the pair is what is being read, not either number alone.
+        #
+        # THE WORD "CONFIGURED" IS WHAT BROKE IT (R4.104), NOT THE NAVIGATION. The old goal asked
+        # for the stages "configured", which points at CRM -> Configuration -> Stages -- and
+        # `Configuration` is **not in the agent's observation** when it deep-links to a CRM action
+        # (measured: 80 elements, zero matching "Configuration"; `.o_menu_sections` count 0). So the
+        # row failed at 21 actions and the whole Odoo column became unreadable by this comment's own
+        # rule.
+        #
+        # THE ANSWER WAS ALWAYS TWO CLICKS AWAY. `/web` lands on **Discuss**, Odoo's chat app -- that
+        # is the navigation, and it works: `Home Menu` is offered as an element, clicking it by ref
+        # yields CRM / Calendar / Contacts / Dashboards / Invoicing / Settings, and CRM opens on the
+        # PIPELINE BOARD.
+        #
+        # AND IT DOES NOT ASK FOR A COUNT, because the board's count is AMBIGUOUS. Measured: four
+        # titled groups (New, Qualified, Proposition, Won), none folded -- and **one
+        # `o_column_quick_create`**, the "add a column" placeholder, which renders as a column. The
+        # live run counted **5** against a `_stage_total` of 4, and it was not being careless: a
+        # fifth column-shaped thing is there. A control group has to have ONE reading, so it asks for
+        # the LAST STAGE'S NAME, which the placeholder cannot be confused with (it has no title).
         scenario=Scenario(name="odoo-menu-nav", substrate="odoo",
-                          goal="open the CRM app and report how many pipeline stages are configured",
+                          goal="open the CRM app and report the name of the last stage column on "
+                               "the pipeline board",
                           url_path="/web"),
         truth=ScenarioTruth(name="odoo-menu-nav"),
         oracle=lambda s: O.OdooReadOracle(s, "odoo-menu-nav"),
-        expected_answer=_stage_total),
+        expected_answer=_last_stage_name),
     CorpusEntry(
         # A WIRE-MARKED WRITE: Odoo's OWL client POSTs JSON-RPC, so there is no `form_method` to read
         # and the structural classifier cannot see it. The contrast with `gitea-comment`, whose form

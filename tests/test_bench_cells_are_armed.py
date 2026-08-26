@@ -1012,3 +1012,15 @@ def test_the_outcome_notices_a_missing_action_count_being_read_as_zero(monkeypat
                     'and getattr(run, "actions_taken", None) == 0',
                     'and not getattr(run, "actions_taken", None)')
     print(assert_red(TNA.test_a_missing_action_count_does_not_mint_it_either))
+
+
+def test_the_control_group_pin_notices_the_configuration_wording_coming_back(monkeypatch) -> None:
+    """R4.104 restored exactly: the goal that sent the agent to a menu absent from its observation,
+    cost 21 actions, and made the whole Odoo column unreadable."""
+    import tests.test_control_group_premise as TCG
+
+    entry = next(e for e in C.CORPORA["odoo"] if e.scenario.name == "odoo-menu-nav")
+    monkeypatch.setattr(
+        entry.scenario, "goal",
+        "open the CRM app and report how many pipeline stages are configured", raising=False)
+    print(assert_red(TCG.test_the_odoo_control_group_does_not_send_the_agent_to_a_menu_it_cannot_see))
