@@ -84,10 +84,26 @@ def check(name: str, *, seed: bool = True, keep: bool = False) -> dict:
         if seed:
             t1 = time.monotonic()
             sub.seed()
+            # AND SNAPSHOT, ALWAYS, because seeding without it produces a substrate that the only
+            # consumer there is cannot use. `score_one` calls `substrate.reset()` before every
+            # scenario, and `reset()` restores from a snapshot `seed()` does not take — nothing in
+            # `benchmarks/` ever called `snapshot()`, because on a developer host somebody ran it by
+            # hand once and the world persisted between sessions.
+            #
+            # MEASURED, on 2.4a's first real weekly run: all seven Gitea scenarios raised
+            # `SubstrateError: no seed at /data/gitea/seed.db — call snapshot() once after seeding`,
+            # and the whole record was refused rather than published as 0.0 (R4.110). That is the
+            # third local-vs-CI axis arriving one layer down from where 0.137.0 had just corrected
+            # it: a job that assumes a provisioned substrate is assuming the developer host.
+            #
+            # NOT behind a flag. A `--no-snapshot` would be a way to build the broken thing on
+            # purpose, and there is no caller that wants one.
+            sub.snapshot()
             report["seed_s"] = round(time.monotonic() - t1, 1)
             # THE SEED IS ONLY WORTH SOMETHING IF IT LANDED. `assert_writable` proves the substrate
             # accepts a write; it says nothing about the corpus's own fixtures existing, which is
-            # what every scenario's expected answer is computed from.
+            # what every scenario's expected answer is computed from. It also proves the substrate
+            # came back UP after `snapshot()` stopped it.
             sub.assert_writable()
         report["ok"] = True
     finally:
