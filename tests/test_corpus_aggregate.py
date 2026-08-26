@@ -141,3 +141,57 @@ def test_a_row_that_fails_the_SAME_way_every_time_is_not_surfaced() -> None:  # 
     that is not there."""
     agg = CA.fold([_rec({"a": O.NOT_AUTHORED})] * 3)
     assert agg["unstable"] == [] and agg["varies"] == []
+
+
+# --- the baseline artifact ------------------------------------------------------------------------
+
+def test_the_baseline_counts_every_observation_not_the_corpus_size() -> None:
+    """`n` is what the gate's Wilson bound is computed from, so it must reflect the evidence bought.
+    Three passes of seven scenarios is 21 observations; recording 7 would throw two thirds of the
+    series away and re-create the problem the reps were paid for."""
+    base = CA.as_baseline([_rec(ALL_OK)] * 3)
+    assert base["metrics"]["availability_rate"]["n"] == 9
+    assert base["reps"] == 3
+
+
+def test_a_coin_flip_row_is_recorded_as_NOT_passing() -> None:  # noqa: N802
+    """`_flip_findings` reports a row that was quiet in the baseline and is not now. Recording a
+    1-of-3 row as quiet would make it report a flip on most future runs — and a channel that cries
+    wolf gets ignored, which is the failure mode R3.9/CLI-1 is about."""
+    base = CA.as_baseline([_rec({"a": O.OK}), _rec({"a": O.REFUSED}), _rec({"a": O.NOT_AUTHORED})])
+    assert base["scenarios"]["a"]["outcome"] not in O.QUIET_OUTCOMES
+    assert [u["scenario"] for u in base["unstable"]] == ["a"], "and it is named as untrustworthy"
+
+
+def test_the_baseline_cost_is_the_MAX_observed_not_the_mean() -> None:  # noqa: N802
+    """MEASURED, AND THE MEAN WAS WRONG. `_cost_findings` regresses at `baseline * 1.25`, and three
+    identical Gitea passes cost $0.3502 / $0.8421 / $0.6167 — an **82% spread**. Against a mean
+    baseline the gate failed rep 2, one of the passes the baseline was built from.
+    """
+    base = CA.as_baseline([_rec(ALL_OK, cost=0.35), _rec(ALL_OK, cost=0.84),
+                           _rec(ALL_OK, cost=0.62)])
+    assert base["cost_usd"] == 0.84
+    assert base["cost_per_rep"] == [0.35, 0.84, 0.62], (
+        "the mean stays recoverable — the expected cost and the alarm threshold are different "
+        "questions and the artifact must not force one to stand in for the other")
+
+
+def test_a_baseline_passes_the_very_passes_it_was_built_from() -> None:
+    """THE LOAD-BEARING CELL. A baseline that fails its own evidence is not a baseline, and this is
+    exactly what the mean-cost draft did. Both directions matter, so the next cell breaks it."""
+    recs = [_rec(ALL_OK, cost=0.35), _rec({**ALL_OK, "c": O.REFUSED}, cost=0.84),
+            _rec(ALL_OK, cost=0.62)]
+    base = CA.as_baseline(recs)
+    for i, r in enumerate(recs, 1):
+        assert O.gate_bench_record(r, baseline=base)["ok"], f"rep {i} fails its own baseline"
+
+
+def test_a_baseline_still_fails_a_run_that_really_regressed() -> None:
+    """The other half — without it, everything above is satisfied by a baseline that passes anything.
+    """
+    recs = [_rec(ALL_OK, cost=0.5)] * 3
+    base = CA.as_baseline(recs)
+    collapsed = _rec({k: O.NOT_AUTHORED for k in ALL_OK}, mean=0.0, cost=0.5)
+    assert O.gate_bench_record(collapsed, baseline=base)["ok"] is False
+    blown = _rec(ALL_OK, cost=5.0)
+    assert O.gate_bench_record(blown, baseline=base)["ok"] is False

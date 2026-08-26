@@ -323,3 +323,38 @@ Notes:
   but **not gated** — it's an in-process micro-timing that depends on the machine.
 - `pass_k` here is strict ("a rep passes only if ALL its tasks pass"); the per-task `replay_success_rate`
   mean is the more actionable discovery-reliability signal.
+
+## `customer_v1_gitea.json` — the customer benchmark, GITEA ONLY (2026-08-26)
+
+**What it is.** Three full passes of the seven Gitea corpus scenarios, folded by
+`benchmarks.corpus_aggregate --baseline`. `availability_rate` mean **0.762** over **n=21**
+scenario-observations (3 reps x 7 scenarios), cost $1.81 for the series.
+
+**Why the name says `_gitea`.** It is half of what step 2.4 owes. `baselines/customer_v1.json` is
+that step's artifact and covers BOTH substrates; writing this under that name would have marked the
+step shipped while the Odoo half, the nightly and the honesty page do not exist. The plan-state test
+caught exactly that and is the reason for the rename.
+
+**What it does prove.** Five of the seven rows returned an identical verdict in all three passes,
+including `gitea-comment` at **3/3 `true`** — a real write, learned once and replayed at 0 LLM calls
+every time. `gitea-start-timer` is **0/3 `not_authored`**: a stable, reproducible product limitation
+(R4.102, a control below the fold that never enters the agent's observation), which is what a
+baseline wants a known failure to look like.
+
+**What it does NOT prove.** `gitea-sort-list` gave THREE different outcomes in three passes
+(`ok` / `refused` / `not_authored`) and is carried in `unstable` — its baseline row is recorded as
+NOT passing, and no number here should be read as evidence about it. And three passes is a flake
+detector, not a stability certificate: a row passing 3/3 could still be 80% reliable, which shows
+3/3 about half the time.
+
+**Why `cost_usd` is the MAXIMUM observed, not the mean.** `_cost_findings` regresses at
+`baseline * 1.25`, and the three passes cost $0.3502 / $0.8421 / $0.6167 — an **82% spread**,
+because a learn that fails spends its whole budget and which rows fail varies. A mean baseline
+failed rep 2, one of the passes it was built from (R4.106). `cost_per_rep` carries the individual
+values so the mean is recoverable.
+
+**Why Odoo is absent.** Not an oversight, and not a lack of measurement — see R4.105. Odoo's three
+reps gave mean 0.181 with std 0.203, and **58% of its 12 replay refusals are the mutation gate
+refusing a step that R4.27 misfiled as a write**. A gated step loses self-heal, so drift becomes a
+hard refusal rather than a recovery. A baseline written now would be dominated by a filed defect and
+invalidated when it is fixed.
