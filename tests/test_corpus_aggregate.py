@@ -119,3 +119,25 @@ def test_it_does_not_write_a_baseline() -> None:
                if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "open"]
     assert targets == ["args.out"], (
         f"this module opens {targets}; the only permitted destination is the caller's --out")
+
+
+def test_a_row_that_fails_two_different_ways_is_surfaced_separately() -> None:
+    """FOUND BY THE FIRST REAL SERIES. `odoo-menu-nav` came back 0/3 having given `over_gated` in
+    some passes and `refused` in others — it showed as stable because neither outcome is a pass,
+    and a row failing two different ways is not the same as one failing the same way every time.
+
+    Kept out of `unstable` deliberately: a RATE over such a row is reproducible, so a baseline is
+    not endangered by it. What it endangers is the diagnosis.
+    """
+    agg = CA.fold([_rec({"a": O.OVER_GATED}), _rec({"a": O.REFUSED}), _rec({"a": O.OVER_GATED})])
+    assert agg["unstable"] == [], "the pass/fail never moved, so the rate is not in doubt"
+    assert [v["scenario"] for v in agg["varies"]] == ["a"]
+    assert agg["varies"][0]["outcomes"] == sorted({O.OVER_GATED, O.REFUSED})
+
+
+def test_a_row_that_fails_the_SAME_way_every_time_is_not_surfaced() -> None:  # noqa: N802
+    """Both directions. `gitea-start-timer` is 0/3 `not_authored` in the real series — a stable,
+    reproducible product limitation (R4.102), and flagging it would send someone hunting a flake
+    that is not there."""
+    agg = CA.fold([_rec({"a": O.NOT_AUTHORED})] * 3)
+    assert agg["unstable"] == [] and agg["varies"] == []

@@ -74,7 +74,7 @@ def fold(records: "list[dict]") -> dict:
             f"result would say so.")
 
     names = sorted(sets[0])
-    stability, unstable = {}, []
+    stability, unstable, varies = {}, [], []
     for name in names:
         seen = [r["scenarios"][name]["outcome"] for r in records]
         scored = [o for o in seen if o != UNSCORED]
@@ -88,6 +88,19 @@ def fold(records: "list[dict]") -> dict:
         if scored and 0 < passes < len(scored):
             unstable.append({"scenario": name, "passes": passes, "of": len(scored),
                              "outcomes": sorted(set(seen))})
+        elif len(set(seen)) > 1:
+            # A WEAKER SIGNAL, AND THE FIRST REAL SERIES IS WHY IT EXISTS. `unstable` catches
+            # PASS/FAIL flips, which is what a rate depends on -- but `odoo-menu-nav` came back 0/3
+            # having given `over_gated` in some passes and `refused` in others, and a row that fails
+            # two different ways is not the same as one that fails the same way every time. It
+            # showed as stable because neither outcome is a pass. The information was already in the
+            # record and nothing pointed at it.
+            #
+            # Kept SEPARATE from `unstable` rather than merged: a rate built on this row is
+            # reproducible, so a baseline is not endangered by it. What it endangers is the
+            # DIAGNOSIS -- two failure modes behind one number.
+            varies.append({"scenario": name, "passes": passes, "of": len(scored),
+                           "outcomes": sorted(set(seen))})
 
     # PER REP, which is what `variance.aggregate` has always meant by the word. Each value is one
     # pass's availability over the corpus, so the spread across them is a real run-to-run noise
@@ -120,6 +133,8 @@ def fold(records: "list[dict]") -> dict:
         },
         # THE DELIVERABLE. Everything above is arithmetic; this is the list a human acts on.
         "unstable": unstable,
+        #: Rows whose VERDICT changed while their pass/fail did not -- see the note in `fold`.
+        "varies": varies,
         "stability": stability,
         # UNKNOWN IS ABSORBING (1.3). One unpriceable pass makes the series total unknown rather than
         # silently reporting the sum of the passes that happened to be priceable.
@@ -143,6 +158,12 @@ def _print(agg: dict) -> None:
         print(f"  UNSTABLE ROWS ({len(agg['unstable'])}) — these are what a baseline must not trust:")
         for u in agg["unstable"]:
             print(f"    {u['scenario']:26} passed {u['passes']}/{u['of']}   saw {u['outcomes']}")
+    if agg.get("varies"):
+        print()
+        print(f"  SAME VERDICT? NO ({len(agg['varies'])}) — the pass/fail did not move, but the")
+        print("  REASON did. A rate over these rows is reproducible; a diagnosis is not:")
+        for v in agg["varies"]:
+            print(f"    {v['scenario']:26} passed {v['passes']}/{v['of']}   saw {v['outcomes']}")
     print("=" * 78)
 
 
