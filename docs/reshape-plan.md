@@ -35,9 +35,10 @@ second time.
 | 2.1 | 2 | done | #189 | B2 — substrates, reset, readiness, boundary ledger |
 | 2.2 | 2 | done | 0.113.0 | B3 — the outcome vocabulary |
 | 2.3 | 2 | done | 0.125.0 | B4 — the 14-scenario corpus + server-side oracles |
-| 2.4 | 2 | pending | — | B5 — baseline, weekly run, honesty page |
+| 2.4a | 2 | done | 0.137.0 | B5 — the weekly run, baseline gating, the honesty page |
+| 2.4b | 2 | pending | — | B5 — the Odoo half of the baseline |
 
-**21 of 24 steps done.** Every row is adjudicated against the tree by `tests/test_plan_state.py` — a `done` step must have its artifact and a `pending`/`held` step must not.
+**22 of 25 steps done.** Every row is adjudicated against the tree by `tests/test_plan_state.py` — a `done` step must have its artifact and a `pending`/`held` step must not.
 <!-- /generated:plan-status -->
 
 Researched 2026-08-16

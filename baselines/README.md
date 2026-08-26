@@ -324,6 +324,8 @@ Notes:
 - `pass_k` here is strict ("a rep passes only if ALL its tasks pass"); the per-task `replay_success_rate`
   mean is the more actionable discovery-reliability signal.
 
+<!-- honesty:customer-bench -->
+
 ## `customer_v1_gitea.json` — the customer benchmark, GITEA ONLY (2026-08-26)
 
 **What it is.** Three full passes of the seven Gitea corpus scenarios, folded by
@@ -358,3 +360,36 @@ reps gave mean 0.181 with std 0.203, and **58% of its 12 replay refusals are the
 refusing a step that R4.27 misfiled as a write**. A gated step loses self-heal, so drift becomes a
 hard refusal rather than a recovery. A baseline written now would be dominated by a filed defect and
 invalidated when it is fixed.
+
+
+### The open defects these numbers are standing on
+
+Every number above is measured under the product as it is TODAY, and some of what it measures is a
+filed defect rather than a property of the approach. This list is machine-checked against
+`docs/register/state.json` by `tests/test_honesty_page.py`, in both directions:
+
+* **every id here must still be OPEN.** When one is fixed the caveat is stale and the number it
+  qualifies may have moved — so the test goes red and somebody re-measures rather than leaving a
+  reader to trust a paragraph that stopped being true;
+* **every open finding cited anywhere in this section must appear here.** Mentioning one in prose
+  without declaring it is how a caveat ends up in the narrative and out of the checked list.
+
+A finding that is FIXED may still be cited above as history — R4.106 is, and that is fine. What may
+not happen is a live caveat quietly becoming a historical one.
+
+<!-- open-findings:customer-bench -->
+* **R4.27** — Odoo serves list reads as JSON-RPC POSTs and the wire detector marks those steps
+  mutating. That is what makes 58% of Odoo's replay refusals the mutation gate, and it is why Odoo
+  has no baseline here at all.
+* **R4.84** — three of the eight doors into the engine can re-author a write flow, which performs
+  the write again. Nothing in this corpus exercises that path; the numbers say nothing about it.
+* **R4.102** — an interactable control below the fold never enters the agent's observation, and
+  nothing in the observation says there is more page. `gitea-start-timer`'s 0/3 IS this defect, so
+  one seventh of the Gitea availability number is a known grounding limit rather than a replay one.
+* **R4.105** — Odoo's own exclusion: mean 0.181, std 0.203, dominated by R4.27. Recorded here
+  because "Odoo is absent" is a statement about the product's measured behaviour, not about effort.
+* **R4.108** — the generic-operator half of the mutation sweep is unbuilt, so the suite behind
+  these benchmarks is proven against curated mutations only.
+<!-- /open-findings -->
+
+<!-- /honesty:customer-bench -->

@@ -1,4 +1,4 @@
-name: mutation sweep
+name: weekly
 
 # WEEKLY, plus a button. reshape-plan step 0.6.
 #
@@ -26,9 +26,23 @@ name: mutation sweep
 # diff rather than a silenced alarm. `prove_red` then fails in the OTHER direction the day it starts
 # being killed again, so the list can only shrink.
 #
-# THE FUTURE TENANT. reshape-plan 2.4's customer-benchmark run is specified as sharing this workflow,
-# on the same weekly cadence. It is NOT here yet, and adding it is 2.4's slice, not this one — it
-# spends real money per run and wants its own review.
+# THE SECOND TENANT ARRIVED AT 0.137.0 (reshape-plan 2.4). Three jobs now, and they cost very
+# different things, which is why they are separated rather than folded into one:
+#
+#   sweep            free, ~9 min, schedule + dispatch. Unchanged.
+#   substrates       free, ~2 min, EVERY trigger including pull_request. Brings a benchmark
+#                    substrate up and proves it serves and can be written to.
+#   customer-bench   SPENDS MONEY (~$0.60 a Gitea pass). Schedule, or a dispatch that explicitly
+#                    asks for it. Never on a pull request.
+#
+# WHY `substrates` RUNS ON PULL REQUESTS AND THE OTHER TWO DO NOT. It is the only free one, and it
+# guards the premise the paid one rests on: the benchmark's dollars are wasted if the substrate was
+# never serving properly, and that failure mode is quiet by nature (R4.89 is a database manager
+# served with HTTP 200 at every URL readiness looked at). Running it per-PR also stops it rotting —
+# a container layer nothing exercises between weekly runs is one that breaks silently.
+#
+# MONEY IS NEVER SPENT BY ACCIDENT. `run_bench` defaults to FALSE, so dispatching this workflow to
+# re-run the mutation sweep does not also buy a benchmark pass.
 
 on:
   schedule:
@@ -36,6 +50,18 @@ on:
     # hour is the most contended minute there is.
     - cron: "17 4 * * 1"
   workflow_dispatch:
+    inputs:
+      run_bench:
+        description: "also run the customer benchmark (SPENDS ~$0.60 and needs ANTHROPIC_API_KEY)"
+        type: boolean
+        default: false
+  # PULL REQUESTS reach the `substrates` job only — see the header. Path-filtered, because the
+  # container layer cannot be affected by a change that touches neither the bench nor this file.
+  pull_request:
+    paths:
+      - 'benchmarks/**'
+      - 'baselines/**'
+      - '.github/workflows/mutation-sweep.yml'
 
 # NOT `cancel-in-progress`. A manual dispatch while the weekly run is in flight would otherwise kill
 # it, and the two are asking the same question — there is nothing to supersede.
@@ -52,6 +78,9 @@ permissions:
 jobs:
   sweep:
     name: every mutation registry, one at a time
+    # NOT ON PULL REQUESTS: `red-proof` in ci.yml already runs the browser-free half on every PR, and
+    # the browser half costs ~9 minutes to tell a merge gate something a weekly cadence is enough for.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -87,3 +116,130 @@ jobs:
       - name: Sweep every registry
         timeout-minutes: 45
         run: uv run --group bench --group providers --group mcp python scripts/mutation_sweep.py
+
+  # ------------------------------------------------------------------------------------------------
+  # THE SUBSTRATE PREFLIGHT (reshape-plan 2.4). Free, browser-free, and it runs on every trigger.
+  #
+  # IT IS ALSO A MEASUREMENT, and that is why it landed before the paid job rather than beside it.
+  # Two modules in this repository assert that "Docker is present on a developer host and absent on
+  # CI" — `benchmarks/oracle_liveness.py` in its docstring, and CLAUDE.md as the third axis of
+  # local-vs-CI divergence. Traced to its evidence, that claim rests on 0.121.0, where two cells
+  # reached `await_ready()` for real and failed both CI arms with `NOT WRITABLE`. A container that is
+  # not RUNNING is trivially true of a job that never started one; it is not evidence about the
+  # daemon. 2.4's whole weekly run depends on which reading is right, and this repo has already paid
+  # once for a prerequisite written on exactly that ambiguity (reshape-plan §13, corrected by step 0).
+  # So it is measured here, and `substrate_check` prints the daemon's version either way.
+  #
+  # GITEA ONLY, deliberately. Its image is PULLED (242 MB); Odoo's is BUILT from a Dockerfile on top
+  # of a ~1.5 GB base, and Odoo is not baselined anyway — it waits on R4.27/D6. Adding it here would
+  # buy minutes of CI for a substrate no number currently depends on. When Odoo is baselined, this is
+  # the job that grows a second matrix leg.
+  substrates:
+    name: a benchmark substrate comes up and can be written to
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@v5
+        timeout-minutes: 5
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        timeout-minutes: 5
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+
+      # NO BROWSER. `assert_login_discriminates` needs Chromium and already runs inside every scored
+      # run, where it guards the thing that matters. This is the layer BELOW it — compose, container
+      # health, a substantive HTTP body, and a real write through the substrate's own API — and
+      # keeping it browser-free is what makes it cheap enough for every pull request.
+      - name: Bring up Gitea, seed it, prove it writable
+        timeout-minutes: 15
+        run: >
+          uv run --group bench --group providers --group mcp
+          python -m benchmarks.substrate_check --substrate gitea
+
+  # ------------------------------------------------------------------------------------------------
+  # THE CUSTOMER BENCHMARK (reshape-plan 2.4). THIS ONE SPENDS MONEY.
+  #
+  # `needs: substrates`, so a dead container layer costs nothing instead of a wasted pass. That is
+  # the same phase ordering R4.99 put on the login: attribute a fault to where it happened, and do
+  # not pay for a run whose premise is already known to be broken.
+  #
+  # GITEA ONLY, and gated against `baselines/customer_v1_gitea.json`. Odoo has no baseline —
+  # measured mean 0.181, std 0.203, with 58% of its replay refusals being the mutation gate refusing
+  # a step R4.27 misfiled as a write (R4.105). Running it weekly would buy a number nothing gates.
+  #
+  # IF THE KEY IS MISSING THIS FAILS, LOUDLY, NAMING THE REMEDY — it does not skip. A benchmark that
+  # quietly does not run is worse than one that is red, because the first reads as "we are measuring"
+  # and the second reads as "fix me". The remedy is one action by one person and is stated in the
+  # step, which is what makes the alarm dischargeable rather than noise (R3.9/CLI-1).
+  customer-bench:
+    name: the customer benchmark, gated against its baseline
+    if: github.event_name == 'schedule' || github.event.inputs.run_bench == 'true'
+    needs: substrates
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@v5
+        timeout-minutes: 5
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        timeout-minutes: 5
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+
+      # BYTE-IDENTICAL to every other browser install in this repository;
+      # `tests/test_ci_provisioning.py` asserts that across workflow files, not within one.
+      - name: Install Chromium
+        timeout-minutes: 8
+        run: uv run --group bench playwright install chromium
+
+      - name: Refuse to start without a key
+        timeout-minutes: 2
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::No ANTHROPIC_API_KEY secret is configured for this repository, so the"
+            echo "::error::customer benchmark cannot run. It is REFUSING rather than skipping: a"
+            echo "::error::benchmark that quietly does not run reads as one that is measuring."
+            echo "::error::Remedy: add the repository secret ANTHROPIC_API_KEY (Settings ->"
+            echo "::error::Secrets and variables -> Actions). Nothing else about this job needs it."
+            exit 1
+          fi
+          echo "a key is configured; its value is never printed, logged or written to disk"
+
+      # ONE PASS, gated against the committed baseline. `--baseline` is what turns on the cost, rate
+      # and flip channels; without it `gate_bench_record` runs the ABSOLUTE channels only and would
+      # print PASS having compared against nothing.
+      - name: Run the Gitea corpus and gate it
+        timeout-minutes: 35
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: >
+          uv run --group bench --group providers --group mcp
+          python -m benchmarks.corpus_run --substrate gitea
+          --baseline baselines/customer_v1_gitea.json
+          --out weekly-gitea.jsonl
+
+      # THE RECORD SURVIVES THE RUN. Actions logs expire; a series of weekly records is the only way
+      # the flake-versus-regression question ever gets answered, and it is the question B3 refuses to
+      # gate a single flip over.
+      - name: Upload the record
+        if: always()
+        timeout-minutes: 5
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: customer-bench-gitea-${{ github.run_id }}-${{ github.run_attempt }}
+          path: weekly-gitea.jsonl
+          if-no-files-found: ignore

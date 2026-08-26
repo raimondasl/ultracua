@@ -207,3 +207,84 @@ def test_every_attribute_read_off_an_adjudicate_result_exists_on_Scored() -> Non
                     f"{mod.__name__} reads `{n.value.id}.{n.attr}` off an `adjudicate` result, but "
                     f"`Scored` has no such attribute — the verdict's own fields live on "
                     f"`.verdict`. This is the AttributeError that cost a paid corpus run.")
+
+
+# ---------------------------------------------------------------------------------------------------
+# THE BASELINE COMPARISON (2.4). `--baseline` is what turns on three of `gate_bench_record`'s five
+# channels; without it the gate runs the ABSOLUTE ones only and prints PASS having compared against
+# nothing. So the flag's REFUSALS matter as much as its happy path: every one of them is a way the
+# weekly run could report a confident pass over a comparison nobody made.
+
+
+def _real_baseline() -> dict:
+    import json as _json
+    from pathlib import Path as _Path
+    root = _Path(__file__).resolve().parents[1]
+    return _json.loads((root / "baselines" / "customer_v1_gitea.json").read_text(encoding="utf-8"))
+
+
+def test_the_committed_baseline_is_accepted_for_its_own_substrate() -> None:
+    """Anti-vacuity, first: every refusal below is satisfied by a checker that refuses everything."""
+    corpus_run._require_a_comparable_baseline(_real_baseline(), "gitea")
+
+
+def test_a_baseline_for_another_substrate_is_refused() -> None:
+    """THE SILENT, FLATTERING ONE. The scenario sets are disjoint, so `_flip_findings` finds nothing
+    to flip and `_rate_findings` compares two different corpora's `availability_rate` as one
+    population. The verdict would be a PASS built on a comparison nobody made."""
+    with pytest.raises(SystemExit, match="customer-odoo"):
+        corpus_run._require_a_comparable_baseline(_real_baseline(), "odoo")
+
+
+def test_a_single_pass_promoted_by_hand_is_refused() -> None:
+    """`kind` separates an aggregate from one run. A single pass carries n=7, and the Wilson bound
+    the gate computes off it would read as three times the evidence it is."""
+    b = dict(_real_baseline(), kind="bench-record")
+    with pytest.raises(SystemExit, match="corpus-baseline"):
+        corpus_run._require_a_comparable_baseline(b, "gitea")
+
+
+def test_a_baseline_cut_before_the_corpus_moved_is_refused() -> None:
+    """Both directions of the scenario set, because they are different events: a scenario ADDED is
+    unmeasured by the baseline, and one GONE means the baseline is describing a corpus that no
+    longer exists. `baselines/README.md`'s standing rule is that a rate measured under one
+    configuration is never compared against another."""
+    b = _real_baseline()
+    shrunk = dict(b, scenarios={k: v for k, v in list(b["scenarios"].items())[:4]})
+    with pytest.raises(SystemExit, match="added"):
+        corpus_run._require_a_comparable_baseline(shrunk, "gitea")
+    grown = dict(b, scenarios={**b["scenarios"], "gitea-invented": {"outcome": "ok"}})
+    with pytest.raises(SystemExit, match="gone"):
+        corpus_run._require_a_comparable_baseline(grown, "gitea")
+
+
+def test_the_gate_actually_receives_the_baseline(monkeypatch, tmp_path) -> None:
+    """THE WIRING, not the checker. A `--baseline` that is validated and then not threaded would
+    pass every cell above while leaving the three comparative channels off -- which is precisely
+    the failure the flag exists to prevent, one layer in.
+
+    Driven through `main` so the argparse -> load -> validate -> gate path is the one exercised.
+    """
+    seen = {}
+    real_gate = O.gate_bench_record
+
+    def spy(record, **kw):
+        seen.update(kw)
+        return real_gate(record, **kw)
+
+    # THROUGH THE MODULE BINDING. `corpus_run` does `from benchmarks import outcomes`, so it calls
+    # `outcomes.gate_bench_record` — patching only the `O` alias this file imported would bind a
+    # different name and the spy would never fire. That is S14's `from .providers import
+    # build_router` lesson, and 0.133.0 hit it again from the test side with four mutations that all
+    # survived because the cell held the original function object.
+    monkeypatch.setattr(corpus_run.outcomes, "gate_bench_record", spy)
+    _script(monkeypatch, _ok_row)
+
+    path = tmp_path / "b.json"
+    path.write_text(json.dumps(_real_baseline()), encoding="utf-8")
+    corpus_run.main(["--substrate", "gitea", "--baseline", str(path)])
+    assert seen.get("baseline") is not None, (
+        "`--baseline` was accepted and never reached `gate_bench_record`, so the cost, rate and "
+        "flip channels stayed off and the run would print PASS having compared against nothing"
+    )
+    assert seen["baseline"]["bench"] == "customer-gitea"
