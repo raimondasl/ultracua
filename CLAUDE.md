@@ -1280,6 +1280,40 @@ unreadable. The navigation was never the problem.
   fail. Removed rather than kept as decoration: this project's own rule is that a cell which cannot
   fail is worse than none.
 
+## Three reps, and Gitea is baseline-ready while Odoo is not (B5, 0.133.0)
+
+`benchmarks/corpus_aggregate.py` folds N passes into one record and names the rows that moved.
+Three full reps of both substrates: **$4.97** ($1.81 Gitea, $3.16 Odoo), ~1.5 h.
+
+* **A SINGLE-PASS ODOO BASELINE COULD HAVE BEEN ANYWHERE FROM 0.000 TO 0.400.** Per-rep
+  availability came back `[0.0, 0.4, 0.143]` — mean **0.181, std 0.203**. The single pass taken
+  earlier said 0.143, which is inside the range and tells you nothing about where the level is. That
+  is the whole argument for reps, with a number on it.
+* **GITEA IS TIGHT AND ALMOST READY**: mean **0.762, std 0.082**, `[0.714, 0.714, 0.857]`. Five of
+  seven rows are rock solid — `gitea-comment` **3/3 `true`** (a real write, learned and replayed at
+  0-LLM, every time) and four reads 3/3 `ok`. `gitea-start-timer` is **0/3 `not_authored`**, the
+  same verdict every time: a STABLE, reproducible product limitation (R4.102), which is exactly what
+  a baseline wants a known failure to look like. One row is genuinely unstable —
+  `gitea-sort-list`, **1/3, and it gave THREE different outcomes** (`ok` / `refused` /
+  `not_authored`) in three runs.
+* **ODOO IS NOT READY, AND NOT MAINLY BECAUSE OF ITS RATE.** Two rows flip pass/fail
+  (`odoo-open-record` 2/3, `odoo-search` 1/3) and **five more fail for DIFFERENT REASONS across
+  reps**. A baseline over that would be reproducible in its number and unreadable in its diagnosis.
+* **`unstable` CATCHES PASS/FAIL FLIPS AND MISSES REASON FLIPS — FOUND BY THE FIRST REAL SERIES.**
+  `odoo-menu-nav` came back 0/3 having given `over_gated` in some passes and `refused` in others,
+  and showed as *stable* because neither outcome is a pass. The information was already in the
+  record and nothing pointed at it. `varies` is a SEPARATE list on purpose: a rate over such a row
+  is reproducible, so a baseline is not endangered — the DIAGNOSIS is.
+* **ALL FOUR ARMING MUTATIONS SURVIVED AT FIRST, AND THE REASON IS ALREADY WRITTEN DOWN HERE.** The
+  cells did `from benchmarks.corpus_aggregate import fold`, which binds the original function
+  object, so patching the module never reached them — S14's `from .providers import build_router`
+  lesson, arrived at from the test side. Call through the module binding, or the mutation is
+  attacking a function nobody runs.
+* **AND ONE THING REPS FIX FOR FREE.** `variance.build_record`'s `per_rep` means one value per REP,
+  and B3 had to hand it one per SCENARIO — which is why `pass_k` became `subset_all_pass` and why
+  the gate uses a Wilson bound instead of `compare_records`. With three passes the values ARE reps,
+  so `std` means what its name says for the first time.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

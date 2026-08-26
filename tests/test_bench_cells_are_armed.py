@@ -1024,3 +1024,45 @@ def test_the_control_group_pin_notices_the_configuration_wording_coming_back(mon
         entry.scenario, "goal",
         "open the CRM app and report how many pipeline stages are configured", raising=False)
     print(assert_red(TCG.test_the_odoo_control_group_does_not_send_the_agent_to_a_menu_it_cannot_see))
+
+
+def _mutate_agg(monkeypatch, find: str, repl: str) -> None:
+    from benchmarks import corpus_aggregate as CA
+
+    _arming.mutate_function(monkeypatch, CA, "fold", find, repl)
+
+
+def test_the_aggregate_notices_a_single_pass_being_folded(monkeypatch) -> None:
+    """A lone pass has no spread; publishing it here attaches `std: 0.0` to a number never repeated."""
+    import tests.test_corpus_aggregate as TCA
+
+    _mutate_agg(monkeypatch, "    if len(records) < 2:", "    if False:")
+    print(assert_red(TCA.test_one_pass_is_refused))
+
+
+def test_the_aggregate_notices_passes_over_different_corpora(monkeypatch) -> None:
+    """A corpus edit mid-series makes the mean an average of two different questions."""
+    import tests.test_corpus_aggregate as TCA
+
+    _mutate_agg(monkeypatch, "    if len(set(sets)) != 1:", "    if False:")
+    print(assert_red(TCA.test_passes_over_different_scenario_SETS_are_refused))
+
+
+def test_the_aggregate_notices_unscored_being_counted_as_a_failure(monkeypatch) -> None:
+    """Counting `unscored` in a row's denominator MANUFACTURES instability — a row that was
+    measured twice and passed twice would be reported as a flake."""
+    import tests.test_corpus_aggregate as TCA
+
+    _mutate_agg(monkeypatch, "        scored = [o for o in seen if o != UNSCORED]",
+                "        scored = list(seen)")
+    print(assert_red(TCA.test_unscored_reps_leave_a_rows_denominator))
+
+
+def test_the_aggregate_notices_an_unknown_cost_being_summed_as_zero(monkeypatch) -> None:
+    """1.3's rule: unknown is ABSORBING. Summing the priceable passes understates a real bill."""
+    import tests.test_corpus_aggregate as TCA
+
+    _mutate_agg(monkeypatch,
+                "    total_cost = None if any(c is None for c in costs) else round(sum(costs), 6)",
+                "    total_cost = round(sum(c or 0.0 for c in costs), 6)")
+    print(assert_red(TCA.test_an_unpriceable_pass_makes_the_series_cost_unknown))
