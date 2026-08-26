@@ -55,9 +55,11 @@ def _docker_is_not_available_to_unit_tests(monkeypatch, request):
         argv = args[0] if args else kwargs.get("args", [])
         raise AssertionError(
             f"{request.node.name} tried to run {' '.join(map(str, argv))[:80]!r} for real.\n"
-            f"    Unit tests here must not touch Docker: it is present on a developer host and "
-            f"ABSENT on CI, so a test that reaches it passes locally and fails both CI arms — "
-            f"measured, R4.85's readiness layer did exactly that.\n"
+            f"    Unit tests here must not touch Docker. NOT because CI lacks a daemon -- it "
+            f"has one (measured: Docker 28.0.4, R4.109) -- but because this host runs a LIVE, "
+            f"SEEDED substrate between sessions and a CI job starts with nothing running. So "
+            f"a cell that reaches Docker passes here against a real Gitea and fails both CI "
+            f"arms; R4.85's readiness layer did exactly that.\n"
             f"    Use the `compose` fixture, patch `S._compose` or `subprocess.run` in the test "
             f"body, or neutralise the probe that calls it (e.g. `assert_writable`) when this cell "
             f"is about a different layer."

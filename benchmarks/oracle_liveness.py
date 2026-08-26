@@ -13,7 +13,11 @@ TWO DIFFERENT QUESTIONS, and conflating them is how a benchmark ends up trusting
     world moves?** It makes a real change through the substrate's own API and requires the probe to
     notice, then resets and requires it to go back.
 
-NOT IN THE UNIT SUITE, deliberately. Docker is present on a developer host and absent on CI, and a
+NOT IN THE UNIT SUITE, deliberately -- but NOT for the reason this line gave until 0.137.0.
+It said "Docker is present on a developer host and absent on CI". **Measured: the ubuntu
+runner has Docker 28.0.4 and Compose 2.38.2, and brings Gitea up in 12.5 s** (R4.109). The
+real asymmetry is one level in: a developer host runs a LIVE, SEEDED substrate between
+sessions and a CI job starts with nothing running, so a
 test that reaches for it passes locally and fails both CI arms — measured at 0.121.0, it shipped a red
 PR. A `skipif` would be worse than an absence: a check that silently never runs reads as a check that
 passes. So this is a module the nightly calls, and its absence from the suite is stated rather than

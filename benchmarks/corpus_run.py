@@ -10,12 +10,19 @@ WHAT IT ADDS OVER `scored_run`, which drives one scenario: the LOOP, the RECORD 
 `build_bench_record` needs one `Scored` per scenario and `gate_bench_record` needs the whole record,
 so neither could be reached from a runner that returns a dict about a single row.
 
-IT DOES NOT WRITE A BASELINE, and that is deliberate rather than unfinished. `baselines/customer_v1
-.json` is 2.4's artifact and one pass cannot be it: B3 already refuses to gate a single flipped
-scenario (`FLIP_IS_GATED = False`) precisely because one pass per scenario cannot separate "this flow
-stopped working" from "this flow is flaky". `--reps` runs the corpus N times and writes N records so
-that question can be ASKED; promoting a record to `baselines/` stays a human act, with the stability
-across those reps in front of you.
+IT READS A BASELINE AND NEVER WRITES ONE, and both halves are deliberate.
+
+READS: `--baseline` is what turns on three of `gate_bench_record`'s five channels — cost, rate and
+flip run only `if baseline is not None`. Without it the gate is ABSOLUTE ONLY, and a scheduled run
+that failed to find its baseline would print `GATE: PASS` having compared against nothing. The file
+is loaded and validated BEFORE the first scenario is paid for, which is R4.99's phase ordering.
+
+NEVER WRITES: one pass cannot be a baseline. B3 refuses to gate a single flipped scenario
+(`FLIP_IS_GATED = False`) precisely because one pass per scenario cannot separate "this flow stopped
+working" from "this flow is flaky" — and 0.130.0 measured that with a number, `odoo-create-lead`
+learning in 6 steps and 0 steps on identical configuration. `--reps` runs the corpus N times and
+writes N records so the question can be ASKED; `corpus_aggregate --baseline` folds them; promoting
+the result to `baselines/` stays a human act, with the stability across those reps in front of you.
 
 A ROW THAT RAISES IS NOT A ROW THAT VANISHES. `score_one` already attributes its own failures
 (harness vs agent, R4.99), but it can still raise outright -- a container that dies mid-run, a

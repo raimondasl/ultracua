@@ -126,7 +126,11 @@ Violating any of these is a blocking defect, not a trade-off:
      `load_dotenv` does not override a variable that is already set, so an empty value is enough. When a
      test needs an agent, pass a `ScriptedProvider` AND a mock `Router` — `learn()` only skips building a
      real provider when BOTH are supplied.
-  3. *Docker*: **this host has a daemon and CI does not.** Added at 0.121.0 with R4.85's fourth
+  3. *Docker*: **this host runs a LIVE, SEEDED substrate between sessions and a CI job starts
+     with nothing running.** (Until 0.137.0 this line said "CI has no daemon", which is FALSE
+     and was never measured -- the ubuntu runner has Docker 28.0.4 and Compose 2.38.2 and
+     brings Gitea up in 12.5 s, seeded in 8.7 s. R4.109; the guard was right and its stated
+     reason was not.) Added at 0.121.0 with R4.85's fourth
      readiness layer, which execs into a container: two pre-existing cells drove `await_ready()` with
      only layers 1-2 mocked, so they began reaching Docker for real — and passed here against a live,
      healthy Gitea while failing **both** CI arms with a baffling `NOT WRITABLE`. Same shape as the
@@ -1417,6 +1421,61 @@ because 2.4's weekly run is specified as sharing this workflow, so the workflow 
   registry name to prose, the cell correctly ignored it, and `assert_red` reported the cell as
   unguarded. The harness was right and the mutation was wrong. Anchor a mutation on enough context to
   name ONE site.
+
+## The weekly bench runs, and "CI has no Docker" was never measured (2.4a, 0.137.0)
+
+reshape-plan 2.4, SPLIT: 2.4a is the weekly run, the baseline gating and the honesty page, all
+shipped; 2.4b is the Odoo half, blocked on R4.27 rather than deferred. Splitting beat holding the
+whole step because everything except Odoo was ready.
+
+* **"DOCKER IS PRESENT ON A DEVELOPER HOST AND ABSENT ON CI" WAS WRITTEN IN THREE PLACES AND IS
+  FALSE (R4.109).** It was never measured. Traced to its source it rests on 0.121.0, where two cells
+  reached `await_ready()` for real and failed both CI arms with `NOT WRITABLE` -- **a container that
+  is not RUNNING**, which is trivially true of a job that never started one. **Measured on a
+  GitHub-hosted ubuntu runner: Docker 28.0.4, Compose 2.38.2, Gitea up in 12.5 s, writable at
+  12.6 s, seeded in 8.7 s.** So the weekly benchmark is an ordinary job and needs no self-hosted
+  runner. Same ambiguity class as the CI `cancelled` that put a wrong prerequisite into
+  `reshape-plan.md` §13 one day after §13 was written to prevent it -- and settled the same way,
+  by measuring.
+* **THE GUARD WAS RIGHT AND ITS REASON WAS WRONG, which is the part to carry.** The real asymmetry
+  is one level in: this host runs a LIVE, SEEDED substrate between sessions and a CI job starts with
+  nothing running, so a cell that reaches Docker still passes here against a real Gitea and still
+  fails both CI arms. `tests/test_substrates.py`'s autouse fixture is UNCHANGED; only its message
+  is. When you find a premise wrong, check whether the thing built on it is wrong too -- here it
+  was not, and deleting the guard would have been the expensive mistake.
+* **`--baseline` IS WHAT TURNS ON THREE OF THE FIVE GATE CHANNELS.** `gate_bench_record` runs cost,
+  rate and flip only `if baseline is not None`, so a scheduled run that failed to find its baseline
+  would print **GATE: PASS** having compared against nothing -- the absolute channels alone. The
+  file is therefore loaded and VALIDATED before a single scenario is paid for, with four refusals:
+  wrong substrate (the scenario sets are disjoint, so the flip channel finds nothing and the verdict
+  is a confident pass over a comparison nobody made), wrong `kind` (a single pass carries n=7 and
+  its Wilson bound reads as three times the evidence it is), and the corpus having grown or shrunk
+  since the cut.
+* **THE GATE'S TOLERANCE IS A MEASURED NUMBER, not a hope.** The baseline is mean 0.762 over n=21,
+  whose Wilson 95% lower bound is **0.549** -- so a weekly pass must land **>= 4/7**, against 5/7,
+  5/7, 6/7 observed. One failure beyond the known-bad row still passes; two do not. Check this the
+  next time the corpus changes size, because the bound moves with `n` and nothing recomputes the
+  sentence.
+* **A BENCHMARK THAT QUIETLY DOES NOT RUN IS WORSE THAN ONE THAT IS RED.** With no
+  `ANTHROPIC_API_KEY` secret the job REFUSES, naming the remedy, rather than skipping -- the first
+  reads as "we are measuring" and the second as "fix me". That is only legitimate because the remedy
+  is one action by one person; an alarm nobody can discharge gets `|| true`d (R3.9/CLI-1).
+* **MONEY IS NEVER SPENT BY ACCIDENT.** `run_bench` defaults to FALSE, so dispatching the workflow
+  to re-run the mutation sweep does not also buy a benchmark pass. The free `substrates` preflight
+  runs on every PR touching the bench, and `customer-bench` `needs:` it -- a dead container layer
+  costs nothing instead of a wasted pass, which is R4.99's phase ordering one level out.
+* **THE HONESTY PAGE IS CHECKED IN BOTH DIRECTIONS.** Every id in its open-findings block must still
+  be OPEN (a fixed one means the caveat is stale and its number may have moved), and every OPEN
+  finding cited anywhere in the honesty region must be declared (a caveat living only in prose is
+  one nothing can fail for). What it deliberately does NOT assert is that all 49 open findings
+  appear -- that would be noise, and noise is how a channel stops being read. Its arming DERIVES the
+  finding it smuggles in rather than naming one: the first draft hard-coded R4.103, which was open
+  when I picked it and `fixed` by the time the cell ran.
+* **A `      - ` LINE IS NOT A STEP UNLESS IT IS UNDER `steps:`.** Adding a `pull_request: paths:`
+  filter fired `parse_steps`' totality assert on `- 'benchmarks/**'` -- correctly, by its own rule.
+  Widening `_STEP_KEYS` would have been wrong twice: it would have admitted a non-step AND blunted
+  the assert that caught it. Note `_JOB_START` matches the top-level `on:` key too, so tracking
+  `steps:` is what keeps a trigger block out of a job.
 
 ## The pattern that predicts the next bug
 
