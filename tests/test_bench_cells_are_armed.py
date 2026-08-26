@@ -995,3 +995,20 @@ def test_the_gate_notices_the_row_no_longer_being_reported(monkeypatch) -> None:
                     'if s.verdict.scored and s.verdict.outcome == NO_ACTIONS_NEEDED]',
                     'if False]')
     print(assert_red(TNA.test_the_gate_fails_on_it_and_a_human_can_sign_for_it))
+
+
+def test_the_outcome_notices_the_recipe_length_standing_in_for_actions(monkeypatch) -> None:
+    """R4.103 restored: read the CACHED RECIPE's length as "did the agent act", and a learn that
+    acted and failed verify-by-replay is republished as a task that needed no work."""
+    mutate_function(monkeypatch, "classify",
+                    'and getattr(run, "actions_taken", None) == 0',
+                    'and True')
+    print(assert_red(TNA.test_a_learn_that_ACTED_and_cached_nothing_is_not_called_free))
+
+
+def test_the_outcome_notices_a_missing_action_count_being_read_as_zero(monkeypatch) -> None:
+    """Never from absence: an arm that reports no action count must not mint the outcome."""
+    mutate_function(monkeypatch, "classify",
+                    'and getattr(run, "actions_taken", None) == 0',
+                    'and not getattr(run, "actions_taken", None)')
+    print(assert_red(TNA.test_a_missing_action_count_does_not_mint_it_either))

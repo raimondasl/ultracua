@@ -152,6 +152,17 @@ class ScenarioRun:
     # records: a default silently switches the clause off for the whole corpus.
     recipe_steps: Optional[int] = None
     learn_found: Optional[bool] = None
+    #: HOW MANY ACTIONS THE AGENT ACTUALLY TOOK, which is NOT `recipe_steps` (R4.103).
+    #:
+    #: `LearnResult.steps` is the CACHED recipe, so it reads 0 whenever nothing was cached -- for a
+    #: task that needed no work AND for a learn that acted five times and failed verify-by-replay.
+    #: Only the second is a product failure, and reading the recipe length as "did the agent act"
+    #: republished it as `no_actions_needed`: a genuine authoring failure relabelled as "nothing to
+    #: do here", which is the flattering direction.
+    #:
+    #: Taken from the engine's own `FlowReport.traces`. `None` for an arm that reports nothing, which
+    #: keeps the `no_actions_needed` clause off records that cannot answer the question.
+    actions_taken: Optional[int] = None
     # No `outcome` field, and B3 arriving did not change that. B2 records FACTS and B3 mints the
     # verdict onto an `outcomes.Scored` beside this record, never into it — so nothing that reads a
     # raw scenario record can mistake an adjudication for an observation.

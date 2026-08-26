@@ -32,10 +32,35 @@ def _classify(rec, name=READ, **oracle):
 # --- what mints it, and what does not --------------------------------------------------------------
 
 def test_a_task_completed_without_acting_is_named_for_what_happened() -> None:
-    """The row as it was really measured before 0.127.0: correct answer, zero steps, nothing cached."""
-    v = _classify(_Record(True, "", None, authored=False, recipe_steps=0, learn_found=True))
+    """The row as it was really measured before 0.127.0: correct answer, no actions, nothing cached."""
+    v = _classify(_Record(True, "", None, authored=False, recipe_steps=0, actions_taken=0,
+                          learn_found=True))
     assert v.outcome == O.NO_ACTIONS_NEEDED
     assert "without a single action" in v.reason
+
+
+def test_a_learn_that_ACTED_and_cached_nothing_is_not_called_free(  # noqa: N802
+) -> None:
+    """R4.103 — the defect the first draft of this outcome shipped.
+
+    `LearnResult.steps` is `list(cached.steps) if cached else []`, so `recipe_steps` reads **0
+    whenever nothing was cached** — for a task that needed no work AND for a learn that acted five
+    times and then failed verify-by-replay (`flow.py` sets `success = False` and does not cache,
+    while `out["found"]` is set on the extraction path and stays True). Only the second is a product
+    failure, and reading the recipe length as "did the agent act" republished it as "this task needed
+    no work": a genuine authoring failure deleted from the product's account.
+    """
+    v = _classify(_Record(True, "", None, authored=False, recipe_steps=0, actions_taken=5,
+                          learn_found=True))
+    assert v.outcome == O.NOT_AUTHORED, (
+        "a learn that ACTED and cached nothing is an authoring failure, not a free task")
+
+
+def test_a_missing_action_count_does_not_mint_it_either() -> None:
+    """Same rule as the step count: never inferred from absence. An arm that reports no action count
+    cannot answer the question, so it falls through to the clause it always hit."""
+    v = _classify(_Record(True, "", None, authored=False, recipe_steps=0, learn_found=True))
+    assert v.outcome == O.NOT_AUTHORED
 
 
 def test_zero_steps_alone_is_not_enough_and_the_corpus_holds_the_control() -> None:
@@ -47,7 +72,11 @@ def test_zero_steps_alone_is_not_enough_and_the_corpus_holds_the_control() -> No
     to be about what its name says. `gitea-start-timer` remains the real-world illustration: zero
     steps after 40 turns and $0.58, nothing found.
     """
-    v = _classify(_Record(True, "", None, authored=False, recipe_steps=0, learn_found=False))
+    # `actions_taken=0` is supplied so `learn_found` is the ONLY thing standing between this row and
+    # the outcome. Without it the new action-count conjunct blocks the clause too, and the mutation
+    # that drops `learn_found` survives — which the arming harness duly reported.
+    v = _classify(_Record(True, "", None, authored=False, recipe_steps=0, actions_taken=0,
+                          learn_found=False))
     assert v.outcome == O.NOT_AUTHORED
 
 
@@ -58,7 +87,7 @@ def test_a_missing_step_count_is_not_read_as_zero() -> None:
     from absence, the rule R4.96 set. Found by the arming harness, which showed the `== 0` mutation
     surviving because the sibling conjunct happened to cover the case the other cell used.
     """
-    v = _classify(_Record(True, "", None, authored=False, learn_found=True))
+    v = _classify(_Record(True, "", None, authored=False, actions_taken=0, learn_found=True))
     assert v.outcome == O.NOT_AUTHORED
 
 
@@ -80,15 +109,16 @@ def test_no_write_scenario_can_be_scored_no_actions_needed() -> None:
     failure) or fired unattributably (a refusal) — never "the task needed no work". Asserted because
     the clause is in the shared `classify`, not in `_classify_read`, so only the guard keeps it read-
     only."""
-    v = _classify(_Record(True, "", None, authored=False, recipe_steps=0, learn_found=True),
-                  name=WRITE)
+    v = _classify(_Record(True, "", None, authored=False, recipe_steps=0, actions_taken=0,
+                          learn_found=True), name=WRITE)
     assert v.outcome != O.NO_ACTIONS_NEEDED
 
 
 def test_a_harness_fault_still_wins() -> None:
     """Ordering: a broken login means the learn never got a fair attempt, so the row says nothing
     about whether the task needed actions."""
-    rec = _Record(True, "", None, authored=False, recipe_steps=0, learn_found=True,
+    rec = _Record(True, "", None, authored=False, recipe_steps=0, actions_taken=0,
+                  learn_found=True,
                   harness_error="SubstrateNotReady: the login could not be driven")
     assert _classify(rec).outcome == "unscored"
 

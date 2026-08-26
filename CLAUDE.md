@@ -1220,6 +1220,37 @@ completed for the first time. **$2.32 across three passes**, one of which was th
   `lang` (Gitea) and `cids` (Odoo), a locale preference and a UI setting, while the real session
   cookies are set for anonymous visitors on both.
 
+## `odoo-menu-nav`, and the recipe length is not the action count (0.131.0)
+
+Diagnosing the Odoo control group cost **$0.55** and most of the work was free. It found a defect in
+code shipped three slices earlier and corrected a claim in a finding filed one slice earlier.
+
+* **`steps: 0` MEANS "NOTHING WAS CACHED", NOT "THE AGENT DID NOT ACT" (R4.103).**
+  `LearnResult.steps` is `list(cached.steps) if cached else []`. 0.128.0's `no_actions_needed`
+  clause used it as the discriminator for "this task needed no work" — and a learn that ACTED and
+  then failed verify-by-replay lands on the same 0 (`flow.py` sets `success = False` and does not
+  cache, while `out["found"]` is set on the extraction path and stays True). That republishes a real
+  authoring failure as "nothing to do here", in the flattering direction. **Measured with the count
+  finally recorded: both rows I had read as inert took 21 ACTIONS** — `odoo-menu-nav` 21,
+  `gitea-start-timer` 21. This is R4.100's shape one level down: diagnose with one quantity, ship a
+  sensor on another. The clause now requires `actions_taken == 0` from `FlowReport.traces`, with
+  `recipe_steps == 0` kept beside it.
+* **SO R4.102'S WORDING WAS WRONG AND IS CORRECTED IN PLACE.** "Recorded zero steps" painted an idle
+  agent; the truth is 21 actions against a page that never showed it the button. The finding itself
+  is untouched and stronger — its evidence was always the OBSERVATION, which no step count enters.
+* **THE CONTROL GROUP'S HOP COUNT IS MEASURED FROM A PAGE THAT DOES NOT EXIST (R4.104, OPEN).**
+  `odoo-menu-nav` declares "two menu hops … deliberately EASY", and `url_path` `/web` redirects to
+  `#action=123&menu_id=81` — **Discuss, the messaging app**. Five candidate URLs probed
+  (`/web`, `/web#home`, `/web#menu_id=`, `/odoo`, `/web/webclient/home`) and **none serves the app
+  menu**. The switcher opens only by clicking `Home Menu`, so the real task is three hops from a
+  chat app plus a count. **When a control group fails, check its premise before its subject.**
+* **A REFUTED HYPOTHESIS, WRITTEN DOWN SO IT IS NOT RE-DERIVED.** `Home Menu` is a `<button>` whose
+  only name source is `title`, and neither `has-text` nor `get_by_role(name=…)` reaches it — which
+  looked exactly like the cause. It is not: `BrowserSession.act` resolves every target by
+  `[data-ultracua-ref="eN"]`, so the agent never goes through role+name. **My probe was broken, not
+  the product**, and one `grep` at `browser.py:_sel` was the difference between a filed finding and
+  a filed fiction.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

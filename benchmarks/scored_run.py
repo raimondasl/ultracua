@@ -388,7 +388,14 @@ async def score_one(name: str, *, reset: bool = True, headless: bool = True,
                 # look identical in `learned/found`, and the first two write runs were the former
                 # while reading as the latter. Recording the pair makes the difference legible in
                 # the artifact instead of needing a substrate query and a config lookup to recover.
+                # TWO DIFFERENT QUANTITIES, and conflating them is R4.103.
+                #
+                # `steps` is the CACHED RECIPE's length -- `LearnResult.steps` is
+                # `list(cached.steps) if cached else []`, so it is **0 whenever nothing was cached**,
+                # however hard the agent worked. `actions_taken` is what the agent actually did,
+                # off the engine's own traces. They agree only when authoring succeeds.
                 out["steps"] = len(res.steps or ())
+                out["actions_taken"] = len(getattr(res.report, "traces", None) or ())
                 out["step_budget"] = spec.max_steps
                 if res.cached:
                     approve(spec, cache=cache)
@@ -558,6 +565,7 @@ async def score_one(name: str, *, reset: bool = True, headless: bool = True,
             # skipped learn is the honest "no observation" rather than a zero that would
             # read as "recorded no action".
             recipe_steps=out.get("steps"), learn_found=out.get("found"),
+            actions_taken=out.get("actions_taken"),
             authored=out.get("learned"))
         scored = outcomes.adjudicate(
             entry.truth, run, bench,
@@ -602,7 +610,7 @@ def _gate_evidence(spec, cache, *, gate_refused: bool = False, pinned: bool = Fa
 
 
 def _Record(agent_ran: bool, agent_error: str, claimed, code: str = "", authored=None,
-            harness_error: str = "", recipe_steps=None, learn_found=None,
+            harness_error: str = "", recipe_steps=None, learn_found=None, actions_taken=None,
             scenario: str = "t", substrate: str = "gitea"):
     """A `ScenarioRun` carrying only the fields `classify` reads. A FACTORY, not a second type.
 
@@ -618,7 +626,8 @@ def _Record(agent_ran: bool, agent_error: str, claimed, code: str = "", authored
     return ScenarioRun(
         scenario=scenario, substrate=substrate, agent_ran=agent_ran, agent_error=agent_error,
         agent_error_code=code, claimed_complete=claimed, authored=authored,
-        harness_error=harness_error, recipe_steps=recipe_steps, learn_found=learn_found)
+        harness_error=harness_error, recipe_steps=recipe_steps, learn_found=learn_found,
+        actions_taken=actions_taken)
 
 
 def main(argv=None) -> int:
