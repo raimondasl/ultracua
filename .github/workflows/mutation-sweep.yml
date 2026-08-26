@@ -1,0 +1,89 @@
+name: mutation sweep
+
+# WEEKLY, plus a button. reshape-plan step 0.6.
+#
+# WHY IT IS NOT ON EVERY PR. The merge gate already proves the browser-free registries red on every
+# pull request (`red-proof` in ci.yml, the same driver with `--tier fast`). What this job adds is the
+# half a merge gate cannot afford: the nine known mutants, whose killers are page-side properties and
+# therefore need Chromium. `red-proof` installs none, deliberately — a killer-suite leg with a
+# browser cell fails EVERY mutant's baseline, measured on CI at 8 failed / 135 passed on both arms
+# while green locally, which reads as a hole in the matrix rather than as a missing browser.
+#
+# WHY WEEKLY AND NOT NIGHTLY. Nothing here changes without a commit, so a nightly cadence buys six
+# extra runs of an unchanged tree per week. Weekly is the plan's own wording ("weekly; a survivor not
+# in `known_survivors` fails") and it is what the repo owner chose on 2026-08-26 for the scheduled
+# channels generally. `workflow_dispatch` is the ad-hoc lever for when that is not soon enough.
+#
+# HOW ANYONE HEARS ABOUT A RED RUN, stated because it is not obvious and a channel nobody watches is
+# not a channel. There is no PR to go red: GitHub notifies the account whose credentials the schedule
+# runs under, which is the last person to have edited this cron. If that stops being the right person,
+# the fix is a notification rule, not a quieter job.
+#
+# WHAT AN OPERATOR DOES WHEN IT GOES RED AND THEY CANNOT FIX IT TODAY. This matters more than the
+# schedule: a loud channel with no way to acknowledge gets `|| true`d, and takes everything else dark
+# with it (R3.9/CLI-1). The acknowledgement here ALREADY EXISTS and is not a new flag — a survivor is
+# registered in that registry's `KNOWN_SURVIVORS` with a reason and a finding id, which is a reviewed
+# diff rather than a silenced alarm. `prove_red` then fails in the OTHER direction the day it starts
+# being killed again, so the list can only shrink.
+#
+# THE FUTURE TENANT. reshape-plan 2.4's customer-benchmark run is specified as sharing this workflow,
+# on the same weekly cadence. It is NOT here yet, and adding it is 2.4's slice, not this one — it
+# spends real money per run and wants its own review.
+
+on:
+  schedule:
+    # Mondays 04:17 UTC. Off the hour deliberately: GitHub queues scheduled runs and the top of the
+    # hour is the most contended minute there is.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+# NOT `cancel-in-progress`. A manual dispatch while the weekly run is in flight would otherwise kill
+# it, and the two are asking the same question — there is nothing to supersede.
+concurrency:
+  group: mutation-sweep
+  cancel-in-progress: false
+
+# READ ONLY. This job checks out, installs and runs tests; it writes nothing back. Least privilege is
+# worth stating explicitly on a SCHEDULED workflow in particular, because a scheduled run carries the
+# repository's own token with no PR review standing behind the commit that changed it.
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    name: every mutation registry, one at a time
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@v5
+        timeout-minutes: 5
+        with:
+          # FULL history, for the same reason every other job here takes it: `tests/` derives the
+          # tier manifest's re-derivation deltas from `git log --follow`, and this job imports the
+          # manifest to decide which registries are browser-side.
+          fetch-depth: 0
+
+      - name: Install uv
+        timeout-minutes: 5
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+
+      # BYTE-IDENTICAL to ci.yml's install, and `tests/test_ci_provisioning.py` asserts that across
+      # every workflow file rather than within one. That cell was written when a single job's two
+      # OS-conditional installs had DRIFTED so the linux arm carried `--with-deps`; a second workflow
+      # file is the same door one building over.
+      - name: Install Chromium
+        timeout-minutes: 8
+        run: uv run --group bench playwright install chromium
+
+      # THE WHOLE SWEEP, one step. The registry SET is derived from `tests/mutations/`, each
+      # registry's killer suite is declared in the registry, and the tier split is read out of the
+      # tier manifest — so this command does not name a single registry and cannot go stale when a
+      # seventh is added. That was the point: the six `--tests` invocations this replaces were a
+      # hand-typed list that nothing could fail for.
+      - name: Sweep every registry
+        timeout-minutes: 45
+        run: uv run --group bench --group providers --group mcp python scripts/mutation_sweep.py

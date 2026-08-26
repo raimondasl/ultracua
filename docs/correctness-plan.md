@@ -607,7 +607,21 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   decisions). Each pin DEMONSTRATES current behaviour and names the residual, so any silent change in
   either direction fails a test. AB-10 (possibly-dead belt-and-braces branch): coverage probe; delete
   if dead.
-- **S16. Scheduled mutation sweep.** The nine known mutants become a script + a weekly CI schedule.
+- **S16. ✅ DONE in 0.136.0 (reshape-plan 0.6) — the nine known mutants are re-runnable for the
+  first time since 0.75.0, and the registry LIST is derived rather than typed.**
+  `tests/mutations/known_nine.py` + `scripts/mutation_sweep.py` +
+  `.github/workflows/mutation-sweep.yml` (weekly, plus `workflow_dispatch`). **9 killed, 0
+  survived** — and it is a re-measurement rather than a re-run, because SIX of the nine sites
+  had moved (the R3.2 refusal migrated out of `flows.py` into `flow._learn`, so it now covers
+  the two callers that never reach the `flows.py` surface) and were re-expressed against the
+  property rather than the 2026-06 line number.
+
+  **What it does NOT re-measure**, stated because the 0.75.0 record is quoted in three
+  documents: "four of the nine were caught by exactly ONE test". Each mutant here is scored by
+  ONE killer FILE, chosen for it, so this proves each is still killed and says nothing about by
+  how many cells. The generic-operator half is sized, refused and filed as **R4.108** — 2848
+  mutants, 70.4 h serial against the fast tier, and a narrow killer measured to manufacture
+  false survivors at ~38% on the best-case file, all six of which the fast tier kills.
 - **S17. ✅ DONE in 0.88.0 — the test was not flaky; the recorder was wrong, and it is now fixed.**
   Rescoped by measurement at 0.87.0: under artificial load the deferred-write refusal failed ~1 run in
   20 and the cached result put the gate on the BENIGN click while the committing step cached ungated

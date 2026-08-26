@@ -77,11 +77,9 @@
    "id": "0.6",
    "phase": 0,
    "title": "scheduled mutation sweep",
-   "status": "held",
-   "trigger": "1.5",
-   "trigger_fired": true,
+   "status": "done",
    "artifact": ".github/workflows/mutation-sweep.yml",
-   "forward_declared": true
+   "landed": "0.136.0"
   },
   {
    "id": "0.7",
@@ -202,9 +200,10 @@
   {
    "id": "2.4",
    "phase": 2,
-   "title": "B5 — baseline, nightly, honesty page",
+   "title": "B5 — baseline, weekly run, honesty page",
    "status": "pending",
-   "artifact": "baselines/customer_v1.json"
+   "artifact": "baselines/customer_v1.json",
+   "note": "WEEKLY, not nightly -- decided by the repo owner on 2026-08-26, with ad-hoc runs available. A full corpus pass costs ~$1.72, so nightly is ~$52/month against a substrate whose Odoo half is std 0.203 and not baselined. The run shares 0.6's workflow, which now exists and carries a `workflow_dispatch` trigger for exactly the ad-hoc case."
   }
  ]
 }
