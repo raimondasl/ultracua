@@ -211,6 +211,31 @@ Moved ahead of secrets/CLI per critique: these are silent wrong-TARGET writes sh
 the harm class the register has rated critical every time it appeared. Each is reproduce-first and
 adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable; deciding late is not.
 
+- **D6.** (from R4.105) **A wire-promoted step is gated on the WHOLE PAGE, not on its own form.**
+  ⏳ **ELIGIBLE 2026-08-26 — the trigger fired and nothing has been built.** Phase 3 is taken "only
+  when a number indicts it"; the number is **58% of Odoo's replay refusals** across three reps, every
+  one carrying the message `mutation gate: page drift`, which is the whole-page FALLBACK branch. The
+  precise branch exists and its own comment says the whole-page fingerprint "over-flags" churn
+  (banners, badges) — Odoo pages churn constantly. `flow.py` already captures `scope_of[i]` for
+  non-mutating **click/type** steps precisely so a later wire promotion can use the precise gate; it
+  does NOT for `press`/`navigate`, which have no ref. **UNVERIFIED: which action types Odoo's failing
+  steps actually are.** That costs ~$0.10 (one run keeping the recipe cache) and must be measured
+  BEFORE any `src/` change — a fix on a wrong diagnosis is worse than none, and this register has the
+  scars.
+
+  **NOT A D0 RETRY, and not R4.27's disposition.** D0 is blocked for building a flow-level REFUSAL off
+  an over-counting mark; this refuses nothing and demotes nothing. R4.27's disposition was attempted
+  and correctly refused 12/12 by `flow mark`. This changes only WHICH drift test an already-marked
+  step is judged by.
+
+  **THE SAFETY ARGUMENT IS THE WHOLE SLICE**, and it cuts both ways: the precise gate is STRICTER
+  about the target's own form and MORE PERMISSIVE about unrelated churn, so the honest risk is a
+  scope fingerprint that is subtly wrong letting a write pass a check it should have failed. It wants
+  the write-safety matrix extended by a dimension rather than a bespoke test beside the fix.
+
+  **SEQUENCED AFTER 0.6 AND 2.4**, which is the plan's order and not a preference: Phase 3 follows
+  Phase 2, 2.4 is open, and 2.4's nightly shares 0.6's workflow.
+
 - **D0.** (from S2) Undeclared-write flows refuse everywhere — confirm scope. ⛔ **DECIDED, 0.77.0: DO
   NOT, and it is BLOCKED, not merely deferred.** It was implemented and reverted. A flow-level refusal
   keyed off `is_write_flow` refuses a large population of ordinary READS, because `step.mutating`
