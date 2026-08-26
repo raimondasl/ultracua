@@ -1314,6 +1314,38 @@ Three full reps of both substrates: **$4.97** ($1.81 Gitea, $3.16 Odoo), ~1.5 h.
   the gate uses a Wilson bound instead of `compare_records`. With three passes the values ARE reps,
   so `std` means what its name says for the first time.
 
+## Gitea is baselined; Odoo waits on R4.27 (0.134.0)
+
+`baselines/customer_v1_gitea.json` is the first customer baseline: three passes, `availability_rate`
+**0.762 over n=21** scenario-observations. Diagnosing why Odoo is NOT in it cost **$0.30** and most
+of it was free — the 21 records the series had already bought.
+
+* **THE ODOO VARIANCE IS NOT THE AGENT WANDERING (R4.105).** `odoo-search` returned an IDENTICAL
+  recipe in all three reps — 2 steps, 4 calls, `mutating_steps: 1`, source `wire` — and scored
+  `over_gated` / `ok` / `over_gated`. The only field that differed was `mutation_gate_refused`.
+  `odoo-open-record` says it from the other side: `mutating_steps: 5` -> `refused`,
+  `mutating_steps: 0` -> `ok` twice. **The mechanism is `flow.py`'s own comment** — "every gated step
+  loses self-heal and suffix-replan" — so a step R4.27 misfiled as a write cannot heal, and drift
+  becomes a hard refusal. **7 of Odoo's 12 refusals (58%) are the mutation gate**; 4 are ordinary
+  locator drift. A baseline written now is dominated by a filed defect and dies when it is fixed.
+* **THE HARNESS EXPLANATION WAS TESTED AND REFUTED, which is why the extra runs were worth it.**
+  The inter-phase reset was the obvious suspect (this file already records that an Odoo reset leaves
+  a cold template). Measured: **3/6 with the reset, 5/6 without** — Fisher p ~ 0.55, and run 4 failed
+  with no reset at all. Stopping at the first 3/3 would have shipped a confident wrong cause.
+* **A BASELINE MUST PASS THE PASSES IT WAS BUILT FROM, AND THE FIRST DRAFT DID NOT (R4.106).**
+  `_cost_findings` regresses at `baseline * 1.25`; three IDENTICAL Gitea passes cost $0.3502 /
+  $0.8421 / $0.6167, an **82% spread**, because a failing learn spends its whole budget and which
+  rows fail varies. A mean baseline failed rep 2. Only running the finished artifact against its own
+  evidence could have caught that. `cost_usd` is the MAX observed now, with `cost_per_rep` carried so
+  the mean stays recoverable — the expected cost and the alarm threshold are different questions.
+* **THE PLAN-STATE GUARD FORCED AN HONEST NAME.** The artifact was first written as
+  `baselines/customer_v1.json`, which is step 2.4's declared artifact — and 2.4 is `pending` because
+  the Odoo half, the nightly and the honesty page do not exist. `test_no_unshipped_step_has_its
+  _artifact_in_the_tree` fired. Renamed to `_gitea`, which is what it is.
+* **A COIN-FLIP ROW IS RECORDED AS NOT PASSING.** `gitea-sort-list` gave three different outcomes in
+  three passes; recording its tie as the quiet one would make `_flip_findings` report a flip on most
+  future runs, and a channel that cries wolf gets ignored.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

@@ -142,6 +142,79 @@ def fold(records: "list[dict]") -> dict:
     }
 
 
+def as_baseline(records: "list[dict]") -> dict:
+    """Fold a series into a RECORD-shaped baseline that `gate_bench_record` can compare against.
+
+    A BASELINE IS A RECORD, NOT AN AGGREGATE. `_rate_findings` reads `metrics[name]["mean"]`/`["n"]`,
+    `_flip_findings` reads `scenarios[...]["outcome"]`, `_cost_findings` reads `cost_usd` -- all in
+    the shape `build_bench_record` emits. `fold` above answers a different question (which rows
+    moved), so it cannot be handed to the gate.
+
+    IT USES EVERY OBSERVATION, WHICH IS THE WHOLE POINT OF PAYING FOR REPS. `n` is the number of
+    SCENARIO-OBSERVATIONS (reps x scenarios), not the corpus size, so the Wilson bound the gate
+    computes reflects the evidence actually gathered. Picking one pass instead would throw two
+    thirds of it away and re-create the problem the series was bought to solve.
+
+    A SCENARIO'S BASELINE OUTCOME IS ITS MODE, and ties break to the NON-QUIET one. `_flip_findings`
+    reports a row that was quiet in the baseline and is not now; recording a coin-flip row as quiet
+    would make it report a flip on half of all future runs, which is how a channel gets ignored. The
+    unstable rows are carried explicitly so a reader knows which numbers not to trust.
+    """
+    agg = fold(records)
+    names = sorted(records[0]["scenarios"])
+
+    scenarios, observations = {}, []
+    for name in names:
+        seen = [r["scenarios"][name]["outcome"] for r in records]
+        scored = [o for o in seen if o != UNSCORED]
+        observations.extend(1.0 if _passed(o) else 0.0 for o in scored)
+        counts = {o: seen.count(o) for o in set(seen)}
+        top = max(counts.values())
+        tied = [o for o, c in counts.items() if c == top]
+        # TIES BREAK TO NON-QUIET, so a row that passed 1 of 3 is not recorded as a pass.
+        outcome = sorted(tied, key=lambda o: (o in QUIET_OUTCOMES, o))[0]
+        row = dict(records[0]["scenarios"][name])
+        row["outcome"] = outcome
+        scenarios[name] = row
+
+    mean = (sum(observations) / len(observations)) if observations else 0.0
+    costs = [r.get("cost_usd") for r in records]
+    return {
+        "bench": records[0].get("bench", "?"),
+        "provider": records[0].get("provider", "?"),
+        "reps": len(records),
+        "kind": "corpus-baseline",
+        "metrics": {"availability_rate": {"mean": round(mean, 6), "n": len(observations)}},
+        # ONLY the rate the gate may compare. `build_bench_record` derives this from `GATED_RATES`;
+        # here it is the single metric this baseline actually carries evidence for.
+        "gated_metrics": ["availability_rate"],
+        "scenarios": scenarios,
+        # THE MAXIMUM OBSERVED, NOT THE MEAN — and this is the one field where the obvious choice
+        # is wrong. `_cost_findings` regresses at `baseline * (1 + cost_rel)` with `cost_rel`
+        # defaulting to 0.25, and the MEASURED per-pass spread over three identical Gitea passes is
+        # **82%**: $0.3502, $0.8421, $0.6167. Against a mean baseline the gate fired on rep 2 — one
+        # of the three passes the baseline was BUILT FROM. A channel that alarms on a third of all
+        # runs from pure noise is the one that gets `|| true`d, taking the inviolable channel dark
+        # with it (R3.9/CLI-1).
+        #
+        # The spread is not mysterious: a learn that FAILS spends its whole budget, so a pass costs
+        # what its failures cost, and which rows fail varies. Gating on the max asks the question
+        # actually worth asking — "did spend blow past anything we have ever seen?" — and still
+        # catches a real doubling.
+        #
+        # `cost_per_rep` rides along so the MEAN is recoverable by a reader who wants the expected
+        # cost rather than the alarm threshold. They are different questions and the artifact
+        # should not force one to stand in for the other.
+        "cost_usd": None if any(c is None for c in costs) else round(max(costs), 6),
+        "cost_per_rep": [None if c is None else round(c, 6) for c in costs],
+        # CARRIED FORWARD so a reader of the artifact sees which rows moved and which failed the
+        # same way every time -- the difference between a number to trust and one to re-measure.
+        "unstable": agg["unstable"],
+        "varies": agg["varies"],
+        "stability": agg["stability"],
+    }
+
+
 def _print(agg: dict) -> None:
     a = agg["availability_rate"]
     print("=" * 78)
@@ -172,6 +245,9 @@ def main(argv=None) -> int:
     ap.add_argument("records", nargs="+",
                     help="jsonl files written by `corpus_run --out` (one record per line)")
     ap.add_argument("--out", default=None, help="write the aggregate here")
+    ap.add_argument("--baseline", action="store_true",
+                    help="emit a RECORD-shaped baseline instead of the aggregate view. It still "
+                         "goes to --out; copying it into baselines/ stays a reviewed human act.")
     args = ap.parse_args(argv)
 
     by_bench: dict = {}
@@ -185,7 +261,7 @@ def main(argv=None) -> int:
     for bench in sorted(by_bench):
         agg = fold(by_bench[bench])
         _print(agg)
-        aggs.append(agg)
+        aggs.append(as_baseline(by_bench[bench]) if args.baseline else agg)
 
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:

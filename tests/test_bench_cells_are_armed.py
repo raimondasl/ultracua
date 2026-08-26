@@ -1066,3 +1066,39 @@ def test_the_aggregate_notices_an_unknown_cost_being_summed_as_zero(monkeypatch)
                 "    total_cost = None if any(c is None for c in costs) else round(sum(costs), 6)",
                 "    total_cost = round(sum(c or 0.0 for c in costs), 6)")
     print(assert_red(TCA.test_an_unpriceable_pass_makes_the_series_cost_unknown))
+
+
+def test_the_baseline_notices_the_cost_going_back_to_a_mean(monkeypatch) -> None:
+    """MEASURED: three identical Gitea passes span 82% in cost, and a mean baseline failed one of
+    the passes it was built from. A channel that alarms on a third of runs gets switched off."""
+    import tests.test_corpus_aggregate as TCA
+    from benchmarks import corpus_aggregate as CA
+
+    _arming.mutate_function(monkeypatch, CA, "as_baseline",
+                            '"cost_usd": None if any(c is None for c in costs) else '
+                            'round(max(costs), 6),',
+                            '"cost_usd": None if any(c is None for c in costs) else '
+                            'round(sum(costs) / len(costs), 6),')
+    print(assert_red(TCA.test_a_baseline_passes_the_very_passes_it_was_built_from))
+
+
+def test_the_baseline_notices_a_coin_flip_row_recorded_as_a_pass(monkeypatch) -> None:
+    """A tie broken toward the QUIET outcome makes an unstable row report a flip on most runs."""
+    import tests.test_corpus_aggregate as TCA
+    from benchmarks import corpus_aggregate as CA
+
+    _arming.mutate_function(
+        monkeypatch, CA, "as_baseline",
+        "        outcome = sorted(tied, key=lambda o: (o in QUIET_OUTCOMES, o))[0]",
+        "        outcome = sorted(tied, key=lambda o: (o not in QUIET_OUTCOMES, o))[0]")
+    print(assert_red(TCA.test_a_coin_flip_row_is_recorded_as_NOT_passing))
+
+
+def test_the_baseline_notices_n_becoming_the_corpus_size(monkeypatch) -> None:
+    """`n` drives the gate's Wilson bound; recording 7 instead of 21 discards the reps' evidence."""
+    import tests.test_corpus_aggregate as TCA
+    from benchmarks import corpus_aggregate as CA
+
+    _arming.mutate_function(monkeypatch, CA, "as_baseline",
+                            '"n": len(observations)', '"n": len(names)')
+    print(assert_red(TCA.test_the_baseline_counts_every_observation_not_the_corpus_size))

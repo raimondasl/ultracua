@@ -1,0 +1,131 @@
+{
+ "bench": "customer-gitea",
+ "provider": "anthropic",
+ "reps": 3,
+ "kind": "corpus-baseline",
+ "metrics": {
+  "availability_rate": {
+   "mean": 0.761905,
+   "n": 21
+  }
+ },
+ "gated_metrics": [
+  "availability_rate"
+ ],
+ "scenarios": {
+  "gitea-comment": {
+   "outcome": "true",
+   "substrate": "gitea",
+   "code": ""
+  },
+  "gitea-filter-state": {
+   "outcome": "ok",
+   "substrate": "gitea",
+   "code": ""
+  },
+  "gitea-menu-nav": {
+   "outcome": "ok",
+   "substrate": "gitea",
+   "code": ""
+  },
+  "gitea-open-issue": {
+   "outcome": "ok",
+   "substrate": "gitea",
+   "code": ""
+  },
+  "gitea-search": {
+   "outcome": "ok",
+   "substrate": "gitea",
+   "code": ""
+  },
+  "gitea-sort-list": {
+   "outcome": "not_authored",
+   "substrate": "gitea",
+   "code": "drift"
+  },
+  "gitea-start-timer": {
+   "outcome": "not_authored",
+   "substrate": "gitea",
+   "code": ""
+  }
+ },
+ "cost_usd": 0.84208,
+ "cost_per_rep": [
+  0.35019,
+  0.84208,
+  0.616725
+ ],
+ "unstable": [
+  {
+   "scenario": "gitea-sort-list",
+   "passes": 1,
+   "of": 3,
+   "outcomes": [
+    "not_authored",
+    "ok",
+    "refused"
+   ]
+  }
+ ],
+ "varies": [],
+ "stability": {
+  "gitea-comment": {
+   "passes": 3,
+   "scored_reps": 3,
+   "reps": 3,
+   "outcomes": [
+    "true"
+   ]
+  },
+  "gitea-filter-state": {
+   "passes": 3,
+   "scored_reps": 3,
+   "reps": 3,
+   "outcomes": [
+    "ok"
+   ]
+  },
+  "gitea-menu-nav": {
+   "passes": 3,
+   "scored_reps": 3,
+   "reps": 3,
+   "outcomes": [
+    "ok"
+   ]
+  },
+  "gitea-open-issue": {
+   "passes": 3,
+   "scored_reps": 3,
+   "reps": 3,
+   "outcomes": [
+    "ok"
+   ]
+  },
+  "gitea-search": {
+   "passes": 3,
+   "scored_reps": 3,
+   "reps": 3,
+   "outcomes": [
+    "ok"
+   ]
+  },
+  "gitea-sort-list": {
+   "passes": 1,
+   "scored_reps": 3,
+   "reps": 3,
+   "outcomes": [
+    "not_authored",
+    "ok",
+    "refused"
+   ]
+  },
+  "gitea-start-timer": {
+   "passes": 0,
+   "scored_reps": 3,
+   "reps": 3,
+   "outcomes": [
+    "not_authored"
+   ]
+  }
+ }
+}
