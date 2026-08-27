@@ -218,6 +218,21 @@ jobs:
           fi
           echo "a key is configured; its value is never printed, logged or written to disk"
 
+      # PROVISION THE SUBSTRATE IN THIS JOB, because `needs:` is ORDERING AND NOT A SHARED MACHINE.
+      # Every job gets a fresh runner, so the `substrates` job's containers do not exist here — and
+      # `score_one` calls `reset()` and `await_ready()` but never `up()`, because on a developer host
+      # the substrate is already running. That assumption cost 2.4a's first real weekly run: all
+      # seven scenarios raised `no seed at /data/gitea/seed.db` (R4.110).
+      #
+      # `needs: substrates` still earns its place — it fails the cheap job first, so a broken
+      # container layer costs nothing rather than a paid pass. What it never did was hand this job a
+      # running substrate.
+      - name: Provision Gitea for the scored run
+        timeout-minutes: 15
+        run: >
+          uv run --group bench --group providers --group mcp
+          python -m benchmarks.substrate_check --substrate gitea --keep
+
       # ONE PASS, gated against the committed baseline. `--baseline` is what turns on the cost, rate
       # and flip channels; without it `gate_bench_record` runs the ABSOLUTE channels only and would
       # print PASS having compared against nothing.
