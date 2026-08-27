@@ -267,6 +267,34 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   **SEQUENCED AFTER 0.6 AND 2.4**, which is the plan's order and not a preference: Phase 3 follows
   Phase 2, 2.4 is open, and 2.4's nightly shares 0.6's workflow.
 
+- **D7.** (from R4.27) **Classify a POST by the protocol declaration in its BODY, not by its method.**
+  📋 **SURVEYED 2026-08-27, NOT SCHEDULED — `docs/reads-over-post.md` is the full write-up.** Eleven
+  approaches with an adversarial pass on each; six are dead, three of them killed by that pass rather
+  than by prior history. What survives is a JSON-RPC read-method allowlist plus a route-EXACT read-route
+  list, failing closed on everything else, packaged as a version-pinned framework profile.
+
+  **WHY THE RECORDED REFUSALS DO NOT REACH IT.** The URL-denylist refusal reads "a GraphQL MUTATION
+  travels the same URL"; an Odoo `create` cannot travel under the name `search_read`, because the method
+  name IS the operation (`getattr(model, method)` dispatch). It is an allowlist of reads with unknowns
+  staying loud — the shape this plan sanctions everywhere else — not an enumeration of exclusions. The
+  request body is a sensor class D5 has NOT spent. It demotes a mark and refuses nothing, so D0's block
+  does not reach it; D6's own entry states that boundary.
+
+  **THE UNPRICED ASSUMPTION IS THE REASON THIS IS NOT SCHEDULED.** That fixing the marking improves Odoo
+  availability at all is assumed by every approach and measured by none — R4.111's tail is the
+  counter-signal, and the READ path also resolves `unique=True`, so demotion may only convert "gate
+  refused" into "healed and still failed". Six free measurements settle it; **#1 (flip the cached marks,
+  replay 0-LLM) decides whether the ranking holds at all** and must run before any `src/` change. That is
+  D6's lesson applied to the fix direction before the fix.
+
+  **CONDITIONS, if it is ever taken.** Measure the demoted population offline first (D0's standing
+  order); trim the allowlist to methods actually observed; **price the verify-by-replay re-arm** —
+  demotion re-enables a full second browser pass, so a wrongly-demoted write is double-fired AT LEARN;
+  reach the heal wire-guards too, or Odoo recovery stays poisoned after demotion; demotion ADDS a
+  provenance mark and never strips `MARK_WIRE`; no operator-extension door in any form (the
+  human-verdict class is spent). One residual is NEW rather than parity and must be filed as such: a
+  customized app overriding a read verb to write is gated today and would stop being.
+
 - **D0.** (from S2) Undeclared-write flows refuse everywhere — confirm scope. ⛔ **DECIDED, 0.77.0: DO
   NOT, and it is BLOCKED, not merely deferred.** It was implemented and reverted. A flow-level refusal
   keyed off `is_write_flow` refuses a large population of ordinary READS, because `step.mutating`

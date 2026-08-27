@@ -27,7 +27,7 @@
   ],
   [
    false,
-   "not retrying after auth refresh \u2014 a recorded step is marked as WRITING and this flow declares no write, so a re-run from the start could re-fire it with no confirm barrier to detect that. Run `flow login --name f`, then replay. `flow inspect --name f` shows WHICH step is marked (the mark can come from the wire or from the step's wording; which of the two it was is not recorded)"
+   "not retrying after auth refresh \u2014 a recorded step is marked as WRITING and this flow declares no write, so a re-run from the start could re-fire it with no confirm barrier to detect that. Run `flow login --name f`, then replay. `flow inspect --name f` shows WHICH step is marked AND WHY \u2014 a `keyword` mark is a substring guess (28% false positives) that `flow mark` can demote; a `wire` mark is a POST that was watched leaving the browser and is not demotable, and on an app serving reads over POST it may be an ordinary read (R4.27)"
   ],
   [
    false,

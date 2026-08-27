@@ -2665,8 +2665,10 @@ def _auth_retry_allowed(spec: FlowSpec, cached_flow, *, auth_refresh: bool,
             "not retrying after auth refresh — a recorded step is marked as WRITING and this flow "
             f"declares no write, so a re-run from the start could re-fire it with no confirm barrier to "
             f"detect that. Run `flow login --name {spec.name}`, then replay. `flow inspect --name "
-            f"{spec.name}` shows WHICH step is marked (the mark can come from the wire or from the step's "
-            f"wording; which of the two it was is not recorded)")
+            f"{spec.name}` shows WHICH step is marked AND WHY — a `keyword` mark is a substring guess "
+            f"(28% false positives) that `flow mark` can demote; a `wire` mark is a POST that was "
+            f"watched leaving the browser and is not demotable, and on an app serving reads over POST "
+            f"it may be an ordinary read (R4.27)")
     # MULTI-COMMIT, asked of the RECIPE as well as the declaration. A whole-flow precheck models only the
     # LAST write, so on a flow that commits twice a retry re-fires an already-landed earlier one. Asking
     # `is_multiwrite()` alone answers "did the human declare more than one BARRIER" — and `record()`
@@ -4468,8 +4470,14 @@ async def run_all(
                 # The remedies below are the ones that exist; note that for a READ misclassified by the
                 # wire promotion none of them work (declaring `mutate` demands a confirm a read cannot
                 # satisfy, and `flow record` re-derives the same verdict). For that population the
-                # acknowledgement is `flow unapprove`, checked above — visibility is the whole of the
-                # remedy until a `mutating` mark can say WHY it was set.
+                # acknowledgement is `flow unapprove`, checked above.
+                #
+                # The mark CAN say why it was set since 0.92.0 — `flow inspect` prints
+                # `mutating_sources`, so an operator reading this can at least tell a keyword guess
+                # (demotable) from a watched POST (not). What provenance does NOT do is separate a
+                # watched POST that wrote from one that read, which is R4.27 and is why the remedies
+                # above still do not work for that population. `docs/reads-over-post.md` surveys what
+                # would.
                 return FleetRun(name=name, ok=False, status="failed",
                                 error="UNDECLARED write — a recorded step mutates but the spec declares no "
                                       "write, so replay cannot verify it landed. NOT RUN, and it will "
