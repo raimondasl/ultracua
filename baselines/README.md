@@ -355,11 +355,30 @@ because a learn that fails spends its whole budget and which rows fail varies. A
 failed rep 2, one of the passes it was built from (R4.106). `cost_per_rep` carries the individual
 values so the mean is recoverable.
 
-**Why Odoo is absent.** Not an oversight, and not a lack of measurement — see R4.105. Odoo's three
-reps gave mean 0.181 with std 0.203, and **58% of its 12 replay refusals are the mutation gate
-refusing a step that R4.27 misfiled as a write**. A gated step loses self-heal, so drift becomes a
-hard refusal rather than a recovery. A baseline written now would be dominated by a filed defect and
-invalidated when it is fixed.
+**Why Odoo is absent, and why that is now a statement about the PRODUCT rather than about
+scheduling.** Odoo's three reps gave mean 0.181 with std 0.203, and **58% of its 12 replay refusals
+are the mutation gate refusing a step that R4.27 misfiled as a write** (R4.105). `is_write_request`
+keys on the HTTP METHOD, and Odoo serves list reads as JSON-RPC POSTs — so ordinary reads cache as
+writes, and a marked step that drifts cannot self-heal.
+
+**The cheap fix was tried and refuted** (R4.111, 0.139.0). Correctness-plan D6 proposed routing such
+a step to the precise form-scope gate instead of the whole-page one, and made itself conditional on
+measuring the action types first. Measured, $0.4634 across four learns: of ten wire-promoted steps,
+six are `navigate` — no element, so the precise gate is structurally unreachable — and four are
+`click` that **already** take the precise gate and refuse anyway, on `target missing/ambiguous`.
+That is a locator failure, not a scope failure. **The gate is correct at both branches; the defect is
+upstream in the marking**, which is the population D0 is blocked over.
+
+**What this does and does not say about the product.** It does NOT say ultracua gets Odoo wrong: no
+Odoo scenario in any run produced `wrong_data`, and `mode="auto"` falls through to a re-author, so
+the answer still arrives. What is lost is the 0-LLM deterministic replay — the central claim — so on
+this class of app the product degrades to an ordinary LLM agent. And it is a CLASS, not an app:
+R4.27's original 12/12 was measured on GraphQL read controls, not on Odoo.
+
+**One caution against assuming R4.27 is the whole story.** `odoo-sort-list`'s gate refusal is itself
+a locator-ambiguity failure, so there may be a second independent Odoo problem underneath — generated
+markup that does not resolve uniquely. One refusal message is a signal, not a measurement, and
+nothing here should be read as "fix R4.27 and Odoo works".
 
 
 ### The open defects these numbers are standing on
@@ -386,6 +405,10 @@ not happen is a live caveat quietly becoming a historical one.
 * **R4.102** — an interactable control below the fold never enters the agent's observation, and
   nothing in the observation says there is more page. `gitea-start-timer`'s 0/3 IS this defect, so
   one seventh of the Gitea availability number is a known grounding limit rather than a replay one.
+* **R4.111** — the cheap route to an Odoo baseline is CLOSED: D6 was refuted by its own
+  mandated measurement, the mutation gate is correct at both branches, and what remains is
+  R4.27's marking. So "Odoo is absent" should be read as a standing product limitation on a
+  CLASS of apps (anything serving reads over POST), not as work not yet scheduled.
 * **R4.105** — Odoo's own exclusion: mean 0.181, std 0.203, dominated by R4.27. Recorded here
   because "Odoo is absent" is a statement about the product's measured behaviour, not about effort.
 * **R4.108** — the generic-operator half of the mutation sweep is unbuilt, so the suite behind

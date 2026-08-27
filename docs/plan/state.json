@@ -212,7 +212,7 @@
    "title": "B5 — the Odoo half of the baseline",
    "status": "pending",
    "artifact": "baselines/customer_v1_odoo.json",
-   "note": "NOT held on a plan STEP, which is why the status is `pending` rather than `held`: it waits on R4.27's over-marking, addressed by correctness-plan decision D6, and D6 is not a row in this table. Odoo measured mean 0.181, std 0.203 over three reps, with 58% of its replay refusals being the mutation gate refusing a step R4.27 misfiled as a write (R4.105). A baseline cut now would be dominated by a filed defect and invalidated the moment it is fixed. The artifact is FORWARD-DECLARED, like 0.5/0.7: if the slice that lands it picks another name, the absent-direction stays quiet and the done-direction is what catches it."
+   "note": "WAITS ON R4.27 DIRECTLY. It was filed as waiting on correctness-plan D6, and **D6 was REFUTED at 0.139.0 by its own mandated measurement** (R4.111): the gate is correct at both branches and the defect is upstream in the marking. So the cheap route to an Odoo baseline is closed, and what remains is R4.27 -- the population D0 is blocked over, and a far larger item. Odoo measured mean 0.181, std 0.203 over three reps. A further signal says fixing R4.27 alone may not be enough: one gate refusal was itself a locator-ambiguity failure, so there may be a second independent Odoo problem underneath. `pending` rather than `held` because R4.27 is a register finding, not a row in this table."
   }
  ]
 }

@@ -1478,6 +1478,44 @@ whole step because everything except Odoo was ready.
   the assert that caught it. Note `_JOB_START` matches the top-level `on:` key too, so tracking
   `steps:` is what keeps a trigger block out of a job.
 
+## D6 was refuted by the measurement it demanded of itself (R4.111, 0.139.0)
+
+Correctness-plan D6 wanted to route a wire-promoted step to the PRECISE form-scope gate instead of
+the whole-page one, and made itself conditional on measuring the action types FIRST. It cost
+**$0.4634 across four Odoo learns** and the answer was: do not build it.
+
+* **TEN WIRE-PROMOTED STEPS, AND THE FIX ADDRESSES NEITHER HALF.** Six `navigate` -- no locator, no
+  scope, so the precise gate is STRUCTURALLY unreachable, there is no element to scope. Four `click`
+  -- scope AND locator, so they take the precise gate **already**, and refused anyway.
+* **BOTH BRANCHES REFUSE, FOR DIFFERENT REASONS, and that is the whole refutation.** `odoo-menu-nav`
+  said `mutation gate: page drift` (the fallback); `odoo-sort-list` said `mutation gate: target
+  missing/ambiguous` -- the PRECISE branch's own first failure mode. That one is
+  `resolve(..., unique=True)` failing to bind uniquely on a generated DOM: a LOCATOR problem, not a
+  scope problem. And `unique=True` is a deliberate write-safety choice, correct for anything the
+  system believes is a write.
+* **SO THE GATE IS RIGHT AT EVERY BRANCH AND THE DEFECT IS UPSTREAM.** R4.27 marks an Odoo read as a
+  write; the write-safety machinery then correctly refuses; an ordinary read becomes a hard refusal.
+  Narrowing the gate would weaken write safety for steps believed to be writes -- what D0 was
+  blocked for.
+* **ONE RUN WOULD HAVE SHIPPED THE WRONG FIX.** From the first scenario alone the conclusion was
+  "the precise gate is structurally unreachable for the failing steps" -- true of navigations and
+  FALSE of 40% of the population. The second scenario produced no gated step at all. The plan
+  budgeted ~$0.10 for ONE run. **When a measurement's first sample gives a clean story, that is the
+  moment to buy the second one**, not the moment to write it up.
+* **WHAT IT IS NOT: a claim the product gets Odoo WRONG.** No Odoo scenario in any run produced
+  `wrong_data`, and `mode="auto"` falls through to a re-author, so the answer still arrives. What is
+  lost is the 0-LLM deterministic replay -- the central claim -- so on this class of app the product
+  degrades to an ordinary LLM agent. And it is a CLASS: `is_write_request` keys on the METHOD, so it
+  is every app serving reads over POST. R4.27's original 12/12 was GraphQL controls, not Odoo.
+* **A SIGNAL, NOT YET A FINDING**: `odoo-sort-list`'s gate refusal is ITSELF a locator failure, so
+  R4.27 may be partly masking a second independent Odoo problem and fixing it alone might not
+  unblock 2.4b. One refusal message is not a measurement.
+* **THE INSTRUMENT SHIPS WITH THE REFUTATION** (`benchmarks/gate_probe.py`), because a conclusion of
+  the form "do not change `src/`" is worth exactly what its reproducibility is worth, and the next
+  person to doubt it should re-derive it in a minute rather than re-buy four learns.
+  `tests/test_gate_probe.py` holds the probe's branch against the engine's own source, so a probe
+  describing a gate the code no longer has fails there rather than answering confidently and wrongly.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

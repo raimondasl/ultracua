@@ -212,7 +212,38 @@ the harm class the register has rated critical every time it appeared. Each is r
 adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable; deciding late is not.
 
 - **D6.** (from R4.105) **A wire-promoted step is gated on the WHOLE PAGE, not on its own form.**
-  ⏳ **ELIGIBLE 2026-08-26 — the trigger fired and nothing has been built.** Phase 3 is taken "only
+  ⛔ **REFUTED 2026-08-27 BY ITS OWN MANDATED MEASUREMENT — DO NOT BUILD IT.** This entry
+  required the action types to be measured BEFORE any `src/` change, on the grounds that a fix
+  on a wrong diagnosis is worse than none. That measurement cost **$0.4634** across four Odoo
+  learns and says the fix addresses nothing: 10 wire-promoted steps across the three scenarios that actually refused: **6 `navigate`** (no locator, no scope -- the precise gate is STRUCTURALLY unreachable, there is no element to scope) and **4 `click`** (scope AND locator -- the precise gate ALREADY, and it refused anyway).
+
+  **BOTH BRANCHES REFUSE, FOR DIFFERENT REASONS.** `odoo-menu-nav` refused with `mutation gate:
+  page drift` — the fallback. `odoo-sort-list` refused with `mutation gate: target
+  missing/ambiguous` — the PRECISE branch's own first failure mode, i.e. the gate D6 wanted to
+  route steps to was already judging them. Its failure is `resolve(..., unique=True)` unable to
+  bind uniquely on a generated DOM: a LOCATOR problem, not a scope problem. And that
+  `unique=True` is a deliberate write-safety choice (fail loud rather than bind a blind `.first`
+  into the wrong form), correct for anything the system believes is a write.
+
+  **SO THE GATE IS RIGHT AT EVERY BRANCH AND THE DEFECT IS UPSTREAM**, in R4.27's marking.
+  Narrowing the gate would weaken write safety for steps the system believes are writes, which
+  is the direction D0 was blocked for. Reproduce with `python -m benchmarks.gate_probe <cache>`;
+  the instrument ships with the refutation because a "do not change `src/`" conclusion is worth
+  what its reproducibility is worth.
+
+  **THE MEASUREMENT CORRECTED ITSELF TWICE, which is why one run was not enough.** From the
+  first scenario alone the conclusion was "the precise gate is structurally unreachable for the
+  failing steps" — true of navigations and FALSE as a generalisation, since 40% of gated steps
+  already reach it. The second produced no gated step at all. The plan budgeted ~$0.10 for ONE
+  run; one run would have shipped a wrong `src/` change to the write rail.
+
+  **AND A SIGNAL WORTH ITS OWN LOOK, NOT YET A FINDING.** R4.105 counted 7 of 12 refusals as the
+  mutation gate and 4 as plain locator failures — but `odoo-sort-list`'s gate refusal IS a
+  locator failure wearing a gate's message. So R4.27 may be partly masking a second,
+  independent Odoo problem (locator ambiguity on generated markup), and fixing R4.27 alone might
+  not unblock 2.4b. One scenario's message is a signal, not a measurement.
+
+  ~~⏳ ELIGIBLE 2026-08-26 — the trigger fired and nothing has been built.~~ Phase 3 is taken "only
   when a number indicts it"; the number is **58% of Odoo's replay refusals** across three reps, every
   one carrying the message `mutation gate: page drift`, which is the whole-page FALLBACK branch. The
   precise branch exists and its own comment says the whole-page fingerprint "over-flags" churn
