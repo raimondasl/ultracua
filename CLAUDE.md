@@ -27,7 +27,9 @@ discriminating token" (accepted residual) and "I looked in the wrong container" 
 does not dispose of all three has now failed twice. **A fourth
 (R3.2, write attribution) has now defeated three attempts** — 0.73.0's drain (reverted), 0.74.0's first
 refusal draft (over-refused), and a 0.76.0 causal-attribution branch that was green and still wrong
-(**parked**, see `docs/parked/README.md`). Read that history before touching attribution: it rules out
+(**parked** on branch `feat/shared-causal-attribution`, whose `docs/parked/README.md` is the write-up
+-- that path is NOT on `main`, which is where this pointer used to lead). Read that history before
+touching attribution: it rules out
 every purely temporal design, and it shows that green is not evidence here. **A fifth attempt is now
 BLOCKED by decision `D5`** in the register — refuse-or-over-gate plus human adjudication IS the design,
 and unblocking it needs a new SENSOR CLASS measured against the existing artifacts first, not a better
@@ -1515,6 +1517,44 @@ the whole-page one, and made itself conditional on measuring the action types FI
   person to doubt it should re-derive it in a minute rather than re-buy four learns.
   `tests/test_gate_probe.py` holds the probe's branch against the engine's own source, so a probe
   describing a gate the code no longer has fails there rather than answering confidently and wrongly.
+
+## Reads over POST: eleven approaches surveyed, six dead (R4.27, 0.140.0)
+
+`docs/reads-over-post.md` is the write-up; D7 in the correctness plan is the entry. Read it before
+proposing anything here — it exists so the next person does not re-derive nine approaches or
+re-propose one of the six that are dead.
+
+* **THE LEAD IS BODY EVIDENCE, and the reason it survives is precise.** A JSON-RPC read-method
+  allowlist plus a route-EXACT read-route list, failing closed. The recorded denylist refusal reads
+  "a GraphQL MUTATION travels the same URL" -- an Odoo `create` cannot travel under the name
+  `search_read`, because the method name IS the operation. Allowlist of reads, unknowns loud. The
+  request body is the one sensor class D5 has not spent, and `dryrun.py` already reads `post_data`,
+  so it costs no plumbing.
+* **THREE APPROACHES DIED IN THE ADVERSARIAL PASS, not in the history**, and each was plausible
+  until its failure direction was walked. Two-tier marking reaches **0 of 10** measured steps
+  because the refusals are GATE refusals, which return pre-act, and the heal paths are themselves
+  `is_write_request` consumers -- restoring recovery leaves it poisoned. The navigate gate is
+  **vacuous on Odoo**, where every backend page is origin+path `/web` with all state in the hash it
+  would have to tolerate. Response evidence is measured barren (200 for reads, writes AND errors)
+  and actively wrong: `web_save` returns the saved record read back.
+* **THE ASSUMPTION EVERYTHING RESTS ON IS MEASURED BY NOTHING** -- that fixing the marking improves
+  Odoo at all. R4.111's tail is the counter-signal, and the READ path also resolves `unique=True`,
+  so demotion may only convert "gate refused" into "healed and still failed". **Six free
+  measurements settle it and #1 decides the ranking**: flip the cached marks to `mutating:false` and
+  replay 0-LLM. Buy that before any `src/` change.
+* **THE HAZARD A DEMOTION FIX CARRIES, which no dossier had priced**: demotion does not merely lose
+  a mark, it RE-ARMS verify-by-replay -- a full second browser pass at learn. A wrongly-demoted
+  write is double-fired before anything replays. Any such fix needs that as a named write-safety
+  cell, not an assumption.
+* **AND A FAMILY NOBODY EVALUATED**: a replay-time wire arbiter. Every approach classifies at learn
+  and acts on a static mark; the dry-run machinery already proves requests can be held pre-send with
+  the body in hand. An escorted believed-write sidesteps D6's "weaken the gate" objection entirely.
+  Recorded as the successor design to evaluate, not as a proposal.
+* **PROSE OUTLIVES ITS FIX, and three pieces had (R4.113).** `_auth_retry_allowed` sent the operator
+  to `flow inspect` to tell them the provenance "is not recorded" -- while `cli.py` prints it three
+  lines away, and has since 0.92.0. `run_all` said visibility was the remedy "until a mark can say
+  WHY it was set"; it can. And CLAUDE.md's own pointer to the parked attribution branch named a path
+  that is not on `main`. When a slice makes a sentence false, grep for the sentence.
 
 ## The pattern that predicts the next bug
 
