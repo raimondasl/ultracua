@@ -7,6 +7,13 @@
 > shows locator failures already dominate independently of any mark. **The lead candidate (B) is
 > still a correct fix for the MARKING and is no longer the path to an Odoo baseline.** See "What the
 > measurements said" below; the ranking that follows it is superseded by that section.
+>
+> **AND THE CAUSE NAMED IN THAT ANSWER WAS ITSELF WRONG (R4.115, 0.142.0).** Measurement #1's
+> observation stands -- demotion does not change the outcome -- but "the locator" is not why.
+> On a RENDERED page the failing spec binds uniquely on the first candidate; the replay is
+> reading a page that has not painted (Odoo: 5 elements at `domcontentloaded`, 0 of 7 scenarios
+> complete, settling 0.62-1.08 s; Gitea: 7 of 7 complete). Conclusion for this document is
+> unchanged and now doubly held: a marking fix is not the Odoo path.
 
 **Status: research, not a decision.** Nothing here is scheduled. It exists so that whoever next
 picks up R4.27 does not re-derive nine approaches, and does not re-propose one of the six that are
