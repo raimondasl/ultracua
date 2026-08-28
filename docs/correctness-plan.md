@@ -270,6 +270,10 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
 - **D7.** (from R4.27) **Classify a POST by the protocol declaration in its BODY, not by its method.**
   📋 **SURVEYED 2026-08-27, NOT SCHEDULED — `docs/reads-over-post.md` is the full write-up.**
   ⚠️ **AND ITS GATING MEASUREMENT CAME BACK NO (R4.114, 0.141.0): this would not unblock Odoo.**
+  ⚠️ **AND R4.115 (0.142.0) RE-ATTRIBUTES WHY.** R4.114 blamed the locator; measured, the
+  locator binds uniquely on a RENDERED page and the replay is reading an unpainted one (Odoo
+  serves 5 elements at `domcontentloaded`, 0 of 7 scenarios complete; Gitea 7 of 7). D7 stays
+  a correct fix for the MARKING and is not the Odoo path — and neither is a locator fix.
   Flipping the wire marks off leaves the same step failing, with `bound_by: none` in both arms —
   the mutation gate was reporting a LOCATOR failure it reached first. D7 remains a correct fix
   for the MARKING (reads should not be filed as writes) and is no longer a candidate for the

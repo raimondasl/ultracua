@@ -1594,6 +1594,67 @@ survey's own ranking is superseded by its own gate, which is what the gate was f
   pays one LLM call per replay. That is why `odoo-search` reported `llm_calls: 1`. Writes and
   navigate-only reads are genuinely 0-LLM; extracting reads are not, unless pinned.
 
+## The Odoo blocker is a READINESS RACE, and the obvious fix is refuted (R4.115, 0.142.0)
+
+R4.114 said the blocker was the LOCATOR. It is not, and that finding's own sensor could not have
+seen it -- an A/B of two arms at ONE instant never asks what was on the page. The whole diagnosis
+cost **$0.0099**.
+
+* **THE LOCATOR IS FINE.** On a RENDERED page the failing spec binds uniquely on the FIRST
+  candidate -- census over the live page, `exact-text` n=1, substring n=1, css n=1, and the real
+  `resolve(unique=True)` returns BOUND with `bound_by: exact-text`. Tier 3 is doubly unavailable
+  (`role='span'` is not a `KNOWN_ROLE`; `len(anchor)==60 == _ANCHOR_MAX`) and it does not matter.
+* **WHAT THE REPLAY IS LOOKING AT**, captured by wrapping `resolve` during a real failing replay:
+  `thead th` **0**, `body_chars` **3**. `goto` waits for `domcontentloaded` and `flow.py` resolves
+  immediately. Blank at 0.31 s, BOUND at 0.70 s.
+* **THREE SITES read page state with no settle**: the locator resolve, the gate's
+  `scope_fingerprint`, and the gate's whole-page `session.snapshot()`. The middle one is the
+  prettiest evidence -- at a real gate call, `t+0ms` returns the PREVIOUS step's recorded scope and
+  `t+100ms` returns exactly this step's. **The gate is not seeing drift, it is seeing the past.**
+* **THE SUBSTRATE CONTRAST IS TOTAL**: Gitea 7/7 complete at `domcontentloaded`, ONE whole-page
+  fingerprint each; Odoo **0/7**, every scenario **5 elements and 1 character**, 3-4 fingerprints,
+  settling 0.62-1.08 s. The 5 is R4.93's separately-measured skeleton.
+* **IT IS NOT LLM LATENCY, and getting that wrong is easy.** The author loop is
+  `snapshot() -> decide() -> act()`, so the learn's FIRST observation is taken at the same instant
+  as the replay's first resolve and sees the same skeleton. What saves the learn is that it
+  **RE-OBSERVES every turn**; the replay resolves once and `mode="replay"` nulls the provider, so
+  `_maybe_heal` returns immediately and one miss is terminal. R4.40 is the LEARN twin and is OPEN --
+  and its guard (`assert_not_a_skeleton`) lives in `benchmarks/`, guarding the learn's start page,
+  with nothing guarding the replay anywhere. A guard on a sibling path, never applied.
+* **THE OBVIOUS REMEDY IS REFUTED, BY THIS REPOSITORY'S SIGNATURE FAULT.** "Retry `resolve` while it
+  returns None" is keyed on an OVERLOADED SENSOR: `None` means five things and FOUR are deliberate
+  safety refusals. A poll re-drives them -- for a refusal keyed on a COMPETING candidate, it waits
+  for the competitor to go away. **Measured**: two per-row `Cancel` links, recorded row hidden at
+  t=400ms, today refuses LOUD and the polled arm BINDS `/cancel/30` at 0.41 s via `role+name`, a
+  Tier-1 confident candidate nothing cross-checks, where `/cancel/3` was recorded. That is D5's
+  overloaded-`None` one level up from `anchor_id`. **A fix needs a SENSOR that separates "not
+  rendered" from "found it and refused"**; the return value cannot express it.
+* **BLAST RADIUS IS SUGGESTIVE, NOT PROVEN.** R4.105's census counts 4 locator + 7 whole-page
+  refusals of 12, which are two of the three sites -- but exactly ONE scenario was driven end to
+  end. `odoo-menu-nav` is neither evidence nor counter-evidence: its recipe carries the proxy's dead
+  ephemeral port in every `navigate` step's `text`, and repairing the port invalidates
+  `precond_fingerprint`, which is `xxh64(url + basis)`.
+
+## Two ways a benchmark run reports GREEN while measuring nothing (R4.116, 0.142.0)
+
+Both were caught in the same hour, both had already been published in a written-up result, and
+neither is exotic. **When a measurement agrees with your hypothesis, check what its numbers mean
+before checking anything else.**
+
+* **`RunRecord.llm_calls` IS THE DECIDE COUNTER AND CANNOT SEE AN EXTRACTION CALL.** Its own comment
+  says so ("API calls are `usage["calls"]` -- they differ"). An unpinned read runs `extract()` inside
+  the finalize closure. A replay reporting `llm_calls: 0` had really spent `{'calls': 1, 'cost_usd':
+  0.00989, 'claude-opus-5': 1}`. **Read `usage["calls"]`**, which is what `scored_run` already does,
+  and never quote `llm_calls` as evidence of the 0-LLM claim.
+* **`odoo-sort-list` CANNOT DETECT WHETHER ITS OWN TASK WAS DONE.** Its recipe clicks the same header
+  THREE times and the header is a two-state toggle, so a faithful replay ends ASCENDING. Measured at
+  the extraction boundary: 17 rows, top `Balmer Inc: Potential Distributor`, `Need 20 Desks` **last**
+  -- and the run reported `RESULT == EXPECTED`. `flows.py` hands the extractor the whole page body
+  with the goal as its prompt, so it ranks the rows itself and is indifferent to sort order; the
+  oracle is a SQL `max()` over the ANSWER STRING and never looks at the page. Blind at learn time
+  (which is how a three-click recipe got cached) and at replay time. **Do not use this row as
+  proof-of-green for any intervention** -- it measures the extractor.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
