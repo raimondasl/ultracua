@@ -1556,6 +1556,44 @@ re-propose one of the six that are dead.
   WHY it was set"; it can. And CLAUDE.md's own pointer to the parked attribution branch named a path
   that is not on `main`. When a slice makes a sentence false, grep for the sentence.
 
+## The Odoo blocker is the LOCATOR, not the marking (R4.114, 0.141.0)
+
+`docs/reads-over-post.md` surveyed eleven approaches to R4.27 and made itself conditional on one
+measurement: does demoting the wire marks actually make an Odoo replay green? **It does not.** The
+survey's own ranking is superseded by its own gate, which is what the gate was for.
+
+* **THE A/B, AND THE ONE FIELD THAT SETTLES IT.** Same recipe, same substrate, differing only in the
+  mark. Control: step 1 `click`, `mutating: True`, `gate: drift`, `gate_bound_by: none`, "mutation
+  gate: target missing/ambiguous". Demoted: same step, no mark, no gate, `bound_by: none`, "locator
+  unresolved or ambiguous (drift)". **`bound_by: none` in BOTH arms** -- the locator never resolved
+  either way, and the gate was reporting a locator failure it reached first. Demotion changes the
+  MESSAGE, not the outcome.
+* **RUN TWICE, BECAUSE ONE SAMPLE HAD A CONFOUND.** The first used day-old recipes, which conflates
+  "the marking is not the blocker" with "these recipes went stale". The second used a recipe learned
+  minutes earlier against the same seed and said the same thing. That is R4.111's rule -- when the
+  first sample gives a clean story, buy the second -- applied to a story I had already written down.
+* **THE CENSUS IS THE OTHER HALF, and it was free.** Of 18 non-passing Odoo replay rows across the
+  three-rep series: 6 never produced a recipe at all (a DISCOVERY failure), 6 gate page/form drift,
+  **4 locator failures with no gate involved**, 1 gate target-missing (itself a locator failure), 1
+  data-not-found. The locator problem is visible without any mark in the picture.
+* **SO R4.27 IS A REAL DEFECT AND NOT THE ODOO BLOCKER.** Fixing it stops reads being filed as
+  writes, which is worth doing on its own terms; the measured availability gain is about zero,
+  because the steps it un-gates then fail on the locator. **Do not cost 2.4b as a marking fix.**
+* **WHAT IT COST TO LEARN: $0.0998** -- one fresh learn, with both replays and the whole census free
+  -- against a slice that would have touched the write rail. `benchmarks/mark_flip_probe.py` ships
+  with the finding.
+* **THE HARNESS AGREED WITH ITSELF THREE TIMES BEFORE IT WAS RIGHT, and each time for a reason that
+  had nothing to do with the mark**: a `TypeError` from calling `replay()` with a parameter it does
+  not have, a `StaleApprovalError` from a hand-written approval sidecar with no `steps_hash`, and a
+  cache MISS because the bench flow's key carries the idempotency proxy's ephemeral port. **Two
+  identical arms are not a null result** -- they are the harness failing in front of you. The probe
+  now asserts the key hits, approves through the product's own verb, and refuses a recipe with
+  nothing to flip.
+* **AND THE ANSWER TO "IS REPLAY 0-LLM" IS NOT UNIFORM**: `flows.replay` builds an extraction router
+  whenever `spec.extract` is set and the read is not pinned, so a read flow that extracts a datum
+  pays one LLM call per replay. That is why `odoo-search` reported `llm_calls: 1`. Writes and
+  navigate-only reads are genuinely 0-LLM; extracting reads are not, unless pinned.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

@@ -1,5 +1,13 @@
 # Apps that serve reads over POST — the approach survey (R4.27)
 
+> **ANSWERED 0.141.0 — READ THIS FIRST. Measurement #1 was run and it says NO.** Demoting the wire
+> marks does NOT make an Odoo replay green: the mutation-gate refusal simply becomes a LOCATOR
+> refusal, on the same step, which never bound in either arm. Measured twice, once on a day-old
+> recipe and once on one learned minutes earlier, so staleness is excluded — and measurement #2
+> shows locator failures already dominate independently of any mark. **The lead candidate (B) is
+> still a correct fix for the MARKING and is no longer the path to an Odoo baseline.** See "What the
+> measurements said" below; the ranking that follows it is superseded by that section.
+
 **Status: research, not a decision.** Nothing here is scheduled. It exists so that whoever next
 picks up R4.27 does not re-derive nine approaches, and does not re-propose one of the six that are
 dead. Written 2026-08-27 at 0.140.0, from a 14-agent survey grounded in live read-only probes of the
@@ -186,6 +194,64 @@ Run these before choosing anything. All are free or nearly so.
 
 Measurement 1 is the D6 lesson applied to the fix direction *before* the fix: buy the second sample
 when the first gives a clean story.
+
+## What the measurements said (0.141.0)
+
+Measurements #1 and #2 were run. They cost **$0.0998** — one fresh Odoo learn; both replays and the
+whole census were free.
+
+### #1 — flipping the marks does not make the replay green
+
+`benchmarks/mark_flip_probe.py` replays the SAME recipe twice against the SAME substrate, differing
+only in whether the `wire`-sourced marks are set. On `odoo-sort-list`, step 1, the same click:
+
+| | control (as learned) | demoted |
+|---|---|---|
+| step meta | `mutating: True`, **`gate: drift`** | no mark, **no gate** |
+| bind | `gate_bound_by: none` | `bound_by: none` |
+| note | `mutation gate: target missing/ambiguous` | `locator unresolved or ambiguous (drift)` |
+
+**`bound_by: none` in BOTH arms.** The locator never resolved either way — the mutation gate was
+reporting a locator failure it happened to reach first. Demotion changes the message, not the
+outcome. Run twice: once on a day-old recipe, once on one learned minutes before, so this is not
+staleness.
+
+Demotion did have one real effect, and only one: it restored the auth-refresh retry (control: *"not
+retrying — a recorded step is marked as WRITING"*; demoted: *"after auth refresh:"*). The retry then
+failed identically.
+
+`odoo-menu-nav` is worse for the thesis: both arms fail at **step 0**, an UNMARKED `navigate`. It
+never reaches a marked step, so R4.27 is irrelevant to its failure entirely.
+
+### #2 — locator failures already dominate, independently of the marking
+
+Census over the three-rep series (18 non-passing Odoo replay rows):
+
+| count | shape |
+|---|---|
+| 6 | **no replay attempted** — the learn produced nothing (a discovery failure, not a replay one) |
+| 6 | gate said *page/form drift* |
+| 4 | **locator unresolved/ambiguous, with no gate involved at all** |
+| 1 | gate said *target missing/ambiguous* — which is itself a locator failure |
+| 1 | data not found |
+
+So of the twelve rows that actually attempted a replay, **four failed on locators with no mark in
+the picture**, and measurement #1 shows the gated ones convert into that same failure when
+unmarked. Roughly a third of Odoo's non-passing rows never produce a recipe at all.
+
+### What this changes
+
+* **R4.27 is a real correctness defect and NOT the Odoo blocker.** Fixing it would stop reads being
+  misfiled — worth doing on its own terms — but the measured availability gain is approximately
+  zero, because the steps it un-gates then fail on locator resolution.
+* **2.4b must not be costed as "fix R4.27, get an Odoo baseline".** The dominant blockers are
+  locator ambiguity on a generated DOM and, for about a third of rows, discovery producing no recipe.
+* **The ranking in "Recommended sequence" is superseded.** B, A and H remain correct descriptions of
+  a marking fix; none of them is the next thing to build for Odoo.
+* Measurements **#3–#6 are deferred with their approaches** — each is an implementation prerequisite
+  for B or A, and neither is now the next step. #5 (bare-vs-suffixed `call_kw`) was answered in
+  passing by the survey's own live probe: browser traffic carries the method in the URL path, and
+  the bare form is what `substrates.Odoo.rpc` constructs.
 
 ## What this survey does not claim
 
