@@ -1774,6 +1774,40 @@ changes again. **60 page-reps** (15 pages x 4: 7 Gitea, 7 Odoo, one static contr
   exists in this corpus, so it is unmeasured and the predicate needs a CAP -- ~2 s covers everything
   here (max observed firing 1485 ms), and with a cap it degrades to today's behaviour, just later.
 
+## The learn settles before it looks (R4.40 + R4.119 FIXED, 0.146.0)
+
+The first of the three legs 2.4b waits on, and the smallest, because the guard already existed.
+`BrowserSession.await_settled()` resolves once the DOM has been mutation-free for
+`settings.settle_quiet_ms` (200), capped at `settle_cap_ms` (2000). Every mutation RESTARTS the quiet
+timer, so it means "the page stopped changing" and not "some time passed".
+
+* **BOTH OBSERVATION SITES, and the second is the one that matters.** `_author_steps` settles before
+  the loop-head snapshot, so the agent decides from the page rather than its skeleton; and before
+  the VERIFY snapshot, which is what makes `changed` mean "my action did something" instead of "the
+  render advanced".
+* **MEASURED BEFORE AND AFTER on real Odoo**, six navigations to the same url: without the settle the
+  observation is 5-6 elements and `no_progress` ends at **0** -- it reaches 3 and then RESETS when a
+  stray fingerprint change reads as progress, which is exactly how a learn burns its budget. With it
+  the observation is **80 elements every time** and `no_progress` climbs to **4**, the `stuck_limit`.
+* **200 ms IS MEASURED, NOT CHOSEN** (R4.120): the cheapest predicate never premature over 60
+  page-reps, where acting at `domcontentloaded` was premature 28 times and "two equal element counts
+  100 ms apart" 17.
+* **FAIL-OPEN BY CONSTRUCTION.** `evaluate` throwing mid-navigation returns `unavailable`; the cap
+  gives up and proceeds. Both are the behaviour before this existed, so the mechanism's worst case is
+  "no better than before" -- a settle that turned a transient into a failed step would be a
+  regression bought with a diagnostic.
+* **REPLAY IS DELIBERATELY UNTOUCHED, and a test pins the call sites at exactly two.** Its cost
+  profile is the opposite: a server-rendered page measures `true_ready = 0` in EVERY rep, so an
+  unconditional wait there is pure tax on the 0-LLM speed claim. Replay gets the CONDITIONAL
+  two-state sensor (R4.115) and lands separately.
+* **`drift_bench` RE-RUN because this adds a MutationObserver that runs IN THE PAGE** -- the rule
+  this file already states. Invariants ALL HOLD, `silent_wrong` 2 (the published allowlist row),
+  writes double=0 suppressed=0 wrong_target=0, recovery refused on 14/14 drifted write rows.
+* **R4.118 STAYS OPEN ON PURPOSE.** Both of its causes are closed at the source, but the OUTCOME it
+  is about -- that a fresh Odoo learn stops producing 100%-`navigate` recipes -- costs paid learns
+  and is unmeasured. Mechanism evidence does not entail it, and marking it fixed on mechanism alone
+  is the "green is not evidence" failure this register keeps re-filing.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

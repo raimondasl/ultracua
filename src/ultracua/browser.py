@@ -236,6 +236,50 @@ class BrowserSession:
         assert self.page is not None
         return await self.page.screenshot()
 
+    # Resolves once the DOM has been free of mutations for `quiet` ms, or at `cap` ms regardless.
+    # Every mutation RESTARTS the quiet timer, so this is "the page stopped changing", not "some time
+    # passed" -- R4.26's rule that a timer is not a boundary, honoured by taking the fact from the
+    # platform. The observer is per-call and disconnected on both exits rather than installed as an
+    # init script: nothing is left running in the page between calls, and a settle cannot be
+    # influenced by mutations that happened before the caller asked.
+    _SETTLE_JS = """(o) => new Promise((resolve) => {
+      let quiet = null, cap = null;
+      const obs = new MutationObserver(() => {
+        clearTimeout(quiet);
+        quiet = setTimeout(() => done('quiet'), o.quiet);
+      });
+      const done = (why) => { obs.disconnect(); clearTimeout(quiet); clearTimeout(cap); resolve(why); };
+      obs.observe(document, {childList: true, subtree: true, attributes: true, characterData: true});
+      quiet = setTimeout(() => done('quiet'), o.quiet);
+      cap = setTimeout(() => done('cap'), o.cap);
+    })"""
+
+    async def await_settled(self, quiet_ms: int = 0, cap_ms: int = 0) -> str:
+        """Wait until the DOM stops changing. Returns 'quiet' | 'cap' | 'unavailable'.
+
+        WHY THE LEARN NEEDS THIS. `_author_steps` snapshots, decides, acts. On a client-rendered app
+        the snapshot lands on an unpainted shell -- measured, Odoo serves 5 elements at
+        `domcontentloaded` and settles to 80-255 around 470-860 ms -- so the agent decides from a page
+        that is not there. Two things follow, and the second is why a NEW guard was not the answer:
+        the agent re-navigates because nothing it wants is visible (R4.118: two of five Odoo learns
+        cached recipes that are 100% `navigate` steps), and the loop's existing `no_progress` bail
+        cannot stop it, because `state_changed` only asks whether the page DIFFERS and every arrival
+        at a differently-unpainted shell differs (R4.119). Feeding that guard a settled observation
+        re-arms it without adding anything that can refuse.
+
+        FAIL-OPEN, DELIBERATELY. A page mid-navigation makes `evaluate` throw, and the honest
+        response is to proceed exactly as the code did before this existed -- a settle that turned a
+        transient into a failed step would be a regression bought with a diagnostic. Same for the
+        cap: on expiry the caller proceeds. The worst case of this mechanism is today's behaviour.
+        """
+        assert self.page is not None
+        q = quiet_ms or settings.settle_quiet_ms
+        c = cap_ms or settings.settle_cap_ms
+        try:
+            return await self.page.evaluate(self._SETTLE_JS, {"quiet": q, "cap": c})
+        except Exception:  # noqa: BLE001 - navigating / context destroyed / closed: proceed as before
+            return "unavailable"
+
     async def snapshot(self) -> Observation:
         assert self.page is not None
         try:
