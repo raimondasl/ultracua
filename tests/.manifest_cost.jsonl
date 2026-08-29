@@ -92,3 +92,5 @@
 {"collected": 2218, "commit": "df255ad", "phase": "fixed_point", "promoted": 15, "rounds": 1, "seconds": 195.2, "when": "2026-08-29T18:13:14+00:00"}
 {"browser": 497, "collected": 2221, "commit": "904be52", "fast": 1724, "phase": "marks", "seconds": 2098.0, "when": "2026-08-29T20:56:21+00:00"}
 {"collected": 2221, "commit": "904be52", "phase": "fixed_point", "promoted": 15, "rounds": 1, "seconds": 191.8, "when": "2026-08-29T20:59:55+00:00"}
+{"browser": 506, "collected": 2232, "commit": "165efe3", "fast": 1726, "phase": "marks", "seconds": 2114.3, "when": "2026-08-29T22:23:50+00:00"}
+{"collected": 2232, "commit": "165efe3", "phase": "fixed_point", "promoted": 15, "rounds": 1, "seconds": 190.9, "when": "2026-08-29T22:27:24+00:00"}
