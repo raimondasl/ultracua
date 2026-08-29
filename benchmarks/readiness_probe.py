@@ -2,6 +2,7 @@
 
     uv run --no-sync python -m benchmarks.readiness_probe --contrast   # needs substrates
     uv run --no-sync python -m benchmarks.readiness_probe --remedy     # needs nothing
+    uv run --no-sync python -m benchmarks.readiness_probe --recipes DIR  # needs nothing
 
 WHAT IT ANSWERS. `docs/reads-over-post.md` and R4.114 both concluded that Odoo's replay blocker was
 the LOCATOR. It is not. On a RENDERED page the failing spec resolves uniquely on the first candidate
@@ -43,6 +44,14 @@ very finding before they were caught, one release apart from each other:
   * `odoo-sort-list`'s oracle compares an ANSWER STRING. The extractor is handed the whole page body
     with the goal as its prompt, so it ranks the rows itself and answers correctly over an ASCENDING
     list. `RESULT == EXPECTED` is therefore not evidence that the replay did the task (R4.116).
+
+`--recipes` is the third mode and needs no substrate, no browser and no key: it reads cached recipes
+off disk and reports their SHAPE. It exists because of R4.118 -- on Odoo the learn thrashes on
+navigation and caches recipes that are 100% `navigate` steps (measured: `odoo-filter-status` 20 of
+20, `odoo-open-record` 8 of 8), several of them carrying MALFORMED urls with an empty `action=`.
+Such a recipe replays every step "ok" and lands on the wrong app, so nothing downstream can fail for
+it. A degenerate recipe is detectable from the ARTIFACT ALONE, which is the cheapest place to catch
+it, and this is where that detection is written down.
 """
 
 from __future__ import annotations
@@ -95,6 +104,95 @@ REMEDY_SPEC = dict(role="link", name="Cancel", tag="a", text="Cancel",
                    css="tbody > tr > td > a",
                    anchor="Acme Corp #3 Cancel", anchor_source="row", anchor_id=None)
 RECORDED_HREF = "/cancel/3"
+
+
+# --------------------------------------------------- the readiness CEILING (an instrument, not a fix)
+
+EVENTS: list = []
+_REAL: dict = {}
+
+
+def _unpatch() -> None:
+    if not _REAL:
+        return
+    from ultracua import flow as flow_mod
+    from ultracua.browser import BrowserSession
+    L.resolve = _REAL["resolve"]
+    flow_mod.resolve = _REAL["resolve"]
+    flow_mod.scope_fingerprint = _REAL["fp"]
+    BrowserSession.snapshot = _REAL["snap"]
+
+
+def _patch_readiness() -> None:
+    """Wait, at all THREE sites, before believing what the page says.
+
+    A CEILING, NOT A PROPOSED FIX. `--remedy` above measures why: a retry keyed on
+    `resolve() -> None` re-drives four deliberate safety refusals and was caught binding a wrong
+    record. This exists to answer "what would be reachable if readiness were solved", and a real fix
+    needs a sensor that separates 'not rendered' from 'found it and refused' (D5).
+
+    The predicate is 'the first value that REPEATS', which is what two independent reproductions were
+    obtained with. A rewrite of it -- `networkidle` plus a fixed settle -- looked strictly better and
+    FAILED where this passes, on two different recipes: `networkidle` NEVER FIRES on Odoo, whose
+    message bus holds a long-poll open, so every call paid a 6 s timeout for nothing."""
+    from ultracua import flow as flow_mod
+    from ultracua.browser import BrowserSession
+
+    if not _REAL:
+        _REAL.update(resolve=L.resolve, fp=flow_mod.scope_fingerprint,
+                     snap=BrowserSession.snapshot)
+    real_resolve, real_fp, real_snap = _REAL["resolve"], _REAL["fp"], _REAL["snap"]
+
+    async def resolve_ready(page, spec, unique=False, sink=None):
+        s = {} if sink is None else sink
+        got = await real_resolve(page, spec, unique=unique, sink=s)
+        w = 0
+        while got is None and w < 5000:
+            await page.wait_for_timeout(100)
+            w += 100
+            got = await real_resolve(page, spec, unique=unique, sink=s)
+        if w:
+            EVENTS.append(f"resolve waited {w}ms -> bound={got is not None}")
+        if sink is not None:
+            sink.update(s)
+        return got
+
+    async def fp_stable(target):
+        prev = await real_fp(target)
+        for i in range(50):
+            try:
+                await target.page.wait_for_timeout(100)
+            except Exception:                                          # noqa: BLE001
+                return prev
+            cur = await real_fp(target)
+            if cur == prev:
+                if i:
+                    EVENTS.append(f"scope fingerprint settled after {i * 100}ms")
+                return cur
+            prev = cur
+        return prev
+
+    async def snap_stable(self):
+        obs = await real_snap(self)
+        prev = len(getattr(obs, "elements", []) or [])
+        for i in range(50):
+            try:
+                await self.page.wait_for_timeout(100)
+            except Exception:                                          # noqa: BLE001
+                return obs
+            nxt = await real_snap(self)
+            n = len(getattr(nxt, "elements", []) or [])
+            if n == prev and n > 0:
+                if i:
+                    EVENTS.append(f"snapshot settled after {i * 100}ms -> {n} elements")
+                return nxt
+            prev, obs = n, nxt
+        return obs
+
+    L.resolve = resolve_ready
+    flow_mod.resolve = resolve_ready
+    flow_mod.scope_fingerprint = fp_stable
+    BrowserSession.snapshot = snap_stable
 
 
 async def _poll_resolve(page, spec, budget_ms: int = 5000):
@@ -226,6 +324,182 @@ def _print_contrast(rows: list) -> None:
     print("=" * 98)
 
 
+# ------------------------------------------------------------------------------- the COMPOSITION
+
+async def _replay_arm(entry, recipe: dict, *, storage: str, root: Path, ready: bool) -> dict:
+    """One replay of `recipe`, with the readiness ceiling on or off. Resets first, so neither arm
+    inherits the other's substrate state."""
+    import time
+
+    from benchmarks.mark_flip_probe import install
+    from ultracua.flows import FlowCache, RunRecord, replay
+
+    _unpatch()
+    sub = SUBSTRATES[entry.scenario.substrate]()
+    sub.reset()
+    sub.await_ready()
+    spec = spec_for(entry, sub.url, storage)     # direct at the substrate: no proxy, no port churn
+    install(recipe, spec, root)
+    EVENTS.clear()
+    if ready:
+        _patch_readiness()
+    rec, t0 = RunRecord(), time.monotonic()
+    try:
+        got = await replay(spec, cache=FlowCache(root=root), on_drift="raise", record=rec)
+        out = {"ok": True, "error": None, "result": str(got)[:160]}
+    except BaseException as exc:                                       # noqa: BLE001
+        out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:170]}", "result": None}
+    finally:
+        _unpatch()
+    steps = [{"i": getattr(t, "index", None), **{k: v for k, v in (dict(getattr(t, "meta", {}) or {})).items()
+                                                 if k in ("action", "ok", "bound_by", "gate_bound_by",
+                                                          "gate", "note")}}
+             for t in (getattr(rec, "traces", None) or []) if getattr(t, "meta", None)]
+    out.update(steps=steps, events=list(EVENTS), wall_s=round(time.monotonic() - t0, 1),
+               # EVERY step bound and executed. Deliberately NOT the oracle: R4.116 -- the extractor
+               # is handed the whole page and answers correctly over a wrongly-sorted list.
+               every_step_ok=bool(out["ok"] and steps and all(s.get("ok") for s in steps)))
+    return out
+
+
+async def compose(scenario: str, recipe_path: Path, workdir: Path) -> dict:
+    """THE 2x2 NOBODY HAD RUN: {marks kept, demoted} x {readiness off, on}.
+
+    Every earlier experiment moved ONE lever. R4.114 demoted the wire marks with no readiness and the
+    locator race killed the first click; the R4.115 blast run added readiness with the marks kept and
+    the whole-page gate killed the first NAVIGATE, because a wire-marked navigate is gated on a
+    fingerprint the render race makes unreproducible. Those are the two off-diagonal cells, and each
+    fails for its own finding's reason. This runs all four.
+
+    MEASURED 0.143.0 on a freshly learned `odoo-sort-list`: only the composed cell completes."""
+    from benchmarks.mark_flip_probe import demote
+
+    entry = next((e for s in corpus.CORPORA for e in corpus.for_substrate(s)
+                  if e.scenario.name == scenario), None)
+    if entry is None:
+        raise SystemExit(f"no scenario named {scenario!r}")
+    recipe = json.loads(Path(recipe_path).read_text(encoding="utf-8"))
+    demoted, flipped = demote(recipe)
+    if not flipped:
+        raise SystemExit(
+            f"{Path(recipe_path).name} has no wire-only marks to flip, so the demoted arms are the "
+            f"same recipe as the kept arms and the 2x2 collapses to a 1x2 measuring nothing.")
+
+    workdir.mkdir(parents=True, exist_ok=True)
+    cfg = LOGIN[entry.scenario.substrate]
+    os.environ[USER_ENV], os.environ[PASS_ENV] = cfg["user"], cfg["password"]
+    sub = SUBSTRATES[entry.scenario.substrate]()
+    sub.await_ready()
+    storage = str(workdir / f"auth-{scenario}.json")
+    await refresh_auth(spec_for(entry, sub.url, storage), headless=True)
+
+    cells = {}
+    for marks, r in (("kept", recipe), ("demoted", demoted)):
+        for ready in (False, True):
+            key = f"{marks}+{'ready' if ready else 'today'}"
+            cells[key] = await _replay_arm(entry, r, storage=storage,
+                                           root=workdir / key.replace("+", "-"), ready=ready)
+    return {"scenario": scenario, "recipe": str(recipe_path), "flipped_steps": flipped,
+            "cells": cells}
+
+
+def _print_compose(res: dict) -> None:
+    print("=" * 98)
+    print(f"  {res['scenario']}   wire marks demoted on steps {res['flipped_steps']}")
+    print(f"\n  {'':10} {'readiness OFF':>16} {'readiness ON':>16}")
+    for marks in ("kept", "demoted"):
+        row = [res["cells"][f"{marks}+{k}"]["every_step_ok"] for k in ("today", "ready")]
+        print(f"  marks {marks:10} {str(row[0]):>10} {str(row[1]):>16}")
+    print()
+    for key, c in res["cells"].items():
+        bad = [s for s in c["steps"] if not s.get("ok")]
+        if c["every_step_ok"]:
+            print(f"    {key:18} COMPLETED, every step bound   result={c['result']!r}")
+        elif bad:
+            b = bad[0]
+            print(f"    {key:18} first failure: step {b.get('i')} {b.get('action')} "
+                  f"bound_by={b.get('bound_by', b.get('gate_bound_by'))}"
+                  f"{'  gate=' + b['gate'] if b.get('gate') else ''} :: {(b.get('note') or '')[:52]}")
+        else:
+            print(f"    {key:18} {(c['error'] or '')[:88]}")
+    won = [k for k, c in res["cells"].items() if c["every_step_ok"]]
+    print(f"\n  cells that completed: {won or 'none'}")
+    if won == ["demoted+ready"]:
+        print("    -> NEITHER FIX ALONE IS SUFFICIENT AND THE COMPOSITION IS. The marking fix and the")
+        print("       readiness fix each remove one of two independent blockers on the same step set.")
+    print("=" * 98)
+
+
+# --------------------------------------------------------------------------- the recipe-shape census
+
+# An `action=` with nothing after it. Odoo cannot resolve it, so it serves the default app (Discuss)
+# and every later step runs against the wrong page while reporting ok. Measured in three of the
+# recipes the Odoo learns produced.
+_EMPTY_ACTION = "action=&"
+
+
+def recipe_shape(recipe: dict) -> dict:
+    """What KIND of recipe is this? Derived from the artifact -- no substrate, no browser, no key."""
+    steps = recipe.get("steps") or []
+    kinds: dict = {}
+    for s in steps:
+        kinds[s.get("action")] = kinds.get(s.get("action"), 0) + 1
+    navs = [s for s in steps if s.get("action") == "navigate"]
+    malformed = [s.get("text") for s in navs
+                 if isinstance(s.get("text"), str)
+                 and (_EMPTY_ACTION in s["text"] or s["text"].rstrip().endswith("action="))]
+    # DISTINCT navigate targets: a healthy recipe navigates somewhere ONCE. Re-navigating to the same
+    # url repeatedly is the signature of an agent that cannot tell whether the page arrived.
+    targets = [s.get("text") for s in navs]
+    repeats = len(targets) - len(set(targets))
+    n = len(steps)
+    return {
+        "steps": n,
+        "kinds": kinds,
+        "navigate_fraction": (len(navs) / n) if n else 0.0,
+        "repeated_navigations": repeats,
+        "malformed_urls": malformed,
+        # DEGENERATE: nothing but navigation. Such a recipe cannot perform the task -- it only moves
+        # the browser -- yet every step replays "ok", so the failure surfaces as a data/verify error
+        # far from its cause, or not at all.
+        "degenerate_navigate_only": bool(n and len(navs) == n),
+    }
+
+
+def census_recipes(root: Path) -> list:
+    rows = []
+    for p in sorted(Path(root).rglob("*.json")):
+        if p.name.endswith(".meta.json"):
+            continue
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:                                              # noqa: BLE001
+            continue
+        if not isinstance(d, dict) or "steps" not in d:
+            continue
+        rows.append({"path": str(p), "name": p.parent.parent.name or p.stem,
+                     **recipe_shape(d)})
+    return rows
+
+
+def _print_recipes(rows: list) -> None:
+    print("=" * 98)
+    print(f"{'recipe':26} {'steps':>6} {'nav%':>6} {'re-nav':>7} {'malformed':>10}  kinds")
+    for r in rows:
+        flag = "  <== DEGENERATE (navigate-only)" if r["degenerate_navigate_only"] else ""
+        print(f"{r['name'][:26]:26} {r['steps']:>6} {r['navigate_fraction']:>5.0%} "
+              f"{r['repeated_navigations']:>7} {len(r['malformed_urls']):>10}  "
+              f"{r['kinds']}{flag}")
+    bad = [r for r in rows if r["degenerate_navigate_only"]]
+    mal = [r for r in rows if r["malformed_urls"]]
+    print(f"\n  navigate-only recipes: {len(bad)}/{len(rows)}  {[r['name'] for r in bad]}")
+    print(f"  recipes with a malformed url: {len(mal)}/{len(rows)}  {[r['name'] for r in mal]}")
+    if bad:
+        print("\n  A navigate-only recipe replays every step ok and performs no task. It is a LEARN")
+        print("  failure that caches as a success (R4.118); nothing downstream can fail for it.")
+    print("=" * 98)
+
+
 def _print_remedy(res: dict) -> None:
     print("=" * 98)
     print("  THE NAIVE READINESS REMEDY, on a page where today REFUSES for safety")
@@ -249,13 +523,26 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--contrast", action="store_true", help="readiness census (needs substrates)")
     ap.add_argument("--remedy", action="store_true", help="refute the naive fix (needs nothing)")
+    ap.add_argument("--recipes", default=None, metavar="DIR",
+                    help="census cached recipe SHAPES under DIR (needs nothing)")
+    ap.add_argument("--compose", action="store_true",
+                    help="the marks x readiness 2x2 (needs a substrate, --scenario and --recipe)")
+    ap.add_argument("--scenario", default=None)
+    ap.add_argument("--recipe", default=None, type=Path)
+    ap.add_argument("--workdir", type=Path, default=Path("D:/ultracua-data/compose"))
     ap.add_argument("--substrates", default="gitea,odoo")
     ap.add_argument("--out", default=None)
     a = ap.parse_args(argv)
-    if not (a.contrast or a.remedy):
-        ap.error("pick at least one of --contrast / --remedy")
+    if not (a.contrast or a.remedy or a.recipes or a.compose):
+        ap.error("pick at least one of --contrast / --remedy / --recipes / --compose")
+    if a.compose and not (a.scenario and a.recipe):
+        ap.error("--compose needs --scenario and --recipe")
 
     out: dict = {}
+    if a.recipes:
+        rows = census_recipes(Path(a.recipes))
+        _print_recipes(rows)
+        out["recipes"] = rows
     if a.contrast:
         rows = asyncio.run(contrast(a.substrates.split(",")))
         _print_contrast(rows)
@@ -264,6 +551,10 @@ def main(argv=None) -> int:
         res = asyncio.run(remedy())
         _print_remedy(res)
         out["remedy"] = res
+    if a.compose:
+        res = asyncio.run(compose(a.scenario, a.recipe, a.workdir))
+        _print_compose(res)
+        out["compose"] = res
     if a.out:
         Path(a.out).write_text(json.dumps(out, indent=1), encoding="utf-8")
     return 0
