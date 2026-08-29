@@ -124,6 +124,19 @@ class Settings:
     max_elements: int = int(os.getenv("ULTRACUA_MAX_ELEMENTS", "80"))
     nav_timeout_ms: int = int(os.getenv("ULTRACUA_NAV_TIMEOUT_MS", "15000"))
     action_timeout_ms: int = int(os.getenv("ULTRACUA_ACTION_TIMEOUT_MS", "5000"))
+    # LEARN-SIDE SETTLE. How long the DOM must be free of mutations before an observation is believed.
+    # 200 ms is MEASURED, not chosen: `readiness_probe --settle` scored candidates against a ground
+    # truth over 60 page-reps (R4.120) and `mut-quiet-200` was the cheapest that was NEVER premature.
+    # The alternatives are worse in the direction that matters -- acting at `domcontentloaded` (what
+    # the learn did before this) was premature 28 times, `document.readyState` 28, and "two equal
+    # element counts 100 ms apart" 17, that last one by locking onto a PLATEAU mid-render.
+    settle_quiet_ms: int = int(os.getenv("ULTRACUA_SETTLE_QUIET_MS", "200"))
+    # ...AND THE CAP, because a page that never stops mutating (an animation, a live ticker) would
+    # otherwise wait forever. No such page is in the measured corpus, so the residual is real and
+    # stated; 2000 ms clears the largest observed firing (1485 ms) with margin. On the cap the settle
+    # gives up and the caller proceeds, which is EXACTLY today's behaviour, just later -- so the
+    # failure direction of this whole mechanism is "no better than before", never "worse".
+    settle_cap_ms: int = int(os.getenv("ULTRACUA_SETTLE_CAP_MS", "2000"))
     # Write-detection act window: how long AFTER a step's verify snapshot a non-idempotent network
     # request is still attributed to THAT action (a write's POST can race a post-act navigation and
     # land just after verify returns). Generous on purpose — a missed write means a double-submit on

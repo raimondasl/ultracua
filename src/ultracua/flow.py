@@ -502,6 +502,11 @@ async def _author_steps(
     for i in range(max_steps):
         tr = StepTrace(index=i)
         with tr.measure("snapshot"):
+            # SETTLE FIRST, so the agent decides from the page rather than from its skeleton. This is
+            # the LEARN path only -- replay is deliberately untouched, because its cost profile is
+            # the opposite: a server-rendered page measures `true_ready = 0` in every rep, so an
+            # unconditional wait there is pure tax on the product's own speed claim (R4.120).
+            tr.meta["settled"] = await session.await_settled()
             obs = await session.snapshot()
 
         # Surface any WebMCP tools the page exposes so the agent can call them directly.
@@ -610,6 +615,12 @@ async def _author_steps(
         with tr.measure("verify"):
             after = None
             try:
+                # AND SETTLE BEFORE THE VERIFY, which is the half that re-arms the bail. `changed`
+                # decides `no_progress`, and comparing two UNSETTLED pages answers "did the render
+                # advance" where the loop is asking "did my action accomplish anything" -- measured,
+                # five navigations to the same Odoo url left `no_progress` at 1 against a limit of 4,
+                # while the identical comparison over settled pages correctly reached 2 (R4.119).
+                tr.meta["settled_after"] = await session.await_settled()
                 after = await session.snapshot()
                 changed = state_changed(obs, after)
             except Exception:  # noqa: BLE001 - a post-action navigation can race the snapshot; don't

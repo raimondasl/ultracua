@@ -1,6 +1,6 @@
 {
  "_comment": "DERIVED, never hand-edited. A test is a browser test iff it was OBSERVED launching one, OR the fast tier later caught it launching (attribution is order-dependent when a module shares browser work through a fixture). Regenerate with `pytest -q --store-browser-marks` then `python scripts/derive_test_tiers.py`, which iterates to the fixed point. An unclassified test makes a tiered run fail loudly rather than skip it.",
- "total": 2211,
+ "total": 2218,
  "browser": [
   "tests/test_annotation_disposition.py::test_the_r427_population_arrives_non_demotable_so_the_verb_cannot_dispose_of_it",
   "tests/test_audit.py::test_advisory_mode_reports_but_never_quarantines",
@@ -162,6 +162,10 @@
   "tests/test_landed_arms_the_ledger.py::test_a_write_whose_confirm_was_already_true_is_NOT_landed",
   "tests/test_landed_arms_the_ledger.py::test_every_failure_after_the_confirm_transition_is_landed",
   "tests/test_learn_capture_evidence.py::test_a_real_learn_records_what_it_saw",
+  "tests/test_learn_settle.py::test_a_closed_page_is_unavailable_not_an_exception",
+  "tests/test_learn_settle.py::test_a_mutating_page_that_stops_is_waited_out",
+  "tests/test_learn_settle.py::test_a_page_that_never_stops_mutating_hits_the_cap",
+  "tests/test_learn_settle.py::test_a_static_page_settles_quiet",
   "tests/test_ledger.py::test_dry_run_resume_previews_without_appending",
   "tests/test_ledger.py::test_failed_row_not_recorded_so_resume_refires",
   "tests/test_ledger.py::test_reads_resume_is_noop",
@@ -1347,6 +1351,9 @@
   "tests/test_learn_capture_evidence.py::test_precond_elements_is_unhashed_and_moves_no_digest",
   "tests/test_learn_capture_evidence.py::test_the_census_separates_unrecorded_from_seen_nothing",
   "tests/test_learn_capture_evidence.py::test_the_field_is_optional_so_older_recipes_still_load",
+  "tests/test_learn_settle.py::test_replay_is_deliberately_untouched",
+  "tests/test_learn_settle.py::test_the_learn_settles_before_both_of_its_observations",
+  "tests/test_learn_settle.py::test_the_settle_window_is_the_measured_one",
   "tests/test_ledger.py::test_cli_run_batch_dry_run_resume_preview",
   "tests/test_ledger.py::test_ledger_bad_job_id_refused",
   "tests/test_ledger.py::test_ledger_header_guard_refuses_foreign_file",
