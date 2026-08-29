@@ -452,10 +452,18 @@ def recipe_shape(recipe: dict) -> dict:
     # url repeatedly is the signature of an agent that cannot tell whether the page arrived.
     targets = [s.get("text") for s in navs]
     repeats = len(targets) - len(set(targets))
+    # HOW MUCH PAGE THE LEARN COULD SEE per step (`CachedStep.precond_elements`, 0.144.0). None on
+    # recipes learned before it existed -- reported as unknown rather than as zero, because "the learn
+    # saw nothing" and "we did not record what the learn saw" are different facts and collapsing them
+    # is this register's most-repeated defect.
+    seen = [s.get("precond_elements") for s in steps]
+    known = [v for v in seen if isinstance(v, int)]
     n = len(steps)
     return {
         "steps": n,
         "kinds": kinds,
+        "precond_elements": {"min": min(known), "max": max(known), "n": len(known)} if known
+                            else {"n": 0, "unrecorded": True},
         "navigate_fraction": (len(navs) / n) if n else 0.0,
         "repeated_navigations": repeats,
         "malformed_urls": malformed,
@@ -484,11 +492,14 @@ def census_recipes(root: Path) -> list:
 
 def _print_recipes(rows: list) -> None:
     print("=" * 98)
-    print(f"{'recipe':26} {'steps':>6} {'nav%':>6} {'re-nav':>7} {'malformed':>10}  kinds")
+    print(f"{'recipe':26} {'steps':>6} {'nav%':>6} {'re-nav':>7} {'malformed':>10} "
+          f"{'els seen':>12}  kinds")
     for r in rows:
         flag = "  <== DEGENERATE (navigate-only)" if r["degenerate_navigate_only"] else ""
+        pe = r["precond_elements"]
+        els = "unrecorded" if pe.get("unrecorded") else f"{pe['min']}-{pe['max']}"
         print(f"{r['name'][:26]:26} {r['steps']:>6} {r['navigate_fraction']:>5.0%} "
-              f"{r['repeated_navigations']:>7} {len(r['malformed_urls']):>10}  "
+              f"{r['repeated_navigations']:>7} {len(r['malformed_urls']):>10} {els:>12}  "
               f"{r['kinds']}{flag}")
     bad = [r for r in rows if r["degenerate_navigate_only"]]
     mal = [r for r in rows if r["malformed_urls"]]

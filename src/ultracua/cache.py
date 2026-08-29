@@ -119,6 +119,22 @@ class CachedStep(BaseModel):
     # Additive + defaulted, so older flows deserialize unchanged (NO schema bump needed) — the same
     # precedent as `slot`, `slot_domain` and `secret` above.
     mutating_sources: Optional[list[str]] = None
+    # HOW MUCH PAGE THE LEARN COULD SEE WHEN IT AUTHORED THIS STEP -- the element count of the very
+    # observation `precond_fingerprint` was taken from. Purely diagnostic: nothing reads it to decide
+    # anything, and it is UNHASHED for that reason (see the inclusion rule below).
+    #
+    # It exists because the product persisted NOTHING about what the learn saw, and on a
+    # client-rendered app that is the difference between a recipe and a transcript of an agent
+    # guessing. R4.118: two of five Odoo learns cached recipes that are 100% `navigate` steps, one
+    # re-navigating to the same url twelve times, and diagnosing that needed a live substrate and
+    # several probes because the artifact carried no evidence either way. R4.93 measured Odoo's
+    # unrendered shell at 5 elements settling to 80, so a step authored at 5 is a step authored
+    # blind -- and with this field that is an ARTIFACT question, answerable by
+    # `readiness_probe --recipes` with no substrate, no browser and no key.
+    #
+    # Additive + defaulted, so older flows deserialize unchanged (NO schema bump needed) -- the same
+    # precedent as `slot`, `slot_domain`, `secret` and `mutating_sources` above.
+    precond_elements: Optional[int] = None
 
 
 class CachedFlow(BaseModel):
@@ -193,7 +209,13 @@ _HASHED_STEP_FIELDS = ("intent", "action", "text", "coords", "tool", "args",
 # include it and every approved flow raises StaleApprovalError". That reason is WRONG — `_canon` omits
 # any field still at its declared default, which is exactly how `secret` was added with zero
 # re-approvals. The conclusion happens to hold here; the stated mechanism does not.
-_UNHASHED_STEP_FIELDS: tuple = ("mutating_sources",)
+# `precond_elements` is UNHASHED by the same inclusion rule, and the answer is cleaner than
+# `mutating_sources`': flipping it weakens NOTHING, because nothing reads it to decide anything. It is
+# an observation ABOUT the capture, not an input to any guard, and unlike `mutating_sources` it is not
+# trust-bearing and has no path to becoming so -- the moment something branches on it, it moves.
+# Hashing it would re-approval-gate every fleet the first time a recipe is re-authored, buying churn
+# for no guard, which is exactly what the rule exists to prevent.
+_UNHASHED_STEP_FIELDS: tuple = ("mutating_sources", "precond_elements")
 _NESTED_STEP_FIELDS = ("locator", "confirm")
 
 _HASHED_LOCATOR_FIELDS = ("role", "name", "tag", "elem_id", "testid", "placeholder",
