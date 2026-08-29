@@ -178,6 +178,29 @@ def test_an_empty_action_parameter_is_detected(url, malformed) -> None:
     assert bool(s["malformed_urls"]) is malformed
 
 
+def test_a_scroll_only_recipe_is_degenerate_though_no_navigate_is_involved() -> None:
+    """THE MEASURED BLIND SPOT. When the learn-side settle fixed R4.118's navigate thrash,
+    `odoo-open-record` came back with FOUR `scroll` steps and nothing else -- the same "moved the
+    browser, touched nothing" shape -- and `degenerate_navigate_only` called it clean. The general
+    predicate is LOCOMOTION vs INTERACTION (R4.121)."""
+    s = P.recipe_shape(_recipe("scroll", "scroll", "scroll", "scroll"))
+    assert s["degenerate_navigate_only"] is False, "no navigate is involved, so the specific flag stays off"
+    assert s["degenerate_no_interaction"] is True
+
+
+def test_a_single_click_recipe_is_not_degenerate() -> None:
+    """BOTH DIRECTIONS. The predicate is deliberately NOT 'all steps share one action', which would
+    condemn a legitimate one-click flow -- the shortest useful recipe there is."""
+    assert P.recipe_shape(_recipe("click"))["degenerate_no_interaction"] is False
+
+
+def test_locomotion_mixed_with_one_interaction_is_not_degenerate() -> None:
+    """`odoo-filter-status` after the settle is `type` + `click`; `odoo-sort-list` is two clicks. A
+    recipe that navigates and scrolls its way to ONE real action still performs its task."""
+    assert P.recipe_shape(_recipe("navigate", "scroll", "scroll", "click")
+                          )["degenerate_no_interaction"] is False
+
+
 def test_an_empty_recipe_is_not_called_degenerate() -> None:
     """`0 navigates == 0 steps` is vacuously true, and a zero-step recipe is R4.101's
     `no_actions_needed`, which is a different thing entirely."""

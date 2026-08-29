@@ -1808,6 +1808,45 @@ timer, so it means "the page stopped changing" and not "some time passed".
   and is unmeasured. Mechanism evidence does not entail it, and marking it fixed on mechanism alone
   is the "green is not evidence" failure this register keeps re-filing.
 
+## The settle is validated on the OUTCOME, and the residual is the bail's wreckage (R4.118 FIXED, R4.121, 0.147.0)
+
+R4.40 and R4.119 were fixed at the MECHANISM. R4.118 was about the outcome -- that a fresh Odoo learn
+stops caching 100%-`navigate` recipes -- and mechanism evidence does not entail it. Three fresh
+learns, **$0.2225**:
+
+| scenario | | steps | nav% | re-nav | malformed | els seen |
+|---|---|---|---|---|---|---|
+| `odoo-filter-status` | before | 20 | 100% | 12 | 4 | 5-6 |
+| | **after** | **2** | **0%** | 0 | 0 | **80** |
+| `odoo-open-record` | before | 8 | 100% | 3 | 2 | 5-6 |
+| | **after** | **4** | **0%** | 0 | 0 | **80** |
+| `odoo-sort-list` (control) | before | 5 | 20% | 0 | 0 | 5-6 |
+| | after | 2 | 0% | 0 | 0 | **80** |
+
+* **2 degenerate -> healthy, 0 regressions**, and the CONTROL stayed healthy -- which is the half
+  that matters, because a "fix" that made every learn bail early would clean the degenerate pair by
+  breaking the working one, and the shape census alone would call that a win.
+* **`precond_elements` IS THE DIRECT EVIDENCE** (shipped for exactly this): every step of all three
+  recipes was authored at **80 elements** where before they were authored at 5-6.
+* **THE LEARNS GOT CHEAPER**: `odoo-filter-status` $0.2472 -> $0.0645, because it stopped spending
+  its budget re-navigating.
+* **ONE UNEXPECTED IMPROVEMENT**: `odoo-sort-list` now caches TWO clicks (ascending then descending)
+  where it cached THREE and ended ASCENDING -- R4.116's "the recipe does not accomplish its own
+  goal", fixed as a side effect of the agent being able to see the page it was clicking.
+* **THE RESIDUAL IS R4.121, AND IT IS THE BAIL WORKING.** `odoo-open-record` cached 4 `scroll` steps
+  and nothing else -- exactly `stuck_limit`. It stopped where it used to burn its whole budget, and
+  the artifact is still a recipe that replays four pointless scrolls. `_author_steps` appends on
+  `if ok:` and breaks separately on `no_progress`, so **a bailed learn keeps every step that
+  succeeded on its own terms**, and `found=True` masks it because the extractor read the answer out
+  of the page text anyway.
+* **A HYPOTHESIS WAS REFUTED ON THE WAY and it is worth keeping.** The suspicion was that scroll
+  defeats the bail the way navigation did, via R4.102's viewport-bounded snapshot changing the
+  element set. It does not: `mouse.wheel` leaves `window.scrollY` at **0** on this page, because
+  Odoo keeps `docH == vpH` and scrolls an INNER container, so the fingerprint is stable, `changed`
+  is correctly False and `no_progress` climbs to 5 in a control. The bail is not fooled by scroll --
+  it fires, and the recipe keeps the wreckage. The reason the agent scrolls fruitlessly at all is
+  R4.102, still open and untouched.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

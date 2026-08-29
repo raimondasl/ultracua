@@ -673,6 +673,10 @@ def _print_compose(res: dict) -> None:
 # recipes the Odoo learns produced.
 _EMPTY_ACTION = "action=&"
 
+# Actions that only reposition the view. Everything else -- click, type, select, press,
+# webmcp_call, click_xy -- changes something. A recipe made ONLY of these accomplishes nothing.
+_LOCOMOTION = frozenset({"navigate", "scroll"})
+
 
 def recipe_shape(recipe: dict) -> dict:
     """What KIND of recipe is this? Derived from the artifact -- no substrate, no browser, no key."""
@@ -705,8 +709,18 @@ def recipe_shape(recipe: dict) -> dict:
         "malformed_urls": malformed,
         # DEGENERATE: nothing but navigation. Such a recipe cannot perform the task -- it only moves
         # the browser -- yet every step replays "ok", so the failure surfaces as a data/verify error
-        # far from its cause, or not at all.
+        # far from its cause, or not at all. This is R4.118's exact signature.
         "degenerate_navigate_only": bool(n and len(navs) == n),
+        # ...AND THE GENERAL FORM, because the specific one has a measured blind spot. When the
+        # learn-side settle fixed R4.118, `odoo-open-record` came back with FOUR `scroll` steps and
+        # nothing else -- the same "moved the browser, touched nothing" shape, and
+        # `degenerate_navigate_only` reports it as clean because none of them is a navigate.
+        #
+        # The distinction that matters is LOCOMOTION vs INTERACTION: navigate and scroll reposition
+        # the view, while click/type/select/press/webmcp_call actually do something. A recipe with no
+        # interacting step cannot perform its task whatever it is made of. Deliberately NOT "all
+        # steps share one action", which would flag a legitimate single-click recipe.
+        "degenerate_no_interaction": bool(n and not (kinds.keys() - _LOCOMOTION)),
     }
 
 
@@ -731,16 +745,22 @@ def _print_recipes(rows: list) -> None:
     print(f"{'recipe':26} {'steps':>6} {'nav%':>6} {'re-nav':>7} {'malformed':>10} "
           f"{'els seen':>12}  kinds")
     for r in rows:
-        flag = "  <== DEGENERATE (navigate-only)" if r["degenerate_navigate_only"] else ""
+        flag = ("  <== DEGENERATE (navigate-only)" if r["degenerate_navigate_only"] else
+                "  <== DEGENERATE (no interacting step)" if r["degenerate_no_interaction"] else "")
         pe = r["precond_elements"]
         els = "unrecorded" if pe.get("unrecorded") else f"{pe['min']}-{pe['max']}"
         print(f"{r['name'][:26]:26} {r['steps']:>6} {r['navigate_fraction']:>5.0%} "
               f"{r['repeated_navigations']:>7} {len(r['malformed_urls']):>10} {els:>12}  "
               f"{r['kinds']}{flag}")
     bad = [r for r in rows if r["degenerate_navigate_only"]]
+    noact = [r for r in rows if r["degenerate_no_interaction"]]
     mal = [r for r in rows if r["malformed_urls"]]
     print(f"\n  navigate-only recipes: {len(bad)}/{len(rows)}  {[r['name'] for r in bad]}")
+    print(f"  NO INTERACTING STEP:   {len(noact)}/{len(rows)}  {[r['name'] for r in noact]}")
     print(f"  recipes with a malformed url: {len(mal)}/{len(rows)}  {[r['name'] for r in mal]}")
+    if noact and not bad:
+        print("\n  A recipe of pure locomotion -- navigate and scroll only -- performs no task, and")
+        print("  `found` can still be True because the extractor reads the page regardless (R4.121).")
     if bad:
         print("\n  A navigate-only recipe replays every step ok and performs no task. It is a LEARN")
         print("  failure that caches as a success (R4.118); nothing downstream can fail for it.")
