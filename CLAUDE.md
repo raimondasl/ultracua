@@ -1847,6 +1847,44 @@ learns, **$0.2225**:
   it fires, and the recipe keeps the wreckage. The reason the agent scrolls fruitlessly at all is
   R4.102, still open and untouched.
 
+## The replay's readiness sensor is the RESOLVER's, not the page's (R4.115 FIXED, 0.148.0)
+
+R4.115 refuted the obvious remedy and left a requirement: separate "the page has not rendered" from
+"resolve found a candidate and refused", given that the RETURN VALUE structurally cannot. The answer
+was not a better page probe -- it was already inside the resolver.
+
+* **`sink["saw_candidates"]`**, set by `_resolve` from its own candidate walk. FALSE means nothing in
+  the page answered to the recorded spec; TRUE means the page answered and the resolver DECLINED --
+  ambiguity under `unique=True`, the Tier-2 conflict, an identity contradiction, or the row guard.
+  `flow._retry_if_unpainted` retries only the first, once, after `await_settled()`.
+* **THE FOUR SAFETY REFUSALS FAIL LOUD AND IMMEDIATELY, with no wait at all**, and that is the
+  point: waiting is exactly what let the competing row disappear in R4.115's measured wrong-record
+  bind. That counterexample is rebuilt as a test and still refuses.
+* **COUNTED ON `count() > 0`, BEFORE THE VISIBILITY TEST.** The conservative side: a match that
+  exists but is HIDDEN reads as "the page answered", so no retry -- and hiding the recorded row is
+  how the bind was manufactured in the first place.
+* **THE LEAK THAT NEARLY SHIPPED.** `resolve`'s row-containment guard refuses ABOVE `_resolve`,
+  after a real element bound uniquely in the WRONG record, so it never reached the branch that sets
+  the flag. Unset reads as falsy, which would have made it the ONE refusal a retry could walk
+  through. It sets `saw_candidates = True` explicitly now, with its own cell.
+* **BOTH replay resolve sites**, the step's and the mutation gate's, because R4.117's composition
+  needs the gate too. `test_write_safety_invariants.py` gains a DIMENSION over every refusal shape
+  the gate can produce, on a page that keeps mutating for a second afterwards -- so a retry keyed on
+  the return value would have time to find something, and only the sensor stops it.
+* **`drift_bench`: invariants ALL HOLD and every number is IDENTICAL to the pre-change run** -- same
+  survival curve, same `bound_by` histogram, writes double=0 suppressed=0 wrong_target=0, recovery
+  refused 14/14. That is what a change which only fires on unpainted pages should look like against
+  static fixtures.
+* **A GUARD I WROTE LAST SLICE FIRED ON ME, correctly.** `test_replay_is_deliberately_untouched`
+  pinned the settle call sites at exactly two and said a third would have to be argued. It was, and
+  the cell now pins the SHAPE instead: two unconditional on the learn, one inside the guarded helper.
+  A fourth still fails.
+* **THE LIMIT, STATED.** Mutation-quiet cannot tell "finished rendering" from "has not started", so a
+  page idle when asked and painting later gets one retry and no more -- the same loud failure as
+  before, never a wrong bind. An earlier draft of that cell used an inert-then-inject fixture, which
+  is not the measured shape (Odoo mutates continuously while booting) and made the mechanism look
+  broken when it was the fixture.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

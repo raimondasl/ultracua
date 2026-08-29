@@ -463,6 +463,11 @@ async def resolve(page: Page, spec: LocatorSpec, unique: bool = False,
     if sink is not None:
         sink["bound_by"] = "none"
         sink["row_mismatch"] = f"{spec.anchor_id!r} -> {got or 'no identified row'}"
+        # THE PAGE ANSWERED AND WE REFUSED, so a readiness-aware caller must NOT wait and retry.
+        # `_resolve` returned a real, uniquely-bound element here -- it is simply in the WRONG
+        # RECORD -- so it never reached the branch that sets this, and an unset key read as falsy
+        # would make this containment guard the one refusal a retry could walk through.
+        sink["saw_candidates"] = True
     return None
 
 
@@ -602,11 +607,30 @@ async def _resolve(page: Page, spec: LocatorSpec, unique: bool = False,
             anchor_loc = scoped.get_by_role(spec.role, name=spec.name, exact=True)  # type: ignore[arg-type]
 
     ambiguous: Optional[Locator] = None
+    # DID ANY CANDIDATE MATCH ANYTHING AT ALL? Observability only, and it is the sensor that lets a
+    # caller separate the two meanings crushed together in a `None` return:
+    #
+    #   saw_candidates FALSE -> nothing in this page answers to the recorded spec. On a
+    #                           client-rendered app that is overwhelmingly "not painted yet"
+    #                           (measured: at the real failing Odoo resolve, exact-text 0, css 0,
+    #                           thead th 0, body 3 chars), so a caller may WAIT and ask again.
+    #   saw_candidates TRUE  -> the page answered and `resolve` REFUSED -- ambiguity under
+    #                           unique=True, the Tier-2 cross-check conflict, an identity
+    #                           contradiction, or the row-containment guard. Waiting there is
+    #                           R4.115's measured wrong-record bind: it waits for a COMPETING
+    #                           candidate to disappear and then binds the survivor.
+    #
+    # Counted on `count() > 0`, deliberately BEFORE the visibility test, which is the conservative
+    # side: a match that exists but is hidden reads as "the page answered", so the caller does NOT
+    # retry. Hiding the recorded row is exactly how the wrong-record bind was manufactured.
+    saw = {"any": False}
 
     async def classify(loc: Locator) -> tuple[str, Optional[Locator]]:
         """-> ("unique"|"ambiguous"|"none", first-visible-match)."""
         try:
             n = await loc.count()
+            if n:
+                saw["any"] = True
             if n == 0:
                 return "none", None
             first = loc.first
@@ -709,6 +733,8 @@ async def _resolve(page: Page, spec: LocatorSpec, unique: bool = False,
 
     if unique or ambiguous is None:
         _bound("none")
+        if sink is not None:
+            sink["saw_candidates"] = saw["any"]
         return None
     _bound(f"ambiguous:{ambiguous_label}")
     return ambiguous

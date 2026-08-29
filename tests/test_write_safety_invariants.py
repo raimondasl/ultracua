@@ -682,3 +682,77 @@ async def test_a_commit_dispatched_LATE_is_still_seen_by_the_learn_watcher(
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+# ---------------------------------------------------------------------------------------------------
+# INVIOLABLE #3 over the READINESS RETRY (0.148.0). The replay now waits and re-resolves when the page
+# has not painted -- and the whole danger of that mechanism is the mutation gate, where a `None` from
+# `resolve` is what REFUSES a write. R4.115 measured the naive form binding `/cancel/30` where
+# `/cancel/3` was recorded, by waiting for a competing candidate to disappear.
+#
+# The shipped retry is keyed on `saw_candidates`, not on the return value: if the page ANSWERED and the
+# resolver refused, there is no wait and no second look. This dimension is that promise, driven over
+# every refusal shape the gate can produce, on a page that keeps MUTATING throughout -- so a retry
+# keyed on the return value would have time to find something, and only the sensor stops it.
+#
+# The bait is a per-row control with a real POST, because a cell that gates on a keyword-named button
+# would pass with the wire having seen nothing (the shape that hid R4.29 for three CI rounds).
+_REFUSAL_SHAPES = [
+    # (id, page body, spec kwargs) -- each must leave the gate refusing, retry or no retry
+    ("ambiguous-two-rows",
+     "<table><tbody>"
+     "<tr id='r3'><td>Acme #3</td><td><a href='/cancel/3'>Cancel</a></td></tr>"
+     "<tr id='r30'><td>Beta #30</td><td><a href='/cancel/30'>Cancel</a></td></tr>"
+     "</tbody></table>",
+     dict(role="link", name="Cancel", tag="a", text="Cancel", css="tbody > tr > td > a",
+          anchor="Acme #3 Cancel", anchor_source="row", anchor_id=None)),
+    ("row-guard-wrong-record",
+     "<table><tbody>"
+     "<tr data-id='r30'><td>Beta #30</td><td><a href='/cancel/30'>Cancel</a></td></tr>"
+     "</tbody></table>",
+     dict(role="link", name="Cancel", tag="a", text="Cancel", css="tbody > tr > td > a",
+          anchor="Acme #3 Cancel", anchor_source="row", anchor_id="r3")),
+]
+
+
+@pytest.mark.parametrize("shape", _REFUSAL_SHAPES, ids=[s[0] for s in _REFUSAL_SHAPES])
+async def test_the_readiness_retry_never_walks_through_a_gate_refusal(shape) -> None:
+    """INVIOLABLE #3 over the readiness retry. A refusal the resolver reached by LOOKING must stay a
+    refusal, however long the page keeps changing afterwards."""
+    from ultracua import flow as flow_mod
+    from ultracua import locators as L
+    from ultracua.browser import BrowserSession
+
+    _id, body, spec_kw = shape
+    # Mutates for a full second AFTER the first resolve: a retry keyed on `loc is None` would keep
+    # looking right through it, which is exactly how the measured wrong-record bind happened.
+    churn = ("<script>let n=0;const h=setInterval(function(){"
+             "document.body.appendChild(document.createElement('span'));"
+             "if(++n>25) clearInterval(h);},40);</script>")
+    s = BrowserSession(headless=True)
+    await s.start()
+    try:
+        await s.page.set_content(f"<body>{body}{churn}</body>")
+        spec = L.LocatorSpec(**spec_kw)
+
+        class _Tr:
+            meta: dict = {}
+
+        tr = _Tr()
+        tr.meta = {}
+        sink: dict = {}
+        first = await L.resolve(s.page, spec, unique=True, sink=sink)
+        assert first is None, f"{_id}: PREMISE LOST -- the gate resolve bound, so nothing is refused here"
+        assert sink.get("saw_candidates") is True, (
+            f"{_id}: the page ANSWERED and the resolver refused, so the sensor must say so -- "
+            f"unset or False is what lets a retry walk through this refusal")
+
+        out = await flow_mod._retry_if_unpainted(s, s.page, spec, tr, first, sink=sink)
+        print(f"    {_id:>24}  refusal held={out is None}  retry={tr.meta.get('readiness_retry')!r}")
+        assert out is None, (
+            f"{_id}: the readiness retry produced a bind out of a REFUSAL. On the mutation gate that "
+            f"is a write fired at whatever the page settled into -- R4.115 measured it landing on a "
+            f"different customer's record under the recorded row's Idempotency-Key.")
+        assert tr.meta.get("readiness_retry") == "refused"
+    finally:
+        await s.close()

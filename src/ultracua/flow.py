@@ -1390,6 +1390,45 @@ def _select_values(text: Optional[str]):
     return parsed if isinstance(parsed, list) else raw
 
 
+async def _retry_if_unpainted(session, page, spec, tr, loc, *, sink=None, tag: str = ""):
+    """A `None` from `resolve` means two different things. Tell them apart, and retry only ONE.
+
+    THE PROBLEM THIS SOLVES (R4.115). On a client-rendered app the replay resolves before the page
+    has painted -- measured at the real failing Odoo call: `thead th` 0, `exact-text` 0, `css` 0,
+    three characters of body -- and reports DRIFT. The learn survives that because it re-observes
+    every turn; the replay resolves once and `mode="replay"` nulls the heal provider, so one miss is
+    terminal.
+
+    WHY THE OBVIOUS FIX IS REFUSED, AND WHAT MAKES THIS DIFFERENT. "Retry while `resolve` returns
+    None" was MEASURED binding a wrong record: `None` means at least five things and four of them are
+    deliberate safety refusals, so a poll re-drives them -- and for a refusal keyed on a COMPETING
+    candidate it simply waits for the competitor to disappear. With two per-row `Cancel` links and
+    the recorded row hidden at t=400ms, that remedy bound `/cancel/30` where `/cancel/3` was
+    recorded, via a Tier-1 confident candidate nothing cross-checks.
+
+    So the retry is NOT keyed on the return value. It is keyed on `saw_candidates`, which the
+    resolver sets from its own internals: FALSE means no candidate matched anything at all, TRUE
+    means the page answered and `resolve` refused. Only the first is retried, and it is retried ONCE,
+    after waiting for the DOM to go quiet. Every safety refusal keeps failing loud, immediately.
+
+    THE COST IS PAID ONLY WHERE IT IS OWED. A resolve that succeeds never reaches here, and a
+    server-rendered page measures `true_ready = 0` in every rep (R4.120), so the 0-LLM speed claim is
+    untouched on the substrates that never needed a wait.
+    """
+    if loc is not None:
+        return loc
+    s = tr.meta if sink is None else sink
+    if s.get("saw_candidates"):
+        # The page answered and the resolver refused. Waiting cannot make that verdict more correct;
+        # it can only wait for the thing it objected to to go away.
+        tr.meta[tag + "readiness_retry"] = "refused"
+        return None
+    why = await session.await_settled()
+    retried = await resolve(page, spec, unique=True, sink=s)
+    tr.meta[tag + "readiness_retry"] = f"{why}:{'bound' if retried is not None else 'still-none'}"
+    return retried
+
+
 async def _replay_step(
     session: BrowserSession, step: CachedStep, *, opts: RunOptions, provider: Optional[Provider],
     tr: StepTrace, goal: str, scope: str, idx: int,
@@ -1428,6 +1467,8 @@ async def _replay_step(
                 # pinned-read gate (locators.resolve docstring).
                 gate_sink: dict = {}
                 target = await resolve(page, step.locator, unique=True, sink=gate_sink)
+                target = await _retry_if_unpainted(session, page, step.locator, tr, target,
+                                                   sink=gate_sink, tag="gate_")
                 tr.meta["gate_bound_by"] = gate_sink.get("bound_by", "")
                 if target is None:
                     drifted, reason = True, "mutation gate: target missing/ambiguous — refusing to re-drive a write"
@@ -1522,6 +1563,7 @@ async def _replay_step(
                 # stays at 100% while load migrates from role+name onto the brittle positional css is a
                 # real safety regression that the rate alone cannot show. See `benchmarks/drift_bench.py`.
                 loc = await resolve(page, step.locator, unique=True, sink=tr.meta)
+                loc = await _retry_if_unpainted(session, page, step.locator, tr, loc)
             if loc is None:
                 return await _maybe_heal(
                     session, step, provider, tr, goal, "locator unresolved or ambiguous (drift)",
