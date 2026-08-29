@@ -1,6 +1,6 @@
 {
  "_comment": "DERIVED, never hand-edited. A test is a browser test iff it was OBSERVED launching one, OR the fast tier later caught it launching (attribution is order-dependent when a module shares browser work through a fixture). Regenerate with `pytest -q --store-browser-marks` then `python scripts/derive_test_tiers.py`, which iterates to the fixed point. An unclassified test makes a tiered run fail loudly rather than skip it.",
- "total": 2218,
+ "total": 2221,
  "browser": [
   "tests/test_annotation_disposition.py::test_the_r427_population_arrives_non_demotable_so_the_verb_cannot_dispose_of_it",
   "tests/test_audit.py::test_advisory_mode_reports_but_never_quarantines",
@@ -1655,6 +1655,8 @@
   "tests/test_ratchets.py::test_the_verdict_fires_in_every_direction",
   "tests/test_readiness_probe.py::test_a_navigate_only_recipe_is_flagged_degenerate",
   "tests/test_readiness_probe.py::test_a_recipe_that_acts_is_not_flagged",
+  "tests/test_readiness_probe.py::test_a_scroll_only_recipe_is_degenerate_though_no_navigate_is_involved",
+  "tests/test_readiness_probe.py::test_a_single_click_recipe_is_not_degenerate",
   "tests/test_readiness_probe.py::test_an_empty_action_parameter_is_detected[http://h/odoo/crm-False]",
   "tests/test_readiness_probe.py::test_an_empty_action_parameter_is_detected[http://h/web#action=&model=crm.lead&view_type=list-True]",
   "tests/test_readiness_probe.py::test_an_empty_action_parameter_is_detected[http://h/web#action=-True]",
@@ -1663,6 +1665,7 @@
   "tests/test_readiness_probe.py::test_an_unpinned_read_reaches_the_extractor",
   "tests/test_readiness_probe.py::test_compose_needs_both_a_scenario_and_a_recipe",
   "tests/test_readiness_probe.py::test_llm_calls_is_a_decide_counter_and_says_so",
+  "tests/test_readiness_probe.py::test_locomotion_mixed_with_one_interaction_is_not_degenerate",
   "tests/test_readiness_probe.py::test_no_settle_stands_between_arriving_and_resolving",
   "tests/test_readiness_probe.py::test_repeated_navigations_are_counted",
   "tests/test_readiness_probe.py::test_resolve_returns_none_for_a_safety_reason_not_only_for_absence[if unique or ambiguous is None:-ambiguity under unique=True]",
