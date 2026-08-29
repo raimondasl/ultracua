@@ -1704,6 +1704,35 @@ actions at the ceiling. Four of five degraded.
   over-refusal shape wearing a learn hat, and the threshold needs measuring on a population that
   includes real navigation flows first.
 
+## The learn's stuck detector is disarmed by the race (R4.119, 0.144.0)
+
+R4.118's thrash is not a missing guard. `flow.py`'s author loop already bails on no progress --
+`changed = state_changed(obs, after)` right after the act, `no_progress = 0 if (ok and changed) else
+no_progress + 1`, break at `stuck_limit` (4). And `state_changed` is
+`before.url != after.url or before.fingerprint != after.fingerprint`: it asks only whether the page
+DIFFERS.
+
+* **MEASURED, WITH A CONTROL.** The SAME Odoo url navigated five times, snapshotting exactly where
+  the loop does: fingerprints `3b1d7446 / 76d1fae2 / 76d1fae2 / d3de4936 / d3de4936` at 5-6
+  elements, and `no_progress` never exceeded **1** against a limit of 4. Repeat it with a 2.5 s
+  settle and all three reads are `7660234d` at 80 elements, `changed` correctly False, `no_progress`
+  climbing 0 -> 1 -> 2. **The sensor is fine; what it is fed is not.**
+* **SO THE REMEDY IS NOT A NEW GUARD.** Feed the existing one a settled observation. Nothing new
+  refuses anything, so it does not go near D0 -- and it is the same readiness predicate R4.115 needs
+  on the replay side, so one sensor serves both halves.
+* **THIRD INSTANCE OF ONE FAULT CLASS.** `state_changed` (differs / not-yet-rendered),
+  `resolve() -> None` (absent / found-and-refused), `anchor_id=None` (no token / wrong container).
+  All three conflate "nothing there" with something else; D5's "change the SENSOR CLASS" is their
+  general form.
+* **WHAT A LEARN SAW IS NOW ON THE RECIPE.** `CachedStep.precond_elements` records the element count
+  of the observation each step's `precond_fingerprint` came from, so "was this authored against an
+  unrendered page" is an ARTIFACT question (`readiness_probe --recipes`, no substrate/browser/key)
+  against R4.93's measured Odoo skeleton of 5. It is UNHASHED and defaulted -- the approval digest is
+  byte-identical, pinned by a cell, so no fleet is re-approval-gated -- and an older recipe reports
+  **unrecorded**, never zero. Do not collapse those: "the learn saw nothing" and "we did not record
+  what the learn saw" are different facts, and collapsing them is this register's most-repeated
+  defect.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

@@ -608,12 +608,27 @@ async def _author_steps(
                 ok, note = False, f"{type(exc).__name__}: {exc}"
 
         with tr.measure("verify"):
+            after = None
             try:
                 after = await session.snapshot()
                 changed = state_changed(obs, after)
             except Exception:  # noqa: BLE001 - a post-action navigation can race the snapshot; don't
                 changed = True  #               lose the attempt (and the write flag) to a transient throw
             tr.meta["changed"] = changed
+            # THE TWO SIZES THE `changed` VERDICT WAS COMPUTED FROM. `state_changed` asks only whether
+            # the page DIFFERS, so on a client-rendered app it reads a mid-render shell as progress and
+            # the `no_progress` bail below never accumulates -- measured on Odoo: five navigations to
+            # the SAME url left `no_progress` at 1 against a `stuck_limit` of 4, while the identical
+            # comparison over SETTLED pages correctly reached 2 (R4.118). Recording both counts makes
+            # that legible in the trace instead of needing a live probe to recover it.
+            #
+            # `after` is initialised to None ABOVE the try: the except arm binds `changed` and not
+            # `after`, so reading it unconditionally would turn a transient snapshot throw -- the very
+            # case that arm exists to survive -- into a NameError that loses the step and its write
+            # flag. Both counts come from observations already in hand; no extra snapshot, no latency.
+            tr.meta["obs_elements"] = len(obs.elements)
+            if after is not None:
+                tr.meta["after_elements"] = len(after.elements)
         # CLOSE with a grace tail: a write's POST can race the post-act navigation and land just after the
         # verify snapshot returns; the grace keeps it attributed to THIS action, not silently dropped.
         act_window["open"] = False
@@ -637,6 +652,10 @@ async def _author_steps(
                     precond_scope=precond_scope,
                     mutating=mutating,
                     mutating_sources=merge_marks(None, mark_src) or None,
+                    # HOW MUCH PAGE THE AGENT COULD SEE when it chose this action, taken from the
+                    # SAME observation as `precond_fingerprint` so the pair cannot disagree. Free:
+                    # `obs` is already in hand, so this adds no snapshot and no latency.
+                    precond_elements=len(obs.elements),
                 )
             )
             pos_of[i] = len(steps) - 1
