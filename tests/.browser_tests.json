@@ -1,6 +1,6 @@
 {
  "_comment": "DERIVED, never hand-edited. A test is a browser test iff it was OBSERVED launching one, OR the fast tier later caught it launching (attribution is order-dependent when a module shares browser work through a fixture). Regenerate with `pytest -q --store-browser-marks` then `python scripts/derive_test_tiers.py`, which iterates to the fixed point. An unclassified test makes a tiered run fail loudly rather than skip it.",
- "total": 2203,
+ "total": 2211,
  "browser": [
   "tests/test_annotation_disposition.py::test_the_r427_population_arrives_non_demotable_so_the_verb_cannot_dispose_of_it",
   "tests/test_audit.py::test_advisory_mode_reports_but_never_quarantines",
@@ -1917,6 +1917,14 @@
   "tests/test_search_premise.py::test_the_target_issue_is_open",
   "tests/test_secret_capture.py::test_the_step_renderer_masks_a_credential_field",
   "tests/test_secret_capture.py::test_the_step_renderer_still_shows_ordinary_values",
+  "tests/test_settle_predicate.py::test_a_page_that_never_changes_is_ready_at_zero",
+  "tests/test_settle_predicate.py::test_a_predicate_that_never_fires_is_reported_as_never",
+  "tests/test_settle_predicate.py::test_a_quiet_predicate_that_waits_out_the_plateau_is_not_premature",
+  "tests/test_settle_predicate.py::test_an_already_settled_page_is_zero_even_when_sampling_started_late",
+  "tests/test_settle_predicate.py::test_els_stable_fires_inside_a_plateau",
+  "tests/test_settle_predicate.py::test_ground_truth_is_the_LAST_change_not_the_first",
+  "tests/test_settle_predicate.py::test_no_samples_is_empty_not_a_confident_zero",
+  "tests/test_settle_predicate.py::test_today_is_scored_as_premature_on_a_slow_page",
   "tests/test_slots.py::test_idempotency_key_canonicalization_is_injective",
   "tests/test_slots.py::test_idempotency_key_slot_channel",
   "tests/test_slots.py::test_relearn_with_params_refused",
