@@ -1655,6 +1655,55 @@ before checking anything else.**
   (which is how a three-click recipe got cached) and at replay time. **Do not use this row as
   proof-of-green for any intervention** -- it measures the extractor.
 
+## Neither Odoo fix works alone; the COMPOSITION does (R4.117, 0.143.0)
+
+Every experiment before this moved ONE lever, and each failed for its own finding's reason -- which
+is why "Odoo is blocked" kept surviving. The 2x2 nobody had run, on a FRESHLY LEARNED
+`odoo-sort-list` recipe (`readiness_probe --compose`, ~$0.05):
+
+| | readiness OFF | readiness ON |
+|---|---|---|
+| **wire marks kept** | step 0 `navigate`, gate drift | step 0 `navigate`, gate drift |
+| **marks demoted** | step 2 `click`, `bound_by: none` | **COMPLETED, every step bound** |
+
+* **THE TWO BLOCKERS ARE INDEPENDENT AND SIT ON THE SAME STEP SET.** R4.27's over-marking gates the
+  `navigate` on a whole-page fingerprint the render race makes unreproducible; R4.115's race breaks
+  the `click`s. Remove either alone and the other remains -- the off-diagonal cells reproduce
+  R4.114 and the blast-radius result exactly.
+* **IT IS EVIDENCE ABOUT THE GENERAL CASE, not about Odoo.** Both blockers are classes:
+  reads-over-POST is every GraphQL/JSON-RPC app (R4.27's original 12/12 was GraphQL), and the
+  readiness race is every client-rendered SPA (Gitea 7/7 complete at `domcontentloaded`, Odoo 0/7).
+  So the product is not structurally confined to server-rendered apps.
+* **WHAT IT IS NOT.** n=1. The demotion is a PROBE of the counterfactual -- a real fix ADDS a
+  provenance mark rather than stripping `MARK_WIRE`, or R4.27 goes invisible (`safety.py` says so).
+  The readiness half is a CEILING whose naive form is REFUTED and must clear D5. And per R4.116 the
+  completed cell's `RESULT == EXPECTED` does not evidence the sort happened -- the claim is only
+  that every recorded step bound and executed.
+* **READINESS ALONE: 0 of 3 fresh recipes** (R4.115's blast radius, $1.07). Its ceiling reproduces
+  on the two recipes it was measured against and on no freshly learned one, because those recipes
+  are themselves degraded -- which is the next finding.
+
+## The learn thrashes on navigation and caches the thrash as a success (R4.118, 0.143.0)
+
+Of five bought Odoo learns: **one** produced a recipe that acts; **two** produced recipes that are
+**100% `navigate` steps and nothing else** (20 of 20, and 8 of 8); **two** cached nothing after 21
+actions at the ceiling. Four of five degraded.
+
+* **THE SHAPE IS DIAGNOSTIC.** `odoo-filter-status` re-navigates to the SAME url **12 times**, with
+  intents repeating almost verbatim ("Open CRM pipeline list view", five times). That is an agent
+  that cannot tell whether the page arrived -- R4.40 and R4.115's race, on the LEARN side.
+* **AND THE URLS IT INVENTS ARE MALFORMED**: `#action=&model=crm.lead&view_type=list`, an EMPTY
+  `action=`, four times in one recipe. Odoo serves the default app, so both recipes replay **every
+  step `ok`** and end on the Discuss inbox; the run then fails at the extraction. A loud failure
+  attributed to the wrong phase -- no step reported a problem.
+* **NEITHER REPLAY-SIDE FIX TOUCHES IT.** Both degenerate recipes fail identically in ALL FOUR
+  cells of R4.117's 2x2, because the defect is upstream of everything replay does.
+* **DETECTABLE FROM THE ARTIFACT ALONE** -- `readiness_probe --recipes DIR`, no substrate, no
+  browser, no key. That is the cheapest place to catch it and where the detection now lives.
+* **NOT FIXED HERE**, deliberately: a refusal that fires on a legitimate navigate-only flow is D0's
+  over-refusal shape wearing a learn hat, and the threshold needs measuring on a population that
+  includes real navigation flows first.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

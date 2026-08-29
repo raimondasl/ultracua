@@ -14,6 +14,12 @@
 > reading a page that has not painted (Odoo: 5 elements at `domcontentloaded`, 0 of 7 scenarios
 > complete, settling 0.62-1.08 s; Gitea: 7 of 7 complete). Conclusion for this document is
 > unchanged and now doubly held: a marking fix is not the Odoo path.
+>
+> **AND AT 0.143.0 THAT IS REFINED AGAIN (R4.117): a marking fix is not the Odoo path ALONE,
+> but it is one NECESSARY half of one.** The 2x2 of {marks kept, demoted} x {readiness off,
+> on} on a fresh recipe completes in exactly one cell -- demoted AND ready. So D7 is not
+> optional-and-unrelated; it is a prerequisite that is insufficient by itself. The third leg,
+> upstream of both, is R4.118.
 
 **Status: research, not a decision.** Nothing here is scheduled. It exists so that whoever next
 picks up R4.27 does not re-derive nine approaches, and does not re-propose one of the six that are

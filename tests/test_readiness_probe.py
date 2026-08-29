@@ -120,3 +120,93 @@ def test_the_probe_refuses_to_run_with_no_mode() -> None:
     """An operator surface that does nothing and exits 0 reads as a pass."""
     with pytest.raises(SystemExit):
         P.main([])
+
+
+def test_compose_needs_both_a_scenario_and_a_recipe() -> None:
+    """The 2x2 cannot be assembled from one of them, and defaulting either would silently measure a
+    different recipe than the operator named."""
+    with pytest.raises(SystemExit):
+        P.main(["--compose"])
+    with pytest.raises(SystemExit):
+        P.main(["--compose", "--scenario", "odoo-sort-list"])
+
+
+# ------------------------------------------------------ the recipe-shape census (R4.118)
+
+
+def _recipe(*actions, texts=None):
+    texts = texts or [None] * len(actions)
+    return {"steps": [{"action": a, "text": t} for a, t in zip(actions, texts)]}
+
+
+def test_a_navigate_only_recipe_is_flagged_degenerate() -> None:
+    """THE PROPERTY. Measured on Odoo: `odoo-filter-status` cached 20 steps of which 20 were
+    `navigate`, and `odoo-open-record` 8 of 8. Such a recipe replays every step ok and performs no
+    task at all, so the failure surfaces far from its cause -- or not at all."""
+    s = P.recipe_shape(_recipe("navigate", "navigate", "navigate"))
+    assert s["degenerate_navigate_only"] is True
+    assert s["navigate_fraction"] == 1.0
+
+
+def test_a_recipe_that_acts_is_not_flagged() -> None:
+    """BOTH DIRECTIONS. A census that flags everything is as useless as one that flags nothing --
+    the real `odoo-sort-list` recipe is navigate + scroll + 3 clicks and must come back clean."""
+    s = P.recipe_shape(_recipe("navigate", "scroll", "click", "click", "click"))
+    assert s["degenerate_navigate_only"] is False
+    assert s["kinds"]["click"] == 3
+
+
+def test_repeated_navigations_are_counted() -> None:
+    """The signature of an agent that cannot tell whether the page arrived: it re-navigates to the
+    SAME url. Measured 12 repeats in `odoo-filter-status`."""
+    s = P.recipe_shape(_recipe("navigate", "navigate", "navigate",
+                               texts=["/a", "/a", "/b"]))
+    assert s["repeated_navigations"] == 1
+
+
+@pytest.mark.parametrize("url, malformed", [
+    ("http://h/web#action=&model=crm.lead&view_type=list", True),   # measured, 4x in one recipe
+    ("http://h/web#action=", True),                                 # trailing, nothing after it
+    ("http://h/web#action=318&model=crm.lead", False),              # a real action id
+    ("http://h/odoo/crm", False),
+])
+def test_an_empty_action_parameter_is_detected(url, malformed) -> None:
+    """Odoo cannot resolve `action=` with nothing after it, so it serves the DEFAULT app (Discuss)
+    and every later step runs against the wrong page while reporting ok. Both directions asserted:
+    a real action id must NOT be flagged, or the census cries wolf on healthy recipes."""
+    s = P.recipe_shape(_recipe("navigate", texts=[url]))
+    assert bool(s["malformed_urls"]) is malformed
+
+
+def test_an_empty_recipe_is_not_called_degenerate() -> None:
+    """`0 navigates == 0 steps` is vacuously true, and a zero-step recipe is R4.101's
+    `no_actions_needed`, which is a different thing entirely."""
+    assert P.recipe_shape({"steps": []})["degenerate_navigate_only"] is False
+
+
+# ------------------------------------------------------------- the composition (R4.117)
+
+
+def test_the_composition_criterion_is_the_replay_not_the_oracle() -> None:
+    """R4.116: `odoo-sort-list`'s extractor is handed the whole page with the goal as its prompt and
+    answers correctly over an ASCENDING list, so `RESULT == EXPECTED` cannot evidence that the replay
+    did the task. The 2x2's cells are decided by `every_step_ok` and the source must say so."""
+    import inspect
+    src = inspect.getsource(P)
+    assert "every_step_ok=bool(out[\"ok\"] and steps and all(s.get(\"ok\") for s in steps))" in src, (
+        "the composition's criterion moved; if it ever becomes the oracle, R4.116 makes every cell a "
+        "false pass")
+
+
+def test_the_readiness_ceiling_restores_every_binding_it_replaced() -> None:
+    """It monkeypatches THREE module globals, and an arm that leaves them patched silently makes the
+    NEXT arm a readiness arm too -- which would turn the 2x2 into two identical rows."""
+    from ultracua import flow as flow_mod
+    from ultracua.browser import BrowserSession
+
+    before = (L.resolve, flow_mod.resolve, flow_mod.scope_fingerprint, BrowserSession.snapshot)
+    P._patch_readiness()
+    assert L.resolve is not before[0], "the patch did not take, so the ceiling measures nothing"
+    P._unpatch()
+    assert (L.resolve, flow_mod.resolve, flow_mod.scope_fingerprint,
+            BrowserSession.snapshot) == before
