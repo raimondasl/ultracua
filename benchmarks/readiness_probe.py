@@ -3,6 +3,7 @@
     uv run --no-sync python -m benchmarks.readiness_probe --contrast   # needs substrates
     uv run --no-sync python -m benchmarks.readiness_probe --remedy     # needs nothing
     uv run --no-sync python -m benchmarks.readiness_probe --recipes DIR  # needs nothing
+    uv run --no-sync python -m benchmarks.readiness_probe --settle     # needs substrates
 
 WHAT IT ANSWERS. `docs/reads-over-post.md` and R4.114 both concluded that Odoo's replay blocker was
 the LOCATOR. It is not. On a RENDERED page the failing spec resolves uniquely on the first candidate
@@ -44,6 +45,26 @@ very finding before they were caught, one release apart from each other:
   * `odoo-sort-list`'s oracle compares an ANSWER STRING. The extractor is handed the whole page body
     with the goal as its prompt, so it ranks the rows itself and answers correctly over an ASCENDING
     list. `RESULT == EXPECTED` is therefore not evidence that the replay did the task (R4.116).
+
+`--settle` answers the question the refutation leaves open: if a retry on the RETURN VALUE cannot
+work, what CAN tell "not rendered yet" from "found it and refused"? It scores candidate predicates
+against a ground truth -- the last moment the interactable count changed -- so **lateness is a cost
+and prematurity is a defect**, never summed. Measured 0.145.0 over 15 pages (7 Gitea, 7 Odoo, one
+static control):
+
+    candidate         premature  never  median late
+    dcl (today)               7      0            -     <- what the product does now
+    ready-state               6      0        234ms
+    els-stable                5      0        297ms     <- the ceiling instrument's predicate
+    mut-quiet-200             0      0        406ms     <- SAFE AND CHEAPEST
+    mut-quiet-500             0      0        672ms
+
+`els-stable` being premature on 5 of 15 is measured confirmation of the PLATEAU flaw that made a
+rewritten harness disagree with a validated one: two equal counts 100 ms apart can both land inside
+a pause mid-render. `networkidle` is absent because it is separately refuted -- it never fires on
+Odoo at all. And the COST IS LOPSIDED, which is the finding's design consequence: Gitea's and the
+control's `true_ready_ms` are **0**, so every millisecond waited there is pure tax, while Odoo's are
+422-610 ms of necessary work.
 
 `--recipes` is the third mode and needs no substrate, no browser and no key: it reads cached recipes
 off disk and reports their SHAPE. It exists because of R4.118 -- on Odoo the learn thrashes on
@@ -324,6 +345,221 @@ def _print_contrast(rows: list) -> None:
     print("=" * 98)
 
 
+# ------------------------------------------------- WHAT DOES "SETTLED" MEAN? (the settle census)
+
+# Installed at document_start so nothing before it is missed. It COUNTS mutations and stamps the last
+# one rather than keeping records, which on a page like Odoo's would be a memory hazard.
+_OBSERVER_JS = """
+window.__ucm = {n: 0, last: 0, t0: Date.now()};
+new MutationObserver(function (recs) {
+  window.__ucm.n += recs.length;
+  window.__ucm.last = Date.now();
+}).observe(document, {childList: true, subtree: true, attributes: true, characterData: true});
+"""
+
+_SETTLE_PROBE_JS = """() => ({
+  els: document.querySelectorAll('a,button,input,select,textarea,[role=button],[onclick],th,td').length,
+  quiet_ms: window.__ucm ? (Date.now() - (window.__ucm.last || window.__ucm.t0)) : -1,
+  muts: window.__ucm ? window.__ucm.n : -1,
+  ready: document.readyState,
+})"""
+
+SETTLE_WINDOW_S = 8.0
+SETTLE_TICK_MS = 50
+
+
+def settle_verdicts(samples: list) -> dict:
+    """Score each candidate predicate against a GROUND TRUTH, from one page's sample series.
+
+    GROUND TRUTH is "the first moment after which the interactable count never changes again".
+    Anything a predicate fires BEFORE that is premature BY CONSTRUCTION -- the page was still
+    changing and the caller would have acted on a half-rendered view. **Lateness is a cost;
+    prematurity is a defect**, so the two are reported separately and never summed into one score.
+
+    THE OFF-BY-ONE THIS ALREADY HAD: a first draft took "the LAST sample that still DIFFERED", which
+    is one sampling interval EARLIER than the page actually settled, and collapses to 0 on a sparse
+    series -- so a sparsely-sampled slow page scored every premature predicate as correct. The
+    definition here is later by one interval, i.e. conservative, which is the right direction for a
+    quantity whose whole job is to catch firing too early.
+
+    Pure, so it is testable without a browser -- which matters, because the failure this exists to
+    catch (`els-stable` locking onto a PLATEAU) is reproducible from a synthetic series and was
+    originally found the expensive way, as two harnesses disagreeing.
+    """
+    if not samples:
+        return {}
+    final = samples[-1]["els"]
+    truth = samples[-1]["t"]
+    idx = len(samples) - 1
+    for i in range(len(samples) - 1, -1, -1):
+        if samples[i]["els"] != final:
+            break
+        truth, idx = samples[i]["t"], i
+    # ...AND ZERO IF THE TAIL IS THE WHOLE SERIES. If the FIRST observation already holds the final
+    # value we cannot know when it arrived -- only that it was at or before we looked -- so the
+    # honest answer is 0, not the timestamp of our own first sample. Reporting the latter said Gitea
+    # settled at 219-266 ms and a STATIC FIXTURE at 16-94 ms, which is measuring the probe's startup
+    # latency and calling it the page's. It nearly shipped as a "correction" to a true claim.
+    if idx == 0:
+        truth = 0
+
+    def first(pred):
+        for s in samples:
+            if pred(s):
+                return s["t"]
+        return None
+
+    fired = {
+        # today's behaviour: act at `domcontentloaded`, i.e. never wait at all
+        "dcl (today)": 0,
+        "ready-state": first(lambda s: s.get("ready") == "complete"),
+        # two consecutive equal, non-zero counts -- what the ceiling instrument used
+        "els-stable": None,
+        "mut-quiet-200": first(lambda s: s.get("quiet_ms", -1) >= 200),
+        "mut-quiet-500": first(lambda s: s.get("quiet_ms", -1) >= 500),
+        "mut-quiet-1000": first(lambda s: s.get("quiet_ms", -1) >= 1000),
+    }
+    for a, b in zip(samples, samples[1:]):
+        if a["els"] == b["els"] and b["els"] > 0:
+            fired["els-stable"] = b["t"]
+            break
+
+    out = {"true_ready_ms": truth, "final_els": final, "els_at_dcl": samples[0]["els"],
+           "total_muts": samples[-1].get("muts"), "candidates": {}}
+    for name, t in fired.items():
+        out["candidates"][name] = {
+            "fired_ms": t,
+            "premature": (t is not None and t < truth),
+            # None when premature or never -- a "lateness" for a premature firing is meaningless and
+            # averaging one in would make the worst candidate look the best.
+            "late_by_ms": (t - truth) if (t is not None and t >= truth) else None,
+        }
+    return out
+
+
+async def _settle_trace(ctx, url: str) -> list:
+    import time
+    page = await ctx.new_page()
+    await page.add_init_script(_OBSERVER_JS)
+    t0 = time.monotonic()
+    await page.goto(url, wait_until="domcontentloaded")
+    samples = []
+    while time.monotonic() - t0 < SETTLE_WINDOW_S:
+        try:
+            s = await page.evaluate(_SETTLE_PROBE_JS)
+        except Exception:                                              # noqa: BLE001
+            break
+        s["t"] = round((time.monotonic() - t0) * 1000)
+        samples.append(s)
+        await page.wait_for_timeout(SETTLE_TICK_MS)
+    await page.close()
+    return samples
+
+
+async def settle(names: list, reps: int = 3) -> list:
+    """Measure every corpus start page `reps` times, plus a STATIC control.
+
+    The control is not decoration: a server-rendered page is ready at `domcontentloaded`, so its
+    `true_ready_ms` is 0 and every millisecond a predicate waits there is PURE TAX. That asymmetry is
+    what argues for waiting conditionally on the replay side rather than unconditionally.
+
+    REPS ARE NOT OPTIONAL, and a single-pass version of this file produced a WRONG recommendation
+    before it was caught. Two runs of the identical measurement disagreed: `odoo-filter-status`
+    settled at 531 ms in one and 968 ms in the next, which is enough to move `mut-quiet-200` from
+    "0 premature" to "premature once" and hand the verdict to `mut-quiet-500`. A predicate that is
+    SOMETIMES premature is unsafe, so prematurity aggregates as EVER-premature across reps while
+    lateness aggregates as a median -- the same asymmetry the per-page scoring already uses, one
+    level up.
+    """
+    import functools
+    import http.server
+    import threading
+
+    work = Path("D:/ultracua-data/settle")
+    work.mkdir(parents=True, exist_ok=True)
+    targets: list = []
+
+    d = work / "fixture"
+    d.mkdir(exist_ok=True)
+    (d / "p.html").write_text(
+        "<html><body><h1>Static</h1><a href='#'>one</a><button>two</button>"
+        "<table><tr><td>x</td><td>y</td></tr></table></body></html>", encoding="utf-8")
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(d))
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    targets.append(("fixture/static", f"http://127.0.0.1:{httpd.server_port}/p.html", None))
+
+    for name in names:
+        sub = SUBSTRATES[name]()
+        sub.await_ready()
+        cfg = LOGIN[name]
+        os.environ[USER_ENV], os.environ[PASS_ENV] = cfg["user"], cfg["password"]
+        entries = list(corpus.for_substrate(name))
+        storage = str(work / f"auth-{name}.json")
+        await refresh_auth(spec_for(entries[0], sub.url, storage), headless=True)
+        for e in entries:
+            targets.append((f"{name}/{e.scenario.name}",
+                            spec_for(e, sub.url, storage).start_url, storage))
+
+    rows = []
+    from playwright.async_api import async_playwright
+    async with async_playwright() as p:
+        br = await p.chromium.launch(headless=True)
+        for label, url, storage in targets:
+            for rep in range(reps):
+                kw = {"viewport": {"width": 1280, "height": 720}}
+                if storage:
+                    kw["storage_state"] = storage
+                ctx = await br.new_context(**kw)
+                rows.append({"label": label, "rep": rep,
+                             **settle_verdicts(await _settle_trace(ctx, url))})
+                await ctx.close()
+            print(f"  measured {label} x{reps}", flush=True)
+        await br.close()
+    httpd.shutdown()
+    return rows
+
+
+def _print_settle(rows: list) -> None:
+    import statistics
+    names = list(rows[0]["candidates"])
+    pages = sorted({r["label"] for r in rows}, key=lambda x: [r["label"] for r in rows].index(x))
+
+    print("=" * 100)
+    print("  PER PAGE -- true_ready across reps (the spread is why reps are not optional)")
+    print(f"{'page':30} {'@dcl':>5} {'final':>6}   true_ready per rep")
+    for p in pages:
+        rs = [r for r in rows if r["label"] == p]
+        truths = [r["true_ready_ms"] for r in rs]
+        spread = "  <== SPREAD" if truths and (max(truths) - min(truths)) > 250 else ""
+        print(f"{p[:30]:30} {rs[0]['els_at_dcl']:>5} {rs[0]['final_els']:>6}   "
+              f"{truths}{spread}")
+
+    print(f"\n  ACROSS {len(rows)} page-reps. Prematurity aggregates as EVER; a predicate that is")
+    print("  sometimes premature is unsafe, so one bad rep disqualifies it.")
+    print(f"\n{'candidate':16} {'premature':>10} {'pages hit':>10} {'never':>7} "
+          f"{'median late':>12} {'max late':>10}")
+    best = []
+    for n in names:
+        pre = sum(1 for r in rows if r["candidates"][n]["premature"])
+        hit = len({r["label"] for r in rows if r["candidates"][n]["premature"]})
+        nev = sum(1 for r in rows if r["candidates"][n]["fired_ms"] is None)
+        late = [r["candidates"][n]["late_by_ms"] for r in rows
+                if r["candidates"][n]["late_by_ms"] is not None]
+        print(f"{n:16} {pre:>10} {hit:>10} {nev:>7} "
+              f"{(f'{statistics.median(late):.0f}' if late else '-'):>12} "
+              f"{(f'{max(late):.0f}' if late else '-'):>10}")
+        if pre == 0 and nev == 0 and late:
+            best.append((statistics.median(late), n))
+    if best:
+        m, n = sorted(best)[0]
+        print(f"\n  SAFE AND CHEAPEST: {n} (median {m:.0f} ms late, NEVER premature over "
+              f"{len(rows)} page-reps, always fires)")
+    else:
+        print("\n  NO CANDIDATE IS SAFE over these reps -- every one fired early at least once.")
+    print("=" * 100)
+
+
 # ------------------------------------------------------------------------------- the COMPOSITION
 
 async def _replay_arm(entry, recipe: dict, *, storage: str, root: Path, ready: bool) -> dict:
@@ -536,6 +772,10 @@ def main(argv=None) -> int:
     ap.add_argument("--remedy", action="store_true", help="refute the naive fix (needs nothing)")
     ap.add_argument("--recipes", default=None, metavar="DIR",
                     help="census cached recipe SHAPES under DIR (needs nothing)")
+    ap.add_argument("--settle", action="store_true",
+                    help="score settle predicates against ground truth (needs substrates)")
+    ap.add_argument("--reps", type=int, default=3,
+                    help="reps per page for --settle; 1 is MEASURED to give a wrong verdict")
     ap.add_argument("--compose", action="store_true",
                     help="the marks x readiness 2x2 (needs a substrate, --scenario and --recipe)")
     ap.add_argument("--scenario", default=None)
@@ -544,8 +784,8 @@ def main(argv=None) -> int:
     ap.add_argument("--substrates", default="gitea,odoo")
     ap.add_argument("--out", default=None)
     a = ap.parse_args(argv)
-    if not (a.contrast or a.remedy or a.recipes or a.compose):
-        ap.error("pick at least one of --contrast / --remedy / --recipes / --compose")
+    if not (a.contrast or a.remedy or a.recipes or a.compose or a.settle):
+        ap.error("pick at least one of --contrast / --remedy / --recipes / --compose / --settle")
     if a.compose and not (a.scenario and a.recipe):
         ap.error("--compose needs --scenario and --recipe")
 
@@ -562,6 +802,10 @@ def main(argv=None) -> int:
         res = asyncio.run(remedy())
         _print_remedy(res)
         out["remedy"] = res
+    if a.settle:
+        rows = asyncio.run(settle(a.substrates.split(","), reps=a.reps))
+        _print_settle(rows)
+        out["settle"] = rows
     if a.compose:
         res = asyncio.run(compose(a.scenario, a.recipe, a.workdir))
         _print_compose(res)

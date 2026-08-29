@@ -1733,6 +1733,47 @@ DIFFERS.
   what the learn saw" are different facts, and collapsing them is this register's most-repeated
   defect.
 
+## The readiness predicate is measured, not argued (R4.120, 0.145.0)
+
+R4.115 refuted the naive remedy and left one question: if a retry on the RETURN VALUE cannot work,
+what CAN tell "not rendered yet" from "found it and refused"? `readiness_probe --settle` scores
+candidates against a ground truth -- the first moment after which the interactable count never
+changes again. **60 page-reps** (15 pages x 4: 7 Gitea, 7 Odoo, one static control), **$0.00**:
+
+| candidate | premature | pages hit | median late |
+|---|---|---|---|
+| `dcl (today)` | **28** | 7 | -- |
+| `ready-state` | 28 | 7 | 235 ms |
+| `els-stable` | **17** | 6 | 296 ms |
+| **`mut-quiet-200`** | **0** | 0 | **274 ms** |
+| `mut-quiet-500` | 0 | 0 | 563 ms |
+
+* **PREMATURITY IS A DEFECT; LATENESS IS A COST.** They are never summed, and a premature firing
+  gets no lateness recorded at all -- averaging one in makes the worst candidate look like the best.
+* **`els-stable`'s 17 are the PLATEAU flaw made numeric.** Two equal counts 100 ms apart can both
+  land inside a pause mid-render. That is exactly why a rewritten blast harness disagreed with a
+  validated one and cost an afternoon; the reproduction is now a browser-free cell.
+* **`networkidle` is absent because it is separately refuted** -- it never fires on Odoo at all.
+* **THE COST IS LOPSIDED, and that decides the design.** Gitea 7/7 and the static control measure
+  `true_ready = 0` in EVERY rep, so a wait there is pure tax; Odoo's 468-859 ms is real work. So
+  **replay waits CONDITIONALLY** -- and that is D5's sensor-class change: `None` + not-quiet means
+  not rendered (wait, retry), `None` + quiet means absent or REFUSED (fail loud, all four safety
+  refusals intact), and nothing is paid on the happy path. **Learn waits unconditionally**, where
+  274 ms is noise beside an LLM call and is what arms R4.119's stuck detector.
+* **REPS ARE NOT OPTIONAL AND THIS NEARLY SHIPPED WITHOUT THEM.** A single pass put
+  `odoo-filter-status` at 968 ms where four reps put it at 656-719 -- enough to flip
+  `mut-quiet-200` from clean to premature and hand the verdict to `mut-quiet-500`.
+* **TWO INSTRUMENT BUGS, FOUND BY DISBELIEVING THE OUTPUT, and the second is the one to carry.**
+  The ground truth first took the LAST sample that still DIFFERED (one interval early, and 0 on a
+  sparse series). Fixing that, it then reported `samples[0]["t"]` when NOTHING ever changed -- the
+  probe's own startup latency -- which said Gitea settled at 219-266 ms and a STATIC FIXTURE at
+  16-94 ms. It was one commit from shipping as a "correction" to the TRUE claim that Gitea is
+  complete at `domcontentloaded`. **A measurement that indicts a control you built to be trivial is
+  measuring itself.**
+* **RESIDUAL**: a page with a persistent animation or ticker would never go mutation-quiet. None
+  exists in this corpus, so it is unmeasured and the predicate needs a CAP -- ~2 s covers everything
+  here (max observed firing 1485 ms), and with a cap it degrades to today's behaviour, just later.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
