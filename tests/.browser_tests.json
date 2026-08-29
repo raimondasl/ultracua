@@ -1,6 +1,6 @@
 {
  "_comment": "DERIVED, never hand-edited. A test is a browser test iff it was OBSERVED launching one, OR the fast tier later caught it launching (attribution is order-dependent when a module shares browser work through a fixture). Regenerate with `pytest -q --store-browser-marks` then `python scripts/derive_test_tiers.py`, which iterates to the fixed point. An unclassified test makes a tiered run fail loudly rather than skip it.",
- "total": 2198,
+ "total": 2203,
  "browser": [
   "tests/test_annotation_disposition.py::test_the_r427_population_arrives_non_demotable_so_the_verb_cannot_dispose_of_it",
   "tests/test_audit.py::test_advisory_mode_reports_but_never_quarantines",
@@ -161,6 +161,7 @@
   "tests/test_landed_arms_the_ledger.py::test_a_sibling_mutating_step_cannot_arm_for_a_failed_commit",
   "tests/test_landed_arms_the_ledger.py::test_a_write_whose_confirm_was_already_true_is_NOT_landed",
   "tests/test_landed_arms_the_ledger.py::test_every_failure_after_the_confirm_transition_is_landed",
+  "tests/test_learn_capture_evidence.py::test_a_real_learn_records_what_it_saw",
   "tests/test_ledger.py::test_dry_run_resume_previews_without_appending",
   "tests/test_ledger.py::test_failed_row_not_recorded_so_resume_refires",
   "tests/test_ledger.py::test_reads_resume_is_noop",
@@ -1342,6 +1343,10 @@
   "tests/test_inviolable_properties.py::test_the_no_llm_fixture_actually_intercepts_every_binding",
   "tests/test_landed_arms_the_ledger.py::test_a_landed_write_is_never_handed_the_auth_refresh_retry",
   "tests/test_landed_arms_the_ledger.py::test_every_failure_return_in_attempt_replay_goes_through_the_arming_helper",
+  "tests/test_learn_capture_evidence.py::test_a_zero_is_reported_as_a_real_zero",
+  "tests/test_learn_capture_evidence.py::test_precond_elements_is_unhashed_and_moves_no_digest",
+  "tests/test_learn_capture_evidence.py::test_the_census_separates_unrecorded_from_seen_nothing",
+  "tests/test_learn_capture_evidence.py::test_the_field_is_optional_so_older_recipes_still_load",
   "tests/test_ledger.py::test_cli_run_batch_dry_run_resume_preview",
   "tests/test_ledger.py::test_ledger_bad_job_id_refused",
   "tests/test_ledger.py::test_ledger_header_guard_refuses_foreign_file",
