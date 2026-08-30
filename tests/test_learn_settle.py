@@ -106,15 +106,28 @@ def test_the_learn_settles_before_both_of_its_observations() -> None:
         "the settle must PRECEDE the observation it is settling for")
 
 
-def test_replay_is_deliberately_untouched() -> None:
+def test_replay_never_settles_UNCONDITIONALLY() -> None:
     """THE ASYMMETRY IS THE DESIGN, not an oversight. A server-rendered page measures
     `true_ready = 0` in every rep (R4.120), so an unconditional wait on the replay path is pure tax
-    on the product's own speed claim. Replay's fix is a CONDITIONAL two-state sensor and lands
-    separately; if someone adds an unconditional settle there, this fails and they have to argue it."""
+    on the product's own speed claim.
+
+    THIS CELL PREVIOUSLY PINNED THE COUNT AT TWO and it FIRED when the replay-side sensor landed at
+    0.148.0 -- which is the guard working: it demanded an argument for the third call site rather
+    than letting it in quietly. The argument is that replay's settle is CONDITIONAL: it lives inside
+    `_retry_if_unpainted` and is reached only after a resolve has already failed with
+    `saw_candidates` False, so nothing is paid on the happy path or on any refusal.
+
+    So the invariant is now the SHAPE rather than the count: the learn's two are unconditional, and
+    every other settle in this module is inside the guarded helper. A fourth one dropped into the
+    replay loop still fails here."""
     src = inspect.getsource(flow_mod)
-    assert src.count("await_settled()") == 2, (
-        f"expected exactly the two LEARN call sites, found {src.count('await_settled()')} -- if a "
-        f"third is on the replay path, R4.120's cost measurement says to make it conditional")
+    total = src.count("await_settled()")
+    inside_helper = inspect.getsource(flow_mod._retry_if_unpainted).count("await_settled()")
+    assert inside_helper == 1, "the replay's settle must live in the guarded helper"
+    assert total == 3, (
+        f"expected 2 unconditional LEARN settles + 1 guarded replay settle, found {total} -- a new "
+        f"unconditional wait on the replay path is pure tax on the substrates R4.120 measured at "
+        f"`true_ready = 0`, and needs the same argument this cell once forced")
 
 
 def test_the_settle_window_is_the_measured_one() -> None:

@@ -743,7 +743,21 @@ def _invariants(rec: dict, rows: list, replay: list, repair: list, rep_surv: lis
         "fixtures_lint_clean": not rec["fixture_lint"],
         "escalate_rows_classified": rec["escalated"] == sum(
             1 for r in rows if r["kind"] == "escalate"),
-        "within_wall_budget": rec["wall_ms"] <= 180000,
+        # WALL BUDGET, RE-DERIVED AT 0.148.0 FROM MEASUREMENT (was 180000, and the bench had grown
+        # into it). This guards against the bench becoming unusable, not against a regression -- the
+        # regressions have their own invariants above.
+        #
+        # Measured on this host: 157.8 / 158.9 / 163.3 / 167.9 s across four runs, i.e. ~10s of
+        # ordinary variance already; CI windows measured 181s and failed at 180. So the old ceiling
+        # sat inside the noise band, which is a deterministic failure waiting for a slow runner.
+        #
+        # 9s of the current figure is the readiness retry (R4.115), and it is LEGITIMATE work rather
+        # than overhead to remove: 42 of 370 replays reach it, each waiting one quiet window because
+        # this bench MUTATES THE DOM AND THEN IMMEDIATELY REPLAYS, so the page really did just
+        # change. That makes drift_bench the worst case for the mechanism -- every row is drifted by
+        # construction -- where a real replay resolves first try and pays nothing. Phases measured:
+        # settle 8.98s, re-resolve 1.08s, the already-quiet probe 0.11s.
+        "within_wall_budget": rec["wall_ms"] <= 220000,
     }
 
 

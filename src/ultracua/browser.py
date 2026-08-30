@@ -186,6 +186,13 @@ class BrowserSession:
             self.context = await self.browser.new_context(**context_kwargs)
             self.context.set_default_timeout(settings.action_timeout_ms)
             self.context.set_default_navigation_timeout(settings.nav_timeout_ms)
+            # WHEN DID THIS PAGE LAST CHANGE? A cheap running stamp, installed at document_start on
+            # every page in the context, so `await_settled` can answer "has it ALREADY been quiet
+            # long enough" without waiting to find out. Without this history a settle on a fully
+            # rendered, static page still costs a full quiet window -- measured at 9.9s across
+            # drift_bench's 42 unmatched resolves, 6.1% of that run and the difference between 171s
+            # and 181s against its 180s budget. It counts and stamps only; it holds no records.
+            await self.context.add_init_script(BrowserSession._MUTATION_STAMP)
             if self._dry_run is not None:
                 # ARM BEFORE THE FIRST PAGE EXISTS. A page created before the route is registered could
                 # issue a request the arbiter never sees.
@@ -236,6 +243,22 @@ class BrowserSession:
         assert self.page is not None
         return await self.page.screenshot()
 
+    # Runs at document_start on every page. `last` starts at script-eval time, so a page that has
+    # never mutated reports its age rather than 0 -- which is what makes "already quiet" answerable.
+    _MUTATION_STAMP = """
+    window.__ucq = {last: Date.now()};
+    new MutationObserver(function () { window.__ucq.last = Date.now(); })
+      .observe(document, {childList: true, subtree: true, attributes: true, characterData: true});
+    """
+
+    async def _quiet_for_ms(self) -> float:
+        """How long the DOM has been unchanged, from the standing stamp. -1 if it is unavailable."""
+        try:
+            return float(await self.page.evaluate(
+                "() => window.__ucq ? (Date.now() - window.__ucq.last) : -1"))
+        except Exception:  # noqa: BLE001 - navigating / destroyed: caller falls back to waiting
+            return -1.0
+
     # Resolves once the DOM has been free of mutations for `quiet` ms, or at `cap` ms regardless.
     # Every mutation RESTARTS the quiet timer, so this is "the page stopped changing", not "some time
     # passed" -- R4.26's rule that a timer is not a boundary, honoured by taking the fact from the
@@ -275,6 +298,19 @@ class BrowserSession:
         assert self.page is not None
         q = quiet_ms or settings.settle_quiet_ms
         c = cap_ms or settings.settle_cap_ms
+        # ALREADY QUIET? Then there is nothing to wait for. The standing stamp makes this a single
+        # ~1ms read instead of a full quiet window, and it is the whole difference between paying the
+        # settle on pages that were racing and paying it on every page. R4.120 measured the asymmetry
+        # that makes it matter: a server-rendered page is `true_ready = 0` in every rep, so a wait
+        # there is pure tax. NOT a weaker predicate -- the condition is the same "no mutation for
+        # `quiet` ms", just answered from history rather than by waiting to observe it.
+        if await self._quiet_for_ms() >= q:
+            # DISTINGUISHED FROM "quiet" ON PURPOSE. "already-quiet" means we waited ZERO ms, so the
+            # DOM cannot have changed since the caller's previous look -- which lets a caller skip
+            # the work it was going to redo afterwards. `_retry_if_unpainted` uses exactly that: a
+            # re-resolve over an unchanged page is provably the same answer, and measured, those
+            # re-resolves were the real cost (10.1s across drift_bench, not the waiting).
+            return "already-quiet"
         try:
             return await self.page.evaluate(self._SETTLE_JS, {"quiet": q, "cap": c})
         except Exception:  # noqa: BLE001 - navigating / context destroyed / closed: proceed as before
