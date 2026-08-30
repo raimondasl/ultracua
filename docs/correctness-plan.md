@@ -270,6 +270,9 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
 - **D7.** (from R4.27) **Classify a POST by the protocol declaration in its BODY, not by its method.**
   📋 **SURVEYED 2026-08-27, NOT SCHEDULED — `docs/reads-over-post.md` is the full write-up.**
   ⚠️ **AND ITS GATING MEASUREMENT CAME BACK NO (R4.114, 0.141.0): this would not unblock Odoo.**
+  ✅ **ITS OFFLINE GATE IS MEASURED (R4.122, 0.149.0, $0.00): the candidate rule clears
+  100% of measured Odoo read STEPS, refuses real `create`/`web_save`, and leaves Gitea
+  untouched — Gitea makes zero POSTs at all. Conditions 3–7 are what a build slice owes.**
   ⚠️ **AND R4.115 (0.142.0) RE-ATTRIBUTES WHY.** R4.114 blamed the locator; measured, the
   locator binds uniquely on a RENDERED page and the replay is reading an unpainted one (Odoo
   serves 5 elements at `domcontentloaded`, 0 of 7 scenarios complete; Gitea 7 of 7). D7 stays

@@ -266,6 +266,68 @@ unmarked. Roughly a third of Odoo's non-passing rows never produce a recipe at a
   passing by the survey's own live probe: browser traffic carries the method in the URL path, and
   the bare form is what `substrates.Odoo.rpc` constructs.
 
+## What measurements #3, #4 and #5 said (0.149.0, $0.00)
+
+`benchmarks/read_post_census.py`. No LLM, no learn. R4.122.
+
+### #3 — clearance, and the number that decides it is PER-STEP
+
+| | cleared |
+|---|---|
+| per POST, Odoo read page loads | **13 / 22 (59%)** |
+| **per STEP** — only what an interaction caused | **2 / 2 (100%)** |
+
+Per-step is the question. `_author_steps` marks a step when a write-classified request fires inside
+its ACT WINDOW, so a step is demoted only when EVERY post in that window is — one un-cleared
+background poll re-marks it. Measured by loading, letting the page settle, then recording only what
+the interaction caused: each sort click produces exactly ONE POST,
+`web_search_read` on `/web/dataset/call_kw/crm.lead/web_search_read`.
+
+The residual nine are page-load chrome. Odoo's `/mail/*` bus routes carry no ORM method at all, so a
+body classifier structurally cannot clear them — and they were measured NOT to land in act windows,
+which is exactly why the per-POST figure understates the fix.
+
+**Gitea makes ZERO POSTs** on every corpus read page: a server-rendered substrate is untouched by
+construction.
+
+### #4 — the negative control HOLDS
+
+Real `create` and `web_save` requests, issued over the page's own origin and session so the route and
+body are exactly what the wire watcher sees, both stay WRITES.
+
+Its first version drove the UI and captured **no write at all** — and reported that it therefore
+proved nothing, rather than passing. A control that does not exercise its subject is worse than none.
+
+### #5 — the suffix and the body are two readings of one fact
+
+The ORM method is carried in BOTH the URL path (`/call_kw/<model>/<method>`) and the body, and they
+agree. So the cross-check costs nothing, and a DISAGREEMENT is now a pinned refusal: the operation is
+ambiguous, so it stays a write.
+
+### Condition 2 — the live method set
+
+`web_search_read`, `get_views`, `systray_get_activities`, `has_group`, `onchange`,
+`check_access_rights`, `render_public_asset`, `create`, `web_save`.
+
+`onchange` — the documented write-in-a-read-shaped-call hazard — **was observed live** and is
+excluded, with a test cell that has to be deleted on purpose before it can be admitted.
+`systray_get_activities` and `has_group` are genuine reads that are NOT on the drafted allowlist and
+stay writes: the fail-closed shape working as intended.
+
+### And the measurement caught a bug in the drafted rule
+
+A first version tested `path.endswith("/call_kw")`, which matches **nothing** — Odoo's route is
+`/web/dataset/call_kw/<model>/<method>`. 18 of 22 POSTs fell through as "route is neither", i.e. the
+rule would have shipped demoting almost nothing. Found before a line of `src/` was touched, which is
+what condition 1 exists for.
+
+### What is still owed
+
+Conditions 3–7 are unmet and are what a BUILD slice owes: pricing the verify-by-replay re-arm (a
+wrongly-demoted write is double-fired at learn), reaching all **14** `is_write_request` consumers or
+saying why not, ADDING a provenance mark rather than stripping `MARK_WIRE`, no operator-extension
+door, and adjudicating with `gate_probe` plus a 3-rep corpus run.
+
 ## What this survey does not claim
 
 * **Not that the product gets Odoo wrong.** No Odoo scenario in any run has produced `wrong_data`,

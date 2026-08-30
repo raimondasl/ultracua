@@ -1885,6 +1885,38 @@ was not a better page probe -- it was already inside the resolver.
   is not the measured shape (Odoo mutates continuously while booting) and made the mechanism look
   broken when it was the fixture.
 
+## D7's offline gate: the number is PER-STEP, not per-POST (R4.122, 0.149.0)
+
+`docs/reads-over-post.md`'s lead candidate attaches seven conditions and the first is "measure the
+demoted population offline first". `benchmarks/read_post_census.py` is that measurement -- **$0.00**,
+no LLM, no learn -- and it changes the shape of the answer.
+
+* **PER-POST 13 of 22 (59%). PER-STEP 2 of 2 (100%).** Per-step is the question: `_author_steps`
+  marks a step when a write-classified request fires inside its ACT WINDOW, so a step is demoted
+  only when EVERY post in that window is, and one un-cleared background poll re-marks it. Measured
+  by loading, settling, then recording ONLY what an interaction caused -- each sort click produces
+  exactly one `web_search_read`.
+* **THE RESIDUAL IS PAGE-LOAD CHROME.** Odoo's `/mail/*` bus routes carry no ORM method, so a body
+  classifier structurally cannot clear them -- and they were measured NOT to land in act windows,
+  which is precisely why the per-POST figure understates the fix.
+* **THE NEGATIVE CONTROL HOLDS**: real `create` and `web_save`, issued over the page's own session so
+  route and body are what the watcher sees, both stay writes. Its first version drove the UI,
+  captured NO write, and reported that it proved nothing rather than passing.
+* **GITEA MAKES ZERO POSTs** on every corpus read page. A server-rendered substrate is untouched by
+  construction.
+* **THE ORM METHOD IS IN BOTH THE PATH AND THE BODY, AND THEY AGREE**, so the cross-check is free --
+  and a disagreement is a pinned refusal, because an ambiguous operation stays a write.
+* **`onchange` WAS OBSERVED LIVE** and is excluded, with a cell that must be deleted on purpose
+  before it can be admitted. `systray_get_activities` and `has_group` are genuine reads that are NOT
+  on the allowlist and stay writes -- fail-closed working.
+* **THE MEASUREMENT CAUGHT A BUG IN THE DRAFTED RULE**: `path.endswith("/call_kw")` matches NOTHING,
+  because the route is `/web/dataset/call_kw/<model>/<method>`. It would have shipped demoting
+  almost nothing. Found before a line of `src/` was touched.
+* **NOTHING IN `src/` CHANGED.** The rule lives in `benchmarks/` as a proposal under measurement, so
+  a wrong answer costs a file nobody imports rather than a revert on the write rail. Conditions 3-7
+  -- the verify-by-replay re-arm, all 14 `is_write_request` consumers, a provenance mark rather than
+  a `MARK_WIRE` strip, no operator door, adjudication -- are what a build slice owes.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
