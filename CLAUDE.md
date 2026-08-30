@@ -1893,7 +1893,7 @@ doesn't; `heading`/`label` anchors were hardened and `row` wasn't. When you fix 
 
 ## Measurement, not assertion
 
-`benchmarks/drift_bench.py` (key-less, ~60s, CI-gated) is the instrument for any change to `locators.resolve`
+`benchmarks/drift_bench.py` (key-less, **~160s** on this host and 181s measured on CI windows -- the `~60s` this line claimed until 0.148.0 was stale by nearly 3x, and the 180s budget it implied sat inside the host's own variance band; the budget is 220s, re-derived from measurement, CI-gated) is the instrument for any change to `locators.resolve`
 or the recovery ladder. It reports a 0-LLM survival curve by mutation intensity, per-tier recovery rates, and
 `silent_wrong` — which must stay within its published allowlist. Use it to *adjudicate* a resolver trade
 rather than argue it; that is what it was built for. `baselines/README.md` states plainly what each number

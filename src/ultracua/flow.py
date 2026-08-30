@@ -1424,6 +1424,15 @@ async def _retry_if_unpainted(session, page, spec, tr, loc, *, sink=None, tag: s
         tr.meta[tag + "readiness_retry"] = "refused"
         return None
     why = await session.await_settled()
+    if why == "already-quiet":
+        # THE PAGE WAS SETTLED BEFORE WE ASKED, so we waited zero ms and the DOM has not changed
+        # since the resolve that just failed. Re-resolving it is provably the same answer, and it is
+        # NOT free: the ladder walks every candidate with a round-trip each. Measured on
+        # drift_bench's static corpus -- 42 such retries costing 10.1s, 6.1% of a run whose budget
+        # this change had pushed past by 1s on CI. Skipping them costs nothing that could have found
+        # anything.
+        tr.meta[tag + "readiness_retry"] = "already-quiet:skipped"
+        return None
     retried = await resolve(page, spec, unique=True, sink=s)
     tr.meta[tag + "readiness_retry"] = f"{why}:{'bound' if retried is not None else 'still-none'}"
     return retried
