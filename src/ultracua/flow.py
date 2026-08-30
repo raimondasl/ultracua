@@ -36,12 +36,14 @@ from .locators import describe, focused_ref, resolve
 from .providers.base import Provider
 from .safety import (
     MARK_OVERGATE,
+    MARK_BODY_READ,
     MARK_WIRE,
     PacingGovernor,
     classify_mutation,
     classify_mutation_with_source,
     merge_marks,
     idempotency_key,
+    body_says_read,
     is_write_request,
     looks_like_interstitial,
     origin_of,
@@ -452,6 +454,23 @@ async def _author_steps(
     # records the identity, so the evidence can be written back onto the step that caused it instead of
     # being kept as a single pass-global bit. See the promotion loop at the end of the function.
     wrote_by_step: set[int] = set()
+    # D7: steps during which a POST fired that `is_write_request` calls a write and whose own BODY
+    # named a READ operation. Recorded so the demotion leaves a trace: the step is not gated, and the
+    # artifact still says a non-idempotent request was seen and WHY it was not counted. Dropping the
+    # evidence instead is what would make R4.27 invisible again.
+    read_post_by_step: set[int] = set()
+    # D7: DID ANY NON-IDEMPOTENT REQUEST FIRE AT ALL, body evidence notwithstanding?
+    #
+    # `performed_write` was doing TWO jobs, and D7's condition 3 is what exposed it: it decides
+    # whether to REFUSE a flow that wrote but gated nothing, AND whether verify-by-replay may
+    # re-drive the flow. Body evidence should clear the first -- an Odoo read must not be refused --
+    # and must NEVER clear the second, because verify-by-replay is a full second browser pass and a
+    # read-named call that really writes would then fire TWICE.
+    #
+    # MEASURED, not argued: without this split, `test_a_body_demoted_call_that_really_writes_is_
+    # never_fired_twice` sees `saves == 2` on its first run. That is a NEW harm rather than the
+    # parity the survey claimed -- today such a server fires once, because the mark skips verify.
+    posted = {"hit": False}
     cur = {"i": -1}                       # the loop index whose act window is open (-1 = none)
     pos_of: dict[int, int] = {}           # loop index -> position in `steps` (a failed act appends nothing)
     scope_of: dict[int, str] = {}         # loop index -> its PRE-act scope fingerprint, for a promotion
@@ -480,10 +499,33 @@ async def _author_steps(
                 return
             if not _in_act_window():
                 return          # outside every window — background noise, not this run's doing
+            # D7: the METHOD says write and the BODY names a read. `is_write_request` classifies by
+            # HTTP method alone, so on an app that serves reads over POST every read step is filed as
+            # a write (R4.27) and loses self-heal, suffix-replan and ordinary drift recovery.
+            #
+            # THIS RETURNS BEFORE `wrote["hit"]`, AND THAT IS THE WHOLE RISK OF THE FEATURE, STATED.
+            # `performed_write` is what skips verify-by-replay, so a read-POST that is really a write
+            # would now be replayed a second time at learn and fire TWICE. It cannot be made
+            # conservative here instead: `_learn_once` REFUSES a flow whose `performed_write` is set
+            # with no gated step, so clearing the step mark while keeping the run flag would delete
+            # every Odoo read flow. Both must clear together. The mitigation is that
+            # `body_says_read` fails closed on everything ambiguous, and that
+            # `test_write_safety_invariants.py` drives a read-NAMED call that really writes and
+            # asserts the server saw exactly ONE save.
+            if body_says_read(req.url, req.post_data):
+                # ...BUT `posted` IS SET REGARDLESS, and that is what keeps this safe. See its
+                # declaration: body evidence clears the step MARK and the refusal, never the
+                # "verify-by-replay would re-drive this" fact.
+                posted["hit"] = True
+                owner_r = _owner()
+                if owner_r >= 0:
+                    read_post_by_step.add(owner_r)
+                return
             # A write DID fire in causal response to this run, so `performed_write` must say so even when
             # we cannot say WHICH step: that flag is what stops best-of-N re-authoring after a write, and
             # what makes `_learn_once` refuse a flow it could not attribute.
             wrote["hit"] = True
+            posted["hit"] = True
             owner = _owner()
             if owner >= 0:
                 wrote_by_step.add(owner)
@@ -770,6 +812,18 @@ async def _author_steps(
         _log.info("learn: step %d %r wrote on the wire — caching it as a WRITE (the classifier said "
                   "otherwise)", p, steps[p].intent)
 
+    # D7: RECORD THE DEMOTION, never just the absence of a mark. A step whose only non-idempotent
+    # traffic was body-cleared reads carries `body_read` in its provenance: it is NOT gated, and the
+    # artifact still says a POST was seen and why it was not counted. `MARK_WIRE` is never stripped
+    # here -- a step that also had a genuine write keeps its `wire` mark AND its gate, because it is
+    # in `wrote_by_step` and was promoted above.
+    for i in sorted(read_post_by_step - wrote_by_step):
+        p = pos_of.get(i)
+        if p is None:
+            continue
+        steps[p] = steps[p].model_copy(update={
+            "mutating_sources": merge_marks(steps[p].mutating_sources, MARK_BODY_READ)})
+
     # WIRE vs CLASSIFIER: they must at least AGREE about which step the write belongs to.
     #
     # This is not attribution, and must not be mistaken for it — R3.2 is exactly that we cannot attribute
@@ -859,7 +913,7 @@ async def _author_steps(
                              "gating step(s) %s as well rather than trust the placement",
                              sorted(acting_at_write), sorted(gated), newly)
     return (steps, success, llm, traces, wrote["hit"] or any(s.mutating for s in steps),
-            unattributed["hit"])
+            unattributed["hit"], posted["hit"])
 
 
 async def _verify_by_replay(
@@ -958,7 +1012,8 @@ async def _learn(
         if reflections:
             author_goal = goal + "\n\nLESSONS FROM PRIOR FAILED ATTEMPTS (do not repeat these mistakes):\n" + \
                 "\n".join(f"- {r}" for r in reflections)
-        steps, success, llm, step_traces, performed_write, write_unattributed = await _author_steps(
+        (steps, success, llm, step_traces, performed_write, write_unattributed,
+         posted_any) = await _author_steps(
             session, opts=opts, hooks=hooks, goal=author_goal, provider=provider,
             max_steps=max_steps,
         )
@@ -1023,7 +1078,7 @@ async def _learn(
             # double-submit; they cache on the Phase-D confirm check and are approval-gated. The gate
             # keys off `performed_write` (a write fired on the wire), NOT the recipe's `mutating` flags,
             # which miss Enter-submits and formless JS POSTs.
-            if opts.verify_replay and not performed_write:
+            if opts.verify_replay and not performed_write and not posted_any:
                 if await _verify_by_replay(url, opts=opts, hooks=hooks, key=key,
                                            candidate=candidate, cache=cache, scope=scope):
                     cache.put(candidate)
@@ -1295,8 +1350,10 @@ async def _replay(
                         "replay: step %d %r failed (%s) — suffix-replanning the tail",
                         i, step.intent, note,
                     )
+                    #  is the 7th member (D7): a body-cleared read must not
+                    # refuse the repair, but the fact that SOMETHING posted is still recorded.
                     (new_steps, authored_ok, replan_llm, replan_traces, _replan_wrote,
-                     _replan_unattr) = await _author_steps(
+                     _replan_unattr, _replan_posted) = await _author_steps(
                         session,
                         # A suffix-replan has no grounding model, and never had one -- `_replay` does
                         # not receive it. NAMED here, because a bundle makes available what a
@@ -1710,7 +1767,11 @@ async def _maybe_heal(
 
     def _watch(req) -> None:
         try:
-            if is_write_request(req.method, req.url):
+            # D7 CONDITION 4. Without the body check this guard is the one that leaves Odoo
+            # RECOVERY poisoned: a healed read fires a read-POST, this trips, and the heal is
+            # refused persistence -- so demoting only at the promotion site would un-gate the
+            # step and then make it unhealable, which is worse than either alone.
+            if is_write_request(req.method, req.url) and not body_says_read(req.url, req.post_data):
                 wrote["hit"] = True
         except Exception:  # noqa: BLE001
             pass

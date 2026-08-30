@@ -756,3 +756,99 @@ async def test_the_readiness_retry_never_walks_through_a_gate_refusal(shape) -> 
         assert tr.meta.get("readiness_retry") == "refused"
     finally:
         await s.close()
+
+
+# ---------------------------------------------------------------------------------------------------
+# INVIOLABLE #3 over D7's BODY DEMOTION (0.150.0). `body_says_read` lets a POST whose own body names a
+# read operation stop counting as a write, which is what un-gates Odoo's read steps (R4.27/R4.122).
+#
+# THE HAZARD IS NAMED AND IT IS THIS CELL'S SUBJECT. Clearing the request also clears `wrote["hit"]`,
+# and `performed_write` is what SKIPS verify-by-replay. So a server whose read-named call actually
+# writes would be replayed a second time at learn and fire TWICE -- a double-submit created by the
+# demotion, at the exact moment the classification is wrong. It cannot be made conservative by keeping
+# the run flag: `_learn_once` REFUSES a flow whose `performed_write` is set with no gated step, so the
+# two must clear together.
+#
+# `saves == 1` IS THE PREMISE, borrowed from R4.36's harness for the same reason: a cell that merely
+# asserts "a flow was cached" passes while the double-fire it exists to catch happens underneath.
+class _RpcSite:
+    """A JSON-RPC endpoint that COUNTS saves, and whose `search_read` really writes."""
+
+    def __init__(self, page: str) -> None:
+        self.page = page
+        self.saves = 0
+        self.calls: list[str] = []
+
+    def serve(self):
+        site = self
+
+        class _H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a) -> None:
+                pass
+
+            def _send(self, body: str, ctype: str = "text/html") -> None:
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body.encode())))
+                self.end_headers()
+                self.wfile.write(body.encode())
+
+            def do_GET(self) -> None:  # noqa: N802
+                self._send(site.page if self.path.split("?")[0] == "/" else "{}")
+
+            def do_POST(self) -> None:  # noqa: N802
+                raw = self.rfile.read(int(self.headers.get("Content-Length") or 0) or 0)
+                site.calls.append(self.path)
+                # THE TREACHEROUS SERVER: a call named `search_read` that commits. This is the
+                # residual `docs/reads-over-post.md` states at parity -- and the parity claim is what
+                # this cell exists to keep honest.
+                site.saves += 1
+                self._send('{"jsonrpc":"2.0","result":[]}', "application/json")
+
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        return httpd, f"http://127.0.0.1:{httpd.server_port}"
+
+
+async def test_a_body_demoted_call_that_really_writes_is_never_fired_twice(tmp_path: Path) -> None:
+    """INVIOLABLE #3 over the D7 demotion. The click fires ONE `search_read` that the server treats
+    as a commit; `body_says_read` clears it, so verify-by-replay is no longer skipped. The flow may
+    be cached or refused -- that is not this cell's business -- but the server must never see the
+    save twice."""
+    from ultracua.cache import FlowCache
+    from ultracua.flows import FlowSpec, _learn_once
+    from ultracua.providers.scripted import ScriptedProvider
+
+    page = (
+        "<h1>Panel</h1><button type=button id='go'>Continue</button>"
+        "<script>document.getElementById('go').addEventListener('click',function(){"
+        "  fetch('/web/dataset/call_kw/crm.lead/search_read',{method:'POST',"
+        "        headers:{'Content-Type':'application/json'},"
+        "        body:JSON.stringify({jsonrpc:'2.0',method:'call',"
+        "                             params:{model:'crm.lead',method:'search_read',args:[],kwargs:{}}})});"
+        "  document.querySelector('h1').textContent='done';"
+        "});</script>")
+    site = _RpcSite(page)
+    httpd, base = site.serve()
+    cache = FlowCache(root=tmp_path / "c")
+    try:
+        spec = FlowSpec(name="p", goal="work the panel", start_url=f"{base}/", headless=True)
+        res = await _learn_once(
+            spec,
+            provider=ScriptedProvider([
+                {"action": "click", "role": "button", "name": "Continue", "intent": "continue"},
+                {"action": "done", "intent": "done"},
+            ]),
+            router=None, cache=cache, verify_replay=True)
+        print(f"    saves={site.saves}  calls={site.calls}  cached={bool(res.cached)}  "
+              f"performed_write={res.performed_write}")
+        if site.saves == 0:
+            raise RuntimeError(
+                "PREMISE LOST: the click never reached the server, so this cell exercises nothing.")
+        assert site.saves == 1, (
+            f"the server committed {site.saves} times. A body-demoted call that really writes was "
+            f"re-driven -- verify-by-replay is no longer skipped once `performed_write` clears, and "
+            f"that is the double-submit D7's condition 3 names. Inviolable #3.")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

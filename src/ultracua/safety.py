@@ -161,6 +161,94 @@ MARK_OVERGATE = "overgate"        # a blanket precaution (AB-1): nothing attribu
 MARK_CAPTION = "caption"          # a keyword hit on an LLM-written caption — a guess about a guess
 MARK_HUMAN = "human"              # a human's explicit verdict (`flows.mark_step`) — the only NON-inferred source
 MARK_UNKNOWN = "unknown"          # marked before provenance existed: SOMETHING marked it, basis unrecoverable
+# D7: the request BODY named a read operation, so a POST that `is_write_request` would call a write
+# was not counted as one. It is recorded rather than silently dropped -- stripping the evidence is
+# what would make R4.27 invisible again, and this mark is how a demoted step still says WHY.
+MARK_BODY_READ = "body_read"
+
+
+# --------------------------------------------------------------------------- D7: reads over POST
+#
+# `is_write_request` classifies by HTTP METHOD, so an app that serves reads over POST has every read
+# step filed as a write (R4.27). The consequence is not cosmetic: a marked step loses self-heal and
+# suffix-replan, and its mutation gate turns ordinary drift into a hard refusal.
+#
+# THIS IS THE JSON-RPC HALF ONLY, AND THE SCOPE MATTERS. It clears Odoo-style `call_kw` and four
+# named page-load routes. It does NOT touch GraphQL, whose reads and mutations share one endpoint and
+# whose operation lives in a query string this does not parse -- and GraphQL is the population R4.27
+# was originally filed on (12/12). `tests/test_annotation_disposition.py` pins that those controls
+# still cache as write flows, and it must keep passing.
+#
+# THE SHAPE IS AN ALLOWLIST FAILING CLOSED: enumerate the operations known to read, and everything
+# else stays a write. That is why the recorded rejection of a URL denylist does not transfer -- a
+# GraphQL mutation can travel the same URL as a query, but an Odoo `create` cannot travel under the
+# name `search_read`, because the method name IS the operation (`getattr(model, method)`).
+#
+# THE SET IS OBSERVED, NOT DRAFTED (R4.122). Every entry below was seen live on the corpus substrate.
+# Four methods that were also seen live are deliberately ABSENT: `onchange` (the documented
+# write-in-a-read-shaped-call hazard), `check_access_rights`, `render_public_asset` and
+# `systray_get_activities`/`has_group` -- all genuine reads, none of them needed to clear a step, and
+# an allowlist earns entries by necessity rather than by plausibility.
+_CALL_KW = "/web/dataset/call_kw"
+
+READ_RPC_METHODS = frozenset({
+    "search_read", "read", "search", "search_count", "read_group", "name_search", "fields_get",
+    "web_search_read", "web_read", "web_read_group", "load_views", "get_views",
+})
+
+# Route-EXACT, never prefix: a prefix match is how an allowlist becomes a hole.
+READ_ROUTES = frozenset({
+    "/web/webclient/load_menus", "/web/action/load", "/web/webclient/translations",
+})
+
+
+def _path_of(url: str) -> str:
+    p = url.split("?", 1)[0].split("#", 1)[0]
+    if p.startswith("http://") or p.startswith("https://"):
+        rest = p.split("/", 3)
+        p = "/" + rest[3] if len(rest) > 3 else "/"
+    return p
+
+
+def body_says_read(url: str, body: Optional[str]) -> bool:
+    """Did this POST's own body name a READ operation? Fails CLOSED in every ambiguous case.
+
+    Returns True only for: a `call_kw` route whose ORM method -- read from the URL suffix and the
+    JSON-RPC body, which must AGREE when both are present -- is on `READ_RPC_METHODS`; or one of the
+    route-exact page-load reads. Everything else is False: unknown methods, batch arrays, non-`call`
+    envelopes, unparseable or absent bodies, and any suffix/body disagreement.
+
+    THE DISAGREEMENT CASE IS NOT A PUZZLE TO RESOLVE. Two readings that differ mean the operation is
+    ambiguous, and an ambiguous operation is a write.
+
+    MEASURED BEFORE IT WAS WRITTEN (R4.122): per-POST this clears 13 of 22 Odoo requests, but per
+    STEP -- the number that actually decides anything, since a step is demoted only when EVERY
+    request in its act window is -- it clears 2 of 2, because each interaction causes exactly one
+    `web_search_read` and the uncleared remainder is page-load chrome that never lands in an act
+    window. A first draft tested `endswith("/call_kw")` and matched NOTHING; the real route is
+    `/web/dataset/call_kw/<model>/<method>`.
+    """
+    if not body:
+        return False
+    path = _path_of(url)
+    if path in READ_ROUTES:
+        return True
+    if not path.startswith(_CALL_KW):
+        return False
+    try:
+        env = json.loads(body)
+    except Exception:  # noqa: BLE001 - an unreadable body names no operation
+        return False
+    if not isinstance(env, dict) or env.get("method") != "call":
+        return False          # a batch array is a list, and lands here too
+    params = env.get("params")
+    from_body = params.get("method") if isinstance(params, dict) else None
+    tail = path[len(_CALL_KW):].strip("/").split("/")
+    from_url = tail[1] if len(tail) > 1 else None
+    if from_body is not None and from_url is not None and from_body != from_url:
+        return False
+    method = from_body or from_url
+    return method in READ_RPC_METHODS
 
 
 def classify_mutation_with_source(action: str, intent: str = "", name: str = "",
