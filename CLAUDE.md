@@ -1917,6 +1917,51 @@ no LLM, no learn -- and it changes the shape of the answer.
   -- the verify-by-replay re-arm, all 14 `is_write_request` consumers, a provenance mark rather than
   a `MARK_WIRE` strip, no operator door, adjudication -- are what a build slice owes.
 
+## D7 is built, and condition 3's hazard was real (R4.123, 0.150.0)
+
+`safety.body_says_read(url, body)` clears a POST whose own body names a read, so an app serving reads
+over POST stops having every read step filed as a write. An ALLOWLIST FAILING CLOSED: `call_kw` plus
+three route-exact page-load reads, with the ORM method read from the URL suffix AND the body and
+required to AGREE -- unknown methods, batch arrays, non-`call` envelopes, unreadable bodies and any
+disagreement all stay writes.
+
+* **SCOPE FIRST: THIS IS NOT R4.27 FIXED.** It is the JSON-RPC half. GraphQL -- where reads and
+  mutations share one endpoint, and which is R4.27's ORIGINAL 12/12 population -- is untouched, and
+  `test_annotation_disposition.py` still pins those controls caching as write flows.
+* **CONDITION 3 WAS NOT THEORETICAL, AND THE NAIVE BUILD FAILED IT ON THE FIRST RUN.** Clearing a
+  request also clears `wrote["hit"]`, and `performed_write` is what SKIPS verify-by-replay -- so a
+  server whose read-named call really writes gets replayed a second time at learn. Measured:
+  **`saves == 2`**. That is a NEW harm rather than the parity the survey claimed, because today such
+  a server fires once.
+* **THE FIX WAS TO SPLIT AN OVERLOADED FLAG**, which is this repository's most repeated move.
+  `performed_write` was deciding BOTH "refuse a flow that wrote but gated nothing" AND
+  "verify-by-replay may re-drive this". Body evidence must clear the first -- keeping it conservative
+  makes `_learn_once` DELETE every Odoo read flow, so the two cannot simply be kept together -- and
+  must never clear the second. A separate `posted` flag now gates verify-by-replay. `saves == 1`.
+* **CONDITION 4: 10 call sites, counted from source so a new one cannot appear unnoticed** (flow 6,
+  recorder 3, dryrun 1). TWO are reached: the learn watcher and the HEAL watcher. The second is the
+  one the survey named -- without it a demoted step is un-gated and then UNHEALABLE, which is worse
+  than either alone. The other eight carry recorded reasons (no body available, wait-predicate not
+  verdict, a different authoring path, deliberately conservative).
+* **CONDITION 5**: the demotion ADDS `MARK_BODY_READ` and never strips `MARK_WIRE` -- the loop reads
+  `read_post_by_step - wrote_by_step`, so a step that also had a genuine write keeps both.
+* **CONDITION 6**: no operator door. The allowlist is a frozenset and a cell asserts no env var,
+  setting or spec field reaches it.
+* **CONDITION 7 IS PARTIAL.** `drift_bench` invariants ALL HOLD (writes double=0 suppressed=0
+  wrong_target=0, recovery refused 14/14), `gate_probe` and the readiness refutation unchanged. **The
+  3-rep corpus run is NOT done** -- it costs real money, and nothing may be claimed about 2.4b until
+  it is.
+* **AND THE RED-PROOF GATE CAUGHT A REAL HOLE HERE, WHICH IS WORTH THE GENERAL RULE.** CI refused
+  the slice: 38 cells `inconclusive` (they import `body_says_read`, absent on the base, and an
+  ImportError is correctly not a kill) and the write-safety cell `no_guard` -- it PASSES on the base,
+  because without the demotion there is no hazard for it to guard. So **every test in the slice was
+  either unrunnable on the base or indifferent to the change, and nothing proved the FEATURE WORKS**.
+  That is the shape to watch for: a slice whose cells all import the new symbol has pinned the RULE
+  and not the BEHAVIOUR. `tests/test_read_post_not_gated.py` imports only pre-D7 symbols so it runs
+  on the base and FAILS there -- a `call_kw` read learns ungated carrying `body_read`, and its
+  write-shaped twin (`create`, same route, same envelope, one word different) still gates, without
+  which the read assertion is satisfied by a demotion that fired on everything.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
