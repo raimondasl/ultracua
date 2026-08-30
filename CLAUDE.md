@@ -1951,6 +1951,16 @@ disagreement all stay writes.
   wrong_target=0, recovery refused 14/14), `gate_probe` and the readiness refutation unchanged. **The
   3-rep corpus run is NOT done** -- it costs real money, and nothing may be claimed about 2.4b until
   it is.
+* **AND THE RED-PROOF GATE CAUGHT A REAL HOLE HERE, WHICH IS WORTH THE GENERAL RULE.** CI refused
+  the slice: 38 cells `inconclusive` (they import `body_says_read`, absent on the base, and an
+  ImportError is correctly not a kill) and the write-safety cell `no_guard` -- it PASSES on the base,
+  because without the demotion there is no hazard for it to guard. So **every test in the slice was
+  either unrunnable on the base or indifferent to the change, and nothing proved the FEATURE WORKS**.
+  That is the shape to watch for: a slice whose cells all import the new symbol has pinned the RULE
+  and not the BEHAVIOUR. `tests/test_read_post_not_gated.py` imports only pre-D7 symbols so it runs
+  on the base and FAILS there -- a `call_kw` read learns ungated carrying `body_read`, and its
+  write-shaped twin (`create`, same route, same envelope, one word different) still gates, without
+  which the read assertion is satisfied by a demotion that fired on everything.
 
 ## The pattern that predicts the next bug
 
