@@ -69,7 +69,17 @@ def _render(obs: Observation, goal: str, history: list[str]) -> str:
     for e in obs.elements:
         t = f" type={e.type}" if e.type else ""
         v = f' value="{e.value}"' if e.value else ""
-        lines.append(f"  [{e.ref}] {e.role}{t}: {e.name}{v}"[:220])
+        # AN UNNAMED CONTROL USED TO RENDER AS `[e11] button: ` — nothing after the colon (R4.131).
+        # Measured on Odoo's list pages: 19-22% of the interactables, including a toolbar of SEVEN
+        # anonymous buttons, one of which opens the search panel. `hint` is set only when `name` is
+        # empty, so this appends nothing to a named control.
+        #
+        # THE SOURCE IS RENDERED WITH IT — `(tooltip: List)` / `(labelled: Toggle Search Panel)` /
+        # `(icon: cog)` — because they are not equally good evidence, and a hint presented as though
+        # it were the accessible name invites the agent to reason about a glyph as if it were a
+        # label. The parenthesis also keeps it visibly distinct from a real name.
+        h = f" ({e.hint})" if (e.hint and not e.name) else ""
+        lines.append(f"  [{e.ref}] {e.role}{t}: {e.name}{h}{v}"[:220])
     return "\n".join(lines)
 
 

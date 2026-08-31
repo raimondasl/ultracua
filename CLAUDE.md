@@ -2052,6 +2052,46 @@ answer. They compound, and neither is visible from the other.
   prove the runner emits the shape; separate synchronous cells pin the arithmetic over it, and the
   mutations target those. Neither half is sufficient alone.
 
+## Three defects behind one control, and the acceptance test still fails (0.153.0)
+
+Asked to look at R4.102, and the thing I had blamed on it was something else. Each fix revealed the
+next; the task that motivated all three still does not work.
+
+* **R4.130 BLAMED THE WRONG DEFECT, AND ONE MEASUREMENT SETTLED IT.** PR #232 said Odoo's Archived
+  filter was unreachable because the control was below the fold. It is not: the search toggler sits
+  at **y=54 in a 720px viewport**, matches the selector, passes `isVisible`, and arrives in the
+  observation at **rank 11 of 80**. The cap was checked too (67 visible against 80). What it has is
+  **no accessible name** -- one of SEVEN anonymous buttons in that toolbar.
+* **R4.131 (FIXED): 106 of 1036 observed interactables have no name** -- Gitea 0-4%, Odoo 19-22% --
+  and **58 (55%) carry recoverable material**: `data-tooltip` (the whole view switcher), a
+  DESCENDANT's `title` (the toggler's inner `<i title="Toggle Search Panel">`), or an icon class.
+  The other 45% is **15 of 15 row-selection checkboxes**, which legitimately have no label, so every
+  unnamed control that is a real command is reachable. **+75 chars/turn, ~19 tokens, 2.3%.**
+* **IT IS A NEW FIELD BECAUSE `_ACCNAME_JS` IS SHARED, and that is derived rather than preferred.**
+  It feeds `SNAPSHOT_JS`, `DESCRIBE_JS` (the cached locator, replayed through `get_by_role(name=)`)
+  and `SCOPE_JS` (every recipe's scope fingerprint). Widening it would invent names Playwright's
+  accname never computes AND invalidate every cached flow in every deployment. `hint` is
+  observation-only, and `Action` has no `name` field at all, so it can never become a locator.
+  It is also a SIXTH redaction channel -- a `data-tooltip` can read "Copy sk-live-..." exactly as a
+  name can.
+* **AN ICON MODIFIER IS NOT A GLYPH.** `oi oi-fw oi-settings-adjust` first rendered `(icon: fw)` --
+  font-awesome's fixed-width modifier dressed as a label. A hint that is noise is worse than none,
+  because nothing in the rendering distinguishes them. Skip the modifier set.
+* **R4.132 (FIXED): `[role=menuitem]` was admitted and `[role=menuitemcheckbox]` was not.** Odoo's
+  Filters menu is 15 of 25 items in that role, `Archived` among them, so the menu the agent had just
+  been taught to open arrived EMPTY. Eight ARIA roles added; **blast radius measured first at 0
+  elements across all 14 corpus start pages**, because they live inside closed menus. `SCOPE_JS` is
+  deliberately left narrower -- widening the GATE's scope hash is a migration, pinned both ways.
+* **R4.133 (OPEN): with the menu open, the 80-element cap truncates the menu.** 108 candidates, 91
+  visible, cap 80. **Do not reach for a bigger cap** -- that taxes every turn of every page for a
+  case that only arises with a menu open, which is D0's shape wearing a token budget. The asymmetry
+  points at PRIORITY: an open menu is what the user is choosing from.
+* **THE ACCEPTANCE TEST FAILED AND IS REPORTED AS SUCH.** The same goal failed again at 20 actions,
+  the ceiling, `found: False`, ~$0.35. Mechanism evidence -- 58/106 named, 7 mutations killed,
+  `drift_bench` invariants holding -- does not entail the outcome, and this register is full of
+  fixes that moved the mechanism and not the number. **Buy the acceptance run; it is the only thing
+  that tells you which of these you have actually fixed.**
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

@@ -96,6 +96,19 @@ SNAPSHOT_JS = r"""
     'a[href]', 'button', 'input', 'select', 'textarea',
     '[role=button]', '[role=link]', '[role=tab]', '[role=menuitem]',
     '[role=checkbox]', '[role=radio]', '[role=combobox]', '[role=switch]',
+    // THE SIBLING ROLES `[role=menuitem]` HAD AND THESE DID NOT (R4.132). Odoo's Filters menu
+    // renders every option as `<span role="menuitemcheckbox">` -- 15 of its 25 items, including
+    // `Archived` -- so a menu the agent had just been taught to OPEN (R4.131 named its toggler)
+    // arrived with its contents invisible. Measured: after the click, 76 visible candidates against
+    // a cap of 80, and ZERO elements whose text says Archived. Not the fold, not the cap: the
+    // selector simply did not admit the role.
+    //
+    // BLAST RADIUS ON CACHED RECIPES, MEASURED BEFORE ADDING THEM: these roles add **0** elements
+    // across all 14 corpus start pages, because they live inside menus that are closed until
+    // something opens them. New candidates would otherwise enter `sorted([role, name, tag])` and
+    // shift that page's fingerprint.
+    '[role=menuitemcheckbox]', '[role=menuitemradio]', '[role=option]', '[role=treeitem]',
+    '[role=slider]', '[role=spinbutton]', '[role=textbox]', '[role=searchbox]',
     '[contenteditable=""]', '[contenteditable="true"]', '[onclick]',
   ].join(',');
 
@@ -105,6 +118,48 @@ SNAPSHOT_JS = r"""
   // DOM-last. (Capping at MAX *before* the sort let a DOM-early/visually-low element evict a
   // DOM-late/visually-top one, and a full pass-1 dropped every cursor:pointer leaf regardless of
   // where it sat.) The 3×MAX ceiling bounds work on huge DOMs. `seen` dedups across the two passes.
+  // WHAT AN UNNAMED CONTROL PROBABLY IS. Deliberately NOT part of `nameOf`: that helper is SHARED
+  // with DESCRIBE_JS (the cached locator, replayed through get_by_role) and SCOPE_JS (every recipe's
+  // scope fingerprint), so widening it would invent names Playwright's accname never computes --
+  // breaking replay binds -- and would change the fingerprint of every cached flow in every
+  // deployment. This is observation-only, and it is computed ONLY when the accessible name is empty,
+  // so a named control costs nothing.
+  //
+  // THE SOURCE TRAVELS WITH THE VALUE. A tooltip is a real label; an icon glyph is a guess. Handing
+  // the agent 'cog' and 'List' as though they were equally good evidence is the overloaded-sensor
+  // shape this register keeps re-filing, so the caller renders `(tooltip: List)` vs `(icon: cog)`.
+  const hintOf = (el) => {
+    const hnorm = (v) => (v || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+    const tip = hnorm(el.getAttribute('data-tooltip') || el.getAttribute('data-original-title'));
+    if (tip) return 'tooltip: ' + tip;
+    // A DESCENDANT's title/aria-label. Real AccName stops at the element for `title`, which is why
+    // `nameOf` does too and must keep doing so -- but an icon-only button routinely puts its label on
+    // the inner <i>, and that is exactly Odoo's search toggler: <i title="Toggle Search Panel">.
+    for (const c of el.querySelectorAll('*')) {
+      const t = hnorm(c.getAttribute('title') || c.getAttribute('aria-label'));
+      if (t) return 'labelled: ' + t;
+    }
+    // LAST RESORT: the icon glyph. `fa-cog` is not a label, but it is not nothing either.
+    //
+    // SKIP THE MODIFIERS, and this was measured rather than anticipated: the optional-columns
+    // toggle carries `oi oi-fw oi-...`, where `fw` is font-awesome's FIXED-WIDTH modifier. Taking
+    // the first match rendered `(icon: fw)` -- noise presented in the same shape as `(icon: cog)`,
+    // which is worse than no hint at all because the agent has no way to tell them apart and may
+    // reason about it. Scan every class and take the first that names a glyph.
+    const MODIFIER = new Set(['fw', 'lg', 'sm', 'xs', 'md', 'spin', 'pulse', 'border', 'small',
+                              'large', 'fixed-width', 'inverse', 'stack', 'li', 'rotate-90',
+                              'rotate-180', 'rotate-270', 'flip-horizontal', 'flip-vertical',
+                              '2x', '3x', '4x', '5x']);
+    for (const c of el.querySelectorAll('i, svg, span')) {
+      const raw = (c.className && c.className.baseVal !== undefined
+                   ? c.className.baseVal : c.className) || '';
+      for (const m of String(raw).matchAll(/(?:^|\s)(?:fa|oi|bi|icon|glyphicon)-([a-z0-9-]{2,28})/g)) {
+        if (!MODIFIER.has(m[1])) return 'icon: ' + m[1];
+      }
+    }
+    return null;
+  };
+
   const CEILING = MAX * 3;
   const seen = new Set();
   const cands = [];
@@ -113,6 +168,9 @@ SNAPSHOT_JS = r"""
     seen.add(el);
     const r = el.getBoundingClientRect();
     cands.push({ el, role, name, tag: el.tagName.toLowerCase(),
+                 // Only for the unnamed: a named control already tells the agent what it is, and
+                 // every hint costs prompt tokens on every turn.
+                 hint: name ? null : hintOf(el),
                  type: el.getAttribute('type'),
                  // A password field's value is MASKED, never sent. It is a placeholder rather than null
                  // on purpose: the agent's "have I already filled this?" reasoning depends on seeing that
@@ -167,7 +225,8 @@ SNAPSHOT_JS = r"""
   for (const c of kept) {
     const ref = 'e' + (i++);
     c.el.setAttribute('data-ultracua-ref', ref);
-    out.push({ ref, role: c.role, name: c.name, tag: c.tag, type: c.type, value: c.value, bbox: c.bbox });
+    out.push({ ref, role: c.role, name: c.name, tag: c.tag, type: c.type, value: c.value,
+               hint: c.hint, bbox: c.bbox });
   }
 
   const pageText = (document.body && document.body.innerText ? document.body.innerText : '')
@@ -329,6 +388,12 @@ async def capture(page, max_elements: int, redact: tuple = ()) -> Observation:
         terms = redact_terms(redact)
         for e in elements:
             for term in terms:
+                # `hint` is page-derived and RENDERED IN THE PROMPT, so it carries the same exposure
+                # as `name`: a `data-tooltip` or an inner `title` can hold the secret exactly as an
+                # accessible name can. Adding a rendered field without adding it here is how R9
+                # shipped scrubbing 2 of 5 Observation fields and had to be reopened.
+                if e.hint:
+                    e.hint = e.hint.replace(term, REDACTED)
                 if e.value:
                     e.value = e.value.replace(term, REDACTED)
                 if e.name:
