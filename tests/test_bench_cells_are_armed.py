@@ -1102,3 +1102,75 @@ def test_the_baseline_notices_n_becoming_the_corpus_size(monkeypatch) -> None:
     _arming.mutate_function(monkeypatch, CA, "as_baseline",
                             '"n": len(observations)', '"n": len(names)')
     print(assert_red(TCA.test_the_baseline_counts_every_observation_not_the_corpus_size))
+
+
+def test_the_print_guard_notices_the_empty_render_it_was_written_for(monkeypatch) -> None:
+    """R4.126, the defect itself: `reason or detail or ""`, which is what the printer really did.
+
+    The two channels `--baseline` turns on carry neither key, so this mutation restores the measured
+    behaviour exactly -- a `[FAIL] cost cost_usd:` that names no number.
+    """
+    import tests.test_gate_findings_print as TGF
+    from benchmarks import corpus_run as CR
+
+    _arming.mutate_function(
+        monkeypatch, CR, "finding_detail",
+        '    prose = f.get("reason") or f.get("detail")',
+        '    return str(f.get("reason") or f.get("detail") or "")\n'
+        '    prose = f.get("reason") or f.get("detail")')
+    print(assert_red(TGF.test_a_finding_with_nothing_on_it_still_renders))
+
+
+def test_the_print_guard_notices_a_constant_standing_in_for_the_numbers(monkeypatch) -> None:
+    """THE OTHER DIRECTION, and the reason the numbers cell exists beside the non-empty one.
+
+    A renderer that returns a fixed string is never empty, so it satisfies the non-empty property
+    completely while telling an operator nothing. Only the cell that asserts the VALUES reach the
+    line can see it -- the same split as "a rate is not the same question as a verdict".
+    """
+    import tests.test_gate_findings_print as TGF
+    from benchmarks import corpus_run as CR
+
+    _arming.mutate_function(
+        monkeypatch, CR, "finding_detail",
+        '    prose = f.get("reason") or f.get("detail")',
+        '    return "a gate finding"\n'
+        '    prose = f.get("reason") or f.get("detail")')
+    print(assert_red(TGF.test_the_cost_and_rate_findings_carry_their_numbers))
+
+
+def test_the_print_guard_notices_None_formatted_as_a_bare_value(monkeypatch) -> None:
+    """1.3's crash, one function over. `_num` exists so an unknown renders as a word; dropping it
+    puts `current=None` on the line, which reads as a measured None rather than an absent number."""
+    import tests.test_gate_findings_print as TGF
+    from benchmarks import corpus_run as CR
+
+    _arming.mutate_function(monkeypatch, CR, "_num",
+                            '    if v is None:\n        return "unknown"',
+                            '    if v is None:\n        return str(v)')
+    print(assert_red(TGF.test_none_is_rendered_as_unknown_not_crashed))
+
+
+def test_the_navstep_census_notices_a_stuck_post_being_ignored(monkeypatch) -> None:
+    """`would_demote` is the arithmetic behind the 0/7. One un-cleared POST re-marks the whole step,
+    which is `_author_steps`' actual rule -- reading it as "any post cleared" would have reported
+    Odoo's navigate windows as 7/7 demoted and hidden the gap this slice exists to file."""
+    import tests.test_read_post_census as TRPC
+    from benchmarks import read_post_census as RPC
+
+    _arming.mutate_function(monkeypatch, RPC, "would_demote",
+                            '"demoted": bool(writes) and not stuck}',
+                            '"demoted": bool(writes) and len(cleared) > 0}')
+    print(assert_red(TRPC.test_one_uncleared_post_re_marks_the_whole_step))
+
+
+def test_the_navstep_census_notices_a_windowless_step_counted_as_demoted(monkeypatch) -> None:
+    """A step with NO posts was never marked, so calling it demoted inflates the rate with steps the
+    fix never touched -- and on a server-rendered substrate that is every step."""
+    import tests.test_read_post_census as TRPC
+    from benchmarks import read_post_census as RPC
+
+    _arming.mutate_function(monkeypatch, RPC, "would_demote",
+                            '"demoted": bool(writes) and not stuck}',
+                            '"demoted": not stuck}')
+    print(assert_red(TRPC.test_a_step_that_made_no_posts_is_not_a_demotion))
