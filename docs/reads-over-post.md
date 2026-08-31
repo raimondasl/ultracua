@@ -275,7 +275,8 @@ unmarked. Roughly a third of Odoo's non-passing rows never produce a recipe at a
 | | cleared |
 |---|---|
 | per POST, Odoo read page loads | **13 / 22 (59%)** |
-| **per STEP** — only what an interaction caused | **2 / 2 (100%)** |
+| **per STEP** — only what a CLICK caused | **2 / 2 (100%)** |
+| **per STEP** — a NAVIGATE's window (R4.127, measured after the fix shipped) | **0 / 7 (0%)** |
 
 Per-step is the question. `_author_steps` marks a step when a write-classified request fires inside
 its ACT WINDOW, so a step is demoted only when EVERY post in that window is — one un-cleared
@@ -284,8 +285,19 @@ the interaction caused: each sort click produces exactly ONE POST,
 `web_search_read` on `/web/dataset/call_kw/crm.lead/web_search_read`.
 
 The residual nine are page-load chrome. Odoo's `/mail/*` bus routes carry no ORM method at all, so a
-body classifier structurally cannot clear them — and they were measured NOT to land in act windows,
-which is exactly why the per-POST figure understates the fix.
+body classifier structurally cannot clear them.
+
+**AND THEY LAND IN A NAVIGATE'S ACT WINDOW, WHICH THIS SECTION ORIGINALLY SAID THEY DID NOT.** The
+2/2 above was measured by loading, waiting 6 s for the page-load chrome to finish, and only then
+recording what a CLICK caused — right for that question, and it excludes exactly the traffic that
+decides a `navigate` step, whose act window *is* the page load. Measured after D7 shipped
+(`read_post_census --navstep`): **0 of 7** Odoo scenarios demote their navigate step, each blocked by
+four un-clearable POSTs — the two `/mail/*` routes plus `call_kw` calls to `systray_get_activities`
+and `has_group`, genuine reads deliberately off the allowlist. R4.117's blocking step is a navigate,
+so D7 does not reach it.
+
+It is latent rather than blocking, and only by luck: R4.118's settle fix stopped learns caching
+navigate steps at all, so no post-settle Odoo recipe contains one. See **R4.127**.
 
 **Gitea makes ZERO POSTs** on every corpus read page: a server-rendered substrate is untouched by
 construction.

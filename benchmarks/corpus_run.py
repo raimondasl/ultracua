@@ -90,6 +90,54 @@ async def run_corpus(substrate: str, *, reset: bool = True, headless: bool = Tru
     return scored, rows
 
 
+# The keys that say WHICH finding this is rather than WHAT it found. Everything else is evidence and
+# gets rendered, so a channel added tomorrow explains itself without touching this function.
+_FINDING_STRUCTURE = frozenset({"channel", "scenario", "metric", "regressed", "acknowledged"})
+
+
+def _num(v: object) -> str:
+    """Render a value that may be None. A formatter that cannot render an unknown WILL meet one --
+    1.3 shipped `f"{None:.4g}"` inside the function that decides the exit code, and a correctly
+    computed regression died before it could print."""
+    if v is None:
+        return "unknown"
+    if isinstance(v, bool):
+        return str(v)
+    if isinstance(v, (int, float)):
+        return f"{v:.4g}"
+    return str(v)
+
+
+def finding_detail(f: dict) -> str:
+    """WHAT THE GATE ACTUALLY FOUND, in one line that is never empty.
+
+    THE DEFECT THIS FIXES. The printer read `reason or detail or ""`, and the two channels that
+    `--baseline` exists to turn on -- cost and rate -- carry NEITHER. They carry `baseline`,
+    `current`, `tolerance`, `baseline_wilson_lo`, `baseline_n`: all computed, all in the record, and
+    none of them reached the screen. Measured on the 0.150.0 three-rep run, where a passing note
+    printed as `[note] cost cost_usd:` and stopped. The FAIL direction is the same code path, so a
+    real cost regression would have printed `[FAIL] cost cost_usd:` and named no number.
+
+    That is 1.3's finding one function over -- there the formatter CRASHED on a correct verdict; here
+    it prints a blank, which is worse in one specific way: a crash gets investigated and a blank
+    looks like it worked.
+
+    FIXED AT THE PRINTER, NOT AT THE APPEND SITES. Adding a `detail` string to each `out.append` in
+    `outcomes.py` is the per-branch shape this register keeps re-filing: it is correct for the
+    channels that exist and silent for the next one. Rendering whatever a finding carries is the
+    invariant enforced ONCE, and `test_no_gate_finding_prints_empty` is what holds it.
+    """
+    prose = f.get("reason") or f.get("detail")
+    if prose:
+        return str(prose)
+    evidence = [f"{k}={_num(v)}" for k, v in sorted(f.items()) if k not in _FINDING_STRUCTURE]
+    if evidence:
+        return ", ".join(evidence)
+    # A finding with no prose AND no evidence says only that a channel fired. That is not a
+    # renderable fact, so say exactly that rather than printing nothing at all.
+    return f"(no detail recorded on this {f.get('channel', 'gate')} finding)"
+
+
 def _print_report(rec: dict, verdict: dict) -> None:
     print()
     print("=" * 78)
@@ -113,7 +161,7 @@ def _print_report(rec: dict, verdict: dict) -> None:
     for f in verdict["findings"]:
         mark = "FAIL" if f.get("regressed") else ("ack " if f.get("acknowledged") else "note")
         print(f"  [{mark}] {f['channel']:11} {f.get('scenario', f.get('metric', ''))}: "
-              f"{str(f.get('reason') or f.get('detail') or '')[:96]}")
+              f"{finding_detail(f)[:110]}")
     print(f"\n  GATE: {'PASS' if verdict['ok'] else 'FAIL'}")
     print("=" * 78)
 

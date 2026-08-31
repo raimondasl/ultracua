@@ -1962,6 +1962,44 @@ disagreement all stay writes.
   write-shaped twin (`create`, same route, same envelope, one word different) still gates, without
   which the read assertion is satisfied by a demotion that fired on everything.
 
+## D7 adjudicated: the reads moved, the writes did not, and that is the design (0.151.0)
+
+Condition 7's three-rep run, both substrates, **$3.11**. It discharges the condition and it does
+NOT unblock 2.4b.
+
+* **THE SPLIT IS THE RESULT, not the rate.** Odoo reads **0.200 -> 0.733** because D7 demotes them
+  and they never reach the mutation gate; writes **0.000 -> 0.000** because `odoo-create-lead`
+  issues a real `create`, `body_says_read` refuses to clear it, and the gate then refuses on
+  R4.111's `unique=True` bind failure -- *mutation gate: target missing/ambiguous*, its own branch,
+  not page drift. Gitea makes zero POSTs on corpus read pages, so D7 cannot touch it, and the
+  baseline gate confirms that three times. A fix that had moved the write column would have been
+  the alarming outcome.
+* **`varies` 5 -> 0 MATTERS MORE THAN 0.181 -> 0.524.** At 0.133.0 five Odoo rows failed for a
+  DIFFERENT reason each pass, so the column was unreadable whatever its mean. Six of seven now give
+  an identical verdict every pass. And the declared control group `odoo-menu-nav` passes 3/3 where
+  it failed before -- by the corpus's own rule, that is what makes any other Odoo number readable.
+* **GITEA TIGHTENED AND I AM NOT CLAIMING CREDIT.** 0.762+/-0.082 -> 0.857+/-0.000, and the
+  previously-unstable `gitea-sort-list` went 1/3 -> 3/3. Fisher on 1/3 vs 3/3 is p ~ 0.4, and the
+  substrate is 7/7 complete at `domcontentloaded` so the settle should be near-inert. The claim is
+  **no regression**, which is what the baseline gate actually tested.
+* **D7 DEMOTES NO NAVIGATE STEP -- 0 of 7 (R4.127), AND R4.122's 2/2 IS WHY THAT WAS INVISIBLE.**
+  That census measured CLICK windows after a deliberate 6 s wait for the page-load chrome; a
+  `navigate` step's act window IS the page load, so the wait excluded exactly the traffic that
+  decides it -- and R4.122's own docstring names the risk. Two mail-bus routes carry no ORM method
+  and cannot be cleared by a body classifier at all. **Latent only by luck**: R4.118's settle
+  stopped learns caching navigate steps, so the three post-settle recipes carry none. Shipped with
+  its instrument (`--navstep`); the pure half is pinned offline.
+* **A LOUD CHANNEL PRINTED ITS NAME AND NOTHING ELSE (R4.126).** `[note] cost cost_usd:` on every
+  pass -- and the FAIL direction is the same line, so a real cost regression names no number. That
+  is 1.3 one function over, where the formatter CRASHED instead; a blank is worse in one way,
+  because a crash gets investigated. Fixed at the PRINTER rather than by adding a `detail` string
+  to each append site, which is correct for today's channels and silent for the next one.
+* **WHAT STILL BLOCKS 2.4b, none of it D7's**: writes at 0.000 would enshrine R4.111 as the
+  expected state; `odoo-open-record` flips 2/3; and `odoo-search` is 0/3 `not_authored` while
+  returning the CORRECT answer with its oracle satisfied -- 2 actions, 0 steps cached. That reads
+  as both actions failing with the extractor answering off the page anyway, but it is a reading of
+  the code, not an instrumented run, and it is NOT `no_actions_needed` (which needs zero actions).
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

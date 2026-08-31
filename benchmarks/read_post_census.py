@@ -42,7 +42,8 @@ from benchmarks import corpus                                          # noqa: E
 from benchmarks import substrates as S                                 # noqa: E402
 from benchmarks.scored_run import LOGIN, PASS_ENV, USER_ENV, spec_for  # noqa: E402
 from ultracua.flows import refresh_auth                                # noqa: E402
-from ultracua.safety import is_write_request                           # noqa: E402
+from ultracua.config import settings                                   # noqa: E402
+from ultracua.safety import body_says_read, is_write_request           # noqa: E402
 
 WORK = Path("D:/ultracua-data/postcensus")
 
@@ -356,20 +357,111 @@ async def step() -> dict:
     return {"windows": len(windows), "all_clear": all_clear}
 
 
+def would_demote(posts: "list") -> dict:
+    """THE DEMOTION QUESTION, as `flow._author_steps` asks it: does EVERY write-classified POST in
+    this window clear? One un-cleared post re-marks the whole step.
+
+    Pure, so the arithmetic can be tested with no browser and no substrate. `body_says_read` is the
+    REAL one -- the question is what SHIPPED does, not what a local draft would do.
+    """
+    writes = [r for r in posts if is_write_request(r["method"], r["url"])]
+    cleared = [r for r in writes if body_says_read(r["url"], r.get("body"))]
+    stuck = [r for r in writes if not body_says_read(r["url"], r.get("body"))]
+    return {"posts": len(posts), "writes": len(writes), "cleared": len(cleared),
+            "stuck": [r["url"] for r in stuck],
+            # NO POSTS AT ALL IS NOT A DEMOTION. Such a step was never marked, so reporting it as
+            # demoted would inflate the rate with steps the fix never touched -- and on a
+            # server-rendered substrate that is every step.
+            "demoted": bool(writes) and not stuck}
+
+
+async def navstep() -> dict:
+    """THE OTHER HALF OF `--step`, AND IT ANSWERS THE OPPOSITE WAY.
+
+    `step()` above measures CLICK act windows, and does so after a deliberate 6 s wait so the
+    load-time chrome is finished before recording starts. That is the right shape for its question
+    and it reported 2/2 demoted. But a `navigate` step's act window IS the page load, so the very
+    traffic that wait excludes is the traffic that decides it -- and this function's own sibling
+    docstring names the risk: "the whole fix turns on whether they land in act windows".
+
+    R4.117 measured Odoo's blocking step as step 0, a NAVIGATE, refused by the gate. So this is the
+    window that matters and it was never measured. Costs nothing: no LLM, no learn.
+    """
+    sub = S.Odoo()
+    sub.await_ready()
+    WORK.mkdir(parents=True, exist_ok=True)
+    cfg = LOGIN["odoo"]
+    os.environ[USER_ENV], os.environ[PASS_ENV] = cfg["user"], cfg["password"]
+    storage = str(WORK / "auth-odoo.json")
+    entries = list(corpus.for_substrate("odoo"))
+    await refresh_auth(spec_for(entries[0], sub.url, storage), headless=True)
+
+    from playwright.async_api import async_playwright
+    rows: list = []
+    print()
+    print("=" * 96)
+    print(f"  NAVIGATE act windows (grace = write_window_ms = {settings.write_window_ms} ms)")
+    print()
+    async with async_playwright() as p:
+        br = await p.chromium.launch(headless=True)
+        for entry in entries:
+            name = entry.scenario.name
+            url = spec_for(entry, sub.url, storage).start_url
+            ctx = await br.new_context(storage_state=storage,
+                                       viewport={"width": 1280, "height": 720})
+            page = await ctx.new_page()
+            rec: list = []
+            page.on("request", lambda r: rec.append(
+                {"url": r.url, "method": r.method, "body": r.post_data})
+                if r.method.upper() == "POST" else None)
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            except Exception as exc:                                   # noqa: BLE001
+                print(f"  {name:24} goto failed: {type(exc).__name__}: {exc}")
+                await ctx.close()
+                continue
+            # THE ACT WINDOW, and nothing is excluded from it -- that exclusion is the whole point.
+            await page.wait_for_timeout(settings.write_window_ms)
+            v = would_demote(rec)
+            v["scenario"] = name
+            rows.append(v)
+            print(f"  {name:24} writes={v['writes']:3} cleared={v['cleared']:3} "
+                  f"stuck={len(v['stuck']):3}  demoted={v['demoted']}")
+            for u in v["stuck"][:4]:
+                print(f"  {'':24}   stuck: {u.split(sub.url)[-1][:62]}")
+            await ctx.close()
+        await br.close()
+
+    dem = [r for r in rows if r["demoted"]]
+    print()
+    print("=" * 96)
+    print(f"  {len(dem)}/{len(rows)} NAVIGATE steps would be demoted "
+          f"(`--step` measured 2/2 for CLICK steps).")
+    if rows and not dem:
+        print("  *** D7 DEMOTES NO NAVIGATE STEP. The blocking step R4.117 measured is a navigate,")
+        print("      so the fix does not reach it. Latent only while learns cache no navigate step.")
+    (WORK / "odoo-navsteps.json").write_text(json.dumps(rows, indent=1), encoding="utf-8")
+    return {"rows": len(rows), "demoted": len(dem)}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--reads", action="store_true", help="census read-only page loads (both substrates)")
     ap.add_argument("--write", action="store_true", help="the negative control (MUTATES odoo, then resets)")
     ap.add_argument("--step", action="store_true", help="per-STEP clearance: only what an action caused")
+    ap.add_argument("--navstep", action="store_true",
+                    help="per-NAVIGATE-step clearance: the page-load window `--step` excludes")
     a = ap.parse_args(argv)
-    if not (a.reads or a.write or a.step):
-        ap.error("pick --reads, --write and/or --step")
+    if not (a.reads or a.write or a.step or a.navstep):
+        ap.error("pick --reads, --write, --step and/or --navstep")
     if a.reads:
         asyncio.run(reads())
     if a.write:
         asyncio.run(write())
     if a.step:
         asyncio.run(step())
+    if a.navstep:
+        asyncio.run(navstep())
     return 0
 
 
