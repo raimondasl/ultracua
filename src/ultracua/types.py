@@ -33,6 +33,24 @@ class Element(BaseModel):
     #                              secret passed as `capture(redact=...)` is replaced with [REDACTED] —
     #                              so "already typed" still reads true without shipping the value.
     bbox: Optional[list[float]] = None  # [x, y, w, h] in CSS px
+    hint: Optional[str] = None  # WHAT AN UNNAMED CONTROL PROBABLY IS — never its accessible name.
+    #                             Set only when `name` is empty. Measured (R4.131): 19-22% of the
+    #                             interactables on an Odoo list page have no accessible name, and the
+    #                             agent sees `button: ` with nothing after the colon — seven identical
+    #                             anonymous buttons in one toolbar, one of which opens the search
+    #                             panel. Sourced from `data-tooltip`, then a descendant's
+    #                             `title`/`aria-label`, then an icon class, and RENDERED WITH ITS
+    #                             SOURCE so the agent can weigh it.
+    #
+    #                             DELIBERATELY NOT PART OF `name`, and that is the whole design.
+    #                             `_ACCNAME_JS` is shared by `SNAPSHOT_JS`, `DESCRIBE_JS` (the cached
+    #                             locator, which replays through `get_by_role(name=...)`) and
+    #                             `SCOPE_JS` (every recipe's scope fingerprint). Widening it would
+    #                             invent names Playwright's accname never computes — breaking replay
+    #                             binds — and would change the fingerprint of every cached flow in
+    #                             every deployment. This field is observation-only: it is not in the
+    #                             fingerprint basis (`role/name/tag + url`) and `Action` has no `name`
+    #                             field at all, so it can never become a locator.
 
 
 class Observation(BaseModel):
