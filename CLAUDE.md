@@ -2000,6 +2000,58 @@ NOT unblock 2.4b.
   as both actions failing with the extractor answering off the page anyway, but it is a reading of
   the code, not an instrumented run, and it is NOT `no_actions_needed` (which needs zero actions).
 
+## A zero-action task could not be named, and the scenario that needed the name measured nothing (0.152.0)
+
+Two defects, found by asking why `odoo-search` scored `not_authored` while returning the correct
+answer. They compound, and neither is visible from the other.
+
+* **`no_actions_needed` HAS BEEN UNMINTABLE SINCE 0.131.0 (R4.129).** The clause needs
+  `actions_taken == 0`; `scored_run` set that to `len(report.traces)`; and `_author_steps` records a
+  nav trace at `index=-1` BEFORE the loop and appends another for the terminal `done`. **The floor
+  is 2.** So R4.103's fix disarmed the mechanism R4.101's fix had just created, four slices apart,
+  and every zero-action task published as *the product was asked to author this flow and did not*.
+* **ELEVEN CELLS WERE GREEN OVER A VALUE THE RUNNER CANNOT PRODUCE.** They all build
+  `_Record(..., actions_taken=0, ...)` by hand -- pinning the clause faithfully and saying nothing
+  about whether anything can supply its input. The fix's cells drive the real `_learn_once` and then
+  classify the result, which is the join the existing file never makes. **When a clause keys on a
+  number, one cell has to get that number from the thing that computes it.**
+* **THE COUNT EXCLUDES TWO THINGS AND MUST NOT EXCLUDE A THIRD.** The navigation (`index < 0`) and a
+  decision to STOP (`meta["stop"]`). A FAILED action still counts -- the agent acted, and it not
+  working is a different fact; folding it in recreates R4.103 one predicate over. Both directions
+  are armed. The census over the 0.151.0 run confirms the model on both substrates: every healthy
+  row satisfies `actions = steps + 2`.
+* **`odoo-search` MEASURES NO SEARCH, AND THE REPAIR IS BLOCKED BY R4.102 -- FOUND BY BUILDING IT
+  (R4.130, OPEN).** All 17 ACTIVE opportunities render on the landing page and the extractor gets
+  the whole body, so the answer needs no action: measured 3/3 at zero actions. R4.129 fixes the
+  LABEL; the scenario is a separate thing and is NOT fixed. **Every candidate answer was measured
+  and fails** -- a form field is an `<input>` and INVISIBLE to `inner_text` (the record page is 453
+  chars, all labels), the archived row's email is shared with FOUR active rows, its revenue renders
+  `$ 7,500.00` against the corpus's own >= 1000 rule, its salesperson and stage are on the landing
+  page. That left the archived row's NAME, spelled `Furnish a 60m² office`, where `60m2` scores
+  False and mints `wrong_data` against a correct answer.
+* **SO THE SEED-RENAME REPAIR WAS BUILT, RE-SEEDED, AND REFUTED BY ITS OWN SCORED RUN.** Every
+  premise passed -- three offline, three live (answer absent from the landing page, present under
+  the Archived filter, restored by `reset()`). Then the run: **20 actions, ceiling hit,
+  `found: False`, $0.3386.** The reason was free to see and is not reasoning: the agent's
+  observation of that page is **80 elements, entirely row content**, with ONE search control and
+  **no Filters control, no dropdown toggler, no Archived option at all**. The repair asked for a
+  control the agent cannot see. Reverted rather than shipped -- it would have cost $0.34 a run to
+  re-measure R4.102. **The general statement: while the extractor gets the whole body and an Odoo
+  list renders every row, NO action-requiring read scenario is constructible on that view.** Fixing
+  R4.102 is the prerequisite, not a better scenario. And the premise checks were all green while
+  the scenario was unusable -- premises bound the TASK, not the agent's ability to see it.
+* **THE DIRECT-IMPORT TRAP IS NOW A GUARD, after catching a third and fourth slice.**
+  `from benchmarks.X import fn` binds the function OBJECT, so `_arming.mutate_function` -- which
+  replaces the module ATTRIBUTE -- never reaches the cell: the mutation SURVIVES and the arming cell
+  reports the guard as unarmed while the guard is fine. It caught me TWICE in this slice alone.
+  `test_no_test_direct_imports_a_function_an_arming_mutation_targets` derives the targets from the
+  arming file's own AST and refuses the form, and **found three more on its first run**, two of them
+  pre-existing. Import the MODULE and call through it.
+* **AND `assert_red` CANNOT ARM AN `async` CELL.** It calls the guard synchronously, so an async
+  guard hands back a coroutine, nothing raises, and it reports a FALSE SURVIVOR. The browser cells
+  prove the runner emits the shape; separate synchronous cells pin the arithmetic over it, and the
+  mutations target those. Neither half is sufficient alone.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

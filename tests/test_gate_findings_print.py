@@ -23,7 +23,7 @@ from __future__ import annotations
 import pytest
 
 from benchmarks import corpus_run
-from benchmarks.outcomes import gate_bench_record
+from benchmarks import outcomes as O
 
 
 def _rec(**over) -> dict:
@@ -57,7 +57,7 @@ def _rec(**over) -> dict:
 
 
 def _findings(record, baseline=None, **kw):
-    return gate_bench_record(record, baseline=baseline, **kw)["findings"]
+    return O.gate_bench_record(record, baseline=baseline, **kw)["findings"]
 
 
 # Each row lights a different channel. The POINT is that the assertion below never names a channel:

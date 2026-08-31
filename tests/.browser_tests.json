@@ -1,7 +1,14 @@
 {
  "_comment": "DERIVED, never hand-edited. A test is a browser test iff it was OBSERVED launching one, OR the fast tier later caught it launching (attribution is order-dependent when a module shares browser work through a fixture). Regenerate with `pytest -q --store-browser-marks` then `python scripts/derive_test_tiers.py`, which iterates to the fixed point. An unclassified test makes a tiered run fail loudly rather than skip it.",
- "total": 2314,
+ "total": 2329,
  "browser": [
+  "tests/test_actions_taken.py::test_a_decision_to_stop_is_not_an_action",
+  "tests/test_actions_taken.py::test_a_real_zero_action_learn_now_mints_no_actions_needed",
+  "tests/test_actions_taken.py::test_a_task_needing_no_action_reports_zero",
+  "tests/test_actions_taken.py::test_the_count_is_the_agents_own_actions[script0-0]",
+  "tests/test_actions_taken.py::test_the_count_is_the_agents_own_actions[script1-1]",
+  "tests/test_actions_taken.py::test_the_count_is_the_agents_own_actions[script2-2]",
+  "tests/test_actions_taken.py::test_the_navigation_is_not_an_action_the_agent_chose",
   "tests/test_annotation_disposition.py::test_the_r427_population_arrives_non_demotable_so_the_verb_cannot_dispose_of_it",
   "tests/test_audit.py::test_advisory_mode_reports_but_never_quarantines",
   "tests/test_audit.py::test_audit_quarantine_refuses_future_runs_and_release_clears",
@@ -528,6 +535,10 @@
   "tests/test_wrongness_fixes.py::test_the_right_row_still_binds_when_it_is_present"
  ],
  "fast": [
+  "tests/test_actions_taken.py::test_a_failed_action_still_counts_as_an_action",
+  "tests/test_actions_taken.py::test_a_nav_and_a_done_is_zero_actions",
+  "tests/test_actions_taken.py::test_no_traces_at_all_is_zero_not_a_crash",
+  "tests/test_actions_taken.py::test_one_action_between_them_is_one",
   "tests/test_audit.py::test_absence_from_the_lossy_excerpt_never_anchors_a_quarantine[{\"in_stock\": true}-In stock: yes]",
   "tests/test_audit.py::test_absence_from_the_lossy_excerpt_never_anchors_a_quarantine[{\"order_id\": \"[REDACTED]\"}-Order 1234567890123 done]",
   "tests/test_audit.py::test_absence_from_the_lossy_excerpt_never_anchors_a_quarantine[{\"price\": 1234.5}-Total $1,234.50]",
@@ -603,7 +614,11 @@
   "tests/test_batch_row_evidence_golden.py::test_the_write_evidence_decision_table[the exception armed it-None-failed-outcome1-False-True]",
   "tests/test_batch_row_evidence_golden.py::test_the_write_evidence_decision_table[unknown, nothing ran-committed=None,attempts=0-failed-None-False-False]",
   "tests/test_bench_cells_are_armed.py::test_a_stale_mutation_is_an_error_not_a_pass",
+  "tests/test_bench_cells_are_armed.py::test_no_test_direct_imports_a_function_an_arming_mutation_targets",
   "tests/test_bench_cells_are_armed.py::test_the_acknowledgement_cell_notices_a_blanket_discharge",
+  "tests/test_bench_cells_are_armed.py::test_the_action_count_notices_a_constant_zero",
+  "tests/test_bench_cells_are_armed.py::test_the_action_count_notices_a_failed_action_being_dropped",
+  "tests/test_bench_cells_are_armed.py::test_the_action_count_notices_traces_being_counted_again",
   "tests/test_bench_cells_are_armed.py::test_the_agent_ran_pin_notices_the_clause_being_switched_off",
   "tests/test_bench_cells_are_armed.py::test_the_agent_ran_pin_notices_the_guard_going_away",
   "tests/test_bench_cells_are_armed.py::test_the_aggregate_notices_a_single_pass_being_folded",
