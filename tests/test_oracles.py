@@ -73,8 +73,9 @@ class _Fake:
             # the corpus's search answer would simply become uncomputable. Imported lazily for the
             # reason `corpus_oracles` does it — this module is imported by `test_corpus`, which the
             # corpus does not import back, and the deferral keeps that one-way.
-            from benchmarks.corpus import SEARCH_TERM
-            self.issues[1]["body"] = f"Only for {SEARCH_TERM} sources."
+            from benchmarks import corpus as _c   # module binding: a direct import of
+            # SEARCH_TERM would bind the VALUE, leaving `mutate_corpus_value` inert here.
+            self.issues[1]["body"] = f"Only for {_c.SEARCH_TERM} sources."
         #: {issue number: [(login, body), …]}
         self.comments = dict(comments or {})
 

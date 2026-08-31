@@ -23,7 +23,8 @@ import json
 
 import pytest
 
-from benchmarks.read_post_census import DRAFT_READ_METHODS, classify
+from benchmarks.read_post_census import DRAFT_READ_METHODS
+from benchmarks import read_post_census as _RPC   # module binding, see the note below
 
 CALL_KW = "http://h/web/dataset/call_kw"
 
@@ -43,12 +44,12 @@ def _body(method: str | None, envelope: str = "call", params_extra=None) -> str:
 def test_a_read_method_on_call_kw_demotes(method) -> None:
     """The population the fix exists for. `web_search_read` is what every measured Odoo read STEP
     caused -- one POST per click, and the step clears only if it demotes."""
-    v = classify(f"{CALL_KW}/crm.lead/{method}", _body(method))
+    v = _RPC.classify(f"{CALL_KW}/crm.lead/{method}", _body(method))
     assert v["demote"] is True and v["rpc_method"] == method
 
 
 def test_a_named_read_route_demotes() -> None:
-    v = classify("http://h/web/action/load", _body(None))
+    v = _RPC.classify("http://h/web/action/load", _body(None))
     assert v["demote"] is True and "route-exact" in v["why"]
 
 
@@ -59,7 +60,7 @@ def test_a_named_read_route_demotes() -> None:
 def test_a_write_method_stays_a_write(method) -> None:
     """THE NEGATIVE CONTROL, offline. `create` and `web_save` were driven live through a real Odoo
     session and both stayed writes; these hold that without a substrate."""
-    v = classify(f"{CALL_KW}/crm.lead/{method}", _body(method))
+    v = _RPC.classify(f"{CALL_KW}/crm.lead/{method}", _body(method))
     assert v["demote"] is False
 
 
@@ -67,7 +68,7 @@ def test_onchange_stays_a_write() -> None:
     """THE NAMED HAZARD. `onchange` reads like a read and can write; it was OBSERVED live during the
     control run. Admitting it to the allowlist should require deleting this cell on purpose."""
     assert "onchange" not in DRAFT_READ_METHODS
-    assert classify(f"{CALL_KW}/crm.lead/onchange", _body("onchange"))["demote"] is False
+    assert _RPC.classify(f"{CALL_KW}/crm.lead/onchange", _body("onchange"))["demote"] is False
 
 
 def test_an_unknown_method_stays_a_write() -> None:
@@ -75,7 +76,7 @@ def test_an_unknown_method_stays_a_write() -> None:
     `systray_get_activities`, `has_group`, `check_access_rights` and `render_public_asset` were all
     observed live and all stay writes until someone adds them deliberately."""
     for m in ("systray_get_activities", "has_group", "check_access_rights", "render_public_asset"):
-        assert classify(f"{CALL_KW}/res.users/{m}", _body(m))["demote"] is False
+        assert _RPC.classify(f"{CALL_KW}/res.users/{m}", _body(m))["demote"] is False
 
 
 def test_a_batch_array_stays_a_write() -> None:
@@ -83,17 +84,17 @@ def test_a_batch_array_stays_a_write() -> None:
     operation."""
     body = json.dumps([{"jsonrpc": "2.0", "method": "call",
                         "params": {"method": "read"}}])
-    assert classify(f"{CALL_KW}/crm.lead/read", body)["demote"] is False
+    assert _RPC.classify(f"{CALL_KW}/crm.lead/read", body)["demote"] is False
 
 
 def test_a_non_call_envelope_stays_a_write() -> None:
-    assert classify(f"{CALL_KW}/crm.lead/read", _body("read", envelope="execute"))["demote"] is False
+    assert _RPC.classify(f"{CALL_KW}/crm.lead/read", _body("read", envelope="execute"))["demote"] is False
 
 
 @pytest.mark.parametrize("body", [None, "", "not json", "{", "[]"])
 def test_an_unreadable_body_stays_a_write(body) -> None:
     """No body, or one that cannot be parsed, is an operation nobody has identified."""
-    assert classify(f"{CALL_KW}/crm.lead/read", body)["demote"] is False
+    assert _RPC.classify(f"{CALL_KW}/crm.lead/read", body)["demote"] is False
 
 
 def test_suffix_and_body_must_agree() -> None:
@@ -101,14 +102,14 @@ def test_suffix_and_body_must_agree() -> None:
     BOTH the path and the body and that they agree, which is what makes the cross-check available at
     no cost. A disagreement is not a puzzle to resolve -- the operation is ambiguous, so it stays a
     write. This is the cell that would catch a route-spoofing attempt."""
-    v = classify(f"{CALL_KW}/crm.lead/read", _body("create"))
+    v = _RPC.classify(f"{CALL_KW}/crm.lead/read", _body("create"))
     assert v["demote"] is False and "!=" in v["why"]
 
 
 def test_a_read_method_on_an_unrelated_route_stays_a_write() -> None:
     """The allowlist is scoped to `call_kw`, not to the method name anywhere it appears -- otherwise
     any endpoint could borrow a read's name."""
-    assert classify("http://h/some/other/endpoint", _body("read"))["demote"] is False
+    assert _RPC.classify("http://h/some/other/endpoint", _body("read"))["demote"] is False
 
 
 def test_the_mail_bus_routes_stay_writes() -> None:
@@ -117,7 +118,7 @@ def test_the_mail_bus_routes_stay_writes() -> None:
     is why per-step clearance was 100% where per-POST clearance was 59% -- but nothing here demotes
     them, and a v1 that started to would be doing it without evidence."""
     for path in ("/mail/init_messaging", "/mail/inbox/messages", "/mail/load_message_failures"):
-        assert classify(f"http://h{path}", _body(None))["demote"] is False
+        assert _RPC.classify(f"http://h{path}", _body(None))["demote"] is False
 
 
 # =================================================================================================

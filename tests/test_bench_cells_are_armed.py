@@ -1174,3 +1174,99 @@ def test_the_navstep_census_notices_a_windowless_step_counted_as_demoted(monkeyp
                             '"demoted": bool(writes) and not stuck}',
                             '"demoted": not stuck}')
     print(assert_red(TRPC.test_a_step_that_made_no_posts_is_not_a_demotion))
+
+
+def test_the_action_count_notices_traces_being_counted_again(monkeypatch) -> None:
+    """R4.129, the defect itself: `actions_taken = len(traces)`. The nav trace and the terminal
+    `done` trace put the floor at 2, so `no_actions_needed` becomes unmintable and a correct
+    zero-action answer publishes as `not_authored`."""
+    import tests.test_actions_taken as TAT
+    from benchmarks import scored_run as SR
+
+    _arming.mutate_function(monkeypatch, SR, "actions_taken",
+                            "    n = 0", "    return len(list(traces or ()))\n    n = 0")
+    print(assert_red(TAT.test_a_nav_and_a_done_is_zero_actions))
+
+
+def test_the_action_count_notices_a_constant_zero(monkeypatch) -> None:
+    """THE OTHER DIRECTION. Returning 0 satisfies every zero-case cell and deletes real authoring
+    failures from the product's account -- the flattering direction R4.103 was filed to close."""
+    import tests.test_actions_taken as TAT
+    from benchmarks import scored_run as SR
+
+    _arming.mutate_function(monkeypatch, SR, "actions_taken",
+                            "    n = 0", "    return 0\n    n = 0")
+    print(assert_red(TAT.test_one_action_between_them_is_one))
+
+
+def test_the_action_count_notices_a_failed_action_being_dropped(monkeypatch) -> None:
+    """An action that FAILED is still an action taken. Excluding it recreates R4.103 one predicate
+    over: a learn that tried and got nowhere would score as a task that needed no work."""
+    import tests.test_actions_taken as TAT
+    from benchmarks import scored_run as SR
+
+    _arming.mutate_function(monkeypatch, SR, "actions_taken",
+                            '        if "stop" in (getattr(t, "meta", None) or {}):',
+                            '        if "error" in (getattr(t, "meta", None) or {}):\n'
+                            '            continue\n'
+                            '        if "stop" in (getattr(t, "meta", None) or {}):')
+    print(assert_red(TAT.test_a_failed_action_still_counts_as_an_action))
+
+
+# ---------------------------------------------------------------------------------------------
+# the trap that has now caught three slices
+# ---------------------------------------------------------------------------------------------
+
+def test_no_test_direct_imports_a_function_an_arming_mutation_targets() -> None:
+    """A DIRECT IMPORT MAKES AN ARMING MUTATION INERT, AND BOTH SIDES STAY GREEN.
+
+    `from benchmarks.scored_run import actions_taken` binds the original function OBJECT at import
+    time. `_arming.mutate_function` replaces the module ATTRIBUTE, so the cell keeps calling the
+    pristine function, the mutation survives, and the arming cell reports the guard as unarmed --
+    when the guard is fine and the wiring is not. That is S14's `from .providers import build_router`
+    lesson arriving from the test side.
+
+    IT HAS HAPPENED THREE TIMES: `corpus_aggregate.fold` at 0.133.0 (all four mutations survived),
+    and twice in one slice at 0.152.0 -- `read_post_census.would_demote` and
+    `scored_run.actions_taken`. Remembering it is evidently not a control, so this derives the
+    mutation targets from THIS file's own AST and refuses the import form outright.
+    """
+    import ast
+    from pathlib import Path
+
+    here = Path(__file__).resolve()
+    tree = ast.parse(here.read_text(encoding="utf-8"))
+
+    # Every name handed to a `mutate_*` helper as its function/attribute argument. Derived, because a
+    # hand-written list is only as good as its worst entry -- and this file gains rows constantly.
+    targets: set = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+        if not name.startswith("mutate_"):
+            continue
+        for arg in node.args:
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and arg.value.isidentifier():
+                targets.add(arg.value)
+                break
+    assert targets, ("derived no mutation targets from this file -- the scan below is then vacuous, "
+                     "which is worse than absent. Check the `mutate_*` call shape before relaxing.")
+
+    offenders: list = []
+    for path in sorted(here.parent.glob("test_*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.ImportFrom) or not (node.module or "").startswith("benchmarks"):
+                continue
+            for alias in node.names:
+                if alias.name in targets:
+                    offenders.append(f"{path.name}:{node.lineno}  "
+                                     f"from {node.module} import {alias.name}")
+
+    print(f"    {len(targets)} mutation targets; scanned {len(list(here.parent.glob('test_*.py')))} files")
+    assert not offenders, (
+        "these tests bind a mutation target directly, so the arming mutation aimed at it cannot "
+        "reach them and would report a FALSE SURVIVOR:\n    " + "\n    ".join(offenders) +
+        "\n  REMEDY: import the MODULE (`from benchmarks import scored_run as SR`) and call "
+        "`SR.<name>(...)`, so the mutated attribute is what runs.")

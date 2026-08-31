@@ -105,6 +105,42 @@ LOGIN = {
 }
 
 
+def actions_taken(traces) -> int:
+    """HOW MANY ACTIONS THE AGENT ACTUALLY TOOK. Not `len(traces)`, which is what this used to be.
+
+    THE DEFECT (R4.129). `outcomes._classify_read`'s `no_actions_needed` clause requires
+    `actions_taken == 0`, and `len(traces)` CANNOT BE 0 for a completed learn -- `_author_steps`
+    records a nav trace at `index=-1` before the loop, and appends another trace for the terminal
+    `done`/`give_up` decision. So the floor is 2, the clause never fired, and a task whose answer was
+    already on the landing page was published as `not_authored` -- "the product was asked to author
+    this flow and did not" -- for a run that answered correctly. That is exactly the mislabelling
+    R4.101 was filed to end, reappearing because R4.103's fix disarmed the mechanism R4.101 created.
+
+    MEASURED, with a `ScriptedProvider` returning `done` on the first turn:
+        actions_taken (= len(traces)) : 2
+          trace index=-1  stop=None    action=None      <- the navigation
+          trace index=0   stop='done'  action='done'    <- the terminal decision
+
+    AND THE SUITE COULD NOT SEE IT: every cell in `tests/test_no_actions_outcome.py` hand-builds
+    `_Record(..., actions_taken=0, ...)`, so eleven cells were green over a value the runner cannot
+    produce. `tests/test_actions_taken.py` drives the REAL runner instead.
+
+    TWO EXCLUSIONS, and both are load-bearing:
+      * `index < 0` is the navigation. It is not an action the agent chose.
+      * a trace carrying `meta["stop"]` is `done` or `give_up` -- a DECISION TO STOP, which is the
+        opposite of acting. `flow.py` sets that key in exactly one place.
+    A failed action still counts: the agent acted, and it not working is a different fact.
+    """
+    n = 0
+    for t in traces or ():
+        if getattr(t, "index", 0) < 0:
+            continue
+        if "stop" in (getattr(t, "meta", None) or {}):
+            continue
+        n += 1
+    return n
+
+
 def _mutate_spec(entry, base_url: str):
     """The `MutateSpec` for a write scenario, built from the corpus's declaration. None for a read.
 
@@ -395,7 +431,7 @@ async def score_one(name: str, *, reset: bool = True, headless: bool = True,
                 # however hard the agent worked. `actions_taken` is what the agent actually did,
                 # off the engine's own traces. They agree only when authoring succeeds.
                 out["steps"] = len(res.steps or ())
-                out["actions_taken"] = len(getattr(res.report, "traces", None) or ())
+                out["actions_taken"] = actions_taken(getattr(res.report, "traces", None))
                 out["step_budget"] = spec.max_steps
                 if res.cached:
                     approve(spec, cache=cache)
