@@ -1,6 +1,6 @@
 {
  "_comment": "DERIVED, never hand-edited. A test is a browser test iff it was OBSERVED launching one, OR the fast tier later caught it launching (attribution is order-dependent when a module shares browser work through a fixture). Regenerate with `pytest -q --store-browser-marks` then `python scripts/derive_test_tiers.py`, which iterates to the fixed point. An unclassified test makes a tiered run fail loudly rather than skip it.",
- "total": 2353,
+ "total": 2362,
  "browser": [
   "tests/test_actions_taken.py::test_a_decision_to_stop_is_not_an_action",
   "tests/test_actions_taken.py::test_a_real_zero_action_learn_now_mints_no_actions_needed",
@@ -2209,6 +2209,15 @@
   "tests/test_variance.py::test_speedup_is_reported_but_not_gated",
   "tests/test_variance.py::test_wilson_ci_bounds",
   "tests/test_verifier.py::test_keyword_completion_signal",
+  "tests/test_web_survey.py::test_every_target_says_why_it_is_here",
+  "tests/test_web_survey.py::test_local_targets_point_at_localhost_and_public_ones_do_not",
+  "tests/test_web_survey.py::test_no_public_target_needs_a_login",
+  "tests/test_web_survey.py::test_target_names_are_unique",
+  "tests/test_web_survey.py::test_the_baseline_records_the_cap_it_was_measured_against",
+  "tests/test_web_survey.py::test_the_calibration_targets_are_the_corpus_pages",
+  "tests/test_web_survey.py::test_the_committed_baseline_matches_the_declared_targets",
+  "tests/test_web_survey.py::test_the_families_are_diverse_enough_to_answer_the_question",
+  "tests/test_web_survey.py::test_the_viewport_is_pinned",
   "tests/test_webarena.py::test_expected_answer_finds_and_requires_expected",
   "tests/test_webarena.py::test_failure_reasons_flatten",
   "tests/test_webarena.py::test_get_failure_reasons_includes_error_msg",

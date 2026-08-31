@@ -1,0 +1,365 @@
+{
+ "max_elements": 80,
+ "rows": [
+  {
+   "name": "gitea",
+   "family": "server-rendered (Go)",
+   "url": "http://localhost:3000/bench/acme/issues?state=all",
+   "local": true,
+   "settle_ms": 781,
+   "settle_verdict": "quiet",
+   "elements_at_dcl": 153,
+   "elements_settled": 153,
+   "painted_late": 0,
+   "changed_after_dcl": 0,
+   "candidates": 153,
+   "visible": 65,
+   "below_fold": 4,
+   "aria": {
+    "option": 10
+   },
+   "considered": 80,
+   "unnamed": 0,
+   "sources": {
+    "tooltip": 0,
+    "labelled": 0,
+    "icon": 0
+   },
+   "leftover": {}
+  },
+  {
+   "name": "odoo",
+   "family": "SPA (OWL)",
+   "url": "http://localhost:8069/web#action=crm.crm_lead_opportunities&view_type=list",
+   "local": true,
+   "settle_ms": 984,
+   "settle_verdict": "quiet",
+   "elements_at_dcl": 5,
+   "elements_settled": 84,
+   "painted_late": 79,
+   "changed_after_dcl": 79,
+   "candidates": 84,
+   "visible": 67,
+   "below_fold": 12,
+   "aria": {
+    "searchbox": 1
+   },
+   "considered": 80,
+   "unnamed": 15,
+   "sources": {
+    "tooltip": 6,
+    "labelled": 1,
+    "icon": 2
+   },
+   "leftover": {
+    "input[checkbox]": 6
+   }
+  },
+  {
+   "name": "magento",
+   "family": "server-rendered (PHP/Knockout)",
+   "url": "http://localhost:7770/",
+   "local": true,
+   "settle_ms": 766,
+   "settle_verdict": "quiet",
+   "elements_at_dcl": 429,
+   "elements_settled": 444,
+   "painted_late": 15,
+   "changed_after_dcl": 15,
+   "candidates": 444,
+   "visible": 32,
+   "below_fold": 69,
+   "aria": {},
+   "considered": 45,
+   "unnamed": 0,
+   "sources": {
+    "tooltip": 0,
+    "labelled": 0,
+    "icon": 0
+   },
+   "leftover": {}
+  },
+  {
+   "name": "conduit",
+   "family": "SPA (React)",
+   "url": "https://demo.realworld.show/",
+   "local": false,
+   "settle_ms": 1250,
+   "settle_verdict": "quiet",
+   "elements_at_dcl": 6,
+   "elements_settled": 9,
+   "painted_late": 3,
+   "changed_after_dcl": 3,
+   "candidates": 9,
+   "visible": 9,
+   "below_fold": 0,
+   "aria": {},
+   "considered": 9,
+   "unnamed": 2,
+   "sources": {
+    "tooltip": 0,
+    "labelled": 0,
+    "icon": 0
+   },
+   "leftover": {
+    "a": 2
+   }
+  },
+  {
+   "name": "saucedemo",
+   "family": "SPA (React)",
+   "url": "https://www.saucedemo.com/",
+   "local": false,
+   "settle_ms": 469,
+   "settle_verdict": "quiet",
+   "elements_at_dcl": 3,
+   "elements_settled": 3,
+   "painted_late": 0,
+   "changed_after_dcl": 0,
+   "candidates": 3,
+   "visible": 3,
+   "below_fold": 0,
+   "aria": {},
+   "considered": 3,
+   "unnamed": 1,
+   "sources": {
+    "tooltip": 0,
+    "labelled": 0,
+    "icon": 0
+   },
+   "leftover": {
+    "input[submit]": 1
+   }
+  },
+  {
+   "name": "mui-table",
+   "family": "SPA (React/MUI)",
+   "url": "https://mui.com/material-ui/react-table/",
+   "local": false,
+   "settle_ms": 1984,
+   "settle_verdict": "quiet",
+   "elements_at_dcl": 399,
+   "elements_settled": 399,
+   "painted_late": 0,
+   "changed_after_dcl": 0,
+   "candidates": 399,
+   "visible": 62,
+   "below_fold": 309,
+   "aria": {},
+   "considered": 80,
+   "unnamed": 0,
+   "sources": {
+    "tooltip": 0,
+    "labelled": 0,
+    "icon": 0
+   },
+   "leftover": {}
+  },
+  {
+   "name": "ant-table",
+   "family": "SPA (React/Ant)",
+   "url": "https://ant.design/components/table",
+   "local": false,
+   "settle_ms": 2484,
+   "settle_verdict": "already-quiet",
+   "elements_at_dcl": 912,
+   "elements_settled": 912,
+   "painted_late": 0,
+   "changed_after_dcl": 0,
+   "candidates": 912,
+   "visible": 80,
+   "below_fold": 789,
+   "aria": {},
+   "considered": 80,
+   "unnamed": 8,
+   "sources": {
+    "tooltip": 0,
+    "labelled": 2,
+    "icon": 1
+   },
+   "leftover": {
+    "a": 4,
+    "input[text]": 1
+   }
+  },
+  {
+   "name": "vuetify",
+   "family": "SPA (Vue/Vuetify)",
+   "url": "https://vuetifyjs.com/en/components/data-tables/basics/",
+   "local": false,
+   "settle_ms": 2484,
+   "settle_verdict": "cap",
+   "elements_at_dcl": 0,
+   "elements_settled": 709,
+   "painted_late": 709,
+   "changed_after_dcl": 709,
+   "candidates": 709,
+   "visible": 65,
+   "below_fold": 256,
+   "aria": {
+    "option": 11
+   },
+   "considered": 80,
+   "unnamed": 9,
+   "sources": {
+    "tooltip": 0,
+    "labelled": 0,
+    "icon": 0
+   },
+   "leftover": {
+    "button[button]": 5,
+    "a": 4
+   }
+  },
+  {
+   "name": "angular-material",
+   "family": "SPA (Angular Material)",
+   "url": "https://material.angular.dev/components/table/examples",
+   "local": false,
+   "settle_ms": 1453,
+   "settle_verdict": "quiet",
+   "elements_at_dcl": 14,
+   "elements_settled": 233,
+   "painted_late": 219,
+   "changed_after_dcl": 219,
+   "candidates": 233,
+   "visible": 31,
+   "below_fold": 197,
+   "aria": {},
+   "considered": 60,
+   "unnamed": 0,
+   "sources": {
+    "tooltip": 0,
+    "labelled": 0,
+    "icon": 0
+   },
+   "leftover": {}
+  },
+  {
+   "name": "the-internet",
+   "family": "server-rendered (plain HTML)",
+   "url": "https://the-internet.herokuapp.com/",
+   "local": false,
+   "settle_ms": 656,
+   "settle_verdict": "quiet",
+   "elements_at_dcl": 46,
+   "elements_settled": 46,
+   "painted_late": 0,
+   "changed_after_dcl": 0,
+   "candidates": 46,
+   "visible": 21,
+   "below_fold": 24,
+   "aria": {},
+   "considered": 21,
+   "unnamed": 0,
+   "sources": {
+    "tooltip": 0,
+    "labelled": 0,
+    "icon": 0
+   },
+   "leftover": {}
+  },
+  {
+   "name": "automationexercise",
+   "family": "server-rendered (PHP)",
+   "url": "https://automationexercise.com/",
+   "local": false,
+   "settle_ms": 2907,
+   "settle_verdict": "quiet",
+   "elements_at_dcl": 83,
+   "elements_settled": 102,
+   "painted_late": 19,
+   "changed_after_dcl": 19,
+   "candidates": 102,
+   "visible": 17,
+   "below_fold": 66,
+   "aria": {},
+   "considered": 19,
+   "unnamed": 3,
+   "sources": {
+    "tooltip": 0,
+    "labelled": 0,
+    "icon": 2
+   },
+   "leftover": {
+    "a": 1
+   }
+  },
+  {
+   "name": "demoqa",
+   "family": "SPA (React)",
+   "url": "https://demoqa.com/elements",
+   "local": false,
+   "settle_ms": 2093,
+   "settle_verdict": "quiet",
+   "elements_at_dcl": 35,
+   "elements_settled": 35,
+   "painted_late": 0,
+   "changed_after_dcl": 0,
+   "candidates": 35,
+   "visible": 9,
+   "below_fold": 1,
+   "aria": {},
+   "considered": 17,
+   "unnamed": 1,
+   "sources": {
+    "tooltip": 0,
+    "labelled": 0,
+    "icon": 0
+   },
+   "leftover": {
+    "a": 1
+   }
+  },
+  {
+   "name": "wikipedia",
+   "family": "server-rendered (MediaWiki)",
+   "url": "https://en.wikipedia.org/wiki/Comparison_of_web_frameworks",
+   "local": false,
+   "settle_ms": 657,
+   "settle_verdict": "quiet",
+   "elements_at_dcl": 98,
+   "elements_settled": 111,
+   "painted_late": 13,
+   "changed_after_dcl": 13,
+   "candidates": 112,
+   "visible": 21,
+   "below_fold": 17,
+   "aria": {},
+   "considered": 29,
+   "unnamed": 2,
+   "sources": {
+    "tooltip": 0,
+    "labelled": 0,
+    "icon": 0
+   },
+   "leftover": {
+    "a": 2
+   }
+  },
+  {
+   "name": "mdn",
+   "family": "server-rendered + hydration",
+   "url": "https://developer.mozilla.org/en-US/docs/Web/API/Element",
+   "local": false,
+   "settle_ms": 844,
+   "settle_verdict": "quiet",
+   "elements_at_dcl": 781,
+   "elements_settled": 781,
+   "painted_late": 0,
+   "changed_after_dcl": 0,
+   "candidates": 781,
+   "visible": 35,
+   "below_fold": 658,
+   "aria": {},
+   "considered": 62,
+   "unnamed": 0,
+   "sources": {
+    "tooltip": 0,
+    "labelled": 0,
+    "icon": 0
+   },
+   "leftover": {}
+  }
+ ]
+}

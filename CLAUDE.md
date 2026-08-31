@@ -2092,6 +2092,42 @@ next; the task that motivated all three still does not work.
   fixes that moved the mechanism and not the number. **Buy the acceptance run; it is the only thing
   that tells you which of these you have actually fixed.**
 
+## Were we improving the system or just fixing Odoo? Measured (R4.134, 0.154.0)
+
+Every observation finding from 0.146.0-0.153.0 was discovered by an Odoo scenario failing, and each
+was ARGUED to be a class rather than a quirk -- from a corpus of two substrates differing on one
+axis, so every claim was an extrapolation from a single SPA. `benchmarks/web_survey.py` settles it:
+**14 targets, 12 rendering families, 665 interactables, $0.00, no LLM and no login.**
+
+| finding | generalizes? | evidence |
+|---|---|---|
+| **R4.102 fold** | **hardest of all -- and still OPEN** | **12/14** targets, up to **789** hidden on one page |
+| R4.115/R4.120 settle | yes | **7/14** change their interactable set after `domcontentloaded` (max 709) |
+| R4.132 ARIA roles | yes | **3/14**, including GITEA -- our own corpus was silently affected |
+| R4.131 unnamed | real everywhere, Odoo an outlier | 6% overall vs Odoo 19%; saucedemo 33%, conduit 22% |
+| **R4.133 cap** | **no** | **0/14** saturate at rest -- it is Odoo-with-a-menu-open |
+
+* **THE OVERFITTING IS IN THE SOURCE LIST, NOT THE DEFECTS.** `data-tooltip` fires six times and
+  **all six are Odoo** -- zero elsewhere -- so hint recovery is 60% on Odoo and **19% off it**. The
+  defects are general, the mechanism is general, the sniffs were tuned to one app.
+* **CALIBRATE OR THE SURVEY IS FICTION.** The Odoo row exists to reproduce a number measured
+  elsewhere (19% unnamed). The first run reported **6 interactables** where the corpus says 80,
+  because both local rows ran WITHOUT a session -- `/web` redirects to `/web/login` and the Gitea
+  path was a 404. The aggregate looked perfectly reasonable. A calibration row that silently
+  measures an error page makes every comparison against it meaningless.
+* **DO NOT REIMPLEMENT THE THING YOU ARE MEASURING.** The first draft copied `nameOf` into the probe
+  and took its 80 in DOM order; `SNAPSHOT_JS` sorts into READING order and runs a second pass. It
+  reported Odoo at 36% unnamed against the product's own 19%. Names and hints now come from a real
+  `sess.snapshot()`; the JS answers only what the Observation cannot (candidates, below-fold, ARIA).
+* **`--only` AND `--local` KEEP IT CHEAP**, and an unreachable target is a ROW rather than a gap: a
+  survey that quietly shrinks is one whose aggregate drifts for reasons nobody can see.
+* **AND IT FOUND A DEFECT OF ITS OWN (R4.135).** 14 of the 26 non-Odoo unnamed controls are anchors
+  wrapping an `<img alt>`. W3C accname folds that into the link's name; `nameOf` ends at
+  `textContent` and an `<img>` contributes neither. Measured both ways: our Observation says
+  `name=''`, `get_by_role('link', name='YouMind')` matches 1. Safe direction (a lost locator tier,
+  not a wrong bind) and NOT fixed here, because it is the shared helper -- a fingerprint migration.
+  A nearby guess was checked and is FALSE: an SVG `<title>` child is already named correctly.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
