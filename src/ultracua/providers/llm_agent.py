@@ -66,6 +66,14 @@ def _render(obs: Observation, goal: str, history: list[str]) -> str:
             lines.append(f"  - {t.get('name', '')}: {t.get('description', '')}")
         lines.append("")
     lines.append("INTERACTABLE ELEMENTS:")
+    # THE SIGNAL, RENDERED WHERE IT IS ACTED ON (R4.102). Placed on the header line
+    # rather than as a separate paragraph so it cannot be read as page content, and
+    # omitted entirely when the whole page fits -- which is 2 of 14 surveyed targets,
+    # so most turns pay for it and it must stay one short clause.
+    if getattr(obs, "below_fold", 0):
+        lines[-1] = (f"INTERACTABLE ELEMENTS (showing what fits the viewport; "
+                     f"{obs.below_fold} more are further down the page -- "
+                     f"use `scroll` to reach them):")
     for e in obs.elements:
         t = f" type={e.type}" if e.type else ""
         v = f' value="{e.value}"' if e.value else ""

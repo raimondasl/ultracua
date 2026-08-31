@@ -229,9 +229,34 @@ SNAPSHOT_JS = r"""
                hint: c.hint, bbox: c.bbox });
   }
 
+  // HOW MUCH PAGE IS BELOW THE FOLD (R4.102). `isVisible` drops `r.top > innerHeight` on purpose --
+  // that is a token-economy choice and a reasonable one -- but the Observation then carried NO
+  // signal that anything had been dropped, so the agent could not tell "this is the page" from
+  // "this is the top third of it". `scroll` was already an available action; there was simply never
+  // a reason to use it. Measured: `gitea-start-timer` failed 3/3 on a two-click task whose button
+  // sits at y=859 in a 720px viewport.
+  //
+  // A COUNT, NOT THE ELEMENTS. The survey (R4.134) measured up to 789 interactables below the fold
+  // on one page; including them would swamp a prompt already capped at 80, and the cap would then
+  // truncate the visible ones. One integer is the whole signal.
+  //
+  // AND IT COUNTS ELEMENTS, NOT HEIGHTS. `document.body.scrollHeight > innerHeight` is INERT on an
+  // app that scrolls an inner container -- measured on Odoo, which keeps docH == vpH == 720 while
+  // hiding 12 controls. The predicate is the same one `isVisible` applies, so what is counted is
+  // exactly what was dropped: laid out, not hidden by CSS, and starting below the fold.
+  let belowFold = 0;
+  for (const el of document.querySelectorAll(sel)) {
+    if (el.disabled) continue;
+    const st = window.getComputedStyle(el);
+    if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) continue;
+    if (r.top > innerHeight) belowFold++;
+  }
+
   const pageText = (document.body && document.body.innerText ? document.body.innerText : '')
     .replace(/\s+/g, ' ').trim().slice(0, 1500);
-  return { elements: out, text: pageText };
+  return { elements: out, text: pageText, below_fold: belowFold };
 }
 """
 
@@ -402,4 +427,6 @@ async def capture(page, max_elements: int, redact: tuple = ()) -> Observation:
             text = text.replace(term, REDACTED)
             url = url.replace(term, REDACTED)
             title = title.replace(term, REDACTED)
-    return Observation(url=url, title=title, elements=elements, text=text, fingerprint=fingerprint)
+    return Observation(url=url, title=title, elements=elements, text=text,
+                       below_fold=int(raw.get("below_fold") or 0),
+                       fingerprint=fingerprint)

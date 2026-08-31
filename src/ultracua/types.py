@@ -68,6 +68,12 @@ class Observation(BaseModel):
     text: str = ""  # short snippet of visible page text (so the agent can read content /
     #                 confirmations / errors and judge completion), not just interactables
     webmcp_tools: Optional[list[dict]] = None  # site-exposed WebMCP tools, if any
+    below_fold: int = 0  # interactables laid out BELOW the viewport, which `elements` omits.
+    #                      R4.102: the omission is deliberate token economy, but without a count the
+    #                      agent cannot tell a whole page from the top third of one, and `scroll` --
+    #                      already an available action -- has no trigger. A COUNT rather than the
+    #                      elements: the survey measured up to 789 of them on a single page.
+    #                      NOT in the fingerprint basis: scrolling would otherwise read as drift.
     fingerprint: str = ""  # structural hash for verification + future cache keys
 
 

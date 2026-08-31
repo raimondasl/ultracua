@@ -277,6 +277,19 @@ class BrowserSession:
       cap = setTimeout(() => done('cap'), o.cap);
     })"""
 
+    async def _await_scroll_applied(self) -> None:
+        """Resolve once the browser has produced a frame carrying the new scroll offset.
+
+        Companion to `await_settled`, which is DOM-mutation based and structurally blind to
+        scrolling. Fail-open like it: a page that navigates out from under the evaluate leaves
+        nothing to wait for, and the caller is no worse off than before this existed.
+        """
+        try:
+            await self.page.evaluate(
+                "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+        except Exception:                                              # noqa: BLE001
+            return
+
     async def await_settled(self, quiet_ms: int = 0, cap_ms: int = 0) -> str:
         """Wait until the DOM stops changing. Returns 'quiet' | 'cap' | 'unavailable'.
 
@@ -354,6 +367,21 @@ class BrowserSession:
                 await page.evaluate("(y) => window.scrollTo(0, y)", int(action.text))
             else:
                 await page.mouse.wheel(0, 600)
+            # WAIT FOR THE SCROLL TO LAND. `await_settled()` cannot see one: it resolves on DOM
+            # MUTATION quiet, and scrolling mutates nothing, so it returns `already-quiet`
+            # immediately and the next snapshot can be taken at the OLD offset.
+            #
+            # MEASURED on `gitea-start-timer` (R4.136): four identical trials returned
+            # `already-quiet` every time, and one of the four then snapshotted 73 elements at y=0
+            # when the page was about to sit at y=600 with 15. Traced against the real agent, the
+            # cost is a wasted turn and then an OVERSHOOT -- it scrolls, sees an identical page,
+            # scrolls again, and two scrolls' worth arrive at once. That is the below-fold signal
+            # (R4.102) being handed to an agent that cannot see the result of acting on it.
+            #
+            # TWO FRAMES, not a timeout: the scroll is applied during frame production, so waiting
+            # for two `requestAnimationFrame` callbacks flushes it without guessing a duration. A
+            # timer here would be R4.26's mistake -- "a timer is not a boundary".
+            await self._await_scroll_applied()
         elif a == "navigate":
             await self.goto(action.text or "about:blank")
         elif a == "click_xy":  # vision tier: click pixel coordinates
