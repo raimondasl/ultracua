@@ -277,6 +277,53 @@ class BrowserSession:
       cap = setTimeout(() => done('cap'), o.cap);
     })"""
 
+    #: Finds the element the page really scrolls and scrolls it. Returns what it moved, or null
+    #: when the WINDOW is the scroller -- in which case the caller wheels, exactly as before.
+    _SCROLL_JS = r"""
+    (dy) => {
+      // THE WINDOW WINS WHEN IT CAN SCROLL, so the common case is untouched: Gitea's issue page has
+      // docH 1512 against a 720 viewport and keeps the wheel it always had. Only a page whose
+      // document CANNOT scroll reaches the search below, which is precisely the broken case.
+      const doc = document.scrollingElement || document.documentElement;
+      if (doc.scrollHeight - doc.clientHeight > 1) return null;
+
+      // The biggest scroller actually on screen. Biggest by VISIBLE AREA rather than by scroll
+      // room: a tall off-screen drawer would otherwise win over the list the agent is looking at.
+      let best = null, bestArea = 0;
+      for (const el of document.querySelectorAll("*")) {
+        const st = getComputedStyle(el);
+        if (!/auto|scroll|overlay/.test(st.overflowY)) continue;
+        if (el.scrollHeight - el.clientHeight < 8) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 80 || r.height < 80) continue;
+        if (r.bottom < 0 || r.top > innerHeight) continue;
+        const area = (Math.min(r.bottom, innerHeight) - Math.max(r.top, 0)) * r.width;
+        if (area > bestArea) { bestArea = area; best = el; }
+      }
+      if (!best) return null;
+      const before = best.scrollTop;
+      best.scrollBy(0, dy);
+      return {moved: best.scrollTop - before};
+    }
+    """
+
+    async def _scroll_inner_container(self, dy: int) -> bool:
+        """Scroll the element the page really scrolls. True if it moved something.
+
+        SCROLLED VIA JS RATHER THAN BY MOVING THE MOUSE OVER IT AND WHEELING. Both work -- the mouse
+        version was what the diagnosis used -- but moving the pointer onto an arbitrary container
+        fires hover states the agent did not ask for, and on a list of rows that means hover toolbars
+        appearing in the very observation the scroll was taken to produce.
+
+        FAIL-OPEN: any error, or no inner scroller, returns False and the caller wheels the window
+        exactly as before. The worst case is the behaviour that shipped before this existed.
+        """
+        try:
+            res = await self.page.evaluate(self._SCROLL_JS, dy)
+        except Exception:                                              # noqa: BLE001
+            return False
+        return bool(res and res.get("moved"))
+
     async def _await_scroll_applied(self) -> None:
         """Resolve once the browser has produced a frame carrying the new scroll offset.
 
@@ -366,7 +413,14 @@ class BrowserSession:
             if action.text and action.text.lstrip("-").isdigit():
                 await page.evaluate("(y) => window.scrollTo(0, y)", int(action.text))
             else:
-                await page.mouse.wheel(0, 600)
+                # SCROLL WHAT ACTUALLY SCROLLS (R4.138). `mouse.wheel` moves the WINDOW, and on an
+                # app that scrolls an inner container the window has nowhere to go: measured on 6 of
+                # 7 Odoo corpus pages, `window.scrollY` stays 0 and the observation is unchanged.
+                # That made R4.102's new below-fold signal actively harmful there -- the agent is
+                # told "12 more are further down the page, use `scroll`", scrolls, and sees an
+                # identical page. A signal that cannot be acted on is worse than none.
+                if not await self._scroll_inner_container(600):
+                    await page.mouse.wheel(0, 600)
             # WAIT FOR THE SCROLL TO LAND. `await_settled()` cannot see one: it resolves on DOM
             # MUTATION quiet, and scrolling mutates nothing, so it returns `already-quiet`
             # immediately and the next snapshot can be taken at the OLD offset.
