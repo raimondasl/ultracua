@@ -339,9 +339,12 @@ caught exactly that and is the reason for the rename.
 
 **What it does prove.** Five of the seven rows returned an identical verdict in all three passes,
 including `gitea-comment` at **3/3 `true`** — a real write, learned once and replayed at 0 LLM calls
-every time. `gitea-start-timer` is **0/3 `not_authored`**: a stable, reproducible product limitation
-(R4.102, a control below the fold that never enters the agent's observation), which is what a
-baseline wants a known failure to look like.
+every time. `gitea-start-timer` is **0/3 `not_authored`**: a stable, reproducible product limitation, which
+is what a baseline wants a known failure to look like. **The CAUSE changed at 0.155.0 and the row
+did not.** It used to be R4.102 -- a control below the fold that never entered the observation --
+and that is now fixed: the agent reaches and clicks the control. It still scores 0/3 because the
+endpoint is a TOGGLE and it clicks an even number of times (R4.137). A number that stays the same
+while its reason changes is exactly what this page exists to say out loud.
 
 **What it does NOT prove.** `gitea-sort-list` gave THREE different outcomes in three passes
 (`ok` / `refused` / `not_authored`) and is carried in `unstable` — its baseline row is recorded as
@@ -402,9 +405,13 @@ not happen is a live caveat quietly becoming a historical one.
   has no baseline here at all.
 * **R4.84** — three of the eight doors into the engine can re-author a write flow, which performs
   the write again. Nothing in this corpus exercises that path; the numbers say nothing about it.
-* **R4.102** — an interactable control below the fold never enters the agent's observation, and
-  nothing in the observation says there is more page. `gitea-start-timer`'s 0/3 IS this defect, so
-  one seventh of the Gitea availability number is a known grounding limit rather than a replay one.
+* **R4.137** — `gitea-start-timer`'s 0/3, and it is no longer a grounding limit: the below-fold
+  defect that used to cause it is fixed (see the paragraph above), and the agent now reaches the
+  button and fires the real `POST /times/stopwatch/toggle` — verified against the server. The endpoint is a toggle, the POST
+  reloads the page to the top, and the agent scrolls back, finds the control now reading `Stop`, and
+  clicks it: an even number of toggles, and the oracle correctly reports nothing changed. So one
+  seventh of the Gitea availability number is a task whose success state is indistinguishable from
+  its start state by the control's own label — a corpus design question as much as a product one.
 * **R4.111** — the cheap route to an Odoo baseline is CLOSED: D6 was refuted by its own
   mandated measurement, the mutation gate is correct at both branches, and what remains is
   R4.27's marking. So "Odoo is absent" should be read as a standing product limitation on a

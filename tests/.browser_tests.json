@@ -1,6 +1,6 @@
 {
  "_comment": "DERIVED, never hand-edited. A test is a browser test iff it was OBSERVED launching one, OR the fast tier later caught it launching (attribution is order-dependent when a module shares browser work through a fixture). Regenerate with `pytest -q --store-browser-marks` then `python scripts/derive_test_tiers.py`, which iterates to the fixed point. An unclassified test makes a tiered run fail loudly rather than skip it.",
- "total": 2362,
+ "total": 2369,
  "browser": [
   "tests/test_actions_taken.py::test_a_decision_to_stop_is_not_an_action",
   "tests/test_actions_taken.py::test_a_real_zero_action_learn_now_mints_no_actions_needed",
@@ -21,6 +21,13 @@
   "tests/test_audit_never_touches_a_write.py::test_a_read_flow_is_still_captured_and_judged",
   "tests/test_audit_never_touches_a_write.py::test_a_write_flow_never_has_an_artifact_written_to_disk",
   "tests/test_audit_never_touches_a_write.py::test_an_undeclared_write_is_never_judged",
+  "tests/test_below_fold_signal.py::test_a_page_that_fits_reports_zero_and_says_nothing",
+  "tests/test_below_fold_signal.py::test_css_hidden_controls_are_not_counted_as_below_the_fold",
+  "tests/test_below_fold_signal.py::test_scrolling_resolves_it",
+  "tests/test_below_fold_signal.py::test_the_count_is_not_in_the_fingerprint",
+  "tests/test_below_fold_signal.py::test_the_count_is_what_the_viewport_bound_dropped",
+  "tests/test_below_fold_signal.py::test_the_derivation_counts_elements_rather_than_comparing_heights",
+  "tests/test_below_fold_signal.py::test_the_signal_reaches_the_prompt_and_names_the_action",
   "tests/test_best_of_n.py::test_best_of_n_exhausts_all_samples",
   "tests/test_best_of_n.py::test_best_of_n_flags_a_cross_origin_write",
   "tests/test_best_of_n.py::test_best_of_n_keeps_first_verified_sample",

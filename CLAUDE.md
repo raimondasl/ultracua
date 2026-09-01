@@ -2128,6 +2128,44 @@ axis, so every claim was an extrapolation from a single SPA. `benchmarks/web_sur
   not a wrong bind) and NOT fixed here, because it is the shared helper -- a fingerprint migration.
   A nearby guess was checked and is FALSE: an SVG `<title>` child is already named correctly.
 
+## The fold is closed, and each fix uncovered the next one (R4.102 FIXED, 0.155.0)
+
+The broadest finding in the register -- 12 of 14 surveyed targets, up to 789 hidden -- and the last
+of the five observation findings still open. Three defects in one chain again, and this time the
+outcome moved even though the scenario still fails.
+
+* **`Observation.below_fold`, A COUNT ON THE ELEMENTS HEADER.** Not the elements: R4.134 measured up
+  to 789 below the fold against a cap of 80, so including them evicts the visible ones. Not a height
+  comparison either -- `scrollHeight > innerHeight` is INERT on an inner-scrolling app, and that
+  refutation is now a BEHAVIOURAL cell (a fixture whose body does not scroll while two controls stay
+  hidden) rather than a grep. The grep was tried first and went red on its own comment, which is the
+  **seventh** time a scan here has matched the prose explaining it.
+* **NOT IN THE FINGERPRINT, AND ABSENT WHEN THE PAGE FITS.** Scrolling would otherwise read as drift
+  on every cached recipe; and 2 of 14 targets have nothing below the fold, so the clause vanishes
+  rather than printing `0 more`. Both are mutations, both killed.
+* **THE FIX EXPOSED R4.136: `await_settled()` IS BLIND TO SCROLLING.** It resolves on DOM-MUTATION
+  quiet and a scroll mutates nothing, so it returns `already-quiet` immediately -- measured, 4 of 4
+  trials -- and the snapshot races the browser applying the scroll. **1 in 4 snapshotted 73 elements
+  at y=0 when the page was about to sit at y=600 with 15.** The agent's trace shows the cost
+  exactly: scroll, see an IDENTICAL page, scroll again, receive two scrolls' worth and overshoot.
+  Fixed by waiting two `requestAnimationFrame` callbacks -- R4.26's *a timer is not a boundary*,
+  applied where `wait_for_timeout` was the obvious reach. 4/4 clean after.
+* **THE OUTCOME MOVED, WHICH IS NEW.** Three previous slices improved a mechanism and changed no
+  behaviour. Here the traced agent goes from 21 actions of thrashing to `scroll -> target visible ->
+  click`, and the click fires the real `POST /times/stopwatch/toggle` -- verified server-side, one
+  click starts the timer.
+* **AND THE SCENARIO STILL FAILS 0/3, FOR A THIRD REASON (R4.137, OPEN).** The endpoint is a TOGGLE.
+  The POST reloads the page to the top, the agent scrolls back, finds the control now reading
+  `Stop`, and clicks it -- an even number of toggles, and the oracle correctly reports nothing
+  changed. **The information is already in the observation**: measured after a successful start, the
+  `PAGE TEXT` carries *"bench started working"*. So the remedy is NOT a fourth widening of the
+  observation -- that would be treating a judgement problem with a sensor.
+* **THE HONESTY PAGE'S GUARD EARNED ITS KEEP.** Marking R4.102 fixed made
+  `test_every_declared_caveat_is_still_open` fail, because `gitea-start-timer`'s 0/3 was declared as
+  BEING that defect. The number did not move and its REASON did, which is exactly what that page
+  exists to say. Note the declared block is regex-scanned, so even a HISTORICAL mention of a fixed id
+  inside it reads as a declaration -- put the history in prose above the block.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
