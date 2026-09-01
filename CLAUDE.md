@@ -2198,6 +2198,43 @@ Found by asking whether the previous slice could HARM a substrate it was not tes
   budget to find a productive strategy. **R4.121 stays OPEN**: one instance disappearing is not the
   mechanism changing, and a learn that DOES bail still keeps its wreckage.
 
+## The agent got better and the number went down (R4.139, R4.115 REOPENED, 0.157.0)
+
+Three Odoo reps at 0.156.0, **$1.77**, bought to see what six observation fixes were worth.
+Availability **0.524 -> 0.381**, reads **0.733 -> 0.533**. The prediction written down beforehand
+("reads should improve") was WRONG, and the reason is worth more than the number.
+
+* **THE AUTHORING PLAINLY IMPROVED.** `odoo-menu-nav` went from recipes of **12, 10 and 6 steps** to
+  **6, 6, 6** -- identical every rep -- and `odoo-open-record` stopped scrolling fruitlessly and now
+  finds the search box. The agent is doing better work and scoring worse.
+* **THE DROP IS TWO ROWS, BOTH FLIPPING ON ONE FIELD.** In every failing rep the recipe is unchanged
+  and `mutation_gate_refused` goes True. `odoo-menu-nav` produced a BYTE-IDENTICAL recipe three
+  times and the gate passed it once, refused it twice.
+* **MARK COUNT IS RULED OUT, and that is what settles the cause.** At 0.151.0 the row carried FOUR
+  mutating steps and was never refused; at 0.156.0 it carries THREE and is refused twice. Fewer
+  marks, more refusals -- so this is not R4.27 marking more, it is the gate deciding differently on
+  the same input.
+* **R4.115 HAS BEEN MARKED `fixed` SINCE 0.148.0 WITH TWO OF ITS THREE NAMED SITES OPEN.** That
+  entry names (1) the resolve, (2) the gate's `scope_fingerprint`, (3) the gate's whole-page
+  snapshot. `_retry_if_unpainted` closed (1) at both call sites. `flow.py:1542` still calls
+  `scope_fingerprint` with no settle -- and is reached ONLY when the retry did not fire -- and
+  `flow.py:1546`'s fallback snapshot likewise. **A wrong status is worse than an open finding,
+  because nobody re-reads a closed one**, and the slice that closed it quoted the three-site list in
+  its own commit message. When you fix one site of a finding that names several, fix the STATUS to
+  match what you closed.
+* **ONE PART OF THE DROP IS ATTRIBUTABLE AND IS THE HONEST COST OF R4.138.** `odoo-open-record` used
+  to score `mutating_steps: 0` on 4-step recipes that scrolled fruitlessly; it now scores 2 on
+  recipes that SEARCH. Searching means POSTs, Odoo serves reads over POST, so **better agent
+  behaviour converts directly into gate exposure** while R4.27 stands.
+* **NOT A STATISTICAL CLAIM.** Three reps against three, Fisher p ~ 0.4 on the key row, and rep 1
+  scored an identical 0.571 in both runs. The DIRECTION is suggestive; the MECHANISM -- identical
+  recipe, different verdict -- is an observation and needs no statistics.
+* **SO 2.4b IS NOT REACHABLE, AND THE REASON IS NO LONGER OBSERVATION.** Five of seven rows are
+  perfectly stable; the two that move are both the gate. What a fix must not do: the fingerprint has
+  the overloaded shape R4.115's first remedy was refuted for -- "it differs" means both *the page
+  changed* and *the page has not finished drawing*. Settle BOTH sides of the comparison; never wait
+  until the fingerprint matches.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
