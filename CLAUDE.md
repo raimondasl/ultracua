@@ -2166,6 +2166,38 @@ outcome moved even though the scenario still fails.
   exists to say. Note the declared block is regex-scanned, so even a HISTORICAL mention of a fixed id
   inside it reads as a declaration -- put the history in prose above the block.
 
+## The scroll landed on the header, not the list (R4.138, 0.156.0)
+
+Found by asking whether the previous slice could HARM a substrate it was not tested on. It could.
+
+* **R4.102's SIGNAL WAS ACTIVE HARM ON ODOO.** Measured across the corpus: **6 of 7** start pages
+  leave `window.scrollY` at 0 after a scroll, with `below_fold` and the element set unchanged. So the
+  observation was telling the agent *"12 more are further down the page -- use `scroll`"* and the
+  scroll did nothing. **A signal that cannot be acted on is worse than none** -- D0's shape arriving
+  through a fix rather than a refusal. Check the previous slice against the substrate it was not
+  built on; that check took ten minutes and cost nothing.
+* **THE MECHANISM IS NOT "INNER CONTAINERS DO NOT SCROLL", AND GETTING THAT WRONG COST A MUTATION.**
+  `mouse.wheel` dispatches at the POINTER, Playwright's pointer starts at (0, 0), and Odoo's
+  scroller is centred at (640, 413) under a control panel -- so the wheel lands on the header, whose
+  nearest scrollable ancestor is the window, which cannot move. A first fixture put its pane at the
+  top-left where the wheel hit it by accident, and `prove_red` correctly called the central mutation
+  a SURVIVOR. **A fixture that does not reproduce the defect makes the fix untestable and looks
+  fine.**
+* **WINDOW-FIRST IS THE WHOLE BALANCE.** Reach the container and Odoo works; take precedence over
+  the document and an ordinary page stops scrolling, because most pages have some inner pane with a
+  little scroll room. The check is one line and it has a mutation of its own.
+* **BIGGEST BY VISIBLE AREA, NOT BY SCROLL ROOM.** A mostly off-screen drawer with 9000px of content
+  has far more scroll room than the list the agent is looking at.
+* **SCROLLED VIA JS, NOT BY MOVING THE POINTER ONTO IT.** Both work -- the pointer version is what
+  the diagnosis used -- but moving the pointer onto a list of rows fires hover toolbars into the very
+  observation the scroll was taken to produce.
+* **THE ACCEPTANCE MOVED, AND IT IS R4.121's OWN CASE.** `odoo-open-record` cached **4 `scroll` steps
+  and nothing else**; it now caches **scroll x3, type, click, click** -- a real recipe that finds the
+  search box and opens the record, `data == expected`. The chain is that the scrolls now CHANGE the
+  page, so `no_progress` never accumulates, so the stuck-bail does not fire and the agent still has
+  budget to find a productive strategy. **R4.121 stays OPEN**: one instance disappearing is not the
+  mechanism changing, and a learn that DOES bail still keeps its wreckage.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
