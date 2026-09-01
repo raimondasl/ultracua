@@ -117,17 +117,40 @@ def test_replay_never_settles_UNCONDITIONALLY() -> None:
     `_retry_if_unpainted` and is reached only after a resolve has already failed with
     `saw_candidates` False, so nothing is paid on the happy path or on any refusal.
 
-    So the invariant is now the SHAPE rather than the count: the learn's two are unconditional, and
-    every other settle in this module is inside the guarded helper. A fourth one dropped into the
-    replay loop still fails here."""
+    IT FIRED A SECOND TIME AT 0.158.0, for R4.115's sites (2) and (3) -- the mutation gate deciding
+    drift from an unsettled page. That argument, since this cell exists to make it be made:
+
+      * IT IS NOT ON EVERY REPLAY STEP. The call is inside `if step.mutating:`, so a read step pays
+        nothing and the speed claim is untouched for the population R4.120 measured.
+      * THE COST WAS MEASURED, NOT ASSERTED: on an already-quiet page `await_settled()` returns
+        `already-quiet` in a median of **3.3 ms on Gitea and 2.2 ms on Odoo** (max 6.1), because
+        `_quiet_for_ms` short-circuits when the page has been still for the quiet window already.
+      * THE COST OF NOT DOING IT (R4.139): a byte-identical recipe was passed by this gate once and
+        refused twice across three reps, with `mutation_gate_refused` the only differing field.
+
+    So the invariant is the SHAPE, in three named positions: the learn's two are unconditional, the
+    step's is inside the guarded helper, and the gate's is inside the `step.mutating` branch. A fifth
+    one dropped anywhere else still fails here."""
     src = inspect.getsource(flow_mod)
     total = src.count("await_settled()")
     inside_helper = inspect.getsource(flow_mod._retry_if_unpainted).count("await_settled()")
-    assert inside_helper == 1, "the replay's settle must live in the guarded helper"
-    assert total == 3, (
-        f"expected 2 unconditional LEARN settles + 1 guarded replay settle, found {total} -- a new "
-        f"unconditional wait on the replay path is pure tax on the substrates R4.120 measured at "
-        f"`true_ready = 0`, and needs the same argument this cell once forced")
+    assert inside_helper == 1, "the replay's step settle must live in the guarded helper"
+
+    # The gate's settle must sit INSIDE the mutating branch -- a read step must not pay for it.
+    gate_call = 'tr.meta["gate_settled"] = await session.await_settled()'
+    assert gate_call in src, "the gate's settle is missing (R4.115 sites 2 and 3)"
+    guard_at = src.index("if step.mutating:")
+    assert guard_at < src.index(gate_call), (
+        "the gate's settle escaped the `if step.mutating:` branch, so every READ step now waits -- "
+        "which is exactly the pure tax this cell exists to refuse")
+    assert src.index(gate_call) < src.index("current = await scope_fingerprint(target)"), (
+        "the settle must PRECEDE the drift comparison it exists to make like-for-like")
+
+    assert total == 4, (
+        f"expected 2 unconditional LEARN settles + 1 guarded replay settle + 1 inside the mutation "
+        f"gate, found {total} -- a new unconditional wait on the replay path is pure tax on the "
+        f"substrates R4.120 measured at `true_ready = 0`, and needs the same argument this cell has "
+        f"now forced twice")
 
 
 def test_the_settle_window_is_the_measured_one() -> None:

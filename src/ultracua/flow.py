@@ -1520,6 +1520,33 @@ async def _replay_step(
     if step.mutating:
         drifted, reason = False, ""
         with tr.measure("gate"):
+            # SETTLE BEFORE DECIDING DRIFT (R4.115 sites 2 and 3, reopened at 0.157.0).
+            #
+            # Both of the gate's comparisons read page state, and neither waited for the page to
+            # finish rendering. R4.115 traced site (2) at a real gate call: `t+0ms` returns the
+            # PREVIOUS step's recorded scope and `t+100ms` returns exactly this step's -- the gate is
+            # not seeing drift, it is seeing the past. `_retry_if_unpainted` below settles only when
+            # the target FAILS to resolve, so on the common path (it resolves at once) nothing had
+            # settled the page before the fingerprint was taken.
+            #
+            # MEASURED COST OF LEAVING IT (R4.139): across three Odoo reps, `odoo-menu-nav` produced
+            # a BYTE-IDENTICAL recipe -- 6 steps, 3 mutating -- and this gate passed it once and
+            # refused it twice, with `mutation_gate_refused` the only differing field. Mark count is
+            # ruled out: the same row carried FOUR mutating steps at 0.151.0 and was never refused.
+            #
+            # WHY THIS IS SAFE IN THE DIRECTION THAT MATTERS, which is the whole argument for
+            # touching a write gate. Settling does not change what the page CONTAINS, only when we
+            # look: a page that genuinely drifted still differs after it settles, so no refusal is
+            # lost. What is gained is that a page merely mid-render stops being called drift. The
+            # recorded side is settled too -- `_author_steps` settles before its loop-head snapshot
+            # (R4.40) and the scope is captured after a full LLM turn -- so this makes the comparison
+            # like-for-like rather than making the gate more permissive.
+            #
+            # AND IT IS NOT "WAIT UNTIL THE FINGERPRINT MATCHES", which is the overloaded-sensor trap
+            # R4.115's first remedy was refuted for. `await_settled` resolves on the page's own
+            # quiet, knows nothing about the fingerprint, and caps at `settle_cap_ms` -- so a page
+            # that never goes quiet is read exactly as it is read today, never later than that.
+            tr.meta["gate_settled"] = await session.await_settled()
             if step.precond_scope and step.locator is not None:
                 # PRECISE gate: did the target's enclosing form/section change? (ignores unrelated
                 # page churn — banners, badges — that the whole-page fingerprint over-flags as drift).

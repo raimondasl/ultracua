@@ -2235,6 +2235,37 @@ Availability **0.524 -> 0.381**, reads **0.733 -> 0.533**. The prediction writte
   changed* and *the page has not finished drawing*. Settle BOTH sides of the comparison; never wait
   until the fingerprint matches.
 
+## The gate was deciding drift from a half-drawn page (R4.115 CLOSED, 0.158.0)
+
+The two sites R4.115 named and 0.148.0 never touched. One `await_settled()` inside
+`if step.mutating:`, ahead of both `scope_fingerprint(target)` and the fallback snapshot.
+
+* **ACCEPTANCE ON THE ROW THAT DIAGNOSED IT.** `odoo-menu-nav` was 1/3 with the gate refusing a
+  byte-identical recipe twice; it is now **4/4 `ok`, `mutation_gate_refused` False every rep**,
+  three of them carrying the same 6-step/3-mutating shape that used to be refused. Fisher on 1/3 vs
+  4/4 is **p ~ 0.14**, so the RATE is suggestive; what is conclusive is that the verdict stopped
+  varying on identical input, which is an observation rather than a statistic.
+* **WHY WAITING INSIDE A WRITE GATE IS SAFE, which is the argument a change here owes.** Settling
+  changes WHEN the gate looks, never WHAT the page contains, so a form that genuinely drifted still
+  differs afterwards. Asserted as a DIFFERENTIAL: both arms churn for a second after the first read
+  and differ only in whether the form really changed -- mid-render reads `drifted=False`, a changed
+  form reads `drifted=True`, both settling to `quiet`. Two independent assertions would have passed
+  a gate that always said False.
+* **IT IS NOT "WAIT UNTIL THE FINGERPRINT MATCHES"**, which is the overloaded-sensor trap R4.115's
+  first remedy was refuted for. `await_settled` resolves on the page's own quiet, knows nothing
+  about the fingerprint, and caps at `settle_cap_ms` -- a page that never settles is read exactly as
+  it is read today, never later.
+* **THE 0.148.0 GUARD FIRED AND FORCED THE ARGUMENT, which is the second time it has.**
+  `test_replay_never_settles_UNCONDITIONALLY` refused the fourth call site until the cost was
+  MEASURED: on an already-quiet page `await_settled()` returns `already-quiet` in a median of
+  **3.3 ms (Gitea) / 2.2 ms (Odoo)**, and the call is scoped to mutating steps so a read pays
+  nothing. The cell now pins the SHAPE in three named positions rather than a count -- plus that the
+  gate's settle is inside the mutating branch AND before the comparison, because either alone is
+  wrong: after the comparison it is decoration that every structural cell still passes.
+* **WHAT IS NOT CLAIMED.** One row is not a rate. Whether the Odoo CORPUS number recovers needs its
+  own three reps, and the other half of R4.139's drop is untouched -- `odoo-open-record`'s extra
+  gate exposure is R4.138's honest cost while R4.27 stands, and the writes remain 0.000 on R4.111.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
