@@ -1,6 +1,6 @@
 {
  "_comment": "DERIVED, never hand-edited. A test is a browser test iff it was OBSERVED launching one, OR the fast tier later caught it launching (attribution is order-dependent when a module shares browser work through a fixture). Regenerate with `pytest -q --store-browser-marks` then `python scripts/derive_test_tiers.py`, which iterates to the fixed point. An unclassified test makes a tiered run fail loudly rather than skip it.",
- "total": 2376,
+ "total": 2379,
  "browser": [
   "tests/test_actions_taken.py::test_a_decision_to_stop_is_not_an_action",
   "tests/test_actions_taken.py::test_a_real_zero_action_learn_now_mints_no_actions_needed",
@@ -550,6 +550,8 @@
   "tests/test_write_safety_invariants.py::test_a_recorded_write_is_gated_on_the_step_that_wrote_or_refused[timer]",
   "tests/test_write_safety_invariants.py::test_a_recorded_write_is_gated_on_the_step_that_wrote_or_refused[timer_armed_by_an_earlier_commit]",
   "tests/test_write_safety_invariants.py::test_a_recorded_write_is_gated_on_the_step_that_wrote_or_refused[timer_with_window_event_shadowed]",
+  "tests/test_write_safety_invariants.py::test_settling_the_gate_never_converts_real_drift_into_a_pass[a genuinely different form-True]",
+  "tests/test_write_safety_invariants.py::test_settling_the_gate_never_converts_real_drift_into_a_pass[the same page, mid-render-False]",
   "tests/test_write_safety_invariants.py::test_the_readiness_retry_never_walks_through_a_gate_refusal[ambiguous-two-rows]",
   "tests/test_write_safety_invariants.py::test_the_readiness_retry_never_walks_through_a_gate_refusal[row-guard-wrong-record]",
   "tests/test_write_signal.py::test_a_declared_write_planning_zero_keys_is_refused_at_preflight",
@@ -2378,6 +2380,7 @@
   "tests/test_write_safety_invariants.py::test_no_annotation_sequence_can_produce_a_write_with_no_mutation_gate[promote-overgate, scoped]",
   "tests/test_write_safety_invariants.py::test_no_annotation_sequence_can_produce_a_write_with_no_mutation_gate[promote-read step, learn-shaped]",
   "tests/test_write_safety_invariants.py::test_no_annotation_sequence_can_produce_a_write_with_no_mutation_gate[promote-read step, recorder-shaped]",
+  "tests/test_write_safety_invariants.py::test_the_gate_settles_before_it_compares_and_only_for_a_write",
   "tests/test_wrongness_fixes.py::test_an_empty_scalar_pin_is_drift_not_an_answer",
   "tests/test_wrongness_fixes.py::test_removing_the_whole_slot_table_still_requires_re_approval"
  ]

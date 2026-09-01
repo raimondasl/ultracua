@@ -46,6 +46,7 @@ import http.server
 import threading
 from pathlib import Path
 
+import inspect
 import pytest
 
 from ultracua.cache import FlowCache, flow_key
@@ -852,3 +853,74 @@ async def test_a_body_demoted_call_that_really_writes_is_never_fired_twice(tmp_p
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+# ---------------------------------------------------------------------------------------------
+# R4.115 sites (2) and (3): the gate settles before deciding drift
+# ---------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("label,changed", [
+    ("the same page, mid-render", False),
+    ("a genuinely different form", True),
+])
+async def test_settling_the_gate_never_converts_real_drift_into_a_pass(label, changed) -> None:
+    """INVIOLABLE #3 OVER THE FIX ITSELF, and the reason it is safe to touch a write gate.
+
+    The gate now settles before comparing scopes (R4.115 sites 2 and 3). The obvious worry is that
+    waiting makes it MORE PERMISSIVE -- that a page which really drifted gets waved through once it
+    stops moving. It cannot: settling changes WHEN we look, never WHAT the page contains, so a form
+    that genuinely differs still differs afterwards.
+
+    Both arms churn for a second after the first read, so a gate that compared too early would see
+    the page mid-render in BOTH. The arms differ only in whether the form really changed, and the
+    verdicts must differ with them -- which is the property, stated as a differential rather than as
+    two independent assertions.
+    """
+    from ultracua.browser import BrowserSession
+    from ultracua.snapshot import scope_fingerprint
+
+    churn = ("<script>let n=0;const h=setInterval(function(){"
+             "document.body.appendChild(document.createElement('span'));"
+             "if(++n>20) clearInterval(h);},40);</script>")
+    recorded_form = '<form id="f"><input name="amount"><button id="go">Pay</button></form>'
+    # The DRIFTED arm adds a field to the very form the gate scopes on -- the shape a gate exists to
+    # catch, since the recorded precondition no longer describes what would be submitted.
+    replay_form = (recorded_form if not changed
+                   else '<form id="f"><input name="amount"><input name="recipient">'
+                        '<button id="go">Pay</button></form>')
+
+    s = BrowserSession(headless=True)
+    await s.start()
+    try:
+        await s.page.set_content(f"<body>{recorded_form}</body>")
+        await s.await_settled()
+        recorded = await scope_fingerprint(s.page.locator("#go").first)
+
+        await s.page.set_content(f"<body>{replay_form}{churn}</body>")
+        settled = await s.await_settled()
+        current = await scope_fingerprint(s.page.locator("#go").first)
+        drifted = bool(current and current != recorded)
+        print(f"    {label:28} settle={settled!r:14} drifted={drifted}")
+        assert drifted is changed, (
+            f"{label}: the gate decided drifted={drifted} for a form that "
+            f"{'DID' if changed else 'did not'} change. Settling must make the comparison "
+            f"like-for-like, never turn a real difference into a match.")
+    finally:
+        await s.close()
+
+
+def test_the_gate_settles_before_it_compares_and_only_for_a_write() -> None:
+    """The two structural halves, because either alone is wrong.
+
+    BEFORE: a settle after the fingerprint would be decoration. INSIDE `if step.mutating:`: a settle
+    on every replay step is pure tax on substrates R4.120 measured at `true_ready = 0`, which is what
+    `tests/test_learn_settle.py` refuses.
+    """
+    from ultracua import flow as flow_mod
+
+    src = inspect.getsource(flow_mod)
+    call = 'tr.meta["gate_settled"] = await session.await_settled()'
+    assert call in src, "the gate's settle is gone; R4.115 sites 2 and 3 are open again"
+    assert src.index("if step.mutating:") < src.index(call) < src.index(
+        "current = await scope_fingerprint(target)"), (
+        "the gate's settle must sit inside the mutating branch AND before the comparison")
