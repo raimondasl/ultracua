@@ -2265,6 +2265,51 @@ The two sites R4.115 named and 0.148.0 never touched. One `await_settled()` insi
 * **WHAT IS NOT CLAIMED.** One row is not a rate. Whether the Odoo CORPUS number recovers needs its
   own three reps, and the other half of R4.139's drop is untouched -- `odoo-open-record`'s extra
   gate exposure is R4.138's honest cost while R4.27 stands, and the writes remain 0.000 on R4.111.
+  (**Those three reps were bought at 0.159.0 and the corpus number DID recover** -- see the next
+  section. The rest of this bullet still stands.)
+
+## The gate gave back its whole class, and the ceiling was lower than I predicted (0.159.0)
+
+Three fresh Odoo reps at 0.158.0, **$1.71**, bought to answer the question 0.158.0 left open: does
+closing R4.115's sites (2) and (3) move the CORPUS number, or only the one row that diagnosed it.
+
+* **`over_gated/drift` WENT 4 -> 0 ACROSS ALL 21 SCENARIO-OBSERVATIONS.** That is the fix's entire
+  target class, and it is the result -- not the rate. `odoo-menu-nav` **1/3 -> 3/3** with `steps=6`
+  in every rep, so the identical-recipe/differing-verdict signature that R4.139 IS has gone; and
+  `odoo-open-record` **1/3 -> 3/3**. Availability **0.381 -> 0.524**, std **0.165 -> 0.082**,
+  unstable rows 2 -> 1. The write rows did not move, which is what SHOULD happen -- they are R4.111,
+  a different mechanism, and a fix that had moved them would have been the alarming outcome.
+* **THE PREDICTION WRITTEN DOWN BEFOREHAND WAS 0.714 AND WAS ARITHMETICALLY IMPOSSIBLE.** With
+  `odoo-search` at `no_actions_needed` (R4.130) and both writes on R4.111, only FOUR of seven rows
+  can pass: the ceiling is **4/7 = 0.571**, which is the number I had written down as the FALLBACK.
+  Reps 2 and 3 scored exactly 0.571. So the honest claim is not "it improved by 0.14" but **"it
+  reached the maximum available in two passes of three"**, and the third lost one row to R4.140.
+  Writing the prediction down was still worth it -- it is what made the miscount visible instead of
+  letting 0.524 read as a disappointing partial win.
+* **A NEW INSTABILITY APPEARED BESIDE THE FIX, AND PROVENANCE COULD NOT CLEAR IT (R4.140).**
+  `odoo-filter-status` -- 3/3 at 0.156.0 -- refused `shape_drift` once here, then **2/3 on a
+  row-only rerun**, and `git diff --stat` between the two series is **one file, +27 lines: my
+  settle**. There was no version of "probably unrelated" worth saying.
+* **SO THE MECHANISM SETTLED IT, WHICH IS THE MOVE WORTH COPYING.** The settle lives inside
+  `if step.mutating:`. Measured on that row: **`mutating_steps=0`, `mutating_sources=()`,
+  `mutation_gate_refused=False`** over three reps -- D7 demotes both of its two clicks, the gate
+  never runs, and the settle is **dead code on it**. That is a proof, where the statistics are only
+  a consistency check: 0/3 clean at a 1/3 rate has probability 0.30 and Fisher on 0/3 vs 3/9 is
+  **p = 0.51**, so 0.156.0's clean sweep needs no explanation beyond luck. **When a new symptom
+  appears next to a new fix, look for a reason the fix cannot execute -- a p-value cannot exonerate
+  a change, and this one did not need to.**
+* **WHAT R4.140 ACTUALLY IS**: the extraction returns `{'count': 6, 'opportunities': [...]}` and the
+  optional second key makes the SHAPE vary between learn and replay, so `ShapeDriftError` fires.
+  Inviolable #2 working -- the alternative is returning structurally-changed data. What is wrong is
+  that a read flow's availability depends on whether an LLM chose to include a second key. Pinning
+  the read is the obvious remedy AND makes the replay 0-LLM, but it changes what a read flow may
+  return on the one surface whose job is refusing silently-wrong data, and must not be bought by
+  loosening the shape gate.
+* **AND `score_one` RETURNS A TUPLE UNDER A `-> dict` ANNOTATION**, which cost a paid learn: the
+  probe read `.get` off it and raised at the LAST statement, after the money was spent. Exactly B5's
+  "a stub cannot see a changed return type", met from the other side -- an annotation is not a
+  contract, and a throwaway probe that spends money should unpack the real return before the run,
+  not after it.
 
 ## The pattern that predicts the next bug
 

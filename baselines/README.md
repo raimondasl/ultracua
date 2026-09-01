@@ -401,8 +401,11 @@ not happen is a live caveat quietly becoming a historical one.
 
 <!-- open-findings:customer-bench -->
 * **R4.27** — Odoo serves list reads as JSON-RPC POSTs and the wire detector marks those steps
-  mutating. That is what makes 58% of Odoo's replay refusals the mutation gate, and it is why Odoo
-  has no baseline here at all.
+  mutating. At 0.134.0 that made 58% of Odoo's replay refusals the mutation gate; **at 0.158.0 the
+  gate refuses none of them** (`over_gated` 4 → 0, once the gate stopped deciding drift from a
+  half-rendered page), so what R4.27 costs today is EXPOSURE rather than refusals: the better the
+  agent gets at driving Odoo, the more read-bearing POSTs it issues for this to mark. It is still
+  why Odoo has no baseline here.
 * **R4.84** — three of the eight doors into the engine can re-author a write flow, which performs
   the write again. Nothing in this corpus exercises that path; the numbers say nothing about it.
 * **R4.137** — `gitea-start-timer`'s 0/3, and it is no longer a grounding limit: the below-fold
@@ -416,8 +419,16 @@ not happen is a live caveat quietly becoming a historical one.
   mandated measurement, the mutation gate is correct at both branches, and what remains is
   R4.27's marking. So "Odoo is absent" should be read as a standing product limitation on a
   CLASS of apps (anything serving reads over POST), not as work not yet scheduled.
-* **R4.105** — Odoo's own exclusion: mean 0.181, std 0.203, dominated by R4.27. Recorded here
-  because "Odoo is absent" is a statement about the product's measured behaviour, not about effort.
+* **R4.105** — Odoo's own exclusion. Measured 0.181 ± 0.203 at 0.133.0 and **0.524 ± 0.082 at
+  0.158.0**, against a ceiling of 0.571 that R4.130 and R4.111 impose; the variance that made the
+  column unreadable is gone (`varies` 5 → 0). Recorded here because "Odoo is absent" is a statement
+  about the product's measured behaviour, not about effort — and because that behaviour has moved a
+  long way while the answer stayed "absent".
+* **R4.140** — `odoo-filter-status` refuses `shape_drift` about one run in three, because the
+  extractor optionally emits a second key and the SHAPE therefore varies between learn and replay.
+  The refusal is correct (inviolable #2), but it means a read row's availability depends on an LLM's
+  choice of schema. Only that one row has been driven enough times to see it; whether the other
+  extracting reads carry the same latent variance is unmeasured.
 * **R4.108** — the generic-operator half of the mutation sweep is unbuilt, so the suite behind
   these benchmarks is proven against curated mutations only.
 <!-- /open-findings -->
