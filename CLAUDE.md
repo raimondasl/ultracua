@@ -2460,6 +2460,45 @@ never reached, and the finding this closes is the third blocker R4.130 has named
   components correct alone and wrong at the join, which is `Odoo.reset()`'s standing note one
   instrument over.
 
+## The Odoo writes fail on an inert click, not on the locator (R4.143, 0.163.0)
+
+R4.111 was diagnosed at 0.139.0 and five slices have landed underneath it since -- D7, the learn
+settle, the replay settle, the GATE settle and five observation fixes. Nobody had re-asked whether
+its story was still true. **$0.43**, two reps each, and both rows reproduce identically every time.
+
+* **NEITHER ROW FAILS THE WAY THE REGISTER SAYS, AND THEY DO NOT FAIL THE SAME WAY AS EACH OTHER.**
+  `odoo-create-lead`: **`gate_refused` is FALSE** -- the mutation gate never runs at all.
+  `odoo-idempotent-replay`: gate refused, on `form/section drift`, the PRECISE branch's SCOPE
+  comparison. The recorded story for both was `resolve(..., unique=True)` failing to bind UNIQUELY
+  on a generated DOM.
+* **IT IS ABSENCE, NOT AMBIGUITY -- the exact pair `saw_candidates` exists to separate.** The
+  failing resolve reports **`saw_candidates=False`** on the first attempt AND on R4.115's
+  settle-and-retry. Reading the message alone (*"locator unresolved or ambiguous"*) cannot tell
+  those apart, which is why it was wrong for five versions; the sensor added at 0.148.0 answers it
+  in one field.
+* **THE PHOTOGRAPH IS WHAT SETTLES IT.** At that moment the page is the LEADS LIST --
+  `view_type=list`, `has_form: false`, 24 visible fields that are the search box and 22 row
+  checkboxes, body text *"New Generate Leads Leads 1-22 / 22 ..."*. So step 2's target is genuinely
+  not there, **because step 1's click on `button 'New'` bound by `role+name`, executed without
+  error, and left the page where it was.** The failing step is not the broken one, and the operator
+  is told the locator drifted when the locator is fine.
+* **INVIOLABLE #2 HOLDS, WHICH IS THE PART NOT TO LOSE.** The run fails LOUD and the oracle confirms
+  *"nothing changed on the server"* -- no write fired, nothing wrong was returned. What is wrong is
+  the ATTRIBUTION. And both replays are genuinely **0-LLM** (`zero_llm: True`), exactly as R4.141
+  predicts for a write: these two rows are the ones that DO demonstrate the product's central claim,
+  and they fail for an unrelated reason.
+* **SO 2.4b's WRITE HALF IS NOT A `unique=True` PROBLEM** and must not be costed as one. R4.111's
+  own hedge was right -- *a signal, not yet a finding ... one message is not a measurement* -- and
+  the measurement has now been taken.
+* **THE NEXT MEASUREMENT, NAMED RATHER THAN GUESSED**: why is the click inert? Two candidates worth
+  separating before any `src/` change -- the click lands on a node OWL is about to replace (a
+  readiness issue on the ACT side, where every fix so far has been on the resolve side), or the
+  recorded target is a different "New" from the one that opens the form. One `scope_fingerprint` in
+  the idempotent-replay trace also returns EMPTY, which is unexplained.
+* **THE INSTRUMENT SHIPS WITH THE DIAGNOSIS** (`benchmarks/replay_step_probe.py`) and it patches
+  `flow.resolve`, not `locators.resolve` -- S14's lesson, since `from .locators import resolve`
+  binds the OBJECT and patching the definition module reaches nothing.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
