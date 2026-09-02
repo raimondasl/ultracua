@@ -73,3 +73,29 @@ def test_it_refuses_a_scenario_the_corpus_does_not_have() -> None:
     with pytest.raises(SystemExit) as ei:
         P.main(["--scenario", "not-a-scenario"])
     assert "no such scenario" in str(ei.value)
+
+
+def test_the_wire_log_is_OPT_IN_and_hooks_each_page_once() -> None:
+    """A request listener attached twice logs every request twice, and the timeline is the evidence.
+
+    R4.144 turned on whether `POST .../onchange` appeared 47 ms after a resolve. A duplicated log
+    does not change that conclusion, but it does make a reader count two requests where there was
+    one -- and this probe exists precisely so the next reader does not have to re-derive the
+    timeline. Off by default because a page load issues dozens of requests and the common use is
+    the resolve trace alone.
+    """
+    src = inspect.getsource(P.probe)
+    assert "_ultracua_wire_hooked" in src, "the once-only guard on the request hook is gone"
+    assert "if wire:" in src, "the wire log stopped being opt-in"
+
+
+def test_resolves_and_requests_share_ONE_clock() -> None:
+    """Two clocks cannot be interleaved, and interleaving is the entire point.
+
+    The finding is that a request fires BETWEEN two resolves. If the resolve rows were stamped from
+    a different origin than the request rows, the ordering would be an artifact of the instrument.
+    """
+    src = inspect.getsource(P.probe)
+    assert src.count("t0 = time.monotonic()") == 1, "more than one clock origin in the probe"
+    assert 'ms=round((time.monotonic() - t0) * 1000)' in src, "resolve rows lost their timestamp"
+    assert '"ms": round((time.monotonic() - t0) * 1000)' in src, "request rows lost their timestamp"

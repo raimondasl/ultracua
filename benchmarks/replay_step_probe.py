@@ -29,6 +29,7 @@ import argparse
 import asyncio
 import json
 import sys
+import time
 
 from ultracua import flow as flow_mod
 
@@ -62,18 +63,39 @@ def _spec_row(spec) -> dict:
             "testid": getattr(spec, "testid", None), "text": (getattr(spec, "text", None) or "")[:40]}
 
 
-async def probe(scenario: str) -> dict:
+async def probe(scenario: str, *, wire: bool = False) -> dict:
     from . import scored_run
 
     calls: list[dict] = []
+    requests: list[dict] = []
     page_at_failure: dict | None = None
     real_resolve = flow_mod.resolve
+    t0 = time.monotonic()
+
+    def hook(page) -> None:
+        """Log every request, interleaved with the resolves, on one clock.
+
+        WITHOUT THIS THE PHOTOGRAPH IS AMBIGUOUS, which cost a slice. R4.143 read a page that still
+        showed the list after a click and concluded the click was INERT. The wire says otherwise:
+        the click fires `POST .../onchange` 47 ms after the resolve, and the form's render is then
+        gated on a lazily-loaded asset bundle plus a `render_public_asset` call. "The page has not
+        changed" and "the click did nothing" are different worlds, and only the request log
+        separates them.
+        """
+        if getattr(page, "_ultracua_wire_hooked", False):
+            return
+        page._ultracua_wire_hooked = True
+        page.on("request", lambda r: requests.append(
+            {"ms": round((time.monotonic() - t0) * 1000), "method": r.method, "url": r.url[-70:]}))
 
     async def spy(page, spec, *a, **kw):
         nonlocal page_at_failure
+        if wire:
+            hook(page)
         sink = kw.get("sink")
         out = await real_resolve(page, spec, *a, **kw)
-        row = dict(_spec_row(spec), bound=out is not None,
+        row = dict(_spec_row(spec), ms=round((time.monotonic() - t0) * 1000),
+                   bound=out is not None,
                    # THE SENSOR THIS PROBE EXISTS FOR. `None` means the caller passed no sink, which
                    # is NOT the same as False -- reporting it as False would invent an absence.
                    saw_candidates=(sink or {}).get("saw_candidates"),
@@ -98,7 +120,8 @@ async def probe(scenario: str) -> dict:
             "outcome": scored.verdict.outcome if scored else None,
             "recipe_steps": out.get("steps"), "mutating_steps": gate.get("mutating_steps"),
             "gate_refused": gate.get("mutation_gate_refused"),
-            "replay_error": rp.get("error"), "resolves": calls, "page_at_failure": page_at_failure}
+            "replay_error": rp.get("error"), "resolves": calls,
+            "page_at_failure": page_at_failure, "requests": requests}
 
 
 def render(r: dict) -> None:
@@ -108,8 +131,18 @@ def render(r: dict) -> None:
     print(f"  error: {r['replay_error']!r}")
     print(f"  --- {len(r['resolves'])} resolve call(s) ---")
     for c in r["resolves"]:
-        print(f"    bound={c['bound']!s:5} saw_candidates={c['saw_candidates']!s:5} "
+        print(f"    {c.get('ms', 0):7} ms  bound={c['bound']!s:5} saw_candidates={c['saw_candidates']!s:5} "
               f"by={c['bound_by']!r:14} role={c['role']!r} name={c['name']!r} id={c['elem_id']!r}")
+    if r.get("requests"):
+        # INTERLEAVED ON ONE CLOCK, from the first resolve onward. A request AFTER a click is the
+        # difference between "the click did nothing" and "the render is not finished".
+        first = min((c.get("ms", 0) for c in r["resolves"]), default=0)
+        rows = [(c["ms"], f"resolve {c['role']}/{c['name']!r} -> "
+                          f"{'BOUND' if c['bound'] else 'none'}") for c in r["resolves"]]
+        rows += [(q["ms"], f"  {q['method']} {q['url']}") for q in r["requests"] if q["ms"] >= first]
+        print(f"  --- wire, interleaved ({len(r['requests'])} requests total) ---")
+        for ms, line in sorted(rows)[:40]:
+            print(f"    {ms:7} ms  {line}")
     p = r["page_at_failure"]
     if p:
         print("  --- the page at the FIRST failing resolve ---")
@@ -125,6 +158,9 @@ def render(r: dict) -> None:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--scenario", action="append", required=True, help="repeatable")
+    ap.add_argument("--wire", action="store_true",
+                    help="log every request on the same clock as the resolves -- the only thing that "
+                         "separates an inert click from an unfinished render")
     ap.add_argument("--out", default=None)
     a = ap.parse_args(argv)
 
@@ -133,7 +169,7 @@ def main(argv=None) -> int:
     if unknown:
         raise SystemExit(f"no such scenario: {unknown}")
 
-    rows = [asyncio.run(probe(s)) for s in a.scenario]
+    rows = [asyncio.run(probe(s, wire=a.wire)) for s in a.scenario]
     for r in rows:
         render(r)
     if a.out:

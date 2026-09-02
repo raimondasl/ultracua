@@ -12,7 +12,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**67 open**, 72 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**68 open**, 72 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **67 open**, 72 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **68 open**, 72 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -975,7 +975,18 @@ if and only if that branch is ever resumed.
 
 **WHAT IS NOT WRONG.** Inviolable #2 holds: the run fails LOUD and the oracle confirms *'nothing changed on the server'*, so no write fired and nothing silently wrong was returned. The replays are also genuinely **0-LLM** (`zero_llm: True`), which is what R4.141 predicts for a write -- these rows are the ones that do demonstrate the product's claim, and they fail for a different reason.
 
-**THE NEXT MEASUREMENT, NOT YET TAKEN**: why is the click inert? Two candidates worth separating before any `src/` change -- the click lands on a node Odoo's OWL runtime is about to replace (a stale-node click, which would be a readiness issue on the ACT side rather than the resolve side), or the recorded target is a different 'New' from the one that opens the form. `benchmarks/replay_step_probe.py` ships with this finding and is where to start. |
+**THE NEXT MEASUREMENT, NOT YET TAKEN**: why is the click inert? Two candidates worth separating before any `src/` change -- the click lands on a node Odoo's OWL runtime is about to replace (a stale-node click, which would be a readiness issue on the ACT side rather than the resolve side), or the recorded target is a different 'New' from the one that opens the form. `benchmarks/replay_step_probe.py` ships with this finding and is where to start. **CORRECTED AT 0.164.0 (R4.144): THE CLICK IS NOT INERT.** This entry's headline was written from a page photograph -- the leads list, still there after the click -- and that is ambiguous between *the click did nothing* and *the render has not finished*. The wire settles it: `POST .../crm.lead/onchange` fires 47 ms after the resolve, followed by the form's lazily-loaded asset bundle and a `render_public_asset` call at +547 ms. The click WORKS; the replay's two looks (+31 ms and the single retry at +359 ms) are both before the form exists. The rest of this entry stands -- both rows reproduce, they fail by different mechanisms, `saw_candidates` reports ABSENCE rather than ambiguity, and the write half of 2.4b is not a `unique=True` problem. **A page photograph is not a verdict about an ACTION**; add the request log. |
+| R4.144 | open | **THE CLICK IS NOT INERT -- IT FIRES, AND THE FORM'S RENDER IS GATED ON A LAZILY-LOADED ASSET BUNDLE THAT MUTATION-QUIET CANNOT SEE.** R4.143 read a page that still showed the leads list after `button 'New'` was clicked and concluded the click had no effect. The WIRE says otherwise, and only the wire could: `POST /web/dataset/call_kw/crm.lead/onchange` fires **47 ms after the resolve**, then `GET /web/bundle/web_editor.backend_assets_wysiwyg` at +125 ms and `POST .../render_public_asset` at +547 ms. Odoo's list -> form transition is a MULTI-STAGE render that pulls JS and CSS it has not loaded yet.
+
+**THE REPLAY LOOKS TWICE AND BOTH LOOKS ARE TOO EARLY.** The step's resolve runs at +31 ms and `_retry_if_unpainted`'s single retry at +359 ms -- before `render_public_asset` has even been requested. Both report `saw_candidates=False`, correctly: the field genuinely is not there yet.
+
+**THIS IS R4.115's OWN DOCUMENTED LIMIT, MET IN THE WILD, WITH A THIRD STATE IT DID NOT NAME.** That entry states mutation-quiet cannot tell *finished rendering* from *has not started*. The case here is neither: the DOM is quiet because the page is WAITING ON THE NETWORK, with nothing to mutate until the bundle lands. R4.120 validated `mut-quiet-200` over 60 page-reps and was never premature -- but that population was page LOADS, not a post-click view transition that fetches new assets, so the predicate's evidence never contained this shape.
+
+**MEASURED EITHER SIDE, and the cold/warm split is why it hides.** Driven outside the replay the field is resolvable **188-281 ms** after the click on a warm context and **484-750 ms** on a cold one, and in all six reps `await_settled()` returned AFTER the field existed -- so a settle-then-retry succeeds there. A replay opens a fresh context, pays the bundle download, and its retry lands in the gap. Every arm of a 4-cell bisect (direct/proxy x bare-click/`expect_request` wrapper) opened the form **5/5**, so the idempotency proxy and the mutating-step request wrapper are both REFUTED as causes.
+
+**THE REMEDY DIRECTION, stated and not built.** One retry is not enough for a render with several network-gated stages; what is missing is not a longer wait but MORE THAN ONE look, bounded by `settle_cap_ms`. That is safe in exactly the way R4.115 established: poll only while `saw_candidates` is False, so all four safety refusals still fail LOUD and immediately, and a competing candidate can never be waited out. `networkidle` is separately refuted -- it never fires on Odoo at all -- so the fix must not reach for it. Needs its own measurement of what a bounded poll costs on the substrates R4.120 measured at `true_ready = 0`, where every extra look is pure tax.
+
+**AND R4.143's HEADLINE IS CORRECTED BY THIS**: the failing step is still not the broken one, and the operator is still told the locator drifted -- but the step before it worked. `benchmarks/replay_step_probe.py --wire` is what separates the two, and it ships here. |
 <!-- /generated:r4-index -->
 
 
