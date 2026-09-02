@@ -1,6 +1,6 @@
 {
  "_comment": "DERIVED, never hand-edited. A test is a browser test iff it was OBSERVED launching one, OR the fast tier later caught it launching (attribution is order-dependent when a module shares browser work through a fixture). Regenerate with `pytest -q --store-browser-marks` then `python scripts/derive_test_tiers.py`, which iterates to the fixed point. An unclassified test makes a tiered run fail loudly rather than skip it.",
- "total": 2401,
+ "total": 2406,
  "browser": [
   "tests/test_actions_taken.py::test_a_decision_to_stop_is_not_an_action",
   "tests/test_actions_taken.py::test_a_real_zero_action_learn_now_mints_no_actions_needed",
@@ -274,6 +274,8 @@
   "tests/test_pin.py::test_find_pin_string_via_testid",
   "tests/test_pin.py::test_read_pin_fails_loud_on_ambiguous_resolve",
   "tests/test_pin.py::test_read_pin_returns_none_when_element_gone",
+  "tests/test_pin_viability.py::test_a_page_whose_values_carry_no_identity_reports_ZERO_which_is_the_odoo_result",
+  "tests/test_pin_viability.py::test_the_census_counts_LEAF_text_holders_and_their_identity",
   "tests/test_press_gate.py::test_focused_ref_fails_closed_on_a_stale_duplicate_ref",
   "tests/test_press_gate.py::test_focused_ref_none_when_unfocused_or_unreffed",
   "tests/test_press_gate.py::test_focused_ref_returns_a_unique_ref",
@@ -1683,6 +1685,9 @@
   "tests/test_oracles.py::test_the_read_oracle_watches_every_surface_it_names",
   "tests/test_oracles.py::test_the_read_probe_actually_reads_the_comments_it_claims_to_watch",
   "tests/test_pin.py::test_parse_is_strict_no_wrong_value_no_crash",
+  "tests/test_pin_viability.py::test_a_write_scenario_is_skipped_because_its_answer_is_not_extracted",
+  "tests/test_pin_viability.py::test_every_scenario_is_measured_on_its_OWN_view",
+  "tests/test_pin_viability.py::test_the_probe_asks_the_PRODUCT_for_a_pin_rather_than_deriving_one",
   "tests/test_plan_state.py::test_a_held_steps_trigger_is_a_real_step_and_its_fired_flag_is_true_iff_that_step_is_done",
   "tests/test_plan_state.py::test_a_vanished_artifact_under_a_done_step_is_caught",
   "tests/test_plan_state.py::test_an_artifact_appearing_under_an_unshipped_step_is_caught",

@@ -1,0 +1,174 @@
+{
+  "rows": [
+    {
+      "scenario": "gitea-sort-list",
+      "substrate": "gitea",
+      "answer": "Zebra crossing renders behind the map layer",
+      "on_start_page": true,
+      "unique_leaf": true,
+      "has_identity": false,
+      "pinnable_here": false,
+      "tag": "a",
+      "elem_id": null,
+      "testid": null,
+      "identity_density": {
+        "leaves": 208,
+        "withId": 77,
+        "withTestid": 0
+      }
+    },
+    {
+      "scenario": "gitea-filter-state",
+      "substrate": "gitea",
+      "answer": "2",
+      "on_start_page": false,
+      "unique_leaf": false,
+      "has_identity": false,
+      "pinnable_here": false,
+      "tag": null,
+      "elem_id": null,
+      "testid": null,
+      "identity_density": {
+        "leaves": 208,
+        "withId": 77,
+        "withTestid": 0
+      }
+    },
+    {
+      "scenario": "gitea-open-issue",
+      "substrate": "gitea",
+      "answer": "Marmalade parser rejects trailing commas",
+      "on_start_page": true,
+      "unique_leaf": true,
+      "has_identity": false,
+      "pinnable_here": false,
+      "tag": "a",
+      "elem_id": null,
+      "testid": null,
+      "identity_density": {
+        "leaves": 208,
+        "withId": 77,
+        "withTestid": 0
+      }
+    },
+    {
+      "scenario": "gitea-search",
+      "substrate": "gitea",
+      "answer": "Alpha channel lost on export",
+      "on_start_page": true,
+      "unique_leaf": true,
+      "has_identity": false,
+      "pinnable_here": false,
+      "tag": "a",
+      "elem_id": null,
+      "testid": null,
+      "identity_density": {
+        "leaves": 208,
+        "withId": 77,
+        "withTestid": 0
+      }
+    },
+    {
+      "scenario": "gitea-menu-nav",
+      "substrate": "gitea",
+      "answer": "5",
+      "on_start_page": true,
+      "unique_leaf": true,
+      "has_identity": false,
+      "pinnable_here": false,
+      "tag": "span",
+      "elem_id": null,
+      "testid": null,
+      "identity_density": {
+        "leaves": 153,
+        "withId": 63,
+        "withTestid": 0
+      }
+    },
+    {
+      "scenario": "odoo-sort-list",
+      "substrate": "odoo",
+      "answer": "Need 20 Desks",
+      "on_start_page": true,
+      "unique_leaf": true,
+      "has_identity": false,
+      "pinnable_here": false,
+      "tag": "td",
+      "elem_id": null,
+      "testid": null,
+      "identity_density": {
+        "leaves": 202,
+        "withId": 0,
+        "withTestid": 0
+      }
+    },
+    {
+      "scenario": "odoo-filter-status",
+      "substrate": "odoo",
+      "answer": "6",
+      "on_start_page": false,
+      "unique_leaf": false,
+      "has_identity": false,
+      "pinnable_here": false,
+      "tag": null,
+      "elem_id": null,
+      "testid": null,
+      "identity_density": {
+        "leaves": 202,
+        "withId": 0,
+        "withTestid": 0
+      }
+    },
+    {
+      "scenario": "odoo-open-record",
+      "substrate": "odoo",
+      "answer": "Gemini Furniture",
+      "on_start_page": false,
+      "unique_leaf": false,
+      "has_identity": false,
+      "pinnable_here": false,
+      "tag": null,
+      "elem_id": null,
+      "testid": null,
+      "identity_density": {
+        "leaves": 138,
+        "withId": 0,
+        "withTestid": 0
+      }
+    },
+    {
+      "scenario": "odoo-search",
+      "substrate": "odoo",
+      "answer": "Quote for 150 carpets",
+      "on_start_page": true,
+      "unique_leaf": true,
+      "has_identity": false,
+      "pinnable_here": false,
+      "tag": "td",
+      "elem_id": null,
+      "testid": null,
+      "identity_density": {
+        "leaves": 202,
+        "withId": 0,
+        "withTestid": 0
+      }
+    },
+    {
+      "scenario": "odoo-menu-nav",
+      "substrate": "odoo",
+      "answer": "Won",
+      "on_start_page": false,
+      "unique_leaf": false,
+      "has_identity": false,
+      "pinnable_here": false,
+      "tag": null,
+      "elem_id": null,
+      "testid": null,
+      "identity_density": {
+        "leaves": 21,
+        "withId": 0,
+        "withTestid": 0
+      }
+    }
+  ]
+}

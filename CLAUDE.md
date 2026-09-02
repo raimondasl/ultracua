@@ -2356,6 +2356,55 @@ reading `pin.py`.
   quote a count -- so rewording this row to return a scalar NARROWS the failure rather than removing
   it, and dropping "show only" risks turning it into another zero-action row (R4.130).
 
+## The 0-LLM claim is undemonstrated for every read, and pinning cannot fix it here (R4.141, 0.161.0)
+
+The plan's own frontier is 2.4b and its note had gone five slices stale, so the first job was
+re-deriving what actually blocks it. That turned up a prior question: **do the corpus's reads replay
+at 0-LLM at all?** They do not, and the mechanism built to make them do so cannot fire on either
+substrate. Total cost **$0.11**, and the expensive half was refused before it was bought.
+
+* **EVERY CORPUS READ PAYS ONE LLM CALL PER REPLAY.** `flows.py` builds an extraction router when
+  `spec.extract is not None and not (spec.pin_read and meta.read_pin)`, and `scored_run.spec_for`
+  sets `extract` for every read and `pin_read` for none. **Measured on BOTH substrates rather than
+  derived**: `gitea-menu-nav`, `gitea-search` and `odoo-sort-list` each replay `llm_calls=1,
+  zero_llm=False`. R4.116 had measured one Odoo instance; the substrate with a published baseline had
+  never been checked.
+* **SO `availability_rate` MIXES TWO THINGS.** It counts a read as available while it calls the model
+  every replay -- and the stated reason `no_actions_needed` scores ZERO is *"every run pays the LLM
+  again -- no speed-up, so not available"*. Both are true of an extracting read. The difference is
+  real but QUANTITATIVE, and nothing measures where a row falls. The writes are the rows that
+  genuinely replay at 0-LLM.
+* **THE MISSING NUMBER IS ALREADY COMPUTED AND PUBLISHED NOWHERE.** `scored_run` sets
+  `out["replay"]["zero_llm"]`; `build_bench_record`'s per-scenario row carries only
+  `{outcome, substrate, code}`. Deliberately NOT plumbed here -- `zero_llm` is an OBSERVATION and
+  B3's design keeps those on `ScenarioRun` and adjudications on `Scored`, so it crosses a boundary
+  that took a slice to get right and should not be crossed in a slice about something else.
+* **THE $0.62 OF LEARNS WAS REFUSED BY A $0.00 MEASUREMENT.** The obvious move was to switch
+  `pin_read` on and see. `benchmarks/pin_viability.py` asks the precondition instead, driving the
+  product's own `_PIN_JS` and `find_pin`: **0 of 10 reads pinnable**. R4.140 had supplied half the
+  precondition free (19 of 19 answers scalar); the half that refuses is DOM IDENTITY. **Odoo carries
+  no `id` and no `data-testid` on any of 765 leaf text holders**; Gitea has ids on 371 of 985 and
+  never on the element holding an answer.
+* **AND "JUST WIDEN THE ALLOWLIST" IS NOT THE REMEDY, WHICH IS THE PART WORTH KEEPING.** A pin must
+  locate its element WITHOUT reference to content -- `read_pin` passes `text=None`, commented *never
+  anchor on the value*, because anchoring on the learned text finds the element by the OLD value and
+  reads it back forever. On a table cell the only content-independent anchors are structural
+  (refused, correctly, and already pinned by an existing test) or an id (absent). The recipe's own
+  locator tiers do not escape it either: `role+name` on a data cell resolves through its text. A real
+  remedy needs a value-independent, non-positional anchor -- a stable ANCESTOR plus an offset, or a
+  neighbouring LABEL, which is the `anchor` concept `locators.py` already has for rows. Unevaluated,
+  and recorded as the design to evaluate rather than as a proposal.
+* **MY OWN PROBE READ THE PREVIOUS PAGE, AND THE LEAF COUNTS ARE WHAT GAVE IT AWAY.** Odoo routes on
+  the HASH, so `goto` between two `#action=` urls inside one session is a SAME-DOCUMENT navigation:
+  it resolves at once and `await_settled` finds the view it just left already quiet. Three rows
+  reported 10-22 leaf text holders where the rendered list has 202. An `about:blank` hop fixes it,
+  and the corrected run flipped `odoo-search` to `on_start_page=True` -- independently reproducing
+  R4.130's central claim, which is what made the fix believable rather than merely different.
+* **AND A SCAN MATCHED ITS OWN PROSE FOR THE EIGHTH TIME.** An ordering cell compared `src.index()`
+  offsets and went red on the docstring naming `await_settled` while explaining the bug. It reads the
+  AST now. Eight occurrences is enough that the rule should be read as absolute: **never asserts an
+  ordering or an absence over source TEXT.**
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
