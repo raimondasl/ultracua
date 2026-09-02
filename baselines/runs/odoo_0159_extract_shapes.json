@@ -1,0 +1,80 @@
+{
+  "what": "Extraction SHAPE per Odoo corpus read, measured to answer whether R4.140 generalises. `_shape_of` reduces a scalar to its primitive type and a dict to its sorted KEY SET; `_shape_matches` compares objects by exact key equality and any two same-primitive shapes as equal. So a read returning one primitive type cannot refuse `shape_drift`.",
+  "substrate": "odoo",
+  "version": "0.160.0",
+  "reps_per_scenario": 5,
+  "instrument": "benchmarks/extract_shape_probe.py",
+  "scenarios": {
+    "odoo-filter-status": {
+      "runs_observed": 9,
+      "shape_t": "object",
+      "distinct_shapes": 2,
+      "shapes": [
+        {
+          "t": "object",
+          "keys": [
+            "count"
+          ]
+        },
+        {
+          "t": "object",
+          "keys": [
+            "count",
+            "opportunities"
+          ]
+        }
+      ],
+      "sample_answer": {
+        "count": 6,
+        "opportunities": [
+          "<17 names elided>"
+        ]
+      },
+      "note": "3 of 9 runs refused `shape_drift`. The two key sets are INFERRED from the refusal plus the observed passing shape -- the gate reports a mismatch, not the two sides -- so treat the second entry as the one directly observed and the first as its complement."
+    },
+    "odoo-menu-nav": {
+      "runs_observed": 4,
+      "shape_t": "string",
+      "distinct_shapes": 1,
+      "shapes": [
+        {
+          "t": "string"
+        }
+      ],
+      "sample_answer": "Won"
+    },
+    "odoo-open-record": {
+      "runs_observed": 5,
+      "shape_t": "string",
+      "distinct_shapes": 1,
+      "shapes": [
+        {
+          "t": "string"
+        }
+      ],
+      "sample_answer": "Gemini Furniture"
+    },
+    "odoo-search": {
+      "runs_observed": 5,
+      "shape_t": "string",
+      "distinct_shapes": 1,
+      "shapes": [
+        {
+          "t": "string"
+        }
+      ],
+      "sample_answer": "Quote for 150 carpets"
+    },
+    "odoo-sort-list": {
+      "runs_observed": 5,
+      "shape_t": "string",
+      "distinct_shapes": 1,
+      "shapes": [
+        {
+          "t": "string"
+        }
+      ],
+      "sample_answer": "Need 20 Desks"
+    }
+  }
+}
