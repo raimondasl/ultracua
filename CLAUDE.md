@@ -2499,6 +2499,46 @@ its story was still true. **$0.43**, two reps each, and both rows reproduce iden
   `flow.resolve`, not `locators.resolve` -- S14's lesson, since `from .locators import resolve`
   binds the OBJECT and patching the definition module reaches nothing.
 
+## The click was never inert: the render is network-gated (R4.144, 0.164.0)
+
+R4.143 said the Odoo write rows fail on an inert click. Asked to find out why, and the answer is
+that they do not. **$0.09** -- one paid learn; every other measurement was free.
+
+* **A PAGE PHOTOGRAPH IS NOT A VERDICT ABOUT AN ACTION, and that is the correction.** R4.143 read
+  the leads list still showing after the click and concluded the click did nothing. That view is
+  ambiguous between *the click did nothing* and *the render has not finished*, and only the request
+  log separates them. The wire: `POST .../crm.lead/onchange` **47 ms after the resolve**, then
+  `GET /web/bundle/web_editor.backend_assets_wysiwyg` at +125 ms and `POST .../render_public_asset`
+  at +547 ms. Odoo's list -> form transition is a MULTI-STAGE render that fetches JS and CSS it has
+  not loaded yet.
+* **THE REPLAY LOOKS TWICE AND BOTH LOOKS ARE TOO EARLY**: the step's resolve at +31 ms and
+  `_retry_if_unpainted`'s single retry at +359 ms, before `render_public_asset` is even requested.
+  Both report `saw_candidates=False`, correctly -- the field is not there yet.
+* **R4.115's DOCUMENTED LIMIT, MET IN THE WILD, WITH A THIRD STATE IT DID NOT NAME.** That entry
+  says mutation-quiet cannot tell *finished rendering* from *has not started*. This is neither: the
+  DOM is quiet because the page is WAITING ON THE NETWORK, with nothing to mutate until the bundle
+  lands. R4.120 validated `mut-quiet-200` over 60 page-reps with zero prematures -- but that
+  population was page LOADS, so the predicate's evidence never contained a post-click transition
+  that fetches new assets.
+* **THE COLD/WARM SPLIT IS WHY IT HIDES.** Outside the replay the field is resolvable **188-281 ms**
+  after the click on a warm context and **484-750 ms** on a cold one, and in all six reps
+  `await_settled()` returned AFTER the field existed -- so settle-then-retry succeeds there. A
+  replay opens a fresh context, pays the bundle download, and its one retry lands in the gap.
+* **FOUR CANDIDATE CAUSES REFUTED BY A BISECT, which is what stopped a wrong fix.** direct/proxy x
+  bare-click/`expect_request` wrapper, five reps each: **5/5 opened in every arm**. So neither the
+  idempotency proxy nor the mutating-step request wrapper is involved, and the "stale node OWL is
+  about to replace" story dies with them.
+* **THE REMEDY DIRECTION, STATED AND NOT BUILT.** One retry cannot cover a render with several
+  network-gated stages; what is missing is not a longer wait but MORE THAN ONE look, bounded by
+  `settle_cap_ms`. Safe in exactly R4.115's way -- poll only while `saw_candidates` is False, so all
+  four safety refusals still fail LOUD and immediately and a competing candidate can never be waited
+  out. `networkidle` is separately refuted (it never fires on Odoo), so the fix must not reach for
+  it. It needs its own cost measurement on the substrates R4.120 measured at `true_ready = 0`, where
+  every extra look is pure tax.
+* **THE INSTRUMENT SHIPS WITH THE CORRECTION**: `replay_step_probe --wire` interleaves resolves and
+  requests on ONE clock. Two clocks cannot be interleaved, and the interleaving IS the evidence --
+  both are pinned by tests.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

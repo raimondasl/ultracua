@@ -1,6 +1,6 @@
 {
  "_comment": "DERIVED, never hand-edited. A test is a browser test iff it was OBSERVED launching one, OR the fast tier later caught it launching (attribution is order-dependent when a module shares browser work through a fixture). Regenerate with `pytest -q --store-browser-marks` then `python scripts/derive_test_tiers.py`, which iterates to the fixed point. An unclassified test makes a tiered run fail loudly rather than skip it.",
- "total": 2427,
+ "total": 2429,
  "browser": [
   "tests/test_actions_taken.py::test_a_decision_to_stop_is_not_an_action",
   "tests/test_actions_taken.py::test_a_real_zero_action_learn_now_mints_no_actions_needed",
@@ -2019,7 +2019,9 @@
   "tests/test_replay_step_probe.py::test_an_ABSENT_sink_is_reported_as_None_and_never_as_False",
   "tests/test_replay_step_probe.py::test_it_patches_the_binding_the_CALLER_holds_not_the_definition",
   "tests/test_replay_step_probe.py::test_it_refuses_a_scenario_the_corpus_does_not_have",
+  "tests/test_replay_step_probe.py::test_resolves_and_requests_share_ONE_clock",
   "tests/test_replay_step_probe.py::test_the_page_is_photographed_at_the_FIRST_failure_only",
+  "tests/test_replay_step_probe.py::test_the_wire_log_is_OPT_IN_and_hooks_each_page_once",
   "tests/test_round2_fixes.py::test_a_deferred_write_is_never_credited_to_the_following_step",
   "tests/test_round2_fixes.py::test_a_genuinely_corrupt_sidecar_is_still_quarantined",
   "tests/test_round2_fixes.py::test_a_persistently_unreadable_sidecar_still_refuses_but_is_not_destroyed",
