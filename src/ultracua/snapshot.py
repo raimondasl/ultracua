@@ -160,6 +160,10 @@ SNAPSHOT_JS = r"""
     return null;
   };
 
+  // The roles an app gives to the choices inside an open panel. Deliberately NOT `menu`,
+  // `listbox` or `tree`, which name persistent CONTAINERS -- see the note on `overlay` below.
+  const OVERLAY_ROLES = new Set(['menuitem', 'menuitemcheckbox', 'menuitemradio', 'option']);
+
   const CEILING = MAX * 3;
   const seen = new Set();
   const cands = [];
@@ -168,6 +172,26 @@ SNAPSHOT_JS = r"""
     seen.add(el);
     const r = el.getBoundingClientRect();
     cands.push({ el, role, name, tag: el.tagName.toLowerCase(),
+                 // IS THIS ELEMENT SOMETHING THE USER IS CURRENTLY CHOOSING FROM? (R4.133.)
+                 //
+                 // KEYED ON THE ITEM'S OWN ROLE, NOT ON AN ANCESTOR CONTAINER, and that is the
+                 // whole design. The first draft asked `el.closest('[role=menu],[role=listbox],
+                 // [role=tree],[role=dialog]...')` and the blast-radius measurement refused it:
+                 // `role=menu` marks PERSISTENT containers on both benchmark substrates, so 10 of
+                 // 14 corpus start pages were BOTH truncated and carrying 4-11 "overlay" elements
+                 // AT REST. Gitea puts `role=menu` on a CLOSED dropdown (`aria-expanded="false"`)
+                 // and Odoo on its systray toolbar -- neither is a popup, and neither is open.
+                 // Giving those priority silently reorders most of the corpus, which is the exact
+                 // regression the reading-order cell exists to refuse, arriving by another door.
+                 //
+                 // A menu ITEM role is the discriminator that survives measurement: an app renders
+                 // `menuitem*`/`option` for the choices in a panel, and a closed panel's items are
+                 // either absent from the DOM or invisible, so they never become candidates. A
+                 // modal is included by CONTAINER because its contents are ordinary controls with
+                 // no distinguishing role of their own -- and `dialog` is qualified with `[open]`
+                 // for the same reason the roles are qualified at all.
+                 overlay: OVERLAY_ROLES.has(role)
+                          || !!el.closest('[aria-modal="true"],dialog[open]'),
                  // Only for the unnamed: a named control already tells the agent what it is, and
                  // every hint costs prompt tokens on every turn.
                  hint: name ? null : hintOf(el),
@@ -219,7 +243,42 @@ SNAPSHOT_JS = r"""
 
   // Truncate AFTER the sort, so an over-dense page sheds its visually-LAST elements (bottom of the
   // page) rather than whichever happened to fall late in the DOM. Refs are assigned only to survivors.
-  const kept = cands.slice(0, MAX);
+  //
+  // AN OPEN OVERLAY IS WHAT THE USER IS CHOOSING FROM, SO IT SURVIVES THE CUT (R4.133).
+  //
+  // Measured on Odoo's opportunities list with the search panel open: the page carries 118 visible
+  // interactables and 16 `menuitem*` roles, the observation is capped at 80, and only NINE of the
+  // menu items reached it -- `Archived` among the seven cut. A dropdown overlays the list, so its
+  // items interleave with the rows BEHIND it in reading order and the cut falls in the middle of
+  // the menu. That is what blocked R4.130: the repair asked the agent to use a control that was
+  // rendered, visible, named and simply not in the observation.
+  //
+  // NOT A BIGGER CAP, which is what this finding was filed refusing. R4.134 measured 0 of 14
+  // surveyed targets saturating `max_elements` at rest, so raising it would tax every turn of every
+  // page for a case that only arises with a menu open -- D0's over-refusal shape wearing a token
+  // budget. Priority costs nothing on the pages that do not need it.
+  //
+  // AND WHEN NOTHING IS OPEN THIS IS BYTE-IDENTICAL TO THE OLD BEHAVIOUR. Both early returns below
+  // are that guarantee written down: an untruncated page keeps every candidate, and a truncated page
+  // with no overlay takes the same `slice(0, MAX)` it always did. The kept set is re-filtered out of
+  // `cands` rather than concatenated, so survivors stay in READING ORDER -- concatenating would put
+  // the menu first and silently reorder the agent's view of every page carrying one.
+  const kept = (() => {
+    if (cands.length <= MAX) return cands;
+    const over = cands.filter((c) => c.overlay);
+    if (over.length === 0) return cands.slice(0, MAX);
+    if (over.length >= MAX) return over.slice(0, MAX);
+    const room = MAX - over.length;
+    let taken = 0;
+    const keep = new Set(over);
+    for (const c of cands) {
+      if (taken >= room) break;
+      if (c.overlay) continue;
+      keep.add(c);
+      taken += 1;
+    }
+    return cands.filter((c) => keep.has(c));
+  })();
   const out = [];
   let i = 0;
   for (const c of kept) {

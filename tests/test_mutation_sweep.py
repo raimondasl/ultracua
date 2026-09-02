@@ -424,3 +424,51 @@ def test_the_coverage_cells_go_red_when_armed() -> None:
     daily = weekly_text.replace('cron: "17 4 * * 1"', 'cron: "17 4 * * *"', 1)
     assert daily != weekly_text, "the mutation is STALE; the cron expression changed shape"
     assert_red(test_the_weekly_workflow_is_weekly_and_can_be_asked_for, daily)
+
+
+def test_the_sweep_reads_the_manifest_the_TIER_MACHINERY_is_currently_using() -> None:
+    """One override, honoured by both files, or a new registry can never land. (R4.142.)
+
+    `tier_marks.py merge` validates a CANDIDATE manifest by re-running the fast tier with
+    `ULTRACUA_TIER_MANIFEST` pointing at it. `tests/_tiers.py` honours that variable; this script
+    did not, so during validation the tier SELECTION came from the candidate while a registry's tier
+    DERIVATION came from the committed file.
+
+    The consequence was not a wrong answer, it was a DEADLOCK: a PR adding a mutation registry whose
+    killer file is also new can never converge. The killer is absent from the committed manifest,
+    `_tier_of` refuses (correctly -- guessing is wrong in both directions), the fast tier goes red,
+    and `merge` reports *"the fast tier is RED but no test launched a browser -- that is a real
+    failure, not a classification problem"*. That message is accurate about what it saw and points
+    away from the cause, and no amount of re-running helps. Measured on the slice that added
+    `overlay_priority.py`: 19 cells pass with the override and 3 fail without it.
+
+    The env NAME is asserted to be ONE string, because two spellings is how one file silently stops
+    honouring what the other does -- the same reason `MODES` and `PROVIDERS` are imported rather than
+    retyped at the daemon door.
+    """
+    import importlib
+    import os
+    from pathlib import Path
+
+    import _tiers
+
+    assert sweep._MANIFEST_ENV == _tiers._MANIFEST_ENV == "ULTRACUA_TIER_MANIFEST", (
+        "the sweep and the tier machinery disagree about the override's NAME; one of them is now "
+        "reading a variable nobody sets")
+
+    # UNSET resolves to the committed artifact -- the override must not become a general knob.
+    prior = os.environ.pop(_tiers._MANIFEST_ENV, None)
+    try:
+        fresh = importlib.reload(sweep)
+        assert fresh.MANIFEST == fresh._MANIFEST_DEFAULT, (
+            "with no override the sweep must read the COMMITTED manifest")
+        os.environ[_tiers._MANIFEST_ENV] = str(Path("tests") / ".browser_tests.candidate.json")
+        fresh = importlib.reload(sweep)
+        assert fresh.MANIFEST == Path("tests") / ".browser_tests.candidate.json", (
+            "the sweep ignored ULTRACUA_TIER_MANIFEST; a candidate-validation run derives registry "
+            "tiers from the wrong file and a new registry deadlocks")
+    finally:
+        os.environ.pop(_tiers._MANIFEST_ENV, None)
+        if prior is not None:
+            os.environ[_tiers._MANIFEST_ENV] = prior
+        importlib.reload(sweep)

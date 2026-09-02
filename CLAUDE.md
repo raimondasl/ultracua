@@ -2405,6 +2405,61 @@ substrate. Total cost **$0.11**, and the expensive half was refused before it wa
   AST now. Eight occurrences is enough that the rule should be read as absolute: **never asserts an
   ordering or an absence over source TEXT.**
 
+## The cap hid the menu, and the obvious selector would have reordered the corpus (R4.133 FIXED, 0.162.0)
+
+Asked to retry R4.130. The retry could not run: the control it needs was rendered, visible,
+correctly named and **not in the observation**. Diagnosis and fix cost **$0.00** -- the paid run was
+never reached, and the finding this closes is the third blocker R4.130 has named.
+
+* **ASK WHAT THE AGENT CAN SEE, AND KEEP ASKING AFTER EACH FIX.** R4.130 blamed R4.102 (wrong -- the
+  toggler is at y=54), then R4.131 (right, fixed at 0.153.0). Driving the page now: the toggler IS
+  named (`hint='labelled: Toggle Search Panel'`), clicking it DOES bring `menuitemcheckbox` items in
+  (R4.132 working) -- and **9 of the page's 16** arrive. 118 visible interactables against a cap of
+  80, and a dropdown OVERLAYS the list, so its items interleave with the rows behind them in reading
+  order and the cut lands mid-menu. `Archived` was one of the seven lost.
+* **PRIORITY, NOT A BIGGER CAP** -- which is what R4.133 was filed asking for. Overlay candidates
+  survive; the rest fill the remaining slots in reading order; the kept set is re-FILTERED out of the
+  sorted list so survivors stay in reading order rather than menu-first. Cap unchanged at 80, and an
+  over-large overlay is itself truncated. **Acceptance: 9 of 16 -> 16 of 16, `Archived` included, at
+  the same 80 elements.**
+* **THE OBVIOUS SELECTOR WAS REFUSED BY ITS OWN BLAST-RADIUS MEASUREMENT, and that number is the
+  real content of this slice.** `el.closest('[role=menu],[role=dialog],[role=listbox],[role=tree]')`
+  is the reading anyone would write. Measured across all 14 corpus start pages: **10 were BOTH
+  truncated AND carrying 4-11 such elements AT REST.** `role=menu` names a PERSISTENT container on
+  both substrates -- Gitea puts it on a CLOSED dropdown (`aria-expanded="false"`), Odoo on its
+  `o_menu_systray` toolbar. Neither is a popup, and priority for them silently reorders most of the
+  corpus: no error, no invalidation, just a different first element on every page in every
+  deployment.
+* **RE-KEYED ON THE ITEM'S OWN ROLE**, `menuitem`/`menuitemcheckbox`/`menuitemradio`/`option`: the
+  same measurement reports **0 overlay elements at rest on 13 of 14 pages**, and the fourteenth is
+  not truncated -- inert across the whole corpus at rest. A closed panel's items are absent from the
+  DOM or invisible, so they never become candidates; that is what makes the item role a *state*
+  signal where the container role is not. A modal is still recognised by CONTAINER, because its
+  contents are ordinary controls with no distinguishing role of their own.
+* **PIN THE INERT DIRECTION HARDEST -- it is the one that rots quietly.** An untruncated page keeps
+  everything, a truncated page with no overlay takes the same `slice(0, MAX)`, and a bare container
+  grants NOTHING. 6 mutations, 6 killed, including the refused first design, which **every
+  menu-facing cell still passes**. `drift_bench` invariants ALL HOLD.
+* **A FIXTURE THAT OVERFLOWS THE FOLD TESTS NOTHING.** The first draft parked its overlays at
+  `top:900px`, outside the 720px viewport, so `isVisible` dropped them (R4.102) and five cells went
+  RED against a working fix. R4.138's fixture lesson one finding over: when a new cell fails, ask
+  whether the fixture reproduces the condition before touching the code.
+* **R4.130 IS NOT FIXED, and the remaining work is a scenario rebuild plus a paid run.** The seed
+  rename and goal rewording were reverted at 0.152.0. Its general claim is untouched and is still
+  what to check first: while the extractor receives the whole page body and an Odoo list renders
+  every row, a landing-page answer needs no action.
+
+* **AND THE INSTRUMENT DEADLOCKED ON ITS FIRST REAL USE (R4.142).** `tier_marks.py merge`
+  validates a candidate manifest with `ULTRACUA_TIER_MANIFEST`; `tests/_tiers.py` honours it and
+  `scripts/mutation_sweep.py` did not, so the tier SELECTION came from the candidate while a
+  registry's tier DERIVATION came from the committed file -- which cannot yet know a killer file the
+  PR is adding. The merge then says *"the fast tier is RED but no test launched a browser -- that is
+  a real failure, not a classification problem"*, which is accurate about what it saw and points at
+  the wrong layer. **A deadlock rather than a wrong answer**: no re-run helps. 0.6 built the sweep
+  and 0.8 built the loop, and no slice had ever added a registry whose killer was also new -- two
+  components correct alone and wrong at the join, which is `Odoo.reset()`'s standing note one
+  instrument over.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
