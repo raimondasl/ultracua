@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from benchmarks import drift_bench
 from benchmarks.drift_bench import (KNOWN_NO_DIGEST_MOVE, KNOWN_WRONG_BINDS, MIN_HEAL_ELIGIBLE,
                                      measure)
 
@@ -254,7 +255,21 @@ async def test_no_new_prediction_mismatches_vs_the_baseline() -> None:
 
 async def test_the_run_fits_its_wall_budget() -> None:
     rec = await _record()
-    # 220s, re-derived at 0.148.0 -- see the note beside  in drift_bench.py.
-    # The old 180s sat INSIDE this host's own ~10s variance band (157.8-167.9 measured) and CI
-    # windows failed it at 181s, so it was a deterministic failure waiting for a slow runner.
-    assert rec["wall_ms"] <= 220000, f"drift-bench took {rec['wall_ms'] / 1000:.0f}s"
+    # 260s, RE-DERIVED AT 0.165.0, and the reason is a real cost this budget should show rather than
+    # absorb silently. R4.144's bounded poll waits on a target the resolver reported ABSENT, and this
+    # corpus is 185 rows x 2 arms of DELIBERATELY drifted pages -- the densest possible population of
+    # exactly that. Measured either side, standalone: **main 184.2s, this 199.0s** (+8%). The cost
+    # floor is the stall window itself (~330 ms x 36 qualifying rows ~ 12s), and shrinking it would
+    # buy the budget with the margin a multi-stage render needs -- the wrong trade, since the poll is
+    # what takes `odoo-create-lead` from `refused_wrongly` to `true`.
+    #
+    # AND THE IN-SUITE NUMBER RUNS ~29s HIGHER THAN STANDALONE on this host (228s vs 199s for the
+    # same code), which is the load this repository already says cannot adjudicate a timing claim.
+    # So 220 was a deterministic failure waiting for a slow runner a second time -- the same
+    # sentence 0.148.0 wrote when it moved this from 180 to 220, for the same reason.
+    #
+    # 220s, re-derived at 0.148.0: the old 180s sat INSIDE this host's own ~10s variance band
+    # (157.8-167.9 measured) and CI windows failed it at 181s.
+    assert rec["wall_ms"] <= drift_bench.WALL_BUDGET_MS, (
+        f"drift-bench took {rec['wall_ms'] / 1000:.0f}s against a "
+        f"{drift_bench.WALL_BUDGET_MS / 1000:.0f}s budget")

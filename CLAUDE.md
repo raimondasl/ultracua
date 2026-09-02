@@ -2539,6 +2539,66 @@ that they do not. **$0.09** -- one paid learn; every other measurement was free.
   requests on ONE clock. Two clocks cannot be interleaved, and the interleaving IS the evidence --
   both are pinned by tests.
 
+## The poll's tax was measured on the wrong population, twice (R4.144 FIXED, 0.165.0)
+
+R4.144 named its remedy and demanded a cost measurement before any `src/` change. The measurement
+is the whole slice: it shaped the fix twice, and both times because the first number was taken where
+the cost is not.
+
+* **THE FIX, AND WHY ONE LOOK CANNOT WORK.** `_retry_if_unpainted` looks repeatedly, bounded, keyed
+  on `saw_candidates` EVERY look. The measured trace is identical across every rep: look 1 `quiet`
+  misses at ~343 ms, looks 2-4 **`already-quiet`** miss, look 5 binds at 719-906 ms. A loop that
+  reused the existing `already-quiet` skip would stop at look 2 and change nothing.
+  **`odoo-create-lead`: `refused_wrongly` -> `true`, 5 of 5 paid runs.**
+* **TAX NUMBER ONE WAS TAKEN ON SCENARIOS THAT SUCCEED.** Across `gitea-sort-list`, `gitea-search`
+  and `gitea-comment` the retry path fired **0 times** -- exactly R4.120's `true_ready = 0`
+  prediction -- and I read that as "the tax is zero". It is zero on rows that PASS. `drift_bench` is
+  370 rows of deliberately DRIFTED pages, which is the retry path's actual population, and it said
+  so on the first run: **184 s -> 259.2 s against a 220 s budget**, `within_wall_budget` FAILED.
+  **A cost measured only where the mechanism does not fire is not a cost measurement.**
+* **AND THE SECOND MEASUREMENT NAMED THE DESIGN, not just the price.** Instrumented: **36 rows
+  paying 2251 ms each, 81.1 s**, every one reporting `already-quiet` on every look after the first.
+  That is not a page mid-render -- the element is GONE, and waiting can only spend the budget. A
+  page WAITING ON THE NETWORK looks different: its quiet gaps are punctuated by bursts, and each
+  burst makes the next settle WAIT rather than answer instantly. **Consecutive `already-quiet` is
+  the discriminator**, and the counter RESETS whenever a settle genuinely waited. Six looks is twice
+  the Odoo render's measured need of three. Bench **202.7 s, invariants ALL HOLD**; Odoo acceptance
+  still 2/2.
+* **SAFE IN EXACTLY R4.115's WAY**, which is what a change to the replay's resolve owes: the moment
+  the page ANSWERS, this is a refusal rather than an unpainted page and it stops. All four safety
+  refusals still fail LOUD and immediately, and a competing candidate can never be waited out -- the
+  measured wrong-record bind the first remedy was refuted for. 9 mutations, 9 killed, and the two
+  that matter most are INERT to every success cell: waiting a mid-poll refusal out, and polling a
+  stopped page to the budget.
+* **A CELL THAT CANNOT FAIL FAST CANNOT FAIL.** The budget cell asserted elapsed time AFTER the
+  call, so the mutation removing the deadline did not make it red -- it made it HANG, past a 600 s
+  harness timeout. An unbounded thing does not return slowly, it does not return. It wraps its own
+  `asyncio.wait_for` now.
+* **THE 0.148.0 SETTLE GUARD FIRED FOR THE THIRD TIME**, correctly, over a second settle inside the
+  helper. It also went red on the new PROSE explaining the poll, because its count was taken over
+  source TEXT -- the ninth occurrence of that class, and the first inside a cell whose subject IS a
+  count. It reads the AST now and pins four named positions.
+* **THE SUITE FAILED A BUDGET THE STANDALONE RUN PASSED, and both numbers are real.** 202.7s
+  standalone, **239s in-suite against a 220s budget** where `main` passes -- this host measures ~29s
+  higher under its own load. Two cuts followed: the poll now **re-resolves only when the page
+  actually CHANGED** (the `already-quiet` skip applied once per look rather than once per call --
+  **184.2s -> 199.0s**), and the budget is re-derived to 260s openly, because the remaining ~15s is
+  the stall window itself on the densest possible population of absent targets, and shrinking it
+  would buy the budget with the margin a multi-stage render needs. Same act 0.148.0 took, same
+  stated reason. **The budget was also written TWICE** -- an invariant in the bench and an assertion
+  in its test -- and is now `WALL_BUDGET_MS`, read by both.
+* **A NEW MECHANISM DISARMED AN EXISTING GUARD, AND NOTHING WENT RED FOR IT.** Before the stall
+  guard, `the_beat_between_looks_is_removed` was KILLED by a cell counting looks: without the beat
+  the loop spun for the whole budget. The stall guard makes that loop exit after six looks either
+  way, so the cell went blind and the mutation started SURVIVING. Only re-running the registry
+  showed it. 1.5's function-split lesson arriving through a behaviour change instead of a refactor:
+  **when you add a mechanism, ask which existing guards it makes unfalsifiable.**
+* **AND THE BASELINED SUBSTRATE WAS CHECKED RATHER THAN ASSUMED (R4.145, OPEN).**
+  `gitea-sort-list` came back 1/3, so the poll went on trial: **2/3 against main's own `src/`**,
+  Fisher p ~ 1.0, step counts 0/2/8 on main. Not this change -- but the row was **3/3 at 0.151.0**,
+  which is the series `baselines/customer_v1_gitea.json`'s 0.857 was cut from. The open question is
+  the baseline, not the row.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

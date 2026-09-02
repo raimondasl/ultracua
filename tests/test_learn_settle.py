@@ -18,7 +18,9 @@ premature 28 times and "two equal element counts" 17.
 
 from __future__ import annotations
 
+import ast
 import inspect
+import textwrap
 
 import pytest
 
@@ -128,13 +130,46 @@ def test_replay_never_settles_UNCONDITIONALLY() -> None:
       * THE COST OF NOT DOING IT (R4.139): a byte-identical recipe was passed by this gate once and
         refused twice across three reps, with `mutation_gate_refused` the only differing field.
 
-    So the invariant is the SHAPE, in three named positions: the learn's two are unconditional, the
-    step's is inside the guarded helper, and the gate's is inside the `step.mutating` branch. A fifth
-    one dropped anywhere else still fails here."""
+    IT FIRED A THIRD TIME AT 0.165.0, for R4.144's bounded poll -- a SECOND settle inside the
+    guarded helper, at the top of the retry loop. That argument:
+
+      * IT IS NOT ON THE HAPPY PATH. It is reached only after a settle that GENUINELY WAITED, on a
+        target the resolver has already reported ABSENT (`saw_candidates` False). A resolve that
+        binds never enters the helper at all, and the `already-quiet` skip above still short-circuits
+        before the loop -- so `drift_bench`'s static corpus (42 such retries, 10.1 s) never reaches
+        it.
+      * THE TAX WAS MEASURED AT ZERO, NOT ARGUED: across `gitea-sort-list`, `gitea-search` and
+        `gitea-comment` the retry path fired **0 times**, which is what R4.120's `true_ready = 0`
+        predicts for a server-rendered page.
+      * THE COST OF NOT DOING IT: `odoo-create-lead` was `refused_wrongly`, and with the poll it is
+        **`true` 3/3**, binding at look 5 of ~5 at 719-906 ms.
+
+    So the invariant is the SHAPE, in four named positions: the learn's two are unconditional, the
+    step's TWO are inside the guarded helper (one before the first look, one per subsequent look),
+    and the gate's is inside the `step.mutating` branch. A new one dropped anywhere else still fails
+    here.
+
+    AND THE COUNT IS TAKEN FROM THE AST, NOT FROM THE TEXT. Counting `src.count("await_settled()")`
+    made this cell red on the new PROSE explaining the poll -- the NINTH time a scan in this
+    repository has matched the comment written to explain it, and the first time inside a cell whose
+    subject is a COUNT. 0.161.0 recorded the rule as absolute; this is it applied.
+    """
+    tree = ast.parse(textwrap.dedent(inspect.getsource(flow_mod)))
+
+    def _settles(node) -> int:
+        return sum(1 for n in ast.walk(node)
+                   if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                   and n.func.attr == "await_settled")
+
     src = inspect.getsource(flow_mod)
-    total = src.count("await_settled()")
-    inside_helper = inspect.getsource(flow_mod._retry_if_unpainted).count("await_settled()")
-    assert inside_helper == 1, "the replay's step settle must live in the guarded helper"
+    total = _settles(tree)
+    helper = next(n for n in ast.walk(tree)
+                  if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
+                  and n.name == "_retry_if_unpainted")
+    inside_helper = _settles(helper)
+    assert inside_helper == 2, (
+        f"expected the replay's step settles to be the retry helper's two -- one before the first "
+        f"look, one per subsequent look -- found {inside_helper}")
 
     # The gate's settle must sit INSIDE the mutating branch -- a read step must not pay for it.
     gate_call = 'tr.meta["gate_settled"] = await session.await_settled()'
@@ -146,11 +181,11 @@ def test_replay_never_settles_UNCONDITIONALLY() -> None:
     assert src.index(gate_call) < src.index("current = await scope_fingerprint(target)"), (
         "the settle must PRECEDE the drift comparison it exists to make like-for-like")
 
-    assert total == 4, (
-        f"expected 2 unconditional LEARN settles + 1 guarded replay settle + 1 inside the mutation "
-        f"gate, found {total} -- a new unconditional wait on the replay path is pure tax on the "
-        f"substrates R4.120 measured at `true_ready = 0`, and needs the same argument this cell has "
-        f"now forced twice")
+    assert total == 5, (
+        f"expected 2 unconditional LEARN settles + 2 in the guarded retry helper + 1 inside the "
+        f"mutation gate, found {total} -- a new unconditional wait on the replay path is pure tax on "
+        f"the substrates R4.120 measured at `true_ready = 0`, and needs the same argument this cell "
+        f"has now forced three times")
 
 
 def test_the_settle_window_is_the_measured_one() -> None:
