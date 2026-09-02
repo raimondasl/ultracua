@@ -52,7 +52,23 @@ import prove_red  # noqa: E402  (after the path insert, deliberately)
 
 from ultracua.flows import sweep_verdict  # noqa: E402
 
-MANIFEST = ROOT / "tests" / ".browser_tests.json"
+# THE SAME MANIFEST THE TIER MACHINERY IS CURRENTLY USING, override included (R4.142).
+#
+# `tier_marks.py merge` validates a CANDIDATE manifest by re-running the fast tier with
+# `ULTRACUA_TIER_MANIFEST` pointing at it. `tests/_tiers.py` honours that; this file did not, so
+# during validation the tier SELECTION came from the candidate while this registry's tier DERIVATION
+# came from the committed file. A PR adding a mutation registry whose killer file is also new could
+# therefore never converge: the killer is absent from the committed manifest, `_tier_of` refuses (as
+# it should -- guessing is wrong in both directions), the fast tier goes red, and the merge reports
+# "the fast tier is RED but no test launched a browser", which reads as a real product failure.
+# Measured on this slice: three cells red, candidate refused, and no amount of re-running helps.
+#
+# The env NAME is imported from `tests/_tiers.py` rather than retyped -- two spellings of one
+# variable is how one file silently stops honouring what the other does.
+_MANIFEST_DEFAULT = ROOT / "tests" / ".browser_tests.json"
+sys.path.insert(0, str(ROOT))
+from tests._tiers import _MANIFEST_ENV  # noqa: E402
+MANIFEST = Path(os.environ[_MANIFEST_ENV]) if os.getenv(_MANIFEST_ENV) else _MANIFEST_DEFAULT
 REGISTRY_DIR = ROOT / "tests" / "mutations"
 
 # QUIET IS AN ALLOWLIST, and it holds one entry. Everything else — an unregistered survivor, a stale
