@@ -2311,6 +2311,51 @@ closing R4.115's sites (2) and (3) move the CORPUS number, or only the one row t
   contract, and a throwaway probe that spends money should unpack the real return before the run,
   not after it.
 
+## `shape_drift` does not generalise, and the remedy I named could not fire (R4.140, 0.160.0)
+
+R4.140 was filed at 0.159.0 with a worry and a remedy, and measurement refuted both. Driving the
+other four Odoo reads five times each cost **~$1.7**; the correction to the remedy cost nothing but
+reading `pin.py`.
+
+* **THE WORRY WAS RIGHT TO HAVE AND THE ANSWER IS NO.** At a 1/3 rate a clean three-rep run happens
+  30% of the time, so the other reads' stability records were NOT evidence of immunity -- that is
+  the same arithmetic used to excuse 0.156.0's clean sweep, and it cuts both ways. Measured: **19 of
+  19 scored runs returned a bare string** (`odoo-search` 'Quote for 150 carpets', `odoo-sort-list`
+  'Need 20 Desks', `odoo-menu-nav` 'Won', `odoo-open-record` 'Gemini Furniture'), one distinct shape
+  apiece. `odoo-filter-status` is the ONLY corpus read whose goal asks for two things at once, which
+  is what invites a composite answer.
+* **THEY ARE STRUCTURALLY IMMUNE, WITH TWO INDEPENDENT SOURCES, AND ONLY AN ARMING PASS FOUND THE
+  SECOND.** `_shape_of` leaves the value out of a scalar's shape, so two answers give BYTE-IDENTICAL
+  shapes and `_shape_matches` accepts them at `recorded == current`; and even with the value put
+  back, the `same primitive type` arm answers True. Breaking EITHER alone leaves the new guard green
+  -- so my first two mutations both reported SURVIVED while the cell was fine, and my first
+  docstring named the wrong mechanism. Breaking both kills it. **A cell that survives a mutation is
+  as often a wrong story about the code as a hole in the suite**, and the difference is one more
+  mutation.
+* **THE REMEDY THE FINDING NAMED CANNOT FIRE ON THE ROW IT DESCRIBES.** "Pin the read" claimed to
+  fix the flake AND deliver 0-LLM. `read_pin` is not a schema pin -- `pin.py` records a resilient
+  LOCATOR to the element holding the answer and re-reads `inner_text()`, which is where the 0-LLM
+  comes from, and it records only for a SCALAR mapping to **exactly one** element. This row returns
+  `{'count': 6, 'opportunities': [...]}`: no pin, ever. Two benefits claimed from a mechanism that
+  delivers neither here.
+* **WHAT WOULD FIX IT IS ALREADY BUILT, IN TWO HALVES NOBODY HAS JOINED.** `extract()` takes a
+  `schema` that becomes the tool-use `input_schema` -- a hard constraint at the API boundary, not a
+  prompt request -- and `flows.py` passes `spec.extract_schema`, which defaults to None and is set
+  nowhere in the bench. Meanwhile the learn ALREADY records `meta.shape` and uses it only to REFUSE
+  afterwards. Deriving one from the other uses the same fact to prevent the divergence instead of
+  punishing it, and the fit is exact (`_shape_of` records a dict's sorted KEY SET; `_shape_matches`
+  compares only that). **It keeps the LLM call** -- no 0-LLM win -- and must not be bought by
+  loosening `_shape_matches`, because a DROPPED key is what that gate exists for.
+* **AND THE MEASUREMENT POINTED SOMEWHERE BETTER THAN THE FINDING DID.** All four immune rows return
+  a scalar string, which IS `read_pin`'s precondition -- so **four of five Odoo reads may be
+  candidates for genuinely 0-LLM replay**, the central product claim. Unverified (the pin needs the
+  value to map to exactly one element) and untried (`pin_read` is opt-in and the bench sets it
+  False). That is the cheap next measurement here, not a fix to the shape gate.
+* **THE SCALAR RESIDUAL, so "scalars are safe" is not over-read**: `_shape_matches` compares `t`
+  FIRST, so `6` and `'6'` still drift. A goal asking "how many" is exactly where an extractor might
+  quote a count -- so rewording this row to return a scalar NARROWS the failure rather than removing
+  it, and dropping "show only" risks turning it into another zero-action row (R4.130).
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

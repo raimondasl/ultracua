@@ -427,8 +427,10 @@ not happen is a live caveat quietly becoming a historical one.
 * **R4.140** — `odoo-filter-status` refuses `shape_drift` about one run in three, because the
   extractor optionally emits a second key and the SHAPE therefore varies between learn and replay.
   The refusal is correct (inviolable #2), but it means a read row's availability depends on an LLM's
-  choice of schema. Only that one row has been driven enough times to see it; whether the other
-  extracting reads carry the same latent variance is unmeasured.
+  choice of schema. **It does not generalize, and that is measured rather than assumed**: the other
+  four Odoo reads were driven five times each and 19 of 19 scored runs returned a bare string, which
+  is structurally outside this gate's reach — so exactly one corpus row can refuse this way, and it
+  is the only one whose goal asks for two things at once.
 * **R4.108** — the generic-operator half of the mutation sweep is unbuilt, so the suite behind
   these benchmarks is proven against curated mutations only.
 <!-- /open-findings -->
