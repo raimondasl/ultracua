@@ -12,7 +12,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**66 open**, 70 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**67 open**, 70 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **66 open**, 70 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **67 open**, 70 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -943,6 +943,17 @@ if and only if that branch is ever resumed.
 **THE SCALAR RESIDUAL, kept explicit so 'scalars are safe' is not over-read**: `_shape_matches` compares `t` FIRST, so `6` and `'6'` still drift. A goal asking 'how many' is exactly where an extractor might quote a count, so rewording this row to return a scalar NARROWS the failure rather than removing it -- and risks turning it into another zero-action row (R4.130) if 'show only' goes, since the answer is then countable off the landing page.
 
 **AN UNEXPECTED CONSEQUENCE WORTH ITS OWN MEASUREMENT**: all four immune rows return a scalar string, which is `read_pin`'s precondition. 'Won', 'Gemini Furniture', 'Need 20 Desks' and 'Quote for 150 carpets' are each plausibly one element's text, so **four of five Odoo reads may be candidates for genuinely 0-LLM replay** -- the central product claim. UNVERIFIED: the pin records only if the value maps to exactly one element. `pin_read` is opt-in and the bench sets it False, so nothing in the corpus has ever tried. |
+| R4.141 | open | **NO CORPUS READ DEMONSTRATES THE 0-LLM CLAIM, AND THE MECHANISM THAT WOULD FIX IT CANNOT FIRE ON EITHER SUBSTRATE.** `flows.py` builds an extraction router whenever `spec.extract is not None and not (spec.pin_read and meta.read_pin)`, and the branch's own comment names the exempt cases: navigate-only reads, selector-based write confirms, and a PINNED read. `scored_run.spec_for` sets `extract=entry.scenario.goal` for every read and sets `pin_read` nowhere, so **every corpus read pays one LLM call per replay**. Measured on BOTH substrates, not just derived: `gitea-menu-nav`, `gitea-search` and `odoo-sort-list` all replay with `llm_calls=1, zero_llm=False`. R4.116 had already measured one Odoo instance; the substrate carrying a published baseline had never been checked.
+
+**SO THE HEADLINE MIXES TWO THINGS.** `availability_rate` counts a read as available while it calls the model on every replay, and the stated reason `no_actions_needed` scores ZERO is *'every run pays the LLM again -- no speed-up, so not available'*. Both are true of an extracting read; the difference between one extraction call and a full re-plan is real but QUANTITATIVE, and nothing in the benchmark measures where a row falls. The writes are the rows that genuinely replay at 0-LLM (`gitea-comment` is the recorded one).
+
+**THE BENCH ALREADY COMPUTES THE MISSING NUMBER AND PUBLISHES IT NOWHERE.** `scored_run` sets `out['replay']['llm_calls']` and `out['replay']['zero_llm']` from a replay-scoped ledger, and `build_bench_record`'s per-scenario row carries only `{outcome, substrate, code}`. Surfacing it is the cheap remedy and is NOT done here: `zero_llm` is an OBSERVATION and B3's whole design keeps observations on `ScenarioRun` and adjudications on `Scored`, so the plumbing crosses a boundary that took a slice to get right and should not be crossed in a slice about something else.
+
+**TURNING `pin_read` ON WOULD NOT HELP -- MEASURED FIRST, FOR $0.00, INSTEAD OF BUYING TEN LEARNS.** `benchmarks/pin_viability.py` drives the product's own `_PIN_JS` and `find_pin` against every read's start page: **0 of 10 pinnable**. R4.140 had already supplied half the precondition for free (19 of 19 runs returned a scalar); the half that refuses is DOM IDENTITY. `find_pin` rejects a purely POSITIONAL css anchor, because after a layout shift it would resolve to a different element and return a wrong value -- a deliberate write-safety-shaped choice, already pinned by `test_find_pin_refuses_positional_only_anchor`. So a pin needs an `id` or `data-testid`. **Odoo has NEITHER on any of 765 leaf text holders across five pages.** Gitea has ids on 371 of 985 -- but never on the element holding an answer, so all five rows still refuse.
+
+**AND THE CONSTRAINT IS DEEPER THAN THE ALLOWLIST, WHICH IS WHY 'JUST WIDEN IT' IS NOT THE REMEDY.** A pin must locate the element WITHOUT reference to its content -- `read_pin` passes `text=None` with the comment *never anchor on the value*, because anchoring on the learned text would find the element by the OLD value and read the old value back forever. On a table cell the only content-independent anchors are structural (refused, correctly) or an id (absent). Widening to the recipe's own locator tiers does not escape this: `role+name` on a data cell resolves through its text. A real remedy needs a value-independent anchor that is not positional -- a stable ANCESTOR plus an offset, or a neighbouring LABEL, which is the `anchor` concept `locators.py` already has for rows. **Unevaluated, and recorded as the design to evaluate rather than as a proposal.**
+
+**WHAT THIS IS NOT**: a claim that reads are slow or wrong. A read still replays its ACTIONS deterministically and pays one call instead of a 6-20 turn re-plan. The defect is that the benchmark's central number does not say which, and that the product's headline claim is undemonstrated for half its corpus. |
 <!-- /generated:r4-index -->
 
 
