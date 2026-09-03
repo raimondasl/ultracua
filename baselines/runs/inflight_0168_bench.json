@@ -1,0 +1,780 @@
+{
+  "summary": {
+    "stalled": {
+      "n": 36,
+      "total_ms": 23404,
+      "busy_at_entry": 0,
+      "max_at_entry": 0
+    },
+    "refused": {
+      "n": 80,
+      "total_ms": 0,
+      "busy_at_entry": 0,
+      "max_at_entry": 0
+    },
+    "skipped": {
+      "n": 10,
+      "total_ms": 30,
+      "busy_at_entry": 0,
+      "max_at_entry": 0
+    }
+  },
+  "rows": [
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 672,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 640,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 703,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 687,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 656,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 641,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 671,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 656,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 641,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 641,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 656,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 672,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 656,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 641,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 625,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 625,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 610,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 609,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:skipped",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:skipped",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:skipped",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:skipped",
+      "ms": 15,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:skipped",
+      "ms": 15,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 625,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 640,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 656,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 656,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 657,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 625,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 656,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 657,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 625,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 703,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 672,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 672,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 641,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 640,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 656,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 656,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 625,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:stalled:1",
+      "ms": 640,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "refused",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:skipped",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:skipped",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:skipped",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:skipped",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    },
+    {
+      "verdict": "already-quiet:skipped",
+      "ms": 0,
+      "inflight_at_entry": 0,
+      "bound": false
+    }
+  ]
+}
