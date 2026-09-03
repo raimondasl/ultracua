@@ -1,0 +1,69 @@
+{
+  "what": "odoo-create-lead measured SOLO and inside the CORPUS at 0.165.0, with the readiness poll's own verdict per run. R4.144 shipped claiming 5/5 from two solo batches; this is the series that corrected it.",
+  "scenario": "odoo-create-lead",
+  "version": "0.165.0",
+  "solo": [
+    {
+      "rep": 1,
+      "outcome": "refused_wrongly",
+      "steps": 3,
+      "wall_s": 120.5,
+      "poll_verdict": "already-quiet:stalled:1",
+      "poll_bound": false,
+      "poll_ms": 734
+    },
+    {
+      "rep": 2,
+      "outcome": "true",
+      "steps": 3,
+      "wall_s": 112.4,
+      "poll_verdict": "quiet:bound:2",
+      "poll_bound": true,
+      "poll_ms": 938
+    },
+    {
+      "rep": 3,
+      "outcome": "true",
+      "steps": 3,
+      "wall_s": 112.9,
+      "poll_verdict": "quiet:bound:2",
+      "poll_bound": true,
+      "poll_ms": 859
+    },
+    {
+      "rep": 4,
+      "outcome": "true",
+      "steps": 4,
+      "wall_s": 98.2,
+      "poll_verdict": "quiet:bound:2",
+      "poll_bound": true,
+      "poll_ms": 859
+    }
+  ],
+  "corpus": [
+    {
+      "rep": 1,
+      "outcome": "refused_wrongly",
+      "code": "drift"
+    },
+    {
+      "rep": 2,
+      "outcome": "true",
+      "code": null
+    },
+    {
+      "rep": 3,
+      "outcome": "refused_wrongly",
+      "code": "drift"
+    }
+  ],
+  "totals": {
+    "solo_pass": 3,
+    "solo_n": 4,
+    "solo_pass_including_earlier_batches": 8,
+    "solo_n_including_earlier_batches": 9,
+    "corpus_pass": 1,
+    "corpus_n": 3
+  },
+  "mechanism": "The one failing solo run reports `already-quiet:stalled:1` at 734 ms -- the stall guard firing because the page went quiet six times running before the render's next stage arrived. Every passing run reports `quiet:bound:2` at 859-938 ms. So the failure is a RACE between the stall window and the render's inter-stage gap, not a locator or a gate problem."
+}
