@@ -105,40 +105,138 @@ async def _staged_page(sess, *, appears_after_ms: int) -> None:
     await sess.page.evaluate(_STAGED_JS, appears_after_ms)
 
 
-@pytest.mark.asyncio
-async def test_the_target_that_appears_after_several_quiet_gaps_IS_found() -> None:
-    """THE DEFECT: one look lands in a gap. The measured shape needed five."""
-    async with BrowserSession(headless=True) as sess:
-        await _staged_page(sess, appears_after_ms=900)
-        sink: dict = {}
-        first = await resolve(sess.page, TARGET, unique=True, sink=sink)
-        assert first is None and sink.get("saw_candidates") is False, (
-            "the fixture is inert: the target must be ABSENT on the first look, or this cell "
-            "passes against the single-look code it exists to refuse")
-        tr = _tr()
-        got = await _retry_if_unpainted(sess, sess.page, TARGET, tr, None, sink=sink)
-        assert got is not None, (
-            f"the target never bound though it appeared at 900 ms, inside the "
-            f"{settings.settle_cap_ms} ms budget: {tr.meta.get('readiness_retry')!r}")
-        assert ":bound:" in tr.meta["readiness_retry"], tr.meta
+class _ScriptedSession:
+    """A session whose settle verdicts are scripted: one ENTRY verdict, then a repeating pattern.
+
+    It REPEATS rather than running out. A finite list that falls back to `already-quiet` on
+    exhaustion silently turns "a page that keeps moving" into "a page that stopped" partway through
+    the run -- which is what the first scripted draft did, stalling at look 21 and reporting the
+    reset as broken when it was fine.
+    """
+
+    def __init__(self, entry, pattern):
+        self._entry = entry
+        self._pattern = list(pattern)
+        self._i = 0
+        self.asked = 0
+
+    async def await_settled(self):
+        self.asked += 1
+        if self.asked == 1:
+            return self._entry
+        v = self._pattern[self._i % len(self._pattern)]
+        self._i += 1
+        return v
+
+
+class _ScriptedPage:
+    """The beat, with no clock in it -- so a scripted cell about the COUNTER runs instantly."""
+
+    async def wait_for_timeout(self, _ms):
+        return None
+
+
+class _SleepingPage:
+    """The beat with its real duration, for the one cell whose subject IS that duration.
+
+    `_ScriptedPage` makes the beat free, which is right for the counter cells and wrong here: a cell
+    measuring how long the poll watches a stopped page cannot use a stub that removes the waiting.
+    """
+
+    async def wait_for_timeout(self, ms):
+        await asyncio.sleep(ms / 1000.0)
+
+
+class _ScriptedResolve:
+    """`resolve` as a SCRIPT: a list of (bound, saw_candidates) answers, in order.
+
+    THREE CELLS HERE USED TO DRIVE A REAL PAGE AND COUPLE A DOM CHANGE TO THE POLL'S OWN CLOCK, and
+    two of them failed CI twice, each time differently. The first fixture put a 360 ms quiet gap
+    against a stall window of `settle_stall_looks * settle_poll_ms` plus per-look settle OVERHEAD --
+    and overhead is exactly what a fast runner has less of, so it stalled there and passed here.
+    Widening the bursts fixed that and produced a second race: the target now landed DURING a look,
+    the resolver saw a half-updated DOM, and the verdict came back `refused-at`.
+
+    Both failures are the same mistake. These cells are about the poll's CONTROL FLOW -- how many
+    times it looks, and what it does with each answer -- and a real page adds a clock to a property
+    that has none. The cells that remain on a browser below are the ones whose subject really is a
+    page: an ambiguous DOM, a static DOM, a DOM that never stops mutating.
+    """
+
+    def __init__(self, answers):
+        self._answers = list(answers)
+        self.calls = 0
+
+    async def __call__(self, page, spec, *a, **kw):
+        self.calls += 1
+        bound, saw = self._answers[min(self.calls - 1, len(self._answers) - 1)]
+        sink = kw.get("sink")
+        if sink is not None:
+            sink["saw_candidates"] = saw
+            sink["bound_by"] = "role+name" if bound else "none"
+        return object() if bound else None
 
 
 @pytest.mark.asyncio
-async def test_it_really_took_MORE_THAN_ONE_look() -> None:
-    """Without this the cell above is satisfied by a single look that got lucky on timing.
+async def test_the_target_that_appears_after_several_quiet_gaps_IS_found(monkeypatch) -> None:
+    """THE DEFECT: one look lands in a gap. The measured Odoo shape needed five.
+
+    Scripted, because the property is control flow: absent, absent, then present must return the
+    element. The real-page evidence for this is the Odoo measurement in R4.144 -- three reps of a
+    live replay, look 1 `quiet` missing at ~343 ms and look 5 binding at 719-906 ms -- which is
+    stronger than any fixture and does not race a clock in CI.
+    """
+    scripted = _ScriptedResolve([(False, False), (False, False), (True, False)])
+    monkeypatch.setattr(flow_mod, "resolve", scripted, raising=True)
+    moving = _ScriptedSession("quiet", ["quiet"])       # the page keeps painting between looks
+    tr = _tr()
+    got = await flow_mod._retry_if_unpainted(
+        moving, _ScriptedPage(), TARGET, tr, None, sink={"saw_candidates": False})
+    assert got is not None, (
+        f"a target that appeared on the third look was never returned: "
+        f"{tr.meta['readiness_retry']!r} after {scripted.calls} resolve(s)")
+    assert ":bound:" in tr.meta["readiness_retry"], tr.meta
+
+
+@pytest.mark.asyncio
+async def test_it_really_took_MORE_THAN_ONE_look(monkeypatch) -> None:
+    """Without this the cell above is satisfied by a single look that got lucky.
 
     The recorded verdict carries the count, so the property is checkable rather than inferred.
     """
-    async with BrowserSession(headless=True) as sess:
-        await _staged_page(sess, appears_after_ms=900)
-        sink: dict = {}
-        await resolve(sess.page, TARGET, unique=True, sink=sink)
-        tr = _tr()
-        await _retry_if_unpainted(sess, sess.page, TARGET, tr, None, sink=sink)
-        verdict = tr.meta["readiness_retry"]
-        looks = int(verdict.rsplit(":", 1)[1])
-        assert looks >= 2, (
-            f"bound on the first look, so this fixture cannot refute the single-look code: {verdict}")
+    scripted = _ScriptedResolve([(False, False), (False, False), (True, False)])
+    monkeypatch.setattr(flow_mod, "resolve", scripted, raising=True)
+    moving = _ScriptedSession("quiet", ["quiet"])
+    tr = _tr()
+    await flow_mod._retry_if_unpainted(
+        moving, _ScriptedPage(), TARGET, tr, None, sink={"saw_candidates": False})
+    looks = int(tr.meta["readiness_retry"].rsplit(":", 1)[1])
+    assert looks == 3, (
+        f"the poll bound after {looks} look(s) against a script that answers on the third -- one "
+        f"look cannot refute the single-look code: {tr.meta['readiness_retry']!r}")
+    assert scripted.calls == 3, f"resolve was called {scripted.calls} times, expected 3"
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_that_APPEARS_MID_POLL_stops_it_too(monkeypatch) -> None:
+    """The in-loop half of the safety guard, which the top-of-function guard does NOT cover.
+
+    A mutation removing the per-look `saw_candidates` check survives every cell about the poll
+    BINDING, and the refusal cell below enters through the top guard and never reaches the loop. So
+    the shape that matters is: ABSENT on look 1, and the page ANSWERING a look later. R4.115's
+    measured wrong-record bind is that timeline in reverse -- wait long enough and the competitor
+    resolves itself -- so it must not be waited on.
+    """
+    scripted = _ScriptedResolve([(False, False), (False, True)])
+    monkeypatch.setattr(flow_mod, "resolve", scripted, raising=True)
+    moving = _ScriptedSession("quiet", ["quiet"])
+    tr = _tr()
+    got = await flow_mod._retry_if_unpainted(
+        moving, _ScriptedPage(), TARGET, tr, None, sink={"saw_candidates": False})
+    assert got is None, (
+        "the poll kept going after the page ANSWERED -- this is the wrong-record bind R4.115 "
+        "measured, arriving one look later")
+    assert "refused-at" in tr.meta["readiness_retry"], tr.meta
 
 
 @pytest.mark.asyncio
@@ -409,48 +507,6 @@ async def test_the_beat_gives_a_QUIET_page_time_for_its_next_stage_to_land(monke
         f"the poll gave up after {elapsed:.0f} ms, under the {floor} ms its own beat should have "
         f"spanned -- without a pause between looks the whole stall budget is spent in the time it "
         f"takes to ask a quiet page six questions, which is less than any network round trip")
-
-
-class _ScriptedSession:
-    """A session whose settle verdicts are scripted: one ENTRY verdict, then a repeating pattern.
-
-    It REPEATS rather than running out. A finite list that falls back to `already-quiet` on
-    exhaustion silently turns "a page that keeps moving" into "a page that stopped" partway through
-    the run -- which is what the first scripted draft did, stalling at look 21 and reporting the
-    reset as broken when it was fine.
-    """
-
-    def __init__(self, entry, pattern):
-        self._entry = entry
-        self._pattern = list(pattern)
-        self._i = 0
-        self.asked = 0
-
-    async def await_settled(self):
-        self.asked += 1
-        if self.asked == 1:
-            return self._entry
-        v = self._pattern[self._i % len(self._pattern)]
-        self._i += 1
-        return v
-
-
-class _ScriptedPage:
-    """The beat, with no clock in it -- so a scripted cell about the COUNTER runs instantly."""
-
-    async def wait_for_timeout(self, _ms):
-        return None
-
-
-class _SleepingPage:
-    """The beat with its real duration, for the one cell whose subject IS that duration.
-
-    `_ScriptedPage` makes the beat free, which is right for the counter cells and wrong here: a cell
-    measuring how long the poll watches a stopped page cannot use a stub that removes the waiting.
-    """
-
-    async def wait_for_timeout(self, ms):
-        await asyncio.sleep(ms / 1000.0)
 
 
 @pytest.mark.asyncio
