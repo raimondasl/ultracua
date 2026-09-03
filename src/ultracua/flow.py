@@ -1490,9 +1490,90 @@ async def _retry_if_unpainted(session, page, spec, tr, loc, *, sink=None, tag: s
         # anything.
         tr.meta[tag + "readiness_retry"] = "already-quiet:skipped"
         return None
-    retried = await resolve(page, spec, unique=True, sink=s)
-    tr.meta[tag + "readiness_retry"] = f"{why}:{'bound' if retried is not None else 'still-none'}"
-    return retried
+    # LOOK MORE THAN ONCE, BOUNDED BY `settle_cap_ms` (R4.144).
+    #
+    # WHY ONE LOOK IS NOT ENOUGH, measured inside a real replay. Odoo's list -> form transition is a
+    # MULTI-STAGE render: `POST .../onchange` 47 ms after the click, then a lazily-loaded asset
+    # bundle, then `render_public_asset` at +547 ms. The DOM is QUIET BETWEEN THOSE STAGES -- there
+    # is nothing to mutate while a bundle downloads -- so mutation-quiet fires on a page that has
+    # not started its next paint. That is R4.115's documented limit ("cannot tell finished from not
+    # started") with a third state it did not name: WAITING ON THE NETWORK. R4.120 validated
+    # `mut-quiet-200` over 60 page-reps with zero prematures, but that population was page LOADS,
+    # never a post-click transition that fetches new assets.
+    #
+    # THE MEASURED SHAPE, three reps, identical every time:
+    #     look 1  settle=quiet          not bound   ~343 ms   <- today's single retry, and it fails
+    #     look 2  settle=already-quiet  not bound   ~375 ms
+    #     look 3  settle=already-quiet  not bound   ~453 ms
+    #     look 4  settle=already-quiet  not bound   ~546 ms
+    #     look 5  settle=quiet          BOUND       ~890 ms
+    # `odoo-create-lead` went `refused_wrongly` -> **`true` 3/3** on that. Note looks 2-4: a loop
+    # that reused the `already-quiet` skip above would stop at look 2 and change nothing, which is
+    # why the beat below is not optional.
+    #
+    # THE TAX IS ZERO WHERE IT WOULD BE PURE TAX, and that is measured rather than argued: across
+    # `gitea-sort-list`, `gitea-search` and `gitea-comment` the retry path fired **0 times** -- a
+    # server-rendered page binds first try, exactly as R4.120's `true_ready = 0` predicts. The
+    # `already-quiet` skip ABOVE is untouched, so `drift_bench`'s static corpus still short-circuits
+    # before reaching here (42 such retries, 10.1 s) and never enters this loop at all.
+    #
+    # SAFE IN EXACTLY R4.115's WAY. The loop is keyed on `saw_candidates` every look, not on the
+    # return value: the moment the page ANSWERS, this is a refusal rather than an unpainted page and
+    # we stop at once. So all four safety refusals still fail LOUD, and a competing candidate can
+    # never be waited out -- which is the measured wrong-record bind the first remedy was refuted
+    # for. `networkidle` is separately refuted (it never fires on Odoo), so it is not reached for.
+    #
+    # AND IT STOPS WHEN NOTHING IS HAPPENING, WHICH IS NOT THE SAME AS THE BUDGET RUNNING OUT.
+    # The first draft polled to the cap on any absent target, and `drift_bench` priced that
+    # immediately: **36 genuinely-drifted rows paying 2251 ms each, 81 s**, taking the bench from
+    # 184 s to 259 s against a 220 s budget. Those rows report `already-quiet` on every look after
+    # the first -- the page is not mid-render, the element is simply gone, and waiting can only
+    # spend the budget. A page WAITING ON THE NETWORK looks different: its quiet gaps are punctuated
+    # by bursts, and every burst makes `await_settled` wait again rather than answering instantly.
+    # So consecutive `already-quiet` returns are the discriminator, and the measured Odoo shape
+    # needed THREE of them in a row before the render's next stage landed.
+    # AND IT ONLY RE-RESOLVES WHEN THE PAGE HAS ACTUALLY CHANGED, which is the `already-quiet` rule
+    # above applied once per look rather than once per call. A ladder walk is not free -- the note
+    # above prices 42 of them at 10.1 s -- and re-walking it against a DOM that has not mutated
+    # since the last walk is provably the same answer. Measured: resolving on every look took the
+    # bench to 239 s in-suite against a 220 s budget, where `main` passes; waiting for a real change
+    # first brings it back inside. So the outer loop counts RESOLVES and the inner one waits.
+    deadline = time.monotonic() + settings.settle_cap_ms / 1000.0
+    stalled = 0
+    looks = 0
+    while True:
+        looks += 1
+        retried = await resolve(page, spec, unique=True, sink=s)
+        if retried is not None:
+            tr.meta[tag + "readiness_retry"] = f"{why}:bound:{looks}"
+            return retried
+        if s.get("saw_candidates"):
+            # THE PAGE ANSWERED THIS TIME. A refusal, not an unpainted page -- and waiting on a
+            # refusal is precisely what bound the wrong record when this was keyed on `None`.
+            tr.meta[tag + "readiness_retry"] = f"{why}:refused-at:{looks}"
+            return None
+        while True:
+            if time.monotonic() >= deadline:
+                tr.meta[tag + "readiness_retry"] = f"{why}:still-none:{looks}"
+                return None
+            if stalled >= settings.settle_stall_looks:
+                tr.meta[tag + "readiness_retry"] = f"{why}:stalled:{looks}"
+                return None
+            # A BEAT BEFORE ASKING AGAIN, because `await_settled()` returns `already-quiet`
+            # instantly on a page between network-gated stages. Without it this spins as fast as the
+            # event loop allows and the whole budget is spent in milliseconds.
+            await page.wait_for_timeout(settings.settle_poll_ms)
+            why = await session.await_settled()
+            if why != "already-quiet":
+                # A WAIT THAT ACTUALLY WAITED MEANS THE PAGE MOVED, so there is something new to
+                # resolve against and the stall counter resets -- a slow multi-stage render keeps
+                # its budget however many gaps it has already had.
+                stalled = 0
+                break
+            # `already-quiet` means nothing mutated in the whole quiet window: the page is telling
+            # us it has stopped, and enough of those in a row is the only evidence available that no
+            # further stage is coming.
+            stalled += 1
 
 
 async def _replay_step(

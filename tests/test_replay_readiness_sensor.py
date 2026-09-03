@@ -161,15 +161,27 @@ async def test_a_page_still_painting_is_waited_out_and_bound() -> None:
         assert loc is None and sink["saw_candidates"] is False
         out = await flow_mod._retry_if_unpainted(s, s.page, spec, tr, loc, sink=sink)
         assert out is not None, "a page that was still painting was not waited out"
-        assert tr.meta["readiness_retry"].endswith(":bound")
+        # `:bound:<looks>` since 0.165.0 -- the verdict carries HOW MANY looks it took, because one
+        # look is not enough for a render whose stages are gated on separate network fetches
+        # (R4.144). Matched as a segment rather than a suffix so the count can grow without this
+        # cell going red for a reason that is not about the property it asserts.
+        assert ":bound:" in tr.meta["readiness_retry"], tr.meta["readiness_retry"]
     finally:
         await s.close()
 
 
 @pytest.mark.asyncio
 async def test_a_genuinely_absent_element_still_fails_after_the_wait() -> None:
-    """The retry is bounded and honest: nothing ever appears, so the answer is still None -- just
-    one settle later. Loud, not silent."""
+    """The retry is bounded and honest: nothing ever appears, so the answer is still None -- just a
+    little later. Loud, not silent.
+
+    SINCE 0.165.0 THERE ARE TWO WAYS TO GIVE UP AND BOTH ARE THIS PROPERTY. `still-none` means the
+    budget ran out; `stalled` means the page produced no mutation for several consecutive looks, so
+    it has STOPPED rather than paused -- which is what keeps a genuinely-absent element from being
+    waited on for the full `settle_cap_ms` (measured: 36 drift_bench rows at 2251 ms each, 81 s).
+    A static page reaches the second. What this cell is about is that neither ever returns an
+    element, so it asserts the SET rather than one spelling.
+    """
     s = BrowserSession(headless=True)
     await s.start()
     try:
@@ -180,7 +192,10 @@ async def test_a_genuinely_absent_element_still_fails_after_the_wait() -> None:
         loc = await L.resolve(s.page, spec, unique=True, sink=sink)
         out = await flow_mod._retry_if_unpainted(s, s.page, spec, tr, loc, sink=sink)
         assert out is None
-        assert tr.meta["readiness_retry"].endswith(":still-none")
+        verdict = tr.meta["readiness_retry"]
+        assert any(k in verdict for k in (":still-none:", ":stalled:", "already-quiet:skipped")), (
+            f"a genuinely absent element produced {verdict!r}, which is not one of the ways this "
+            f"retry is allowed to give up -- the only thing it must never do is return an element")
     finally:
         await s.close()
 

@@ -137,6 +137,21 @@ class Settings:
     # gives up and the caller proceeds, which is EXACTLY today's behaviour, just later -- so the
     # failure direction of this whole mechanism is "no better than before", never "worse".
     settle_cap_ms: int = int(os.getenv("ULTRACUA_SETTLE_CAP_MS", "2000"))
+    # The beat between looks when the replay is waiting for a page to paint (R4.144). Reached ONLY
+    # after a settle that genuinely waited, on a target the resolver has already reported ABSENT --
+    # so it is never on the happy path, and measured 0 firings across three Gitea scenarios. 50 ms
+    # because the next `await_settled()` usually returns `already-quiet` instantly (the page is
+    # between network-gated stages), so without a beat the loop spins the resolver ladder for the
+    # whole budget; the measured shape binds at look 5 of ~5, well inside `settle_cap_ms`.
+    settle_poll_ms: int = int(os.getenv("ULTRACUA_SETTLE_POLL_MS", "50"))
+    # How many CONSECUTIVE `already-quiet` looks mean the page has stopped rather than paused
+    # (R4.144). A render waiting on the network has quiet GAPS punctuated by bursts, and every burst
+    # makes the next settle wait rather than answer instantly; an element that is simply GONE is
+    # quiet forever. Measured: the Odoo shape needed THREE consecutive already-quiets before its
+    # next stage landed, so 6 is twice the observed need -- and `drift_bench` priced the alternative
+    # exactly, 36 genuinely-drifted rows paying 2251 ms each because polling to the cap cannot tell
+    # those two pages apart. The failure direction is today's behaviour: a loud miss, never a bind.
+    settle_stall_looks: int = int(os.getenv("ULTRACUA_SETTLE_STALL_LOOKS", "6"))
     # Write-detection act window: how long AFTER a step's verify snapshot a non-idempotent network
     # request is still attributed to THAT action (a write's POST can race a post-act navigation and
     # land just after verify returns). Generous on purpose — a missed write means a double-submit on
