@@ -38,9 +38,17 @@ TARGET = LocatorSpec(role="button", name="Ready", tag="button", text="Ready")
 _STAGED_JS = """
 (ms) => {
   const host = document.getElementById('host');
-  // Three bursts before the target, each separated by a QUIET gap longer than the settle's quiet
-  // window -- so `await_settled` returns between them, repeatedly, on a page still to paint.
-  for (const t of [60, 200, 340]) {
+  // BURSTS 250 ms APART, and the spacing is the whole point twice over. Wider than the 200 ms quiet
+  // window, so `await_settled` returns BETWEEN them and the poll actually iterates -- tighter and
+  // the entry settle simply waits until they stop, binding on look 1 and proving nothing.
+  //
+  // AND NO GAP LONGER THAN THE STALL WINDOW. The first draft put its last burst at 340 ms and the
+  // target at 700 -- a 360 ms quiet gap against a window of `settle_stall_looks * settle_poll_ms`
+  // (~300 ms) PLUS per-look settle overhead. That overhead is what a fast machine has less of, so
+  // the fixture passed here and failed BOTH CI arms with `already-quiet:stalled:1`: a cell racing
+  // the very guard it shares a codebase with. Bursts now continue past the target, so the stall
+  // counter is reset every cycle and never approaches its limit on any machine.
+  for (const t of [60, 310, 560, 810]) {
     setTimeout(function () {
       const d = document.createElement('span');
       d.textContent = 'stage';
@@ -101,7 +109,7 @@ async def _staged_page(sess, *, appears_after_ms: int) -> None:
 async def test_the_target_that_appears_after_several_quiet_gaps_IS_found() -> None:
     """THE DEFECT: one look lands in a gap. The measured shape needed five."""
     async with BrowserSession(headless=True) as sess:
-        await _staged_page(sess, appears_after_ms=700)
+        await _staged_page(sess, appears_after_ms=900)
         sink: dict = {}
         first = await resolve(sess.page, TARGET, unique=True, sink=sink)
         assert first is None and sink.get("saw_candidates") is False, (
@@ -110,7 +118,7 @@ async def test_the_target_that_appears_after_several_quiet_gaps_IS_found() -> No
         tr = _tr()
         got = await _retry_if_unpainted(sess, sess.page, TARGET, tr, None, sink=sink)
         assert got is not None, (
-            f"the target never bound though it appeared at 700 ms, inside the "
+            f"the target never bound though it appeared at 900 ms, inside the "
             f"{settings.settle_cap_ms} ms budget: {tr.meta.get('readiness_retry')!r}")
         assert ":bound:" in tr.meta["readiness_retry"], tr.meta
 
@@ -122,7 +130,7 @@ async def test_it_really_took_MORE_THAN_ONE_look() -> None:
     The recorded verdict carries the count, so the property is checkable rather than inferred.
     """
     async with BrowserSession(headless=True) as sess:
-        await _staged_page(sess, appears_after_ms=700)
+        await _staged_page(sess, appears_after_ms=900)
         sink: dict = {}
         await resolve(sess.page, TARGET, unique=True, sink=sink)
         tr = _tr()
@@ -370,31 +378,37 @@ _QUIET_BURST_QUIET_JS = """
 
 
 @pytest.mark.asyncio
-async def test_the_beat_gives_a_QUIET_page_time_for_its_next_stage_to_land() -> None:
-    """Why the beat is load-bearing, once the stall guard exists.
+async def test_the_beat_gives_a_QUIET_page_time_for_its_next_stage_to_land(monkeypatch) -> None:
+    """Why the beat is load-bearing, once the stall guard exists -- measured as TIME, not as looks.
 
-    A mutation removing `wait_for_timeout` SURVIVED the first draft, because the stall guard exits
-    after six looks either way and a look-count assertion cannot see the difference. What the beat
-    actually buys is TIME: six already-quiet looks span ~320 ms with it and ~18 ms without, and a
-    network fetch lands in that window. So the discriminating fixture is a page that is GENUINELY
-    still and then produces the target -- no bursts, because a burst makes the settle wait and
-    resets the stall counter, which is a different mechanism keeping the poll alive.
+    A mutation removing `wait_for_timeout` survived a look-count assertion, because the stall guard
+    exits after six looks either way. What the beat buys is the WALL CLOCK those six looks span:
+    ~300 ms with it, near zero without, and a network round trip lands in that window.
+
+    THE BROWSER VERSION OF THIS CELL RACED THE GUARD IT WAS TESTING. It put the target 500 ms into a
+    quiet stretch and required the stall window to outlast it -- a window that is
+    `settle_stall_looks * settle_poll_ms` plus per-look settle OVERHEAD, and a fast machine has less
+    overhead. It passed here and failed both CI arms. The property is a duration, so it is measured
+    as one: a page that never moves must still be watched for about the beat times the limit.
     """
-    async with BrowserSession(headless=True) as sess:
-        await sess.page.set_content("<div id='host'><button>Other</button></div>")
-        await sess.page.evaluate(_QUIET_THEN_APPEAR_JS, 500)
-        sink: dict = {}
-        first = await resolve(sess.page, TARGET, unique=True, sink=sink)
-        assert first is None and sink.get("saw_candidates") is False
-        # THE ENTRY SETTLE RETURNS AT ~344 ms HERE, so a target before that binds on look 1 and this
-        # cell exercises nothing -- which is exactly how the first two drafts passed while the
-        # mutation survived. Traced rather than assumed.
-        tr = _tr()
-        got = await _retry_if_unpainted(sess, sess.page, TARGET, tr, None, sink=sink)
-        assert got is not None, (
-            f"the target arrived 500 ms into a quiet stretch and the poll had already given up: "
-            f"{tr.meta['readiness_retry']!r}. Six looks with no beat span ~18 ms, which is less "
-            f"time than any network round trip")
+    async def _never_binds(page, spec, *a, **kw):
+        (kw.get("sink") or {})["saw_candidates"] = False
+        return None
+
+    monkeypatch.setattr(flow_mod, "resolve", _never_binds, raising=True)
+    stopped = _ScriptedSession("quiet", ["already-quiet"])
+    tr = _tr()
+    t0 = time.monotonic()
+    out = await flow_mod._retry_if_unpainted(
+        stopped, _SleepingPage(), TARGET, tr, None, sink={"saw_candidates": False})
+    elapsed = (time.monotonic() - t0) * 1000
+
+    assert out is None and ":stalled:" in tr.meta["readiness_retry"], tr.meta
+    floor = settings.settle_poll_ms * (settings.settle_stall_looks - 1)
+    assert elapsed >= floor, (
+        f"the poll gave up after {elapsed:.0f} ms, under the {floor} ms its own beat should have "
+        f"spanned -- without a pause between looks the whole stall budget is spent in the time it "
+        f"takes to ask a quiet page six questions, which is less than any network round trip")
 
 
 class _ScriptedSession:
@@ -422,8 +436,21 @@ class _ScriptedSession:
 
 
 class _ScriptedPage:
-    async def wait_for_timeout(self, _ms):   # the beat, with no clock in it
+    """The beat, with no clock in it -- so a scripted cell about the COUNTER runs instantly."""
+
+    async def wait_for_timeout(self, _ms):
         return None
+
+
+class _SleepingPage:
+    """The beat with its real duration, for the one cell whose subject IS that duration.
+
+    `_ScriptedPage` makes the beat free, which is right for the counter cells and wrong here: a cell
+    measuring how long the poll watches a stopped page cannot use a stub that removes the waiting.
+    """
+
+    async def wait_for_timeout(self, ms):
+        await asyncio.sleep(ms / 1000.0)
 
 
 @pytest.mark.asyncio
