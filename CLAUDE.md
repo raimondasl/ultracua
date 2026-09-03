@@ -2599,6 +2599,42 @@ the cost is not.
   which is the series `baselines/customer_v1_gitea.json`'s 0.857 was cut from. The open question is
   the baseline, not the row.
 
+## The corpus refuted a number I had already written down (R4.146, 0.167.0)
+
+Three Odoo reps at 0.165.0, **$1.79**, bought to see whether R4.133 and R4.144 moved the corpus.
+Availability **0.524 -> 0.619**, `varies` still 0, and one rep reached the 0.714 ceiling for the
+first time. The interesting part is the row that did not.
+
+* **I PREDICTED THE MEAN CORRECTLY AND THE MECHANISM WRONG, WHICH IS THE MORE DANGEROUS HALF.**
+  Written down beforehand: mean **0.62-0.71**, because `odoo-filter-status` flakes about one run in
+  three (R4.140). Measured: **0.619** -- and `filter-status` held **3/3** while `odoo-create-lead`,
+  which I had predicted at 3/3, came in at **1/3**. Checking only the headline would have called
+  this a clean success. **A prediction is a pair -- the number and the reason -- and only the
+  second one is worth anything when the first is right.**
+* **R4.144's `5/5` WAS A LUCKY STREAK.** That entry recorded 5 of 5 from two SOLO batches. Four
+  fresh solo reps returned **3 of 4**, so the honest figure is **9 of 13** and the row is FLAKY, not
+  fixed. The mechanism in that entry is right; the claim built on it was too strong. Corrected in
+  place -- two batches under the lightest possible conditions is exactly where a streak hides.
+* **THE FAILURE HAS ONE SHAPE AND THE INSTRUMENT SHOWS IT.** Every pass reports
+  **`quiet:bound:2` at 859-938 ms**; the single failure reports **`already-quiet:stalled:1` at
+  734 ms** -- the stall guard giving up because the page had not produced its next render stage yet.
+  So it is a RACE between the stall window and the render's inter-stage gap, and the gap sometimes
+  exceeds ~730 ms. Not a locator, not a gate.
+* **CONTEXT MAKES IT WORSE, CONSISTENTLY WITH THAT MECHANISM.** Solo **8/9**, corpus **1/3**, where
+  the row runs sixth of seven after five resets and ~30 minutes of load. Fisher p ~ 0.045 --
+  suggestive at that n, and a slower machine producing longer quiet gaps is exactly what the
+  mechanism predicts.
+* **DO NOT WIDEN THE WINDOW.** The stall guard exists because polling to the budget cost **81 s on
+  `drift_bench`**. A window wide enough for a ~1200 ms gap puts ~14 s back, and both knobs trade the
+  window directly against the cost. **Consecutive quiet is a PROXY**, now the second spent sensor
+  here, so D5 applies: change the sensor class rather than its constant.
+* **THE CANDIDATE, NAMED AND NOT BUILT**: whether a request is IN FLIGHT. During the bundle download
+  there are pending requests; when the element is gone there are none. Strictly weaker than
+  `networkidle`, which is separately refuted because Odoo's bus holds a connection open and it never
+  fires -- so that refutation does not carry over. It needs its own cost measurement, and this
+  slice's own record is why: **both previous readings of this mechanism's cost were wrong, and both
+  were taken on populations it does not fire in.**
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
