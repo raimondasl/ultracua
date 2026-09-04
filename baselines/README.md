@@ -358,11 +358,27 @@ because a learn that fails spends its whole budget and which rows fail varies. A
 failed rep 2, one of the passes it was built from (R4.106). `cost_per_rep` carries the individual
 values so the mean is recoverable.
 
-**Why Odoo is absent, and why that is now a statement about the PRODUCT rather than about
-scheduling.** Odoo's three reps gave mean 0.181 with std 0.203, and **58% of its 12 replay refusals
-are the mutation gate refusing a step that R4.27 misfiled as a write** (R4.105). `is_write_request`
-keys on the HTTP METHOD, and Odoo serves list reads as JSON-RPC POSTs — so ordinary reads cache as
-writes, and a marked step that drifts cannot self-heal.
+**Why Odoo is absent, and why the reason has changed completely since this page was written.**
+When it was, Odoo measured mean **0.181 ± 0.203** and **58% of its 12 replay refusals were the
+mutation gate** refusing a step R4.27 misfiled as a write (R4.105) — `is_write_request` keys on the
+HTTP METHOD, Odoo serves list reads as JSON-RPC POSTs, and a marked step that drifts cannot
+self-heal. **At 0.170.0 Odoo measures 0.714 ± 0.000, per-rep `[0.714, 0.714, 0.714]`, with `varies`
+0 and `unstable` 0** — the arithmetic ceiling, reached in every pass. So instability is no longer
+the reason. **The gate is a narrower story than "fixed"**: the `over_gated/drift` outcome went
+4 → 0 at 0.158.0 and has stayed there, and that is about the READ rows. The mutation gate still
+refuses `odoo-idempotent-replay` in **9 of 9 reps since 0.158.0** — it is one of the two rows below.
+
+**What holds it now is TWO ROWS, one per column, and both are stable in OUTCOME.**
+`odoo-search` scores `no_actions_needed` 3/3 — a permanent 0 that is **not** a product failure, but
+a corpus artifact: the answer renders on the landing page, so there is no recipe to replay and no
+speed-up to measure (R4.130). `odoo-idempotent-replay` scores `refused_wrongly` **0 of 12 across
+four series** (R4.143). Its OUTCOME is 0/12 and its MECHANISM is not: all three 0.156.0 reps refused
+on the mutation gate's PRECISE branch failing its BIND (`target missing/ambiguous`), and the nine
+since read `form/section drift`, its SCOPE comparison — the outcome-vs-reason distinction this
+benchmark built `varies` for, and one nobody has diagnosed either way. Neither row is a stability
+problem, which is what 0.133.0 actually refused Odoo for — so what remains is a judgement about
+whether a baseline should be cut over a corpus-design artifact and an undiagnosed refusal, not a
+wait for the numbers to settle.
 
 **The cheap fix was tried and refuted** (R4.111, 0.139.0). Correctness-plan D6 proposed routing such
 a step to the precise form-scope gate instead of the whole-page one, and made itself conditional on
@@ -404,8 +420,9 @@ not happen is a live caveat quietly becoming a historical one.
   mutating. At 0.134.0 that made 58% of Odoo's replay refusals the mutation gate; **at 0.158.0 the
   gate refuses none of them** (`over_gated` 4 → 0, once the gate stopped deciding drift from a
   half-rendered page), so what R4.27 costs today is EXPOSURE rather than refusals: the better the
-  agent gets at driving Odoo, the more read-bearing POSTs it issues for this to mark. It is still
-  why Odoo has no baseline here.
+  agent gets at driving Odoo, the more read-bearing POSTs it issues for this to mark. **It is no
+  longer why Odoo has no baseline**, and that sentence stood here until 0.170.0 after the numbers
+  under it had moved: what holds Odoo now is R4.130 and R4.143, neither of which is this.
 * **R4.84** — three of the eight doors into the engine can re-author a write flow, which performs
   the write again. Nothing in this corpus exercises that path; the numbers say nothing about it.
 * **R4.137** — `gitea-start-timer`'s 0/3, and it is no longer a grounding limit: the below-fold
@@ -416,21 +433,42 @@ not happen is a live caveat quietly becoming a historical one.
   seventh of the Gitea availability number is a task whose success state is indistinguishable from
   its start state by the control's own label — a corpus design question as much as a product one.
 * **R4.111** — the cheap route to an Odoo baseline is CLOSED: D6 was refuted by its own
-  mandated measurement, the mutation gate is correct at both branches, and what remains is
-  R4.27's marking. So "Odoo is absent" should be read as a standing product limitation on a
-  CLASS of apps (anything serving reads over POST), not as work not yet scheduled.
-* **R4.105** — Odoo's own exclusion. Measured 0.181 ± 0.203 at 0.133.0 and **0.524 ± 0.082 at
-  0.158.0**, against a ceiling of 0.571 that R4.130 and R4.111 impose; the variance that made the
-  column unreadable is gone (`varies` 5 → 0). Recorded here because "Odoo is absent" is a statement
-  about the product's measured behaviour, not about effort — and because that behaviour has moved a
-  long way while the answer stayed "absent".
+  mandated measurement, and the mutation gate is correct at both branches. **What this entry says
+  about the WRITE ROWS is superseded**: it recorded both of them as blocked on `unique=True`
+  failing to bind, R4.143 measured that neither fails that way, and at 0.169.0 `odoo-create-lead`
+  passes **3/3** — against 1 of 9 across the three prior corpus series (Fisher p = 0.018).
+  **That pooled arm is heterogeneous and the qualifier "before the poll landed" would be wrong**:
+  the readiness poll landed AT 0.165.0, which is one of the three prior series and is the one
+  holding the single pass. One write row remains, and it is R4.143's, not this one's.
+* **R4.105** — Odoo's own exclusion. Measured 0.181 ± 0.203 at 0.133.0, 0.524 ± 0.082 at
+  0.158.0, and **0.714 ± 0.000 at 0.169.0** — which is the ceiling, since two of seven rows cannot
+  currently pass (R4.130 and R4.143). The variance that made the column unreadable is gone
+  (`varies` 5 → 0, `unstable` 0). Recorded here because "Odoo is absent" is a statement about the
+  product's measured behaviour, not about effort — and because that behaviour has now moved from
+  *unreadable* to *at its ceiling* while the answer stayed "absent". **A 15/21 cut would have a
+  Wilson 95% lower bound of 0.500, so a weekly gate would need ≥ 4/7** — the same width Gitea's
+  0.762 over n=21 buys.
 * **R4.140** — `odoo-filter-status` refuses `shape_drift` about one run in three, because the
   extractor optionally emits a second key and the SHAPE therefore varies between learn and replay.
   The refusal is correct (inviolable #2), but it means a read row's availability depends on an LLM's
   choice of schema. **It does not generalize, and that is measured rather than assumed**: the other
   four Odoo reads were driven five times each and 19 of 19 scored runs returned a bare string, which
   is structurally outside this gate's reach — so exactly one corpus row can refuse this way, and it
-  is the only one whose goal asks for two things at once.
+  is the only one whose goal asks for two things at once. **It has not fired in six consecutive reps**
+  (0.165.0 and 0.169.0, 3/3 each), which at a ~1/3 rate has probability 0.088 — suggestive, and not a
+  claim: nothing changed underneath it, so the entry stays open and the caveat stands.
+* **R4.143** — the one row now holding Odoo's write column. `odoo-idempotent-replay` refuses
+  `form/section drift` — the mutation gate's PRECISE branch failing its SCOPE comparison, not its
+  bind — **0 of 12 across four series**, deterministically. Everything that fixed its sibling row
+  (the network-gated render, the bounded poll, the removal of the stall guard) leaves it untouched,
+  and the lead this entry names has never been followed: one `scope_fingerprint` in the trace
+  returns EMPTY and nothing explains it. Until it is diagnosed, any Odoo write number is one
+  undiagnosed refusal wide.
+* **R4.147** — a residual inside the row that now passes. `odoo-create-lead` failed one of six solo
+  reps at 0.169.0 with `refused@0ms`, a safety refusal rather than a readiness one, and it did not
+  recur in the three corpus reps — but at its own observed 1-in-6 rate, three clean passes has
+  probability 0.58, so that is absence of evidence and nothing more. The 3/3 above should be read
+  with it.
 * **R4.108** — the generic-operator half of the mutation sweep is unbuilt, so the suite behind
   these benchmarks is proven against curated mutations only.
 <!-- /open-findings -->
