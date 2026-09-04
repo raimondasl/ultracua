@@ -175,12 +175,17 @@ async def test_a_genuinely_absent_element_still_fails_after_the_wait() -> None:
     """The retry is bounded and honest: nothing ever appears, so the answer is still None -- just a
     little later. Loud, not silent.
 
-    SINCE 0.165.0 THERE ARE TWO WAYS TO GIVE UP AND BOTH ARE THIS PROPERTY. `still-none` means the
-    budget ran out; `stalled` means the page produced no mutation for several consecutive looks, so
-    it has STOPPED rather than paused -- which is what keeps a genuinely-absent element from being
-    waited on for the full `settle_cap_ms` (measured: 36 drift_bench rows at 2251 ms each, 81 s).
-    A static page reaches the second. What this cell is about is that neither ever returns an
-    element, so it asserts the SET rather than one spelling.
+    THERE ARE SEVERAL WAYS TO GIVE UP AND ALL OF THEM ARE THIS PROPERTY. `still-none` means the
+    budget ran out; `no-inflight` (0.169.0) means nothing was outstanding when the poll began, so
+    the browser was not mid-fetch and no further stage is coming -- which is what keeps a
+    genuinely-absent element off the full `settle_cap_ms` (measured: 36 drift_bench rows, 23.4 s ->
+    8.7 s). A STATIC page reaches that one, since `set_content` issues no requests.
+    `already-quiet:skipped` is the third, when the page had not moved since the failing resolve.
+
+    A `stalled` verdict existed between 0.165.0 and 0.169.0 and is gone with the guard that produced
+    it. It stays in the accepted set on purpose: this cell is about the SET, not one spelling, and a
+    verdict that can no longer occur costs nothing here while a missing one costs a red test for a
+    behaviour that never changed.
     """
     s = BrowserSession(headless=True)
     await s.start()
@@ -193,7 +198,8 @@ async def test_a_genuinely_absent_element_still_fails_after_the_wait() -> None:
         out = await flow_mod._retry_if_unpainted(s, s.page, spec, tr, loc, sink=sink)
         assert out is None
         verdict = tr.meta["readiness_retry"]
-        assert any(k in verdict for k in (":still-none:", ":stalled:", "already-quiet:skipped")), (
+        assert any(k in verdict for k in (":still-none:", ":stalled:", ":no-inflight:",
+                                          "already-quiet:skipped")), (
             f"a genuinely absent element produced {verdict!r}, which is not one of the ways this "
             f"retry is allowed to give up -- the only thing it must never do is return an element")
     finally:

@@ -198,6 +198,7 @@ class BrowserSession:
                 # issue a request the arbiter never sees.
                 await self._dry_run.install(self.context)
             self.page = await self.context.new_page()
+            self._watch_inflight(self.page)
             return self
         except BaseException:
             # A failure AFTER launch (bad storage_state, new_context/new_page raising, cancellation)
@@ -206,6 +207,54 @@ class BrowserSession:
             # only stops what we own, so tearing down whatever we created here is safe; then re-raise.
             await self.close()
             raise
+
+    def _watch_inflight(self, page) -> None:
+        """Count requests that have STARTED and not yet ended. (R4.146.)
+
+        WHAT THIS IS FOR, and what it is deliberately NOT. The replay's readiness poll gives up when
+        the DOM has been quiet for several consecutive looks, on the premise that a render waiting on
+        the network pauses in BURSTS while an element that is simply gone is quiet forever. Measured,
+        that premise holds AT THE MOMENT THE POLL BEGINS and not during it: `drift_bench`'s 36
+        stalling rows read **0 outstanding at entry and never rise**, while Odoo's list -> form
+        transition reads **1-2 from entry**. So this count answers "was the browser waiting on
+        something when we started waiting", which is a decision the poll can trust.
+        It does NOT answer "is anything still coming": sampling one Odoo poll at 25 ms showed the
+        count returning to zero MID-render -- busy 16-688 ms against zeros 516-891 ms on the same
+        run, because the last stage renders assets already fetched and is pure CPU. A poll keyed on
+        the live count would need the same consecutive-count crutch it is replacing.
+
+        NOT `networkidle`, which is separately refuted here: Odoo's message bus holds a connection
+        open, so it never fires at all. "How many are outstanding right now" is a strictly weaker
+        question and it does have an answer.
+
+        `requestfailed` decrements as `requestfinished` does. Counting only successes leaks, and a
+        page carrying one failed request would read as permanently busy -- turning a cost saving into
+        an unbounded wait, which is the wrong failure direction for this mechanism.
+        """
+        page._ultracua_inflight = 0
+
+        def _started(_req) -> None:
+            page._ultracua_inflight += 1
+
+        def _ended(_req) -> None:
+            # Floored, because a response can arrive for a request that began before this handler
+            # did (a page created inside `new_context` with `storage_state` already fetching).
+            page._ultracua_inflight = max(0, page._ultracua_inflight - 1)
+
+        page.on("request", _started)
+        page.on("requestfinished", _ended)
+        page.on("requestfailed", _ended)
+
+    @staticmethod
+    def inflight(page) -> int:
+        """Outstanding requests on `page`, or 0 for a page this session never wrapped.
+
+        ZERO IS THE SAFE DEFAULT AND IT IS DELIBERATE: an unwatched page reads "nothing outstanding",
+        which makes the poll give up EARLIER -- the behaviour before this existed. Defaulting to
+        "busy" would make an unwatched page wait the full budget on every miss, which is the 81 s
+        `drift_bench` regression arriving through a missing attribute.
+        """
+        return getattr(page, "_ultracua_inflight", 0)
 
     async def goto(self, url: str) -> None:
         assert self.page is not None

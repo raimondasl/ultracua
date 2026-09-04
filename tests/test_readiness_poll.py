@@ -130,7 +130,15 @@ class _ScriptedSession:
 
 
 class _ScriptedPage:
-    """The beat, with no clock in it -- so a scripted cell about the COUNTER runs instantly."""
+    """The beat, with no clock in it -- so a scripted cell about the COUNTER runs instantly.
+
+    `_ultracua_inflight = 1` because these cells are about what the poll does ONCE IT IS POLLING,
+    and since 0.169.0 it only polls when something was outstanding at entry (R4.146). A stub that
+    reported zero would exit before the loop and every cell below would pass without executing the
+    code it names -- the inert-fixture failure this file has already had twice.
+    """
+
+    _ultracua_inflight = 1
 
     async def wait_for_timeout(self, _ms):
         return None
@@ -142,6 +150,8 @@ class _SleepingPage:
     `_ScriptedPage` makes the beat free, which is right for the counter cells and wrong here: a cell
     measuring how long the poll watches a stopped page cannot use a stub that removes the waiting.
     """
+
+    _ultracua_inflight = 1        # see `_ScriptedPage`: these cells are about the LOOP
 
     async def wait_for_timeout(self, ms):
         await asyncio.sleep(ms / 1000.0)
@@ -292,6 +302,9 @@ async def test_a_target_that_never_appears_is_BOUNDED() -> None:
     async with BrowserSession(headless=True) as sess:
         await sess.page.set_content("<div id='host'></div>")
         await sess.page.evaluate(_CHURN_JS)
+        # This cell is about the LOOP, and the poll only loops when something was
+        # outstanding at entry (R4.146). `set_content` issues no requests, so say so.
+        sess.page._ultracua_inflight = 1
         sink: dict = {"saw_candidates": False}
         tr = _tr()
         t0 = time.monotonic()
@@ -397,166 +410,104 @@ async def test_the_poll_does_not_SPIN_between_looks() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_page_that_STOPS_is_given_up_on_long_before_the_budget() -> None:
-    """The cost direction, and `drift_bench` priced it before this cell existed.
+async def test_the_beat_bounds_how_OFTEN_the_poll_asks(monkeypatch) -> None:
+    """The beat, measured as a RATE now that the stall guard is gone.
 
-    A first draft polled to the cap on ANY absent target: **36 genuinely-drifted rows paying
-    2251 ms each, 81 s**, taking the bench from 184 s to 259 s against a 220 s budget. Those rows
-    report `already-quiet` on every look -- the page is not mid-render, the element is gone. A page
-    waiting on the NETWORK looks different, because each burst makes the next settle wait rather
-    than answer instantly, so consecutive already-quiets are the discriminator.
+    It used to be measured as a duration, with the stall guard providing the exit. Without a pause
+    the loop asks the resolver as fast as the event loop allows for the whole `settle_cap_ms`, which
+    is thousands of ladder walks on a page that is not going to answer -- and a ladder walk is not
+    free (42 of them priced at 10.1 s in this same helper). With the beat the count is bounded by
+    the budget divided by the beat.
 
-    The fixture mutates ONCE (so the first settle genuinely waits and the loop is entered) and then
-    stops forever, which is exactly the drifted-row shape.
+    `_SleepingPage` and not `_ScriptedPage`: the beat's whole subject is that it waits, and the stub
+    that makes the counter cells instant would remove it.
     """
-    async with BrowserSession(headless=True) as sess:
-        await sess.page.set_content("<div id='host'><button>Other</button></div>")
-        await sess.page.evaluate(
-            """() => setTimeout(function () {
-                 const s = document.createElement('span'); s.textContent = 'once';
-                 document.getElementById('host').appendChild(s);
-               }, 60)""")
-        sink: dict = {}
-        first = await resolve(sess.page, TARGET, unique=True, sink=sink)
-        assert first is None and sink.get("saw_candidates") is False
-        tr = _tr()
-        t0 = time.monotonic()
-        got = await _retry_if_unpainted(sess, sess.page, TARGET, tr, None, sink=sink)
-        elapsed = (time.monotonic() - t0) * 1000
-        assert got is None
-        assert "stalled" in tr.meta["readiness_retry"], (
-            f"a page that stopped mutating was polled to the budget instead of given up on: "
-            f"{tr.meta['readiness_retry']!r}")
-        assert elapsed < settings.settle_cap_ms, (
-            f"the stall guard did not save anything: {elapsed:.0f} ms against a "
-            f"{settings.settle_cap_ms} ms cap")
-
-
-def test_the_stall_limit_clears_the_measured_need_with_margin() -> None:
-    """A limit BELOW the measured need silently reverts the fix, and nothing about the poll's own
-    success would say so -- the Odoo shape needed THREE consecutive already-quiets before its next
-    render stage landed."""
-    assert settings.settle_stall_looks >= 6, (
-        "the stall limit must clear the 3 consecutive already-quiets the Odoo render needed, with "
-        "margin -- at or below it, a network-gated render is given up on mid-flight")
-    assert settings.settle_stall_looks * settings.settle_poll_ms < settings.settle_cap_ms, (
-        "a stall limit that cannot be reached inside the budget is inert, and the 81 s drift_bench "
-        "regression comes straight back")
-
-
-_QUIET_THEN_APPEAR_JS = """
-(ms) => {
-  // NO intervening mutation: the page is genuinely still, and then the target arrives. That is
-  // what a network fetch landing looks like, and it is the only shape in which the BEAT is
-  // observable -- with bursts, every settle waits and the stall counter keeps resetting anyway.
-  setTimeout(function () {
-    const b = document.createElement('button');
-    b.textContent = 'Ready';
-    document.getElementById('host').appendChild(b);
-  }, ms);
-}
-"""
-
-_QUIET_BURST_QUIET_JS = """
-() => {
-  const host = document.getElementById('host');
-  // THE ONLY SHAPE THAT NEEDS THE RESET, and three drafts missed it. `stalled` increments ONLY on
-  // an `already-quiet` look, so a page that bursts continuously never increments it and removing
-  // the reset changes nothing. What is required is: a quiet look (stalled -> 1), then a BURST that
-  // must clear it, then another quiet stretch before the target. Traced both arms before use --
-  // real binds at ~953 ms, a non-resetting counter stalls at look 2.
-  setTimeout(function () {
-    const d = document.createElement('span'); d.textContent = 'stage'; host.appendChild(d);
-  }, 350);
-  setTimeout(function () {
-    const b = document.createElement('button'); b.textContent = 'Ready'; host.appendChild(b);
-  }, 700);
-}
-"""
-
-
-@pytest.mark.asyncio
-async def test_the_beat_gives_a_QUIET_page_time_for_its_next_stage_to_land(monkeypatch) -> None:
-    """Why the beat is load-bearing, once the stall guard exists -- measured as TIME, not as looks.
-
-    A mutation removing `wait_for_timeout` survived a look-count assertion, because the stall guard
-    exits after six looks either way. What the beat buys is the WALL CLOCK those six looks span:
-    ~300 ms with it, near zero without, and a network round trip lands in that window.
-
-    THE BROWSER VERSION OF THIS CELL RACED THE GUARD IT WAS TESTING. It put the target 500 ms into a
-    quiet stretch and required the stall window to outlast it -- a window that is
-    `settle_stall_looks * settle_poll_ms` plus per-look settle OVERHEAD, and a fast machine has less
-    overhead. It passed here and failed both CI arms. The property is a duration, so it is measured
-    as one: a page that never moves must still be watched for about the beat times the limit.
-    """
-    async def _never_binds(page, spec, *a, **kw):
-        (kw.get("sink") or {})["saw_candidates"] = False
-        return None
-
-    monkeypatch.setattr(flow_mod, "resolve", _never_binds, raising=True)
-    stopped = _ScriptedSession("quiet", ["already-quiet"])
-    tr = _tr()
-    t0 = time.monotonic()
-    out = await flow_mod._retry_if_unpainted(
-        stopped, _SleepingPage(), TARGET, tr, None, sink={"saw_candidates": False})
-    elapsed = (time.monotonic() - t0) * 1000
-
-    assert out is None and ":stalled:" in tr.meta["readiness_retry"], tr.meta
-    floor = settings.settle_poll_ms * (settings.settle_stall_looks - 1)
-    assert elapsed >= floor, (
-        f"the poll gave up after {elapsed:.0f} ms, under the {floor} ms its own beat should have "
-        f"spanned -- without a pause between looks the whole stall budget is spent in the time it "
-        f"takes to ask a quiet page six questions, which is less than any network round trip")
-
-
-@pytest.mark.asyncio
-async def test_a_burst_RESETS_the_stall_counter_so_a_slow_render_keeps_its_budget(monkeypatch) -> None:
-    """The reset, driven by a SCRIPT rather than by a real page's timing.
-
-    FOUR BROWSER-TIMED DRAFTS OF THIS CELL FAILED TO SEE THE MUTATION, each for its own reason: the
-    shipped limit of six needs seven looks, which outruns the budget; a limit of one makes the first
-    quiet look terminal for both arms, so the reset never matters; a continuously bursting page
-    never increments `stalled` at all, so removing the reset changes no value; and the shape that
-    does work -- quiet, burst, quiet -- depends on where ~55 ms looks fall relative to a 350 ms
-    burst, which moves run to run.
-
-    The property is arithmetic: `stalled` counts CONSECUTIVE already-quiet looks, so a total of
-    three with a burst in the middle must NOT stall at a limit of three, and the same three in a row
-    must. A real page cannot pin that reliably; a scripted sequence pins it exactly. The browser
-    cells above already cover the integration.
-    """
-    # A SMALL CAP TOO, because `_ScriptedPage.wait_for_timeout` does not sleep: with the real 2000 ms
-    # the no-stall arm would spin the loop for two seconds of wall clock to reach its deadline.
+    scripted = _ScriptedResolve([(False, False)])
+    monkeypatch.setattr(flow_mod, "resolve", scripted, raising=True)
     monkeypatch.setattr(
-        flow_mod, "settings",
-        dataclasses.replace(settings, settle_stall_looks=3, settle_cap_ms=200), raising=True)
-
-    async def _never_binds(page, spec, *a, **kw):
-        (kw.get("sink") or {})["saw_candidates"] = False
-        return None
-
-    monkeypatch.setattr(flow_mod, "resolve", _never_binds, raising=True)
-
-    # The first verdict is the ENTRY settle and must be a real wait, or the `already-quiet` skip
-    # above returns before the loop is entered. Then: two quiet looks, a real wait, two more --
-    # three in total between any pair of waits, never three in a ROW.
-    interrupted = _ScriptedSession("quiet", ["already-quiet", "already-quiet", "quiet"])
+        flow_mod, "settings", dataclasses.replace(settings, settle_cap_ms=400), raising=True)
+    session = _ScriptedSession("quiet", ["already-quiet"])
     tr = _tr()
     out = await flow_mod._retry_if_unpainted(
-        interrupted, _ScriptedPage(), TARGET, tr, None, sink={"saw_candidates": False})
-    assert out is None                       # nothing ever binds in this script, by construction
-    assert "stalled" not in tr.meta["readiness_retry"], (
-        f"a page that kept moving was declared stalled: {tr.meta['readiness_retry']!r} -- the "
-        f"counter is not resetting when a settle actually waited")
-    assert ":still-none:" in tr.meta["readiness_retry"], tr.meta["readiness_retry"]
+        session, _SleepingPage(), TARGET, tr, None, sink={"saw_candidates": False})
+    assert out is None and ":still-none:" in tr.meta["readiness_retry"], tr.meta
 
-    # And the control: three in a ROW must stall, or the guard is inert and drift_bench pays again.
-    straight = _ScriptedSession("quiet", ["already-quiet"])
-    tr2 = _tr()
-    out2 = await flow_mod._retry_if_unpainted(
-        straight, _ScriptedPage(), TARGET, tr2, None, sink={"saw_candidates": False})
-    assert out2 is None
-    assert ":stalled:" in tr2.meta["readiness_retry"], (
-        f"three consecutive already-quiet looks did not stall: {tr2.meta['readiness_retry']!r}")
+    # COUNT THE SETTLES, NOT THE RESOLVES. A page that never moves keeps the INNER loop spinning,
+    # and that loop asks `await_settled` -- `resolve` is called exactly once whatever the beat does,
+    # so a resolve count cannot see this and the first draft of this cell passed against the
+    # mutation. The mutation is what said so.
+    ceiling = 400 / settings.settle_poll_ms + 3       # budget / beat, plus slack for the last wait
+    assert session.asked <= ceiling, (
+        f"the poll asked the page {session.asked} times inside a 400 ms budget, above the "
+        f"~{ceiling:.0f} its own beat allows -- without a pause between looks it spins as fast as "
+        f"the event loop permits, and every ask walks back into the settle machinery")
+    assert scripted.calls == 1, (
+        f"the outer loop ran {scripted.calls} times on a page that never moved; it should re-resolve "
+        f"only when the page CHANGED")
+
+
+@pytest.mark.asyncio
+async def test_nothing_in_flight_at_entry_gives_up_after_the_FIRST_look(monkeypatch) -> None:
+    """THE COST FIX (R4.146), and its placement is the whole of it.
+
+    Measured: `drift_bench`'s 36 stalling rows read **0 outstanding at entry and never rise**,
+    costing 23.4 s between them, while Odoo's list -> form transition reads **1-2 from entry** in 3
+    of 3 reps. So an entry reading of zero means the browser was not mid-fetch and no further stage
+    is coming -- the poll can stop, and those 23.4 s are saved.
+
+    BUT THE FIRST LOOK STILL HAPPENS. R4.115's original mechanism is one settle plus one re-resolve,
+    and it earns its keep on a page that painted DURING the settle -- which has nothing to do with
+    the network. This cell asserts the resolve was CALLED, because a fix that skipped it would pass
+    every cost assertion while quietly reverting the mechanism it sits inside.
+    """
+    scripted = _ScriptedResolve([(False, False)])
+    monkeypatch.setattr(flow_mod, "resolve", scripted, raising=True)
+
+    class _IdlePage(_ScriptedPage):
+        _ultracua_inflight = 0            # nothing was outstanding when the poll began
+
+    tr = _tr()
+    out = await flow_mod._retry_if_unpainted(
+        _ScriptedSession("quiet", ["already-quiet"]), _IdlePage(), TARGET, tr, None,
+        sink={"saw_candidates": False})
+    assert out is None
+    assert ":no-inflight:" in tr.meta["readiness_retry"], (
+        f"a page with nothing outstanding at entry was polled anyway: "
+        f"{tr.meta['readiness_retry']!r} -- that is the 23.4 s drift_bench pays for nothing")
+    assert scripted.calls == 1, (
+        f"the first look was skipped ({scripted.calls} resolve calls) -- R4.115's settle-and-retry "
+        f"is about a page that painted during the SETTLE and must survive this")
+
+
+@pytest.mark.asyncio
+async def test_something_in_flight_at_entry_is_what_LETS_it_poll(monkeypatch) -> None:
+    """The contrast, on an otherwise identical script.
+
+    Without this the cell above is satisfied by a poll that never loops at all -- and the two
+    differ in exactly one attribute, which is the discriminator the finding rests on.
+    """
+    answers = [(False, False), (False, False), (True, False)]
+
+    idle, busy = _ScriptedResolve(answers), _ScriptedResolve(answers)
+    class _IdlePage(_ScriptedPage):
+        _ultracua_inflight = 0
+
+    monkeypatch.setattr(flow_mod, "resolve", idle, raising=True)
+    tr_idle = _tr()
+    out_idle = await flow_mod._retry_if_unpainted(
+        _ScriptedSession("quiet", ["quiet"]), _IdlePage(), TARGET, tr_idle, None,
+        sink={"saw_candidates": False})
+
+    monkeypatch.setattr(flow_mod, "resolve", busy, raising=True)
+    tr_busy = _tr()
+    out_busy = await flow_mod._retry_if_unpainted(
+        _ScriptedSession("quiet", ["quiet"]), _ScriptedPage(), TARGET, tr_busy, None,
+        sink={"saw_candidates": False})
+
+    assert out_idle is None and idle.calls == 1, tr_idle.meta
+    assert out_busy is not None and busy.calls == 3, tr_busy.meta
+    assert ":bound:" in tr_busy.meta["readiness_retry"], (
+        "a page that WAS mid-fetch stopped polling -- the entry check must gate the loop, not "
+        "replace it")
 
 

@@ -71,7 +71,7 @@ MUTANTS = [
      "looks either way, so a LOOK COUNT is blind too; what the beat buys is TIME (six quiet "
      "looks span ~320 ms with it and ~18 ms without), and only a page that goes still and THEN "
      "produces the target can see that. Killed by "
-     "test_the_beat_gives_a_QUIET_page_time_for_its_next_stage_to_land."),
+     "test_the_beat_bounds_how_OFTEN_the_poll_asks."),
 
     ('the_happy_path_pays_for_the_poll', "flow.py",
      "    if loc is not None:\n        return loc",
@@ -80,23 +80,20 @@ MUTANTS = [
      "try, and this path fired 0 times across three Gitea scenarios. Making a bound locator fall "
      "through re-resolves it on every step of every replay, which is pure tax on the 0-LLM speed "
      "claim. Killed by test_a_resolve_that_SUCCEEDED_never_enters_the_helper_at_all."),
-    ('a_stopped_page_is_polled_to_the_budget', "flow.py",
-     '            if stalled >= settings.settle_stall_looks:\n                tr.meta[tag + "readiness_retry"] = f"{why}:stalled:{looks}"\n                return None',
-     "            pass  # MUTANT: keep waiting on a page that has stopped",
-     "THE COST DIRECTION, and drift_bench priced it before any cell existed: 36 "
-     "genuinely-drifted rows paying 2251 ms each, 81 s, taking the bench from 184 s to 259 s. "
-     "Every cell about the poll BINDING still passes under this -- an element that is simply "
-     "gone is quiet forever, and only a cell measuring how long a STOPPED page is waited on "
-     "can see it. Killed by test_a_page_that_STOPS_is_given_up_on_long_before_the_budget."),
+    ('the_entry_check_never_fires', "flow.py",
+     '        if not busy_at_entry:',
+     "        if False:  # MUTANT: poll even a page that was not mid-fetch",
+     "THE COST FIX, removed. drift_bench's 36 stalling rows read ZERO outstanding at entry and "
+     "never rise, and without this check each pays the full stall window -- 23.4 s between them, "
+     "which is what made widening the window unaffordable in the first place. Every cell about "
+     "the poll BINDING still passes. Killed by "
+     "test_nothing_in_flight_at_entry_gives_up_after_the_FIRST_look."),
 
-    ('the_stall_counter_never_resets', "flow.py",
-     '                stalled = 0\n                break',
-     "                break  # MUTANT: never reset",
-     "The other half, and it reverts the FIX rather than the cost. A settle that genuinely "
-     "WAITED means the page moved, so the counter must reset -- without it a render whose "
-     "stages are spread over a second is given up on in its first gap. The short fixture "
-     "only increments on an ALREADY-QUIET look, so a continuously bursting page never produces one "
-     "and removing the reset changes no value -- the fixture has to be quiet, THEN burst, THEN "
-     "quiet. Three drafts missed that. Killed by "
-     "test_a_burst_RESETS_the_stall_counter_so_a_slow_render_keeps_its_budget."),
+    ('the_entry_reading_is_taken_AFTER_the_settle', "flow.py",
+     '    busy_at_entry = BrowserSession.inflight(page)',
+     "    busy_at_entry = 0  # MUTANT: read nothing",
+     "The reading itself. Hard-coding zero makes the check fire on EVERY page, so a render that "
+     "was mid-fetch is abandoned after one look -- R4.146's defect, restored through the new "
+     "mechanism rather than the old one. Killed by "
+     "test_something_in_flight_at_entry_is_what_LETS_it_poll."),
 ]

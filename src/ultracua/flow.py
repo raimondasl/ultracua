@@ -1480,6 +1480,10 @@ async def _retry_if_unpainted(session, page, spec, tr, loc, *, sink=None, tag: s
         # it can only wait for the thing it objected to to go away.
         tr.meta[tag + "readiness_retry"] = "refused"
         return None
+    # READ THE NETWORK BEFORE WAITING ON IT (R4.146). Taken here rather than after the settle
+    # because the settle can take up to `settle_cap_ms`, by which time a bundle may have landed and
+    # the reading would describe a different moment than the one that was measured.
+    busy_at_entry = BrowserSession.inflight(page)
     why = await session.await_settled()
     if why == "already-quiet":
         # THE PAGE WAS SETTLED BEFORE WE ASKED, so we waited zero ms and the DOM has not changed
@@ -1523,23 +1527,25 @@ async def _retry_if_unpainted(session, page, spec, tr, loc, *, sink=None, tag: s
     # never be waited out -- which is the measured wrong-record bind the first remedy was refuted
     # for. `networkidle` is separately refuted (it never fires on Odoo), so it is not reached for.
     #
-    # AND IT STOPS WHEN NOTHING IS HAPPENING, WHICH IS NOT THE SAME AS THE BUDGET RUNNING OUT.
-    # The first draft polled to the cap on any absent target, and `drift_bench` priced that
-    # immediately: **36 genuinely-drifted rows paying 2251 ms each, 81 s**, taking the bench from
-    # 184 s to 259 s against a 220 s budget. Those rows report `already-quiet` on every look after
-    # the first -- the page is not mid-render, the element is simply gone, and waiting can only
-    # spend the budget. A page WAITING ON THE NETWORK looks different: its quiet gaps are punctuated
-    # by bursts, and every burst makes `await_settled` wait again rather than answering instantly.
-    # So consecutive `already-quiet` returns are the discriminator, and the measured Odoo shape
-    # needed THREE of them in a row before the render's next stage landed.
-    # AND IT ONLY RE-RESOLVES WHEN THE PAGE HAS ACTUALLY CHANGED, which is the `already-quiet` rule
-    # above applied once per look rather than once per call. A ladder walk is not free -- the note
-    # above prices 42 of them at 10.1 s -- and re-walking it against a DOM that has not mutated
-    # since the last walk is provably the same answer. Measured: resolving on every look took the
-    # bench to 239 s in-suite against a 220 s budget, where `main` passes; waiting for a real change
-    # first brings it back inside. So the outer loop counts RESOLVES and the inner one waits.
+    # AND WHAT BOUNDS IT IS THE CAP, because the ENTRY CHECK above is the cost control (R4.146).
+    #
+    # A CONSECUTIVE-QUIET STALL GUARD LIVED HERE FROM 0.165.0 TO 0.169.0 AND WAS REMOVED ON
+    # MEASUREMENT. It existed to stop a poll spending the budget on a page that had stopped, priced
+    # at **36 drift_bench rows x 2251 ms = 81 s** when the poll was unconditional. The entry check
+    # takes those rows out before the loop -- they read ZERO outstanding and now leave as
+    # `no-inflight` -- so the guard was reached by nothing: with it disabled the bench measures
+    # **186.1 s against 187.0 s**, identical, and the retry path is unchanged at 36 rows / 8.7 s.
+    #
+    # What it DID still do was cause R4.146. Every failure of `odoo-create-lead` was `stalled` and
+    # never `still-none`: at six looks it gave up at 734 ms, at twelve it gave up at 1235 ms, while
+    # every successful bind lands at 781-1015 ms. So it was cutting off renders that were merely
+    # slow. Removing it makes that failure mode impossible by construction rather than unlikely --
+    # a stronger claim than the rate supports on its own (6/6 vs 5/6 is p ~ 1.0).
+    #
+    # The residual is bounded and was priced: a page that WAS mid-fetch, whose fetch completes and
+    # which then produces nothing, now waits to `settle_cap_ms` instead of ~1450 ms. That is ~550 ms
+    # on a step that is failing anyway, on a population `drift_bench` contains none of.
     deadline = time.monotonic() + settings.settle_cap_ms / 1000.0
-    stalled = 0
     looks = 0
     while True:
         looks += 1
@@ -1552,12 +1558,24 @@ async def _retry_if_unpainted(session, page, spec, tr, loc, *, sink=None, tag: s
             # refusal is precisely what bound the wrong record when this was keyed on `None`.
             tr.meta[tag + "readiness_retry"] = f"{why}:refused-at:{looks}"
             return None
+        if not busy_at_entry:
+            # NOTHING WAS OUTSTANDING WHEN WE STARTED WAITING, so the browser was not mid-fetch and
+            # no further stage is coming. Measured (R4.146): `drift_bench`'s 36 stalling rows read
+            # **0 at entry and never rise**, costing 23.4 s between them, while Odoo's list -> form
+            # transition reads **1-2 from entry** in 3 of 3 reps. This is the entry reading only --
+            # the LIVE count is separately refuted, returning to zero mid-render while the element
+            # is still coming, so it can never be consulted inside the loop.
+            #
+            # PLACED AFTER THE FIRST LOOK, NOT BEFORE IT. R4.115's original mechanism is one settle
+            # and one re-resolve, and it earns its keep on a page that painted DURING the settle --
+            # which has nothing to do with the network. Skipping the look would revert that; skipping
+            # only the LOOP keeps it whole and still saves the 23.4 s, because what those rows spend
+            # is the waiting, not the resolve.
+            tr.meta[tag + "readiness_retry"] = f"{why}:no-inflight:{looks}"
+            return None
         while True:
             if time.monotonic() >= deadline:
                 tr.meta[tag + "readiness_retry"] = f"{why}:still-none:{looks}"
-                return None
-            if stalled >= settings.settle_stall_looks:
-                tr.meta[tag + "readiness_retry"] = f"{why}:stalled:{looks}"
                 return None
             # A BEAT BEFORE ASKING AGAIN, because `await_settled()` returns `already-quiet`
             # instantly on a page between network-gated stages. Without it this spins as fast as the
@@ -1566,14 +1584,10 @@ async def _retry_if_unpainted(session, page, spec, tr, loc, *, sink=None, tag: s
             why = await session.await_settled()
             if why != "already-quiet":
                 # A WAIT THAT ACTUALLY WAITED MEANS THE PAGE MOVED, so there is something new to
-                # resolve against and the stall counter resets -- a slow multi-stage render keeps
-                # its budget however many gaps it has already had.
-                stalled = 0
+                # resolve against. `already-quiet` means nothing mutated in the whole window, and
+                # the loop simply asks again after another beat until the cap -- which is safe here
+                # only because the entry check has already excluded the pages that will never move.
                 break
-            # `already-quiet` means nothing mutated in the whole quiet window: the page is telling
-            # us it has stopped, and enough of those in a row is the only evidence available that no
-            # further stage is coming.
-            stalled += 1
 
 
 async def _replay_step(
