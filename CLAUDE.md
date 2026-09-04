@@ -2670,6 +2670,43 @@ itself conditional on measuring it first. **~$0.45**, both populations, and the 
   which one is free and which is paid, rather than running nothing and printing a clean summary --
   the same rule as `arm_oracles`, one instrument over.
 
+## I set out to widen a window and deleted it instead (R4.146 FIXED, 0.169.0)
+
+The plan was R4.146's entry check PLUS a wider stall window, with the saving paying for the width.
+Half of that was right. **~$1.7** in acceptance reps, and the measurement changed the design twice.
+
+* **THE ENTRY CHECK WORKS AND IS THE CHEAP HALF.** `BrowserSession` counts outstanding requests;
+  the poll reads that count BEFORE it settles, and gives up after one look if nothing was in
+  flight. `drift_bench`'s 36 stalling rows leave as `no-inflight` for **8.7 s instead of 23.4 s**
+  and the bench goes **199.0 s -> ~187 s**. Note the projection was 23.4 s and the saving is
+  **14.6 s**: the settle and the first look remain, deliberately, because they are R4.115's
+  mechanism and it is about a page that painted during the SETTLE -- nothing to do with the network.
+* **THE WIDENING DID NOT WORK.** At twelve looks `odoo-create-lead` was 5/6 with the SAME verdict,
+  `already-quiet:stalled:1`, merely later -- 1235 ms against 734 ms at six. A third round of tuning
+  the constant was available and would have been the wrong move.
+* **SO THE GUARD WAS MEASURED INSTEAD, AND THE ANSWER WAS TO DELETE IT.** With the entry check in
+  front, nothing reaches it: disabling it entirely measures **186.1 s against 187.0 s** -- identical
+  -- with the retry path unchanged at 36 rows / 8.7 s. It cost nothing, saved nothing, and its only
+  observed effect was cutting off renders that were merely slow, every successful bind landing at
+  781-1109 ms. **Removing a mechanism makes its failure mode impossible by CONSTRUCTION, which is a
+  stronger claim than the rate supports** -- 6/6 against 5/6 is p ~ 1.0 and proves nothing on its
+  own. `settle_stall_looks` goes with it, and so do four cells and two mutations: a cell for a
+  mechanism that no longer exists is an assertion about nothing.
+* **ACCEPTANCE, STATED HONESTLY: the stalls are gone and the row is not green.** Six reps produced
+  **no stall at any width** and 5 of 6 `true`; the single failure is `refused@0ms`, the
+  top-of-function SAFETY guard, a different mechanism. Filed as R4.147 at n=1 and explicitly NOT
+  claimed as fixed here -- and filed OPEN rather than folded into R4.146's closure, because nobody
+  re-reads a closed finding. That is 0.157.0's lesson, where R4.115 sat `fixed` with two of three
+  sites still open.
+* **AND THE RATE IS NOT CLAIMED TO HAVE IMPROVED.** 5/6 now against 8/9 and 3/4 before is p ~ 1.0
+  either way. What is established is mechanism, not rate: the failures were `stalled` and now none
+  are.
+* **A MUTATION SURVIVED THE REWRITE BECAUSE I COUNTED THE WRONG THING.** The beat's replacement cell
+  counted RESOLVE calls -- but the spin lives in the INNER loop, which only calls `await_settled`,
+  so `resolve` runs exactly once whatever the beat does. Counting settles kills it. Third time this
+  slice a mutation survived because my model of the code was wrong rather than the suite weak, and
+  the third time the fix was a better SENSOR rather than a better assertion.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
