@@ -2635,6 +2635,41 @@ first time. The interesting part is the row that did not.
   slice's own record is why: **both previous readings of this mechanism's cost were wrong, and both
   were taken on populations it does not fire in.**
 
+## The in-flight sensor: refuted as proposed, kept as something narrower (R4.146, 0.168.0)
+
+R4.146 named "whether a request is IN FLIGHT" as the replacement for consecutive-quiet and made
+itself conditional on measuring it first. **~$0.45**, both populations, and the answer split.
+
+* **THE ENTRY READING DISCRIMINATES PERFECTLY, AND THE FREE HALF SAYS SO.** Of `drift_bench`'s 126
+  retry-path entries, the **36 that STALL have ZERO pending at entry and zero at every later
+  sample**, costing **23.4 s**; Odoo's render gap reads **1-2 pending from entry** in 3 of 3 paid
+  reps. At the moment the retry begins the two populations are cleanly separated.
+* **THE LIVE COUNT IS NOT A SENSOR, AND ONLY SAMPLING SHOWED IT.** Through one Odoo poll at 25 ms
+  intervals the pending count returns to ZERO mid-render -- **busy spans 16-688 ms, zeros span
+  516-891 ms on the same run**, element at ~907 ms. Odoo's last stage renders the assets it just
+  fetched, which is CPU work with nothing outstanding. So **"nothing pending" does not mean "nothing
+  is coming"**, the longest mid-render zero run is ~175 ms (3-4 looks at a 50 ms beat), and a live
+  sensor needs the same consecutive-count crutch the stall guard already has. That is not the
+  sensor-class change D5 asks for.
+* **THE SUMMARY READING WOULD HAVE SHIPPED THE WRONG THING.** The first pass recorded only entry and
+  peak, both of which look decisive; the mid-render zeros are invisible unless you sample. Two
+  earlier readings of this same mechanism's cost were also wrong for want of the right population --
+  **this is the third, and the first where the population was right and the SAMPLING RATE was the
+  gap.**
+* **WHAT SURVIVES IS NARROWER AND BETTER THAN WHAT WAS PROPOSED.** Trust the reading only AT ENTRY:
+  nothing outstanding when the retry began -> give up at once. 36 of 36 on the bench, 0 of 3 on
+  Odoo, so it saves the whole 23.4 s and changes nothing about the render. **And the second-order
+  effect is the point**: with that check in front, the stall window is only reached by a row that
+  HAD something in flight, of which `drift_bench` has none -- so widening the window would cost
+  nothing on the very population that priced it at 81 s. The saving funds the fix R4.146 needs.
+* **STILL UNMEASURED, and named so it is not assumed**: whether any population other than
+  `drift_bench` reaches the stall window with requests outstanding (a wider window would cost
+  there), and whether the entry check holds on Gitea, where the retry path fires 0 times and the
+  check is inert by construction rather than by measurement.
+* **A PROBE THAT SPENDS MONEY REFUSES TO BE A NO-OP.** `inflight_probe` with no mode exits naming
+  which one is free and which is paid, rather than running nothing and printing a clean summary --
+  the same rule as `arm_oracles`, one instrument over.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
