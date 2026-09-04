@@ -63,28 +63,6 @@ _STAGED_JS = """
 }
 """
 
-_AMBIGUOUS_LATER_JS = """
-() => {
-  const host = document.getElementById('host');
-  // Quiet gaps first, so look 1 sees NOTHING and the poll is entered through the unpainted door.
-  for (const t of [60, 200]) {
-    setTimeout(function () {
-      const d = document.createElement('span');
-      d.textContent = 'stage';
-      host.appendChild(d);
-    }, t);
-  }
-  // Then TWO of them at once: the page has answered, ambiguously. A poll must stop here rather than
-  // wait for one to go away -- which is precisely the wrong-record bind R4.115 measured.
-  setTimeout(function () {
-    for (let i = 0; i < 2; i++) {
-      const b = document.createElement('button');
-      b.textContent = 'Ready';
-      host.appendChild(b);
-    }
-  }, 420);
-}
-"""
 
 _CHURN_JS = """
 () => setInterval(function () {
@@ -354,31 +332,6 @@ def test_the_poll_interval_is_the_measured_one() -> None:
         "a beat at or above the quiet window makes the poll slower than the thing it waits for")
     assert settings.settle_cap_ms // settings.settle_poll_ms >= 5, (
         "the budget must afford at least the five looks the measured Odoo shape needed")
-
-
-@pytest.mark.asyncio
-async def test_a_refusal_that_APPEARS_MID_POLL_stops_it_too() -> None:
-    """The in-loop half of the safety guard, which the top-of-function guard does NOT cover.
-
-    A mutation removing the per-look `saw_candidates` check SURVIVED the first draft of this file:
-    every cell asserting the poll BINDS still passed, and the refusal cell above enters through the
-    top guard and never reaches the loop. So this is the shape that matters -- absent on look 1, and
-    AMBIGUOUS a moment later. R4.115's measured wrong-record bind is exactly this timeline in
-    reverse: wait long enough and the competitor resolves itself. It must not be waited on.
-    """
-    async with BrowserSession(headless=True) as sess:
-        await sess.page.set_content("<div id='host'><button>Other</button></div>")
-        await sess.page.evaluate(_AMBIGUOUS_LATER_JS)
-        sink: dict = {}
-        first = await resolve(sess.page, TARGET, unique=True, sink=sink)
-        assert first is None and sink.get("saw_candidates") is False, (
-            "the fixture must start ABSENT, or this enters through the top guard like the cell above")
-        tr = _tr()
-        got = await _retry_if_unpainted(sess, sess.page, TARGET, tr, None, sink=sink)
-        assert got is None, (
-            "the poll bound a target it had already seen as AMBIGUOUS -- this is the wrong-record "
-            "bind R4.115 measured, arriving one look later")
-        assert "refused-at" in tr.meta["readiness_retry"], tr.meta
 
 
 @pytest.mark.asyncio

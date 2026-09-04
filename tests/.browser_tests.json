@@ -1,6 +1,6 @@
 {
  "_comment": "DERIVED, never hand-edited. A test is a browser test iff it was OBSERVED launching one, OR the fast tier later caught it launching (attribution is order-dependent when a module shares browser work through a fixture). Regenerate with `pytest -q --store-browser-marks` then `python scripts/derive_test_tiers.py`, which iterates to the fixed point. An unclassified test makes a tiered run fail loudly rather than skip it.",
- "total": 2452,
+ "total": 2453,
  "browser": [
   "tests/test_actions_taken.py::test_a_decision_to_stop_is_not_an_action",
   "tests/test_actions_taken.py::test_a_real_zero_action_learn_now_mints_no_actions_needed",
@@ -2265,6 +2265,7 @@
   "tests/test_tiers.py::test_importing_ultracua_config_does_not_repopulate_a_scrubbed_key",
   "tests/test_tiers.py::test_no_provider_key_is_visible_to_the_suite",
   "tests/test_tiers.py::test_no_test_file_hand_marks_its_own_tier",
+  "tests/test_tiers.py::test_no_test_module_defines_the_same_test_TWICE",
   "tests/test_tiers.py::test_the_manifest_covers_everything_this_run_collected",
   "tests/test_tiers.py::test_the_manifest_exists_and_is_internally_consistent",
   "tests/test_tiers.py::test_the_probe_is_installed_on_every_known_entry_point",

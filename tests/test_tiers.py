@@ -388,3 +388,43 @@ def test_no_test_file_hand_marks_its_own_tier() -> None:
         "tier membership is DERIVED from an observed launch, never declared — a hand-written mark is a "
         "list, and a list is only as good as its worst entry:\n  " + "\n  ".join(offenders)
     )
+
+
+def test_no_test_module_defines_the_same_test_TWICE() -> None:
+    """A shadowed cell runs the OTHER one, silently. (0.169.0.)
+
+    Python keeps the last definition and pytest collects one id, so two cells with one name look
+    like a single passing test. That is not hypothetical: replacing three timing-coupled cells with
+    scripted equivalents left the browser copy of one of them further down the file, and the copy is
+    what ran -- for two slices, through a green local suite, until it failed a CI arm on a race the
+    replacement existed to remove. Nothing in the suite could fail for it, because the count was
+    right and the name was right.
+
+    Read from the AST rather than by collecting, so the SHADOWED definition is visible: pytest only
+    ever reports the survivor, which is exactly what made this invisible.
+    """
+    import ast
+    import collections
+
+    offenders: list[str] = []
+    for path in sorted(Path(__file__).parent.rglob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+
+        def _walk(body, prefix=""):
+            names: list[tuple[str, int]] = []
+            for node in body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+                    names.append((prefix + node.name, node.lineno))
+                elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+                    names += _walk(node.body, f"{node.name}.")
+            return names
+
+        seen = collections.Counter(n for n, _ in _walk(tree.body))
+        for name, count in seen.items():
+            if count > 1:
+                lines = [ln for n, ln in _walk(tree.body) if n == name]
+                offenders.append(f"{path.name}::{name} defined {count}x at lines {lines}")
+
+    assert not offenders, (
+        "a test name is defined more than once, so only the LAST one runs and the other is dead "
+        "code that reads as covered:\n  " + "\n  ".join(offenders))
