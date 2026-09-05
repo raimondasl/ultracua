@@ -2904,6 +2904,20 @@ is complete; the plan has no `pending` step left.
   `customer-bench` independent of `substrates`; this failure therefore blocked nothing, where a day
   earlier it would have skipped the Gitea benchmark too. A fix landing one commit before the defect
   it protects against is luck, but it is the kind that only happens if the audit runs BEFORE the PR.
+* **THE FIRST FIX WAS INERT, AND THE DECLARATION IS WHY: `Substrate` IS A DATACLASS.** Writing
+  `serves_before_seed: bool = True` on the base made it a FIELD, so the generated `__init__` assigns
+  that default to every instance and shadows `Odoo`'s plain override. **`Odoo.serves_before_seed` is
+  False; `Odoo().serves_before_seed` was True**, and `check()` reads the instance. Drop the
+  annotation and a class constant behaves like one.
+* **MY GUARD WAS GREEN THE WHOLE TIME, because it read the CLASS where the code reads an INSTANCE.**
+  That is the entire failure in one sentence, and no amount of care in the assertion would have
+  caught it — the object was wrong, not the property. It reads an instance now, plus a second
+  assertion that the name is not in `dataclasses.fields(Substrate)`, which is the only place the
+  mechanism is visible at all.
+* **AND THE SECOND FIX WAS REPRODUCED BEFORE IT WAS BELIEVED.** The first was written from the CI
+  log alone; the second was driven against a genuinely wiped local Odoo, failing identically to CI
+  first and then returning `ok: true` (`seed_s` 97.8, `ready_s` 103.9). **Two CI round trips bought
+  what one `down(wipe=True)` would have.**
 * **AND MY ARMING HARNESS HIT THE TRAP THIS FILE ALREADY DOCUMENTS.** A `pytest.raises` miss is
   `_pytest.outcomes.Failed`, a **BaseException**, so an `except Exception` harness reports the cell
   as unarmed. CLAUDE.md records five false verdicts from exactly that; I wrote a sixth an hour after

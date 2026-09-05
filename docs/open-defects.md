@@ -1091,7 +1091,13 @@ if and only if that branch is ever resumed.
 
 **THE `needs:` REMOVAL, LANDED ONE COMMIT EARLIER BY THE SAME SLICE'S AUDIT, IS WHY THIS COST NOTHING ELSE.** `customer-bench` no longer fans in over both `substrates` legs, so an Odoo container failure blocked no other job. A day earlier it would have skipped the baselined Gitea benchmark as well.
 
-**5 mutations, 5 killed**, including the defect restored verbatim. The arming harness needed fixing first: a `pytest.raises` miss is `_pytest.outcomes.Failed`, a **BaseException**, so an `except Exception` harness scores a genuine kill as a crash. CLAUDE.md records five false verdicts from precisely that trap; this is a sixth, written an hour after reading it. |
+**5 mutations, 5 killed**, including the defect restored verbatim. The arming harness needed fixing first: a `pytest.raises` miss is `_pytest.outcomes.Failed`, a **BaseException**, so an `except Exception` harness scores a genuine kill as a crash. CLAUDE.md records five false verdicts from precisely that trap; this is a sixth, written an hour after reading it.
+
+**THE FIRST FIX WAS INERT AND CI SAID SO — the declaration became a DATACLASS FIELD.** `Substrate` is a `@dataclass`, so writing `serves_before_seed: bool = True` on the base made it field #7; the generated `__init__` then assigns that default to EVERY instance, silently shadowing `Odoo`'s plain `serves_before_seed = False`. Measured: `Odoo.serves_before_seed` is **False** and `Odoo().serves_before_seed` is **True**. `check()` reads the INSTANCE, so it went on taking the `up()` branch and the CI leg failed a second time with a byte-identical message. Fixed by dropping the annotation — an un-annotated class constant is not a field, and subclass override works.
+
+**AND MY OWN GUARD WAS GREEN THROUGHOUT, because it read a different object from the code it guards.** `test_exactly_the_substrates_that_cannot_serve_empty_declare_so` asked `cls.serves_before_seed`; `check()` asks `sub.serves_before_seed`. The class said False, every instance said True, and the test could not see the gap. It reads an INSTANCE now, and a second assertion pins that the name is not in `dataclasses.fields(Substrate)` — the mechanism itself, which is invisible from either attribute alone. **A guard that reads a different object from the thing it guards is green for a living.**
+
+**AND THE SECOND FIX WAS REPRODUCED BEFORE IT WAS BELIEVED, which is the whole difference.** The first was written from the CI log alone and shipped inert. The second was driven against a genuinely wiped local Odoo — `down(wipe=True)`, then the real `substrate_check` — failing identically to CI first, then `ok: true` with `serves_before_seed: false`, `up_s` 4.7, `seed_s` 97.8, `ready_s` 103.9. This repo's oldest rule, arriving on a substrate: reproduce before fixing, and reproduce the FIX. |
 <!-- /generated:r4-index -->
 
 

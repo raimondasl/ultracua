@@ -963,7 +963,14 @@ def test_exactly_the_substrates_that_cannot_serve_empty_declare_so() -> None:
     # what makes a new substrate show up in this assertion at all.
     from benchmarks.scored_run import SUBSTRATES
 
-    cannot = {n for n, cls in SUBSTRATES.items() if not cls.serves_before_seed}
+    # READ OFF AN INSTANCE, NOT THE CLASS, and that distinction is the whole reason this cell was
+    # rewritten. `check()` asks `sub.serves_before_seed` of an INSTANCE. The first version of this
+    # guard asked the CLASS, passed, and the Odoo CI leg failed anyway -- because `Substrate` is a
+    # `@dataclass` and the annotated base declaration had become a FIELD, so the generated
+    # `__init__` assigned the default to every instance and shadowed `Odoo`'s override. Measured:
+    # `Odoo.serves_before_seed` False, `Odoo().serves_before_seed` True. A guard that reads a
+    # different object from the code it guards is green for a living.
+    cannot = {n for n, cls in SUBSTRATES.items() if not cls().serves_before_seed}
     assert cannot == {"odoo"}, (
         f"the substrates declaring they cannot serve before seeding are {sorted(cannot)}, not "
         f"['odoo']. A virgin Odoo returns the database manager at every URL (R4.89) so readiness is "
@@ -973,4 +980,18 @@ def test_exactly_the_substrates_that_cannot_serve_empty_declare_so() -> None:
     assert S.Substrate.serves_before_seed is True, (
         "the BASE default must stay True: a substrate that serves empty is the ordinary case, and a "
         "default of False would silently skip the pre-seed readiness layer for every new substrate."
+    )
+
+    # AND IT MUST NOT BE A DATACLASS FIELD. This is the mechanism that made the first fix inert, and
+    # it is invisible from either attribute on its own: as a field the base default is re-assigned
+    # per instance, so the class says one thing and every object says another. Asserted directly so
+    # the next person to add a `: bool` annotation here gets a red test naming the reason.
+    import dataclasses
+
+    fields = {f.name for f in dataclasses.fields(S.Substrate)}
+    assert "serves_before_seed" not in fields, (
+        "`serves_before_seed` has become a dataclass FIELD again. The generated `__init__` will "
+        "assign the base default to every instance and silently shadow `Odoo`'s override -- which "
+        "is exactly how the Odoo preflight kept failing against a green test. Declare it WITHOUT a "
+        "type annotation so it stays an ordinary class constant."
     )

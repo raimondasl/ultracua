@@ -204,7 +204,13 @@ class Substrate:
     #: asserts readiness first can never reach it.
     #:
     #: Declared rather than probed, because probing means bringing a substrate up to find out.
-    serves_before_seed: bool = True
+    #: NOT ANNOTATED, AND THAT IS LOAD-BEARING: `Substrate` is a `@dataclass`, so an annotated
+    #: `serves_before_seed: bool = True` becomes a FIELD, and the generated `__init__` then
+    #: assigns the default to EVERY instance -- silently shadowing `Odoo`'s plain override.
+    #: Measured: `Odoo.serves_before_seed` was False while `Odoo().serves_before_seed` was
+    #: True, so the class read right and the running code took the wrong branch. Without the
+    #: annotation this is an ordinary class constant and subclass override works.
+    serves_before_seed = True
 
     def start(self, timeout_s: int = 300) -> float:
         """Start the profile's containers. Returns seconds taken. Does NOT assert readiness.
