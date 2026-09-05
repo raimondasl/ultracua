@@ -2887,6 +2887,27 @@ is complete; the plan has no `pending` step left.
   went red, and the fix was to give R4.141 a bullet saying what it does to these numbers -- which is
   the caveat a reader most needs, because `availability_rate` counts rows that call the model on
   every replay and does not say which.
+* **AND THE ODOO LEG FAILED ON ITS FIRST CI RUN, WHICH IS WHAT THE LEG WAS FOR (R4.149).** Not on
+  size or speed -- **that worry is REFUTED**: the image came up in **~65 s** on a GitHub runner. It
+  failed because `substrate_check.check()` calls `up()`, which asserts readiness, BEFORE `seed()`.
+  A virgin Odoo has no `bench` database, so every URL serves the DATABASE MANAGER (R4.89) and
+  `await_ready` refuses it -- correctly, and with a message that names the remedy in as many words:
+  *"Run `seed()` ... this is the expected state of a virgin instance and not a misconfiguration"*.
+  The check could never reach the seed that would have made it pass.
+* **THE ASSUMPTION WAS THAT A SUBSTRATE IS READY BEFORE IT HAS DATA**, true of Gitea and false of
+  Odoo, and it was invisible while `substrates` had one leg. `Substrate.serves_before_seed` declares
+  it, `start()` is `up()` without the readiness wait, and `check()` runs
+  `start -> seed -> snapshot -> await_ready -> assert_writable` for a substrate that cannot serve
+  empty. **`--no-seed` is now REFUSED for such a substrate** rather than passing over two started
+  containers -- a green preflight proving nothing is exactly what the preflight exists to prevent.
+* **THE `needs:` REMOVAL PAID FOR ITSELF ON THE SAME RUN.** The audit had just made
+  `customer-bench` independent of `substrates`; this failure therefore blocked nothing, where a day
+  earlier it would have skipped the Gitea benchmark too. A fix landing one commit before the defect
+  it protects against is luck, but it is the kind that only happens if the audit runs BEFORE the PR.
+* **AND MY ARMING HARNESS HIT THE TRAP THIS FILE ALREADY DOCUMENTS.** A `pytest.raises` miss is
+  `_pytest.outcomes.Failed`, a **BaseException**, so an `except Exception` harness reports the cell
+  as unarmed. CLAUDE.md records five false verdicts from exactly that; I wrote a sixth an hour after
+  reading it. 5 mutations, 5 killed once the harness was right -- including the defect restored.
 * **WHAT THIS DOES NOT CLOSE.** The baseline must be RE-CUT when R4.130 or R4.148 lands --
   **and nothing will tell you to**: `_flip_findings` reports rows that were QUIET in the baseline
   and are not quiet now, so an IMPROVEMENT produces no finding at all. A first draft of this bullet

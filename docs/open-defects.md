@@ -12,7 +12,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**70 open**, 74 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**70 open**, 75 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **70 open**, 74 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **70 open**, 75 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -1081,6 +1081,17 @@ if and only if that branch is ever resumed.
 **NOT FIXED HERE, AND THE OBVIOUS REMEDIES ARE NAMED SO THEY ARE NOT RE-DERIVED.** (a) *Widen the selector* -- adding `.o_form_view`/`.o_list_view` overfits to one app, which is exactly what R4.134 measured this project doing (`data-tooltip` fires 6 times and all 6 are Odoo); and a wider selector that still lands on a large container buys nothing. (b) *Make the comparison count-insensitive for anonymous repeated controls* -- a write gate that ignores row-count changes is a write gate that ignores a real page change, and this is inviolable #3's rail. (c) *Stop pretending*: when `closest()` misses, the precise gate has no scope, and saying so is a different behaviour from silently fingerprinting `document.body` under a precise gate's name. (c) is the direction that changes the SENSOR CLASS rather than tuning it, and it is the one D5 would admit. **Whichever is built, the acceptance is this row going `true`, not a mechanism moving** -- this register's record is that mechanism evidence does not entail the outcome.
 
 **AND R4.143's NEVER-FOLLOWED LEAD IS EXPLAINED.** That entry records *one `scope_fingerprint` in the trace returns EMPTY, which is unexplained*. Reproduced: call [1] returns `""` and the container probe fails alongside it, i.e. the locator `evaluate` threw -- a detached target. At RECORD time an empty `precond_scope` makes `if step.precond_scope and step.locator is not None` false, so that step silently takes the WHOLE-PAGE fallback gate instead. Benign for this row (a different step refuses first) and worth knowing: an empty scope is not 'no gate', it is 'the other gate', with nothing saying so. |
+| R4.149 | fixed | **THE SUBSTRATE PREFLIGHT ASSUMED A SUBSTRATE IS READY BEFORE IT HAS DATA, WHICH IS FALSE OF ODOO AND WAS INVISIBLE WHILE THE JOB HAD ONE LEG.** Found on the first CI run of the Odoo `substrates` leg (0.172.0, PR #252): `SubstrateNotReady: odoo: /web/login is serving the DATABASE MANAGER, not the app. The database 'bench' does not exist yet.` `substrate_check.check()` called `up()` -- which asserts readiness -- and only then `seed()`. A virgin Odoo has no `bench` database, so every URL returns the database manager with HTTP 200 (R4.89) and `await_ready` refuses it. The check could never reach the seed that would have made it pass.
+
+**THE FAILURE MESSAGE WAS ALREADY PERFECT, which is the part worth keeping.** It said *"Run `seed()` (then `snapshot()`) before any scenario -- `up()` deliberately runs first, so this is the expected state of a virgin instance and not a misconfiguration"*. The readiness check knew exactly what was wrong and named the remedy; nothing was mysterious for a moment. A guard that says what to do is worth more than one that merely says no.
+
+**AND THE WORRY THE LEG WAS ADDED TO MEASURE IS REFUTED.** 0.172.0 shipped it labelled *"Odoo's image is BUILT from a Dockerfile on a ~1.5 GB base and NOBODY HAS EVER RUN IT ON CI ... if it proves too slow or too large for a per-PR job, the fix is to restrict this leg to the scheduled run"*. Measured: the container came **up in ~65 s** on a GitHub-hosted ubuntu runner, against Gitea's 34 s for the whole check. Size and speed were never the problem. **The prediction was right to write down and wrong in its content** -- which is only visible because it was written down.
+
+**FIXED BY DECLARING THE DIFFERENCE RATHER THAN BRANCHING ON THE NAME.** `Substrate.serves_before_seed` (True by default, False on `Odoo`) says whether an app is functional empty; `Substrate.start()` is `up()` without the readiness wait; and `check()` runs `start -> seed -> snapshot -> await_ready -> assert_writable` for a substrate that cannot serve empty, which is the only order in which its readiness layer CAN hold. `seed()` already awaited readiness internally, so the layer was never skipped -- it is now asserted and TIMED where it can succeed. **`--no-seed` is refused** for such a substrate: with no seed there is no readiness to prove and the check would pass having started two containers, which is the vacuous-green shape the preflight exists to prevent.
+
+**THE `needs:` REMOVAL, LANDED ONE COMMIT EARLIER BY THE SAME SLICE'S AUDIT, IS WHY THIS COST NOTHING ELSE.** `customer-bench` no longer fans in over both `substrates` legs, so an Odoo container failure blocked no other job. A day earlier it would have skipped the baselined Gitea benchmark as well.
+
+**5 mutations, 5 killed**, including the defect restored verbatim. The arming harness needed fixing first: a `pytest.raises` miss is `_pytest.outcomes.Failed`, a **BaseException**, so an `except Exception` harness scores a genuine kill as a crash. CLAUDE.md records five false verdicts from precisely that trap; this is a sixth, written an hour after reading it. |
 <!-- /generated:r4-index -->
 
 

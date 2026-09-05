@@ -194,10 +194,38 @@ class Substrate:
     containers: tuple = ()
     min_body_bytes: int = 500
 
-    def up(self, timeout_s: int = 300) -> float:
-        """Start the profile and block until the substrate can actually serve. Returns seconds taken."""
+    #: CAN THIS SUBSTRATE SERVE BEFORE IT HAS BEEN SEEDED?
+    #:
+    #: True for one whose app is functional empty -- Gitea serves its own UI with no repositories.
+    #: FALSE for one whose app does not exist until its database does: a virgin Odoo has no `bench`
+    #: database, so `/web/login` serves the DATABASE MANAGER and `await_ready` refuses it, correctly
+    #: and by R4.89's design. That refusal names the remedy in as many words ("Run `seed()` ... this
+    #: is the expected state of a virgin instance and not a misconfiguration"), and a caller that
+    #: asserts readiness first can never reach it.
+    #:
+    #: Declared rather than probed, because probing means bringing a substrate up to find out.
+    serves_before_seed: bool = True
+
+    def start(self, timeout_s: int = 300) -> float:
+        """Start the profile's containers. Returns seconds taken. Does NOT assert readiness.
+
+        Split out of `up()` at 0.172.0 for the one caller that cannot assert readiness yet: on a
+        substrate with `serves_before_seed = False`, the app is not serving until `seed()` has
+        created its database, so `up()` raises before seeding can happen. Measured on the first CI
+        run of the Odoo leg, which failed in 65 s with exactly that message.
+        """
         started = time.monotonic()
         _compose("--profile", self.profile, "up", "-d", timeout=timeout_s)
+        return time.monotonic() - started
+
+    def up(self, timeout_s: int = 300) -> float:
+        """Start the profile and block until the substrate can actually serve. Returns seconds taken.
+
+        UNCHANGED CONTRACT -- it is `start()` plus `await_ready()`, and a test pins that composition
+        so the split cannot quietly drop the readiness half.
+        """
+        started = time.monotonic()
+        self.start(timeout_s=timeout_s)
         self.await_ready(timeout_s=timeout_s)
         return time.monotonic() - started
 
@@ -530,6 +558,12 @@ class Odoo(Substrate):
     The filestore (attachments, generated assets) lives on disk and must move with the database, or
     a scenario that opens an attachment gets the PREVIOUS scenario's file with the current row's id.
     """
+
+    #: A VIRGIN ODOO CANNOT SERVE. With no `bench` database, every URL -- `/`, `/web` and
+    #: `/web/login` alike -- returns the database manager with HTTP 200 (R4.89), and `await_ready`
+    #: refuses it on the body. So readiness is establishable only AFTER `seed()`, which creates the
+    #: database and calls `await_ready` itself once the service is back up.
+    serves_before_seed = False
 
     name: str = "odoo"
     profile: str = "odoo"
