@@ -11,10 +11,13 @@ what the document claims, and fail loudly on drift rather than trusting a human 
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
 REGISTER = Path("docs/open-defects.md")
+#: The STATE is the source of truth for a finding's text; the markdown is rendered from it.
+STATE = Path("docs/register/state.json")
 NOTES = Path("CLAUDE.md")
 
 # Round-3 headings look like `### R3.7. …`, and a fixed one is prefixed `### ✅ FIXED in 0.79.0 — R3.8. …`
@@ -225,3 +228,44 @@ def test_every_finding_id_cited_in_code_exists_in_the_register() -> None:
         "\n  ".join(f"{i} — cited at {', '.join(w[:4])}" for i, w in sorted(dangling.items())) +
         "\n\nFile the finding in the register in the SAME change that names it. Every id is a promise "
         "that a reader can look it up; this project's first instruction is to read that file.")
+
+
+def test_an_occurrence_count_matches_the_occurrences_it_counts() -> None:
+    """A finding that tallies its own sightings must not claim a number its own text refutes.
+
+    R4.22 tracks a recurring CI flake by COUNT, because that is the one fact CI logs do not keep --
+    and the count is hand-typed. It read `**17 occurrences**` while the body already carried
+    `**Occurrence 18**`: the slice that appended 18 did not bump the headline, so every reader taking
+    the number from the headline was one behind, and the next slice's +1 preserved the error instead
+    of fixing it. Exactly the drift `render_register.py` exists to prevent for the STATUS INDEX,
+    one level down, where nothing was watching.
+
+    So the tally is DERIVED here rather than trusted: any summary claiming `**N occurrences**` must
+    agree with the highest `Occurrence N` it actually contains. Scoped to findings that number their
+    occurrences, because a summary may legitimately say `**3 occurrences**` in prose without
+    enumerating them -- and that case is asserted to be empty of numbered ones rather than skipped,
+    so a finding cannot dodge the check by half-numbering.
+    """
+    claim = re.compile(r"\*\*(\d+) occurrences?\*\*")
+    marker = re.compile(r"[Oo]ccurrence (\d+)")
+    checked = []
+    for f in json.loads(STATE.read_text(encoding="utf-8"))["findings"]:
+        s = f["summary"]
+        m = claim.search(s)
+        if not m:
+            continue
+        seen = [int(x) for x in marker.findall(s)]
+        if not seen:
+            continue
+        checked.append(f["id"])
+        assert int(m.group(1)) == max(seen), (
+            f"{f['id']} claims **{m.group(1)} occurrences** but its own body numbers up to "
+            f"{max(seen)} (present: {sorted(set(seen))}). Re-derive the headline from the body "
+            f"rather than incrementing it -- an off-by-one here is invisible and permanent, and it "
+            f"has already happened once."
+        )
+    assert checked, (
+        "no finding states an occurrence tally any more, so this guard is asserting nothing. Either "
+        "the `**N occurrences**` convention has changed -- in which case update this cell to the new "
+        "one -- or the regex has stopped matching it."
+    )

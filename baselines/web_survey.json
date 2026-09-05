@@ -6,17 +6,23 @@
    "family": "server-rendered (Go)",
    "url": "http://localhost:3000/bench/acme/issues?state=all",
    "local": true,
-   "settle_ms": 781,
+   "settle_ms": 484,
    "settle_verdict": "quiet",
-   "elements_at_dcl": 153,
-   "elements_settled": 153,
+   "elements_at_dcl": 154,
+   "elements_settled": 154,
    "painted_late": 0,
    "changed_after_dcl": 0,
-   "candidates": 153,
-   "visible": 65,
+   "candidates": 154,
+   "visible": 66,
    "below_fold": 4,
    "aria": {
     "option": 10
+   },
+   "scope": {
+    "targets": 153,
+    "unmatched": 49,
+    "median_share": 68,
+    "whole_page": 49
    },
    "considered": 80,
    "unnamed": 0,
@@ -32,7 +38,7 @@
    "family": "SPA (OWL)",
    "url": "http://localhost:8069/web#action=crm.crm_lead_opportunities&view_type=list",
    "local": true,
-   "settle_ms": 984,
+   "settle_ms": 938,
    "settle_verdict": "quiet",
    "elements_at_dcl": 5,
    "elements_settled": 84,
@@ -43,6 +49,12 @@
    "below_fold": 12,
    "aria": {
     "searchbox": 1
+   },
+   "scope": {
+    "targets": 84,
+    "unmatched": 84,
+    "median_share": 100,
+    "whole_page": 84
    },
    "considered": 80,
    "unnamed": 15,
@@ -60,7 +72,7 @@
    "family": "server-rendered (PHP/Knockout)",
    "url": "http://localhost:7770/",
    "local": true,
-   "settle_ms": 766,
+   "settle_ms": 969,
    "settle_verdict": "quiet",
    "elements_at_dcl": 429,
    "elements_settled": 444,
@@ -70,6 +82,12 @@
    "visible": 32,
    "below_fold": 69,
    "aria": {},
+   "scope": {
+    "targets": 444,
+    "unmatched": 322,
+    "median_share": 100,
+    "whole_page": 322
+   },
    "considered": 45,
    "unnamed": 0,
    "sources": {
@@ -84,7 +102,7 @@
    "family": "SPA (React)",
    "url": "https://demo.realworld.show/",
    "local": false,
-   "settle_ms": 1250,
+   "settle_ms": 3938,
    "settle_verdict": "quiet",
    "elements_at_dcl": 6,
    "elements_settled": 9,
@@ -94,6 +112,12 @@
    "visible": 9,
    "below_fold": 0,
    "aria": {},
+   "scope": {
+    "targets": 9,
+    "unmatched": 9,
+    "median_share": 100,
+    "whole_page": 9
+   },
    "considered": 9,
    "unnamed": 2,
    "sources": {
@@ -110,7 +134,7 @@
    "family": "SPA (React)",
    "url": "https://www.saucedemo.com/",
    "local": false,
-   "settle_ms": 469,
+   "settle_ms": 500,
    "settle_verdict": "quiet",
    "elements_at_dcl": 3,
    "elements_settled": 3,
@@ -120,6 +144,12 @@
    "visible": 3,
    "below_fold": 0,
    "aria": {},
+   "scope": {
+    "targets": 3,
+    "unmatched": 0,
+    "median_share": 100,
+    "whole_page": 3
+   },
    "considered": 3,
    "unnamed": 1,
    "sources": {
@@ -136,7 +166,7 @@
    "family": "SPA (React/MUI)",
    "url": "https://mui.com/material-ui/react-table/",
    "local": false,
-   "settle_ms": 1984,
+   "settle_ms": 1937,
    "settle_verdict": "quiet",
    "elements_at_dcl": 399,
    "elements_settled": 399,
@@ -146,6 +176,12 @@
    "visible": 62,
    "below_fold": 309,
    "aria": {},
+   "scope": {
+    "targets": 399,
+    "unmatched": 90,
+    "median_share": 77,
+    "whole_page": 90
+   },
    "considered": 80,
    "unnamed": 0,
    "sources": {
@@ -160,8 +196,8 @@
    "family": "SPA (React/Ant)",
    "url": "https://ant.design/components/table",
    "local": false,
-   "settle_ms": 2484,
-   "settle_verdict": "already-quiet",
+   "settle_ms": 3265,
+   "settle_verdict": "quiet",
    "elements_at_dcl": 912,
    "elements_settled": 912,
    "painted_late": 0,
@@ -170,6 +206,12 @@
    "visible": 80,
    "below_fold": 789,
    "aria": {},
+   "scope": {
+    "targets": 912,
+    "unmatched": 22,
+    "median_share": 2,
+    "whole_page": 22
+   },
    "considered": 80,
    "unnamed": 8,
    "sources": {
@@ -187,17 +229,23 @@
    "family": "SPA (Vue/Vuetify)",
    "url": "https://vuetifyjs.com/en/components/data-tables/basics/",
    "local": false,
-   "settle_ms": 2484,
+   "settle_ms": 3250,
    "settle_verdict": "cap",
    "elements_at_dcl": 0,
-   "elements_settled": 709,
-   "painted_late": 709,
-   "changed_after_dcl": 709,
-   "candidates": 709,
+   "elements_settled": 710,
+   "painted_late": 710,
+   "changed_after_dcl": 710,
+   "candidates": 710,
    "visible": 65,
    "below_fold": 256,
    "aria": {
     "option": 11
+   },
+   "scope": {
+    "targets": 699,
+    "unmatched": 482,
+    "median_share": 100,
+    "whole_page": 482
    },
    "considered": 80,
    "unnamed": 9,
@@ -216,7 +264,7 @@
    "family": "SPA (Angular Material)",
    "url": "https://material.angular.dev/components/table/examples",
    "local": false,
-   "settle_ms": 1453,
+   "settle_ms": 1563,
    "settle_verdict": "quiet",
    "elements_at_dcl": 14,
    "elements_settled": 233,
@@ -226,6 +274,12 @@
    "visible": 31,
    "below_fold": 197,
    "aria": {},
+   "scope": {
+    "targets": 233,
+    "unmatched": 17,
+    "median_share": 93,
+    "whole_page": 17
+   },
    "considered": 60,
    "unnamed": 0,
    "sources": {
@@ -240,7 +294,7 @@
    "family": "server-rendered (plain HTML)",
    "url": "https://the-internet.herokuapp.com/",
    "local": false,
-   "settle_ms": 656,
+   "settle_ms": 719,
    "settle_verdict": "quiet",
    "elements_at_dcl": 46,
    "elements_settled": 46,
@@ -250,6 +304,12 @@
    "visible": 21,
    "below_fold": 24,
    "aria": {},
+   "scope": {
+    "targets": 46,
+    "unmatched": 46,
+    "median_share": 100,
+    "whole_page": 46
+   },
    "considered": 21,
    "unnamed": 0,
    "sources": {
@@ -264,16 +324,22 @@
    "family": "server-rendered (PHP)",
    "url": "https://automationexercise.com/",
    "local": false,
-   "settle_ms": 2907,
+   "settle_ms": 2000,
    "settle_verdict": "quiet",
    "elements_at_dcl": 83,
-   "elements_settled": 102,
-   "painted_late": 19,
-   "changed_after_dcl": 19,
-   "candidates": 102,
+   "elements_settled": 99,
+   "painted_late": 16,
+   "changed_after_dcl": 16,
+   "candidates": 99,
    "visible": 17,
-   "below_fold": 66,
+   "below_fold": 63,
    "aria": {},
+   "scope": {
+    "targets": 99,
+    "unmatched": 10,
+    "median_share": 72,
+    "whole_page": 10
+   },
    "considered": 19,
    "unnamed": 3,
    "sources": {
@@ -290,7 +356,7 @@
    "family": "SPA (React)",
    "url": "https://demoqa.com/elements",
    "local": false,
-   "settle_ms": 2093,
+   "settle_ms": 2015,
    "settle_verdict": "quiet",
    "elements_at_dcl": 35,
    "elements_settled": 35,
@@ -300,6 +366,12 @@
    "visible": 9,
    "below_fold": 1,
    "aria": {},
+   "scope": {
+    "targets": 35,
+    "unmatched": 35,
+    "median_share": 100,
+    "whole_page": 35
+   },
    "considered": 17,
    "unnamed": 1,
    "sources": {
@@ -316,16 +388,22 @@
    "family": "server-rendered (MediaWiki)",
    "url": "https://en.wikipedia.org/wiki/Comparison_of_web_frameworks",
    "local": false,
-   "settle_ms": 657,
+   "settle_ms": 687,
    "settle_verdict": "quiet",
    "elements_at_dcl": 98,
-   "elements_settled": 111,
-   "painted_late": 13,
-   "changed_after_dcl": 13,
-   "candidates": 112,
+   "elements_settled": 109,
+   "painted_late": 11,
+   "changed_after_dcl": 11,
+   "candidates": 109,
    "visible": 21,
    "below_fold": 17,
    "aria": {},
+   "scope": {
+    "targets": 109,
+    "unmatched": 55,
+    "median_share": 100,
+    "whole_page": 55
+   },
    "considered": 29,
    "unnamed": 2,
    "sources": {
@@ -342,7 +420,7 @@
    "family": "server-rendered + hydration",
    "url": "https://developer.mozilla.org/en-US/docs/Web/API/Element",
    "local": false,
-   "settle_ms": 844,
+   "settle_ms": 969,
    "settle_verdict": "quiet",
    "elements_at_dcl": 781,
    "elements_settled": 781,
@@ -352,7 +430,13 @@
    "visible": 35,
    "below_fold": 658,
    "aria": {},
-   "considered": 62,
+   "scope": {
+    "targets": 781,
+    "unmatched": 393,
+    "median_share": 100,
+    "whole_page": 393
+   },
+   "considered": 64,
    "unnamed": 0,
    "sources": {
     "tooltip": 0,
