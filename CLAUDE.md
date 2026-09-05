@@ -2827,6 +2827,74 @@ The reason it survived everything is that none of those touch it.
   TWICE because `SCOPE_JS` splices in the accessible-name helper. It went red on the wrong call --
   the cell working one layer earlier than intended. Anchor on `const scope = el.closest(`.
 
+## Odoo is baselined, and the evidence was already bought (2.4b, 0.172.0)
+
+`baselines/customer_v1_odoo.json`: `availability_rate` **0.714 over n=21**, std **0.000**, `varies`
+0, `unstable` 0, `cost_usd` **0.664** (the MAX of three passes, R4.106). **It cost $0.00.** Phase 2
+is complete; the plan has no `pending` step left.
+
+* **THE SERIES WAS RUN AT 0.169.0 AND `src/` HAS NOT CHANGED SINCE, which is a `git diff` and not a
+  claim.** 0.170.0 was that series' own write-up and 0.171.0 a benchmark probe plus a diagnosis --
+  both touched `docs/`, `benchmarks/` and `tests/` only. So 21 scenario-observations bought three
+  slices ago describe the product as it stands today. **Check that before reusing evidence, and
+  check it by diffing rather than by remembering**: it is the difference between a free baseline and
+  a $1.81 one, and between an honest artifact and a stale one.
+* **WHAT REFUSED ODOO FOR FOUR SERIES WAS NEVER THE MEAN.** 0.133.0 declined it with `varies` **5**
+  -- five rows failing for a DIFFERENT reason each pass -- so the column was unreadable whatever
+  number sat on top. `varies` is 0 and `unstable` is 0, which is **tighter than Gitea was at its own
+  cut** (one row, three outcomes, three passes). The second condition was that the two non-passing
+  rows be UNDERSTOOD and not merely stable, and R4.148 supplied the last of that one slice ago.
+* **THE CEILING IS 5/7 AND THE BASELINE SAYS SO OUT LOUD.** `odoo-search` is a corpus-design
+  artifact (R4.130) and `odoo-idempotent-replay` a diagnosed product defect (R4.148). A baseline
+  whose headline is a ceiling has to name the rows it cannot reach, or the number reads as a score.
+* **VERIFIED AGAINST ALL THREE OF ITS OWN PASSES BEFORE SHIPPING** -- R4.106's rule, which killed
+  the first Gitea draft when a mean `cost_usd` regressed against a pass it was built from. Gate
+  green on each rep, with the coverage channel acknowledged and cost/rate quiet.
+* **A CORRECTION THE AUDIT FORCED, because it is the shape to watch for.** This section first
+  claimed the weekly spend "roughly doubles to ~$1.30 a pass against Gitea's ~$0.66" -- and $0.66 is
+  ODOO's `cost_usd`, quoted as Gitea's, whose figure is **0.842**. Worse, a baseline's `cost_usd` is
+  the MAXIMUM observed pass recorded as an alarm threshold, never the spend: the observed means are
+  $0.603 (Gitea) and $0.602 (Odoo), so the real weekly figure is ~$0.60 -> **~$1.20**. One number,
+  two category errors -- the wrong substrate AND the wrong quantity.
+* **THE ACKNOWLEDGEMENT IS A FILE, AND GITEA'S IS EMPTY.** Odoo signs for exactly one row; Gitea
+  signs for none, and now says so in a committed `[]` rather than by omitting the flag. **An absent
+  allowlist and an empty one read identically at the call site and mean different things** --
+  "nobody has looked" versus "nothing is signed for" -- so both weekly legs pass `--acknowledge` and
+  stay ONE shape instead of one plus a special case. `test_the_baseline_the_page_describes_is_the
+  _one_on_disk` now DERIVES the baseline set from disk rather than naming Gitea's file, so a third
+  substrate cannot ship undocumented either -- and it is ARMED for the first time, 2 mutations, both
+  killed. **The first draft of this line claimed "3 mutations, 3 killed" on the strength of an
+  arming script in a scratch directory that was never committed**, which is a claim about a guard
+  nothing in the tree demonstrates. The third mutation is deliberately absent rather than lost: it
+  deleted the acknowledgement file, and a cell that writes to `baselines/` to arm itself can leave
+  the tree broken when it fails. **And one of the two was WRONG on its first run** -- it replaced
+  `0.714` once where the region quotes it five times, so the cell passed and the harness correctly
+  reported the mutation as unguarded rather than the guard as weak.
+* **BOTH CI JOBS MATRIX OVER THE SUBSTRATES, `fail-fast: false`**, and the weekly spend roughly
+  doubles to ~$1.30 a pass. **One thing is deliberately unmeasured and labelled as such**: Odoo's
+  image is BUILT from a Dockerfile on a ~1.5 GB base and has never run on a CI runner, where Gitea's
+  is pulled and was timed at 12.5 s up / 8.7 s seeded (R4.109). The `substrates` leg is therefore
+  partly a measurement. **If it is too slow for a per-PR job the fix is to move that leg to the
+  schedule, NOT to widen a timeout until it fits** -- a timeout that has been stretched to
+  accommodate the thing it was watching for is no longer a sensor.
+* **A STALE MUTATION CAUGHT THE RENAME, which is the third instrument to do its job in this slice.**
+  `test_substrate_check.py` arms itself by deleting the provisioning step BY NAME, and the name
+  moved from `Provision Gitea` to the matrix form. It asserted `the mutation is STALE` rather than
+  passing -- `prove_red`'s rule reaching a hand-written arming cell.
+* **AND THE HONESTY PAGE'S OWN GUARD REFUSED THE FIRST DRAFT.** The new section cites R4.141 (an
+  open finding: every corpus read still replays with `llm_calls=1`), and citing an open finding in
+  the region without declaring it in the machine-checked block is exactly what that test forbids. It
+  went red, and the fix was to give R4.141 a bullet saying what it does to these numbers -- which is
+  the caveat a reader most needs, because `availability_rate` counts rows that call the model on
+  every replay and does not say which.
+* **WHAT THIS DOES NOT CLOSE.** The baseline must be RE-CUT when R4.130 or R4.148 lands --
+  **and nothing will tell you to**: `_flip_findings` reports rows that were QUIET in the baseline
+  and are not quiet now, so an IMPROVEMENT produces no finding at all. A first draft of this bullet
+  said the gate "reads an improvement as a flip", which is backwards and would have left a reader
+  expecting a signal that cannot arrive. And 0.714 is the best this corpus has measured, not a rate:
+  two open flake findings sit on rows that scored 3/3, so three passes is a flake detector and not a
+  stability certificate.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

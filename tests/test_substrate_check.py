@@ -285,15 +285,20 @@ def test_the_workflow_cells_go_red_when_armed() -> None:
 
     # (a) REMOVE THE PROVISIONING STEP -- the exact shape of R4.110, which shipped and cost a paid
     # run. The step is deleted by name so the mutation names one site.
-    marker = "      - name: Provision Gitea for the scored run\n"
+    # Anchored on the MATRIX form since 0.172.0: both jobs grew a `substrate` leg when the Odoo
+    # baseline landed (2.4b), so the literal "Gitea" in these names is gone. The stale-marker
+    # asserts below are what caught that, which is the rule `prove_red` applies to every mutation --
+    # a find-text that no longer matches is an ERROR, never a quiet pass.
+    marker = "      - name: Provision ${{ matrix.substrate }} for the scored run\n"
     assert marker in text, "the mutation is STALE; the provisioning step was renamed"
     start = text.index(marker)
-    end = text.index("      - name: Run the Gitea corpus and gate it", start)
+    end = text.index("      - name: Run the ${{ matrix.substrate }} corpus and gate it", start)
     stripped = text[:start] + text[end:]
     assert_red(test_every_job_that_pays_for_a_corpus_provisions_its_own_substrate, parsed(stripped))
 
     # (b) DROP `--keep` -- the same failure reached from the other side, and the one a reader would
     # least expect: the step is there, it runs, and it tears the substrate down before the corpus.
-    dropped = text.replace("--substrate gitea --keep", "--substrate gitea", 1)
+    dropped = text.replace("--substrate ${{ matrix.substrate }} --keep",
+                           "--substrate ${{ matrix.substrate }}", 1)
     assert dropped != text, "the mutation is STALE; the provisioning command changed shape"
     assert_red(test_the_provisioning_step_keeps_the_substrate_running, parsed(dropped))

@@ -1,0 +1,118 @@
+{
+ "bench": "customer-odoo",
+ "provider": "anthropic",
+ "reps": 3,
+ "kind": "corpus-baseline",
+ "metrics": {
+  "availability_rate": {
+   "mean": 0.714286,
+   "n": 21
+  }
+ },
+ "gated_metrics": [
+  "availability_rate"
+ ],
+ "scenarios": {
+  "odoo-create-lead": {
+   "outcome": "true",
+   "substrate": "odoo",
+   "code": ""
+  },
+  "odoo-filter-status": {
+   "outcome": "ok",
+   "substrate": "odoo",
+   "code": ""
+  },
+  "odoo-idempotent-replay": {
+   "outcome": "refused_wrongly",
+   "substrate": "odoo",
+   "code": "drift"
+  },
+  "odoo-menu-nav": {
+   "outcome": "ok",
+   "substrate": "odoo",
+   "code": ""
+  },
+  "odoo-open-record": {
+   "outcome": "ok",
+   "substrate": "odoo",
+   "code": ""
+  },
+  "odoo-search": {
+   "outcome": "no_actions_needed",
+   "substrate": "odoo",
+   "code": ""
+  },
+  "odoo-sort-list": {
+   "outcome": "ok",
+   "substrate": "odoo",
+   "code": ""
+  }
+ },
+ "cost_usd": 0.66395,
+ "cost_per_rep": [
+  0.58879,
+  0.66395,
+  0.553255
+ ],
+ "unstable": [],
+ "varies": [],
+ "stability": {
+  "odoo-create-lead": {
+   "passes": 3,
+   "scored_reps": 3,
+   "reps": 3,
+   "outcomes": [
+    "true"
+   ]
+  },
+  "odoo-filter-status": {
+   "passes": 3,
+   "scored_reps": 3,
+   "reps": 3,
+   "outcomes": [
+    "ok"
+   ]
+  },
+  "odoo-idempotent-replay": {
+   "passes": 0,
+   "scored_reps": 3,
+   "reps": 3,
+   "outcomes": [
+    "refused_wrongly"
+   ]
+  },
+  "odoo-menu-nav": {
+   "passes": 3,
+   "scored_reps": 3,
+   "reps": 3,
+   "outcomes": [
+    "ok"
+   ]
+  },
+  "odoo-open-record": {
+   "passes": 3,
+   "scored_reps": 3,
+   "reps": 3,
+   "outcomes": [
+    "ok"
+   ]
+  },
+  "odoo-search": {
+   "passes": 0,
+   "scored_reps": 3,
+   "reps": 3,
+   "outcomes": [
+    "no_actions_needed"
+   ]
+  },
+  "odoo-sort-list": {
+   "passes": 3,
+   "scored_reps": 3,
+   "reps": 3,
+   "outcomes": [
+    "ok"
+   ]
+  }
+ }
+}

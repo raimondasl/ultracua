@@ -332,10 +332,12 @@ Notes:
 `benchmarks.corpus_aggregate --baseline`. `availability_rate` mean **0.762** over **n=21**
 scenario-observations (3 reps x 7 scenarios), cost $1.81 for the series.
 
-**Why the name says `_gitea`.** It is half of what step 2.4 owes. `baselines/customer_v1.json` is
-that step's artifact and covers BOTH substrates; writing this under that name would have marked the
-step shipped while the Odoo half, the nightly and the honesty page do not exist. The plan-state test
-caught exactly that and is the reason for the rename.
+**Why the name says `_gitea`.** It was half of what step 2.4 owed, and writing it under the
+both-substrate name would have marked the step shipped while the Odoo half did not exist — the
+plan-state test caught exactly that, and it is the reason for the rename. **The other half is now
+below**, as its own artifact rather than a merged one: the two corpora are disjoint, they are gated
+separately, and a single file would make one substrate's regression arithmetically dilutable by the
+other's.
 
 **What it does prove.** Five of the seven rows returned an identical verdict in all three passes,
 including `gitea-comment` at **3/3 `true`** — a real write, learned once and replayed at 0 LLM calls
@@ -358,47 +360,78 @@ because a learn that fails spends its whole budget and which rows fail varies. A
 failed rep 2, one of the passes it was built from (R4.106). `cost_per_rep` carries the individual
 values so the mean is recoverable.
 
-**Why Odoo is absent, and why the reason has changed completely since this page was written.**
-When it was, Odoo measured mean **0.181 ± 0.203** and **58% of its 12 replay refusals were the
-mutation gate** refusing a step R4.27 misfiled as a write (R4.105) — `is_write_request` keys on the
-HTTP METHOD, Odoo serves list reads as JSON-RPC POSTs, and a marked step that drifts cannot
-self-heal. **At 0.170.0 Odoo measures 0.714 ± 0.000, per-rep `[0.714, 0.714, 0.714]`, with `varies`
-0 and `unstable` 0** — the arithmetic ceiling, reached in every pass. So instability is no longer
-the reason. **The gate is a narrower story than "fixed"**: the `over_gated/drift` outcome went
-4 → 0 at 0.158.0 and has stayed there, and that is about the READ rows. The mutation gate still
-refuses `odoo-idempotent-replay` in **9 of 9 reps since 0.158.0** — it is one of the two rows below.
+## `customer_v1_odoo.json` — the customer benchmark, ODOO (2026-09-05)
 
-**What holds it now is TWO ROWS, one per column, and both are stable in OUTCOME.**
-`odoo-search` scores `no_actions_needed` 3/3 — a permanent 0 that is **not** a product failure, but
-a corpus artifact: the answer renders on the landing page, so there is no recipe to replay and no
-speed-up to measure (R4.130). `odoo-idempotent-replay` scores `refused_wrongly` **0 of 12 across
-four series** (R4.143). Its OUTCOME is 0/12 and its MECHANISM is not: all three 0.156.0 reps refused
-on the mutation gate's PRECISE branch failing its BIND (`target missing/ambiguous`), and the nine
-since read `form/section drift`, its SCOPE comparison — the outcome-vs-reason distinction this
-benchmark built `varies` for, and one nobody has diagnosed either way. Neither row is a stability
-problem, which is what 0.133.0 actually refused Odoo for — so what remains is a judgement about
-whether a baseline should be cut over a corpus-design artifact and an undiagnosed refusal, not a
-wait for the numbers to settle.
+**What it is.** Three full passes of the seven Odoo corpus scenarios, folded by
+`benchmarks.corpus_aggregate --baseline`. `availability_rate` mean **0.714** over **n=21**
+scenario-observations, `std` **0.000**, per rep `[0.714, 0.714, 0.714]`. Reads 0.800 over 5, writes
+0.500 over 2.
 
-**The cheap fix was tried and refuted** (R4.111, 0.139.0). Correctness-plan D6 proposed routing such
-a step to the precise form-scope gate instead of the whole-page one, and made itself conditional on
-measuring the action types first. Measured, $0.4634 across four learns: of ten wire-promoted steps,
-six are `navigate` — no element, so the precise gate is structurally unreachable — and four are
-`click` that **already** take the precise gate and refuse anyway, on `target missing/ambiguous`.
-That is a locator failure, not a scope failure. **The gate is correct at both branches; the defect is
-upstream in the marking**, which is the population D0 is blocked over.
+**The series was run at 0.169.0 and `src/` has not changed since.** Two releases landed in between
+and neither touched the product: 0.170.0 was the write-up of this very series, 0.171.0 a benchmark
+probe and a diagnosis. So this baseline is cut from evidence bought earlier and still valid, at a
+cost of $0.00 — and that claim is checkable rather than asserted, because it is a `git diff` over
+`src/`.
 
-**What this does and does not say about the product.** It does NOT say ultracua gets Odoo wrong: no
-Odoo scenario in any run produced `wrong_data`, and `mode="auto"` falls through to a re-author, so
-the answer still arrives. What is lost is the 0-LLM deterministic replay — the central claim — so on
-this class of app the product degrades to an ordinary LLM agent. And it is a CLASS, not an app:
-R4.27's original 12/12 was measured on GraphQL read controls, not on Odoo.
+**Why it could be cut now, when four earlier series said no.** The history is
+0.181 ± 0.203 (0.133.0) → 0.524 ± 0.082 (0.158.0) → 0.619 ± 0.082 (0.165.0) → **0.714 ± 0.000**.
+What refused Odoo at 0.133.0 was never the mean: it was that **five rows failed for a DIFFERENT
+REASON each pass** (`varies` 5), so the column was unreadable whatever number sat on top of it.
+`varies` is **0** now and `unstable` is **0** — tighter than Gitea was when its own baseline was
+cut, which carried one row giving three different outcomes in three passes.
 
-**One caution against assuming R4.27 is the whole story.** `odoo-sort-list`'s gate refusal is itself
-a locator-ambiguity failure, so there may be a second independent Odoo problem underneath — generated
-markup that does not resolve uniquely. One refusal message is a signal, not a measurement, and
-nothing here should be read as "fix R4.27 and Odoo works".
+**What it does prove.** **All seven** rows returned an identical verdict in all three passes —
+that is what `unstable` 0 and `varies` 0 mean, and the first draft of this paragraph said "five",
+copied from the Gitea section above, understating its own result. Among them `odoo-create-lead` at
+**3/3 `true`** — a real write on a client-rendered SPA, learned once
+and replayed at 0 LLM calls every time. The declared in-substrate control group `odoo-menu-nav`
+passes 3/3, which by the corpus's own rule is what makes any other Odoo number readable at all.
 
+**What it does NOT prove, and this matters more here than on Gitea.** Two of the seven rows CANNOT
+pass, and the 0.714 is therefore a ceiling rather than a score:
+
+* `odoo-search` scores `no_actions_needed` 3/3 — a permanent 0 that is **not** a product failure but
+  a corpus-design artifact: the answer renders on the landing page, so there is no recipe to replay
+  and no speed-up to measure (R4.130). It is the one row this baseline's gate **acknowledges**, in
+  `customer_v1_odoo.acknowledged.json`, and acknowledging it inflates nothing — the row still scores
+  zero in every denominator.
+* `odoo-idempotent-replay` scores `refused_wrongly` 0/3 on a diagnosed product defect: the "precise"
+  mutation gate finds no container to scope to on Odoo, so it fingerprints the whole page, and the
+  flow's own write adds a list row that breaks its own precondition (R4.148).
+
+**And three passes is a flake detector, not a stability certificate.** A row passing 3/3 could still
+be 80% reliable, which shows 3/3 about half the time. Two open flake findings sit on rows that
+scored 3/3 here — R4.140 on `odoo-filter-status` and R4.147 on `odoo-create-lead` — so the honest
+reading of 0.714 is *the best this corpus has measured*, not *the rate*.
+
+**What the availability number counts, which is not what a reader assumes.** Every corpus READ
+that replays at all pays AT LEAST ONE LLM call, because no read is pinned and none can be — 0 of 10
+are pinnable, Odoo carrying no `id` or `data-testid` on any of 765 leaf text holders (R4.141). In
+this very series: four reads report `llm_calls` **1**, `odoo-filter-status` reports **2**, and
+`odoo-search` reports none because it never replays. So a read counted as "available" still calls
+the model on every replay, and "one call" is a floor rather than the figure. **The two WRITES report
+`llm_calls: 0` and `zero_llm: true`** — on this corpus they are the only rows that demonstrate the
+0-LLM claim at all.
+
+**The gate's width, measured.** The Wilson 95% lower bound on 15/21 is **0.500**, so a weekly pass
+must land **≥ 4/7** against 5/7 observed in every rep. One failure beyond the two known-bad rows
+still passes; two do not. That bound moves with `n`, and nothing recomputes this sentence — check it
+the next time the corpus changes size.
+
+**Why `cost_usd` is the MAXIMUM observed, not the mean.** The same RULE as Gitea's (R4.106), and
+NOT the same reason — which is worth separating, because the rule is standing and the reason was
+Gitea's alone. Gitea's three passes spread **140%** ($0.3502 / $0.8421 / $0.6167) and a mean baseline
+genuinely regressed against one of them. Odoo's spread is **20%** ($0.5533 / $0.5888 / $0.6640), so a
+mean baseline would not have fired here. The maximum is used anyway because the rule exists for the
+run that has not happened yet: a failing learn spends its whole budget, and which rows fail varies. `cost_per_rep` carries the individual values so the mean stays
+recoverable. **This baseline was checked against all three of its own passes before it shipped** —
+gate green on each — which is the check that killed the first Gitea draft.
+
+**What Odoo's presence here does and does not say about the product.** It does NOT say ultracua
+handles Odoo as well as Gitea: 0.714 against 0.762, with the gap entirely in the two rows above. It
+does say the product is not confined to server-rendered apps, which was an open question as recently
+as 0.143.0 — the corpus differs on exactly one axis, and both blockers that used to define that axis
+(reads-over-POST, the readiness race) are closed.
 
 ### The open defects these numbers are standing on
 
@@ -421,8 +454,10 @@ not happen is a live caveat quietly becoming a historical one.
   gate refuses none of them** (`over_gated` 4 → 0, once the gate stopped deciding drift from a
   half-rendered page), so what R4.27 costs today is EXPOSURE rather than refusals: the better the
   agent gets at driving Odoo, the more read-bearing POSTs it issues for this to mark. **It is no
-  longer why Odoo has no baseline**, and that sentence stood here until 0.170.0 after the numbers
-  under it had moved: what holds Odoo now is R4.130 and R4.143, neither of which is this.
+  longer why Odoo has no baseline** -- Odoo HAS one as of 0.172.0 -- and that sentence stood here
+  until 0.170.0 after the numbers under it had moved. What holds Odoo's two unreachable rows is
+  R4.130 and R4.148, neither of which is this. What R4.27 costs the baseline is not a refusal but a
+  standing exposure that grows as the agent gets better.
 * **R4.84** — three of the eight doors into the engine can re-author a write flow, which performs
   the write again. Nothing in this corpus exercises that path; the numbers say nothing about it.
 * **R4.137** — `gitea-start-timer`'s 0/3, and it is no longer a grounding limit: the below-fold
@@ -440,14 +475,13 @@ not happen is a live caveat quietly becoming a historical one.
   **That pooled arm is heterogeneous and the qualifier "before the poll landed" would be wrong**:
   the readiness poll landed AT 0.165.0, which is one of the three prior series and is the one
   holding the single pass. One write row remains, and it is R4.143's, not this one's.
-* **R4.105** — Odoo's own exclusion. Measured 0.181 ± 0.203 at 0.133.0, 0.524 ± 0.082 at
-  0.158.0, and **0.714 ± 0.000 at 0.169.0** — which is the ceiling, since two of seven rows cannot
-  currently pass (R4.130 and R4.143). The variance that made the column unreadable is gone
-  (`varies` 5 → 0, `unstable` 0). Recorded here because "Odoo is absent" is a statement about the
-  product's measured behaviour, not about effort — and because that behaviour has now moved from
-  *unreadable* to *at its ceiling* while the answer stayed "absent". **A 15/21 cut would have a
-  Wilson 95% lower bound of 0.500, so a weekly gate would need ≥ 4/7** — the same width Gitea's
-  0.762 over n=21 buys.
+* **R4.105** — Odoo's exclusion, now ENDED, and kept here for what the number still means.
+  Measured 0.181 ± 0.203 at 0.133.0, 0.524 ± 0.082 at 0.158.0, and **0.714 ± 0.000 at 0.169.0**,
+  which is the cut above. That is a CEILING and not a score: two of seven rows cannot pass (R4.130,
+  R4.148). The finding stays open because its subject — what an Odoo number is worth — is still
+  live: the variance that made the column unreadable is gone (`varies` 5 → 0, `unstable` 0), and
+  what replaced it is a headline bounded by two known rows rather than by the product's actual
+  reach.
 * **R4.140** — `odoo-filter-status` refuses `shape_drift` about one run in three, because the
   extractor optionally emits a second key and the SHAPE therefore varies between learn and replay.
   The refusal is correct (inviolable #2), but it means a read row's availability depends on an LLM's
@@ -457,6 +491,18 @@ not happen is a live caveat quietly becoming a historical one.
   is the only one whose goal asks for two things at once. **It has not fired in six consecutive reps**
   (0.165.0 and 0.169.0, 3/3 each), which at a ~1/3 rate has probability 0.088 — suggestive, and not a
   claim: nothing changed underneath it, so the entry stays open and the caveat stands.
+* **R4.141** — what `availability_rate` COUNTS, on both substrates. Every corpus read replays with
+  `llm_calls=1` because no read is pinned and none can be (0 of 10 pinnable; Odoo carries no `id`
+  or `data-testid` on any of 765 leaf text holders). So a read counted as available still calls the
+  model on every replay, and the number does not say which rows do. The writes are the rows that
+  demonstrate the 0-LLM claim. Neither baseline separates the two, and that is a limit of the
+  metric rather than of the run.
+* **R4.130** — `odoo-search`'s permanent zero, and the reason this baseline acknowledges a row.
+  The scenario's answer renders on its own landing page, so a correct run takes no actions, caches
+  no recipe, and has no speed-up to measure. It is a corpus-design fault rather than a product one,
+  and it costs Odoo's headline **one seventh**. Its named blocker (the below-fold defect) is fixed;
+  the rebuild was reverted at 0.152.0 and has not been retried, so whether it is now repairable
+  needs one paid run.
 * **R4.143** — the one row holding Odoo's write column. `odoo-idempotent-replay` refuses
   `form/section drift` — the mutation gate's PRECISE branch failing its SCOPE comparison, not its
   bind — **0 of 12 across four series**, deterministically. Everything that fixed its sibling row
