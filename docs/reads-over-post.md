@@ -38,7 +38,10 @@ learn. The step then loses self-heal, suffix-replan, the auth-refresh retry and 
 refused from MCP and `run_batch`, and at replay is judged by the mutation gate, which REFUSES on
 drift rather than healing.
 
-Measured: Odoo `availability_rate` **0.181** (std 0.203) against Gitea's **0.762** — same tasks,
+Measured **at 0.133.0**, and both figures below are superseded — Odoo is **0.714 ± 0.000** as of
+0.169.0 and the mutation gate refuses none of the READ rows (`over_gated/drift` 4 → 0 at 0.158.0),
+so the motivating numbers have moved a long way while the survey's ARGUMENT stands:
+Odoo `availability_rate` **0.181** (std 0.203) against Gitea's **0.762** — same tasks,
 different transport. **58%** of Odoo's replay refusals are the mutation gate on wire-marked steps
 (R4.105). R4.27's original measurement was **12/12** GraphQL read controls cached as write flows.
 

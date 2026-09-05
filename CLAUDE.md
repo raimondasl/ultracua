@@ -2707,6 +2707,75 @@ Half of that was right. **~$1.7** in acceptance reps, and the measurement change
   slice a mutation survived because my model of the code was wrong rather than the suite weak, and
   the third time the fix was a better SENSOR rather than a better assertion.
 
+## Odoo reached its ceiling, and the prediction that mattered was the ROW (0.170.0)
+
+Three reps at 0.169.0, **$1.81**. Availability **0.619 -> 0.714**, std **0.082 -> 0.000**, per-rep
+`[0.714, 0.714, 0.714]`, `varies` 0, `unstable` 0. Bought to see whether R4.146's stall-guard
+removal -- closed on SOLO reps -- survives corpus context, which is the only population it was ever
+about.
+
+* **THE PREDICTION WAS WRITTEN DOWN AS A PAIR AND BOTH HALVES HELD.** 0.167.0's lesson was that I
+  got the mean right and the mechanism wrong, so this time the ROW was the primary claim:
+  `odoo-create-lead` passes 2 or 3 of 3, because the corpus/solo gap WAS the stall guard and the
+  guard is gone. It went **3/3**, and the number followed from it. **A prediction whose number is
+  right and whose row is wrong is a failure that reads as a success** -- checking only the headline
+  would have scored 0.167.0 as a clean win.
+* **THE RATE CLAIM IS AVAILABLE NOW BECAUSE THE POPULATION CHANGED, NOT BECAUSE THE EVIDENCE
+  ACCUMULATED.** R4.147 says *do not claim the row improved* and is still right about SOLO reps --
+  5/6 against 8/9 and 3/4 is p ~ 1.0, and solo was never the broken population. In the CORPUS the
+  row is **1 of 9 across three prior versions against 3 of 3 now, Fisher p = 0.018**. The
+  same-code comparison (0.165.0's 1/3 against 3/3) is **p = 0.4** and settles nothing alone. Quote
+  whichever question is being asked and LABEL it: the pooled arm spans three different mechanisms
+  underneath, so it answers *how often has this row ever passed a corpus* (once in nine) rather
+  than *is this version better than the last*.
+* **AND THE MECHANISM STORY IS AN INFERENCE, NOT A READING -- WHICH I ASSERTED AS CONCLUSIVE AND HAD
+  TO WITHDRAW.** The draft said *every 0.165.0 corpus failure read `already-quiet:stalled:1`; no
+  `stalled` verdict exists anywhere in this series*. Both halves are wrong. **No corpus run has ever
+  recorded a poll verdict at all** -- `readiness_retry` is read only by `benchmarks/inflight_probe.py`,
+  built at 0.168.0 -- so `stalled` appears zero times in ALL FOUR series, including 0.165.0 where the
+  guard was live and firing. Its absence here is a property of the SCHEMA, not a result. The verdict
+  exists in exactly one artifact, `odoo_create_lead_0165_solo_vs_corpus.json`, under `solo`, on one
+  of four reps. **What is actually conclusive is a CODE fact**: the guard is deleted, so that failure
+  mode is impossible by construction. The corpus series is CONSISTENT with the stall story and
+  contains no evidence either way -- and `refused@0ms` (R4.147) emits the identical `DriftError`.
+* **THE FALSIFIER I WAS WATCHING WAS THE OTHER ROWS, AND IT HELD -- ON OUTCOMES.** The entry check
+  (R4.146) had only ever been measured against `drift_bench` and one scenario, never the corpus, so a
+  previously-stable row breaking would have been a regression bought with an acceptance. No outcome
+  moved. **An outcome is blind to AUTHORING, though**: `odoo-menu-nav`, the declared control group,
+  learned recipes of **6 / 11 / 8 steps** where 0.158.0 got **6 / 6 / 6** -- the inverse of R4.139's
+  signature (identical recipe, differing verdict) and not claimed here as a regression, because
+  nothing separates it from ordinary learn variance the earlier series happened not to show. Recorded
+  because a falsifier stated over outcomes cannot see it.
+* **THREE CLEAN REPS IS NOT EVIDENCE R4.147 IS GONE, and the arithmetic says so**: at its observed
+  1-in-6 SOLO rate, **P(0 sightings in 3) = 0.58**, so silence is the LIKELIER outcome for a fully
+  live defect. Same for R4.140, unfired in six consecutive reps at a filed ~1/3 rate -- p = 0.088,
+  suggestive, with no mechanism underneath it and the entry left open. **Buying reps to watch
+  something not happen is not a measurement**; catch it under the probe instead.
+* **THE CEILING IS ARITHMETIC AND IT MOVED FROM 4/7 TO 5/7.** Two rows still cannot pass, both
+  STABLE in OUTCOME: `odoo-search` `no_actions_needed` 3/3 (R4.130 -- a corpus artifact, not a
+  product failure) and `odoo-idempotent-replay` `refused_wrongly` **0 of 12 across four series**, now
+  the ONLY row holding the write column. **Its outcome is 0/12 and its MECHANISM is not** -- all
+  three 0.156.0 reps refused on the PRECISE branch's BIND (`target missing/ambiguous`) and the nine
+  since read `form/section drift`, its SCOPE comparison. That is the outcome-vs-reason split `varies`
+  exists for, and fusing them is what made me write *both fail the same way every time*.
+  **2.4b is no longer blocked on stability** -- 0.133.0 refused Odoo for `varies` 5, and that is 0 --
+  so what is left is a judgement about cutting a baseline over one corpus-design artifact and one
+  undiagnosed refusal, plus R4.106's rule that `cost_usd` is the MAX observed.
+* **AND THE PAGE THAT EXISTS TO NOT GO STALE HAD GONE STALE, plus two documents behind it.**
+  `baselines/README.md` still read *0.181 +/- 0.203* and *58% of refusals are the mutation gate* --
+  **four Odoo corpus series old** (0.151.0, 0.156.0, 0.158.0, 0.165.0 have run since) -- and
+  `docs/reads-over-post.md` and `docs/reshape-plan.md` still assert both numbers in the present
+  tense, the latter naming a dependency (D6) refuted at 0.139.0. Its machine-checked block caught
+  nothing, correctly: the guard asserts every declared id is still OPEN, and every one was. **A
+  caveat can rot without its finding closing**, which is the direction that test does not cover and
+  prose has to.
+* **THE FIX SENTENCE THAT WAS ITSELF WRONG, because it is the shape to watch for.** The rewrite said
+  *neither is the gate: `over_gated/drift` went 4 -> 0 and has stayed there* -- true of the READ
+  rows, and false as written: the mutation gate refuses `odoo-idempotent-replay` in **9 of 9 reps
+  since 0.158.0**, and the same paragraph named that refusal as one of the two holds two lines later.
+  **A staleness fix is a new claim and gets audited like one**; this one contradicted itself inside
+  one paragraph, on the page whose whole job is not doing that.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
