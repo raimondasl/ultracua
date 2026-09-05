@@ -457,13 +457,21 @@ not happen is a live caveat quietly becoming a historical one.
   is the only one whose goal asks for two things at once. **It has not fired in six consecutive reps**
   (0.165.0 and 0.169.0, 3/3 each), which at a ~1/3 rate has probability 0.088 — suggestive, and not a
   claim: nothing changed underneath it, so the entry stays open and the caveat stands.
-* **R4.143** — the one row now holding Odoo's write column. `odoo-idempotent-replay` refuses
+* **R4.143** — the one row holding Odoo's write column. `odoo-idempotent-replay` refuses
   `form/section drift` — the mutation gate's PRECISE branch failing its SCOPE comparison, not its
   bind — **0 of 12 across four series**, deterministically. Everything that fixed its sibling row
-  (the network-gated render, the bounded poll, the removal of the stall guard) leaves it untouched,
-  and the lead this entry names has never been followed: one `scope_fingerprint` in the trace
-  returns EMPTY and nothing explains it. Until it is diagnosed, any Odoo write number is one
-  undiagnosed refusal wide.
+  (the network-gated render, the bounded poll, the removal of the stall guard) leaves it untouched.
+  **It is now DIAGNOSED (R4.148) and still open**, so the Odoo write number is one known,
+  unfixed refusal wide rather than an unexplained one.
+* **R4.148** — and the diagnosis is worse than the row. The "precise" mutation gate scopes to
+  `el.closest('form, dialog, fieldset, section, main, article')`; where that matches nothing it
+  fingerprints `document.body`, so it silently becomes the whole-page gate it exists to improve on.
+  On Odoo it matches on **0 of 5** measured calls. `odoo-idempotent-replay` is then refused by its
+  OWN write — the learn creates a lead, the leads list gains a row, and the recorded scope goes from
+  23 row checkboxes to 24 with the SETS otherwise identical. **This is not an Odoo quirk**: a survey
+  of 14 public targets finds **5** giving the gate no scope at all, including hand-written
+  server-rendered HTML with no framework. Any write number on any substrate should be read knowing
+  that a create-flow whose page lists what it creates can refuse itself.
 * **R4.147** — a residual inside the row that now passes. `odoo-create-lead` failed one of six solo
   reps at 0.169.0 with `refused@0ms`, a safety refusal rather than a readiness one, and it did not
   recur in the three corpus reps — but at its own observed 1-in-6 rate, three clean passes has

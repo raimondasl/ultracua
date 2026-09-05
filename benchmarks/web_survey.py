@@ -157,7 +157,36 @@ PROBE = r"""
     const n = document.querySelectorAll('[role=' + r + ']').length;
     if (n) aria[r] = n;
   }
-  return {candidates: all.length, visible: visible.length, below_fold: below.length, aria};
+
+  // R4.148 -- the PRECISE mutation gate's scope, asked of every candidate. `snapshot.SCOPE_JS`
+  // fingerprints `el.closest(SCOPE_SEL) || document.body`, so a target with no such ancestor makes
+  // the "precise" gate fingerprint the WHOLE PAGE while still calling itself precise. Measured on
+  // Odoo: 0 of 5 gate/record calls matched, so the scope was `<body>` and 100% of the page every
+  // time; on Gitea it matched `<form id=comment-form>` at 10%. Counted over the SCOPE_JS selector
+  // set (narrower than the survey's own `SEL` above) so the number describes the gate rather than
+  // the observation.
+  const SCOPE_SEL = 'form, dialog, [role=dialog], fieldset, [role=form], section, main, ' +
+                    '[role=main], article';
+  const GATE_SEL = ['a[href]','button','input','select','textarea','[role=button]','[role=link]',
+                    '[role=tab]','[role=menuitem]','[role=checkbox]','[role=radio]',
+                    '[role=combobox]','[role=switch]'].join(',');
+  const gateAll = [...document.querySelectorAll(GATE_SEL)];
+  const pageN = gateAll.length || 1;
+  let unmatched = 0;
+  const shares = [];
+  for (const e of gateAll) {
+    const sc = e.closest(SCOPE_SEL);
+    if (!sc) { unmatched++; shares.push(1.0); continue; }   // falls back to document.body
+    shares.push(sc.querySelectorAll(GATE_SEL).length / pageN);
+  }
+  shares.sort((a, b) => a - b);
+  const med = shares.length ? shares[Math.floor(shares.length / 2)] : null;
+  const scope = {targets: gateAll.length, unmatched: unmatched,
+                 median_share: med === null ? null : Math.round(med * 100),
+                 whole_page: shares.filter(s => s >= 0.999).length};
+
+  return {candidates: all.length, visible: visible.length, below_fold: below.length, aria,
+          scope: scope};
 }
 """
 
@@ -276,7 +305,7 @@ async def run(targets) -> list:
 def _print(rows: list) -> None:
     print("\n" + "=" * 118)
     print(f"  {'target':20} {'family':30} {'els':>4} {'d-dcl':>6} {'unnamed':>9} "
-          f"{'hinted':>7} {'fold':>5} {'cap':>4}  aria")
+          f"{'hinted':>7} {'fold':>5} {'cap':>4} {'gate-scope':>12}  aria")
     print("  " + "-" * 114)
     for r in rows:
         if "error" in r:
@@ -286,9 +315,14 @@ def _print(rows: list) -> None:
         hinted = sum(r["sources"].values())
         cap = "FULL" if r["visible"] > settings.max_elements else "-"
         aria = ",".join(f"{k}:{v}" for k, v in sorted(r["aria"].items())) or "-"
+        sc = r.get('scope') or {}
+        # The gate's scope, as "how many of this page's gate-eligible targets would fingerprint the
+        # WHOLE page". 100% means the precise gate is a whole-page gate here (R4.148).
+        gs = (f"{100*sc['whole_page']//max(1,sc['targets'])}% whole"
+              if sc.get('targets') else '-')
         print(f"  {r['name']:20} {r['family']:30} {r['considered']:>4} "
               f"{r['painted_late']:>+6} {un:>4} ({100*un/con:>3.0f}%) "
-              f"{hinted:>7} {r['below_fold']:>5} {cap:>4}  {aria[:34]}")
+              f"{hinted:>7} {r['below_fold']:>5} {cap:>4} {gs:>12}  {aria[:34]}")
 
     live = [r for r in rows if "error" not in r]
     if not live:
@@ -313,6 +347,12 @@ def _print(rows: list) -> None:
           f"(max {max((r['below_fold'] for r in live), default=0)})")
     print(f"  SETTLE    {len(late)}/{len(live)} targets CHANGE their interactable set after "
           f"domcontentloaded (max delta {max((r['changed_after_dcl'] for r in live), default=0)})")
+    scoped = [r for r in live if (r.get('scope') or {}).get('targets')]
+    allbody = [r for r in scoped if r['scope']['whole_page'] == r['scope']['targets']]
+    anybody = [r for r in scoped if r['scope']['unmatched']]
+    print(f"  GATE      {len(allbody)}/{len(scoped)} targets give the PRECISE mutation gate NO scope "
+          f"at all (every target fingerprints the whole page); {len(anybody)}/{len(scoped)} have at "
+          f"least one such target (R4.148)")
     print("=" * 118)
 
 

@@ -1,0 +1,365 @@
+[
+ {
+  "scenario": "gitea-comment",
+  "outcome": "true",
+  "gate_refused": false,
+  "mutating_steps": 1,
+  "replay_error": null,
+  "calls": [
+   {
+    "seq": 0,
+    "ms": 34234,
+    "phase": "record",
+    "hash": "f60ecaa4936cde0c",
+    "raw": [
+     [
+      "button",
+      "Add heading",
+      "md-header"
+     ],
+     [
+      "button",
+      "Add bold text",
+      "md-bold"
+     ],
+     [
+      "button",
+      "Add italic text",
+      "md-italic"
+     ],
+     [
+      "button",
+      "Quote text",
+      "md-quote"
+     ],
+     [
+      "button",
+      "Add code",
+      "md-code"
+     ],
+     [
+      "button",
+      "Add a link",
+      "md-link"
+     ],
+     [
+      "button",
+      "Add a bullet list",
+      "md-unordered-list"
+     ],
+     [
+      "button",
+      "Add a numbered list",
+      "md-ordered-list"
+     ],
+     [
+      "button",
+      "Add a list of tasks",
+      "md-task-list"
+     ],
+     [
+      "button",
+      "Mention a user or team",
+      "md-mention"
+     ],
+     [
+      "button",
+      "Reference an issue or pull request",
+      "md-ref"
+     ],
+     [
+      "button",
+      "",
+      "button"
+     ],
+     [
+      "button",
+      "Use the legacy editor instead",
+      "button"
+     ],
+     [
+      "textbox",
+      "Leave a comment",
+      "textarea"
+     ],
+     [
+      "button",
+      "Drop files or click here to upload.",
+      "button"
+     ],
+     [
+      "textbox",
+      "",
+      "input"
+     ],
+     [
+      "button",
+      "Close Issue",
+      "button"
+     ],
+     [
+      "button",
+      "Comment",
+      "button"
+     ]
+    ],
+    "container": {
+     "matched": true,
+     "tag": "form",
+     "id": "comment-form",
+     "cls": "ui form form-fetch-action",
+     "interactables": 18,
+     "page_interactables": 181
+    }
+   },
+   {
+    "seq": 1,
+    "ms": 45609,
+    "phase": "record",
+    "hash": "a217735fa43b9b1f",
+    "raw": [
+     [
+      "button",
+      "Add heading",
+      "md-header"
+     ],
+     [
+      "button",
+      "Add bold text",
+      "md-bold"
+     ],
+     [
+      "button",
+      "Add italic text",
+      "md-italic"
+     ],
+     [
+      "button",
+      "Quote text",
+      "md-quote"
+     ],
+     [
+      "button",
+      "Add code",
+      "md-code"
+     ],
+     [
+      "button",
+      "Add a link",
+      "md-link"
+     ],
+     [
+      "button",
+      "Add a bullet list",
+      "md-unordered-list"
+     ],
+     [
+      "button",
+      "Add a numbered list",
+      "md-ordered-list"
+     ],
+     [
+      "button",
+      "Add a list of tasks",
+      "md-task-list"
+     ],
+     [
+      "button",
+      "Mention a user or team",
+      "md-mention"
+     ],
+     [
+      "button",
+      "Reference an issue or pull request",
+      "md-ref"
+     ],
+     [
+      "button",
+      "",
+      "button"
+     ],
+     [
+      "button",
+      "Use the legacy editor instead",
+      "button"
+     ],
+     [
+      "textbox",
+      "Leave a comment",
+      "textarea"
+     ],
+     [
+      "button",
+      "Drop files or click here to upload.",
+      "button"
+     ],
+     [
+      "textbox",
+      "",
+      "input"
+     ],
+     [
+      "button",
+      "Close with Comment",
+      "button"
+     ],
+     [
+      "button",
+      "Comment",
+      "button"
+     ]
+    ],
+    "container": {
+     "matched": true,
+     "tag": "form",
+     "id": "comment-form",
+     "cls": "ui form form-fetch-action dirty",
+     "interactables": 18,
+     "page_interactables": 181
+    }
+   },
+   {
+    "seq": 2,
+    "ms": 83140,
+    "phase": "gate",
+    "hash": "a217735fa43b9b1f",
+    "raw": [
+     [
+      "button",
+      "Add heading",
+      "md-header"
+     ],
+     [
+      "button",
+      "Add bold text",
+      "md-bold"
+     ],
+     [
+      "button",
+      "Add italic text",
+      "md-italic"
+     ],
+     [
+      "button",
+      "Quote text",
+      "md-quote"
+     ],
+     [
+      "button",
+      "Add code",
+      "md-code"
+     ],
+     [
+      "button",
+      "Add a link",
+      "md-link"
+     ],
+     [
+      "button",
+      "Add a bullet list",
+      "md-unordered-list"
+     ],
+     [
+      "button",
+      "Add a numbered list",
+      "md-ordered-list"
+     ],
+     [
+      "button",
+      "Add a list of tasks",
+      "md-task-list"
+     ],
+     [
+      "button",
+      "Mention a user or team",
+      "md-mention"
+     ],
+     [
+      "button",
+      "Reference an issue or pull request",
+      "md-ref"
+     ],
+     [
+      "button",
+      "",
+      "button"
+     ],
+     [
+      "button",
+      "Use the legacy editor instead",
+      "button"
+     ],
+     [
+      "textbox",
+      "Leave a comment",
+      "textarea"
+     ],
+     [
+      "button",
+      "Drop files or click here to upload.",
+      "button"
+     ],
+     [
+      "textbox",
+      "",
+      "input"
+     ],
+     [
+      "button",
+      "Close with Comment",
+      "button"
+     ],
+     [
+      "button",
+      "Comment",
+      "button"
+     ]
+    ],
+    "container": {
+     "matched": true,
+     "tag": "form",
+     "id": "comment-form",
+     "cls": "ui form form-fetch-action dirty",
+     "interactables": 18,
+     "page_interactables": 181
+    }
+   }
+  ],
+  "diffs": [
+   {
+    "recorded_seq": 0,
+    "replayed_seq": 2,
+    "hash_equal": false,
+    "recorded_len": 18,
+    "replayed_len": 18,
+    "only_recorded": [
+     [
+      "button",
+      "Close Issue",
+      "button"
+     ]
+    ],
+    "only_replayed": [
+     [
+      "button",
+      "Close with Comment",
+      "button"
+     ]
+    ],
+    "identical": false,
+    "same_multiset": false
+   },
+   {
+    "recorded_seq": 1,
+    "replayed_seq": 2,
+    "hash_equal": true,
+    "recorded_len": 18,
+    "replayed_len": 18,
+    "only_recorded": [],
+    "only_replayed": [],
+    "identical": true,
+    "same_multiset": true
+   }
+  ]
+ }
+]

@@ -2776,6 +2776,57 @@ about.
   **A staleness fix is a new claim and gets audited like one**; this one contradicted itself inside
   one paragraph, on the page whose whole job is not doing that.
 
+## The precise gate is not precise, and the write refuses itself (R4.148, 0.171.0)
+
+`odoo-idempotent-replay` is `refused_wrongly` **0 of 12 across four series** and had survived D7, the
+learn settle, the replay settle, the GATE settle and five observation fixes. Diagnosed for **$0.09**.
+The reason it survived everything is that none of those touch it.
+
+* **NOBODY HAD LOOKED, BECAUSE THE FUNCTION RETURNS A HASH.** `scope_fingerprint` answers "these
+  differ" and structurally cannot say HOW. `benchmarks/scope_probe.py` captures the RAW `SCOPE_JS`
+  array on every call -- record AND gate -- plus a description of the container `el.closest(...)`
+  actually chose. **Phase comes from the CALLING FRAME** (`_author_steps` = record, `_replay_step` =
+  gate), which is exact because those are the only two callers, asserted both ways against the AST.
+* **`el.closest()` MATCHES NOTHING ON ODOO -- 5 of 5 calls, on two different page types.** So the
+  scope is `<body class=o_web_client>` and the "precise" gate fingerprints **100% of the page**
+  (46/46, 338/338, 47/47). `flow.py`'s own comment says the precise gate *"ignores unrelated page
+  churn -- banners, badges -- that the whole-page fingerprint over-flags as drift"*. Where `closest()`
+  misses it provides ZERO precision and silently IS the fallback it claims to improve on.
+* **SO THE FLOW IS REFUSED BY ITS OWN WRITE.** The write step's precondition is recorded over the
+  leads LIST, one `['checkbox','','input']` per row. The learn then creates a lead: the reset
+  template holds **22**, the substrate held **23** after the run. Gate compares 23 checkboxes
+  (22 rows + select-all) against 24 and refuses. **The two scope SETS are identical** -- that one
+  count is the entire difference in the array.
+* **THE CONTROL IS EXACT.** `gitea-comment`, 3/3 `true` and the one row demonstrating the whole
+  product claim, matches `<form id=comment-form>` -- **18 of the page's 181 interactables (10%)** --
+  and its recorded and gate hashes are BYTE-IDENTICAL. The gate works as designed the moment it has
+  a container.
+* **AND IT IS NOT A RENDERING-FAMILY STORY, which is what I would have guessed.** `web_survey`
+  gained a GATE column, all 14 targets, free: **5 of 14 give the precise gate no scope at all** --
+  and one of them is `the-internet`, hand-written server-rendered HTML with no framework -- while
+  **13 of 14** have at least one such target. ant-table is 2%, angular-material 7%,
+  automationexercise 10%. The axis is whether an app wraps controls in a `<form>`/`<section>`/
+  `<main>`, not SPA-vs-server-rendered. Even Gitea is 32%.
+* **THE OVERLOADED SENSOR AGAIN, so D5 applies.** `precond_scope` is one string meaning both *the
+  target's enclosing form* and *the entire document*, and nothing can tell them apart. That is
+  `anchor_id=None`, `resolve() -> None` and `state_changed` on a fourth surface. The remedy that
+  changes the sensor class is to stop pretending -- when `closest()` misses there is no precise
+  scope, and saying so differs from silently fingerprinting `document.body` under a precise name.
+  Widening the selector overfits to one app (R4.134 measured exactly that), and making the
+  comparison count-insensitive is a write gate that ignores a real page change.
+* **NOT FIXED HERE, deliberately.** The acceptance for whatever is built is this ROW going `true`,
+  not a mechanism moving -- this register's record is that mechanism evidence does not entail the
+  outcome, three slices running.
+* **MY OWN DIFF COULD NOT SHOW THE ANSWER IT FOUND.** The first draft used set differences, so on
+  the one comparison the gate actually made it printed two empty lists beside `identical=False` --
+  a diff that says "these differ" and shows nothing. The whole answer was a COUNT, and I finished it
+  by hand. `count_changes` exists now and has its own armed cell. **An instrument that cannot
+  describe the difference it detects is one you will finish by hand and then mis-summarise.**
+* **AND A SCAN MATCHED THE WRONG THING FOR THE TENTH TIME**, in the direction that fails loudly:
+  the cell pinning the probe's selector against `SCOPE_JS` anchored on `el.closest(`, which appears
+  TWICE because `SCOPE_JS` splices in the accessible-name helper. It went red on the wrong call --
+  the cell working one layer earlier than intended. Anchor on `const scope = el.closest(`.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
