@@ -19,9 +19,11 @@ triplicate, and it left a fourth copy in `run_all` — the unattended cron drive
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import http.server
 import json
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -311,9 +313,15 @@ async def test_a_genuinely_corrupt_sidecar_is_still_quarantined(tmp_path: Path) 
 
 # ==================== R3 + R4: the write signal's TIMING ====================
 
-def _serve_deferred(hits: list, defer_ms: int, second_button: bool = False):
+def _serve_deferred(hits: list, defer_ms: int, second_button: bool = False,
+                    server_lag_ms: int = 0):
     """`#go` fires its POST after `defer_ms` — a debounce, an autosave tick, an awaited round-trip.
-    `#benign` (optional) does nothing at all and exists only to be the NEXT step."""
+    `#benign` (optional) does nothing at all and exists only to be the NEXT step.
+
+    `server_lag_ms` delays the HANDLER, not the page: the POST is sent on time and RECORDED late. That
+    is the axis the two observers of this write disagree on (R4.151), and widening it on purpose is what
+    turns a CI-only flake into a deterministic cell — the alternative is waiting for a loaded runner to
+    lose a 1.6 ms race, which is fishing rather than reproducing."""
 
     class _H(http.server.BaseHTTPRequestHandler):
         def log_message(self, *a) -> None:
@@ -336,6 +344,8 @@ def _serve_deferred(hits: list, defer_ms: int, second_button: bool = False):
             length = int(self.headers.get("Content-Length") or 0)
             if length:
                 self.rfile.read(length)
+            if server_lag_ms:
+                time.sleep(server_lag_ms / 1000.0)
             hits.append(self.path)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -347,17 +357,53 @@ def _serve_deferred(hits: list, defer_ms: int, second_button: bool = False):
     return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
 
 
-async def test_the_heal_waits_for_a_deferred_write_before_judging(tmp_path: Path) -> None:
-    """R3. Reading `wrote["hit"]` the instant `act` returns is a zero-width window. Both siblings this
-    guard mirrors DO wait — the learn watcher through a `write_window_ms` grace tail, `_replay_step` via
-    `expect_request(timeout=write_settle_ms)`. Without the wait, a 25 ms debounce walked straight past and
-    the write control was persisted as a READ, to be re-fired ungated on every later 0-LLM replay."""
+# THE PREMISE HAS TO OUTLIVE THE RACE IT READS ACROSS (R4.151, 0.175.0).
+#
+# TWO OBSERVERS WATCH THIS ONE POST AND THEY CANNOT SEE IT AT THE SAME MOMENT. `hits` is appended on the
+# SERVER's handler thread, once the request has crossed the loopback socket and been dispatched; the
+# product watches `page.on("request")`, which fires when the browser SENDS it. `_maybe_heal` returns on
+# that earlier signal, so reading `hits` the instant it returns is a race. MEASURED on an idle host over
+# six reps: send -> handler 1.0 ms, send -> assertion 2.6 ms, **margin 1.5-1.8 ms**. A loaded CI runner
+# loses that, which is exactly what happened on `main` at c7d31a5 — the product logged *"heal: the
+# proposed action fired a WRITE on the wire"* and the very next line asserted on an empty list.
+#
+# SO THE WAIT IS THE SAME MEDICINE THE TEST EXISTS TO PROVE THE PRODUCT TAKES. R3's whole subject is
+# *"WAIT for the write, don't just glance"*, and the cell asserting it was glancing, one level out.
+#
+# WHAT MUST NOT BE DONE INSTEAD, because it is the tempting fix: ask the PRODUCT whether it saw a write.
+# That is the thing under test, so a premise reading it is vacuous by construction — it would pass
+# against a fixture that never posted at all. The server's own record is the INDEPENDENT witness. What
+# changes here is WHEN it is read, never WHAT is asserted, and the failure stays loud: a fixture that
+# genuinely does not post still fails, with the same message, one bounded wait later.
+_POST_WAIT_TICKS = 500      # x 10 ms = 5 s. A local POST is recorded ~1 ms after it is sent; this is slack
+                            # for a starved runner, and it is spent only when something is already wrong.
+
+
+async def _await_post(hits: list) -> None:
+    """Give the server's handler thread a bounded chance to record the POST the browser already sent."""
+    for _ in range(_POST_WAIT_TICKS):
+        if hits:
+            return
+        await asyncio.sleep(0.01)
+
+
+@contextlib.asynccontextmanager
+async def _deferred_heal(server_lag_ms: int = 0):
+    """Drive the REAL `_maybe_heal` against a page whose POST fires 25 ms after the click.
+
+    A CONTEXT MANAGER, AND NOT A FUNCTION RETURNING A TUPLE, FOR A REASON THAT COST A MUTATION.
+    The first draft here returned from inside the `try`, so `session.close()` — measured at ~1.2 s —
+    ran BEFORE the caller's assertion. The teardown silently became the wait: the premise then held at
+    any lag under a second whether `_await_post` existed or not, so the cell written to prove the fix
+    could not fail, and the flake would have been "fixed" by an accident of ordering that nothing
+    stated. Yielding keeps the assertions exactly where the original had them — after the work, before
+    the teardown — so the bounded wait is the only thing standing between the premise and the race."""
     from ultracua.flow import _maybe_heal
     from ultracua.providers.scripted import ScriptedProvider
     from ultracua.timing import StepTrace
 
     hits: list = []
-    httpd, base = _serve_deferred(hits, defer_ms=25)
+    httpd, base = _serve_deferred(hits, defer_ms=25, server_lag_ms=server_lag_ms)
     session = await BrowserSession(headless=True).start()
     try:
         await session.goto(base + "/")
@@ -367,15 +413,46 @@ async def test_the_heal_waits_for_a_deferred_write_before_judging(tmp_path: Path
             session, step, ScriptedProvider([{"action": "click", "role": "button", "name": "Continue",
                                               "intent": "open the daily report"}]),
             StepTrace(index=0), "open the daily report", "drift")
-
-        assert hits, "the fixture did not POST; this test would prove nothing"
-        assert ok is False
-        assert "WRITE on the wire" in note
-        assert step.locator.name == "Daily report"       # NOT re-pointed at the write control
+        await _await_post(hits)
+        # SNAPSHOT, so the ordering above is enforced by CONSTRUCTION and not by the `yield`. Handing
+        # out the live list would leave the bug one refactor away: turn this back into a `return` and
+        # the caller reads `hits` after the teardown has already given the server its second chance.
+        # A copy taken HERE says what was recorded by the time the wait ended, whenever it is read.
+        yield list(hits), ok, note, step
     finally:
         await session.close()
         httpd.shutdown()
         httpd.server_close()
+
+
+async def test_the_heal_waits_for_a_deferred_write_before_judging(tmp_path: Path) -> None:
+    """R3. Reading `wrote["hit"]` the instant `act` returns is a zero-width window. Both siblings this
+    guard mirrors DO wait — the learn watcher through a `write_window_ms` grace tail, `_replay_step` via
+    `expect_request(timeout=write_settle_ms)`. Without the wait, a 25 ms debounce walked straight past and
+    the write control was persisted as a READ, to be re-fired ungated on every later 0-LLM replay."""
+    async with _deferred_heal() as (hits, ok, note, step):
+        assert hits, "the fixture did not POST; this test would prove nothing"
+        assert ok is False
+        assert "WRITE on the wire" in note
+        assert step.locator.name == "Daily report"       # NOT re-pointed at the write control
+
+
+async def test_the_premise_holds_when_the_server_records_the_post_late() -> None:
+    """R4.151, the deterministic reproduction kept as a regression test.
+
+    The flake above is a 1.6 ms race, and waiting for a loaded runner to lose it is fishing rather than
+    reproducing (R4.26's rule). So the window is BUILT: the handler sleeps 300 ms — ~200x the measured
+    margin — before recording the POST it was sent. The page is untouched, so the product sees exactly
+    what it sees today and the only thing moved is when the SERVER writes its record down.
+
+    Against a bare `assert hits` this cell is RED with the CI failure's own signature. It is the sensor
+    for the fix, and it is deliberately not a timing assertion: it asserts the PREMISE, which is the
+    thing that was wrong."""
+    async with _deferred_heal(server_lag_ms=300) as (hits, ok, note, _step):
+        assert hits, "the fixture did not POST; this test would prove nothing"
+        # ...and the product's verdict is unchanged by the lag, because the lag is server-side only.
+        assert ok is False
+        assert "WRITE on the wire" in note
 
 
 def test_a_deferred_write_is_never_credited_to_the_following_step() -> None:

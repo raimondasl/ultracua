@@ -3029,6 +3029,57 @@ and neither produced the dangerous EVENT. The remedy was two MUTATIONS, not S1b'
   **A mutation that kills is not evidence that the assertion you aimed it at works** -- read the
   message, not the verdict. 6 mutations, 6 killed once the fifth was aimed properly.
 
+## The premise asked the slower witness, and won by 1.6 ms (R4.151, 0.175.0)
+
+A CI-only red on `main` that neither PR beside it caused. `test_the_heal_waits_for_a_deferred_write_
+before_judging` failed on its own premise -- *"the fixture did not POST; this test would prove
+nothing"* -- while the SAME run's log carried the product's *"heal: the proposed action fired a WRITE
+on the wire"*. Both true, and that pair is the finding.
+
+* **TWO OBSERVERS WATCH ONE POST AND CANNOT SEE IT AT THE SAME MOMENT.** The product watches
+  `page.on("request")`, which fires when the browser SENDS; the fixture appends to `hits` on the
+  server's handler thread, once the request has crossed the loopback socket and been dispatched.
+  `_maybe_heal` returns on the earlier signal, so reading `hits` the instant it returns is a race.
+  **Measured over six reps on one clock: send -> handler 1.0 ms, send -> assertion 2.6 ms, margin
+  1.5-1.8 ms.** Not an exotic race -- the cell was ALWAYS within two milliseconds of failing, and
+  passing was the luck.
+* **WHICH RUN IS RED MATTERS, AND `gh run list --branch main` ONLY SHOWS ONE KIND.** The checks that
+  gate a merge are `event=pull_request` against `refs/pull/N/merge`; the run against the merge commit
+  on `main` is `event=push` and fires afterwards. **A red `main` can sit underneath two green PRs**,
+  and reporting one as the other is how a conversation about it goes wrong. `git diff b51cc51
+  c7d31a5` was EMPTY -- identical trees, green then red -- which is what makes it a flake rather than
+  a regression, and is worth deriving before diagnosing anything.
+* **THE FIX IS THE MEDICINE THE CELL EXISTS TO PROVE THE PRODUCT TAKES.** R3's whole subject is *"WAIT
+  for the write, don't just glance"*; the cell asserting it was glancing, one level out. A bounded
+  poll of the server's own record, and **the tempting alternative was refused as vacuous**: asking the
+  PRODUCT whether it saw a write reads the thing under test, so that premise passes against a fixture
+  that never posted at all. What changed is WHEN the independent witness is read, never WHAT is
+  asserted -- an absent POST still fails loud, same message, one bounded wait later.
+* **REPRODUCED, NOT FISHED FOR.** Waiting for a loaded runner to lose a 1.6 ms race is not a
+  reproduction (R4.26). `server_lag_ms` delays the HANDLER and not the page -- the POST is sent on
+  time and RECORDED late -- so the window is BUILT. 300 ms is ~200x the margin, the CI signature comes
+  back deterministically, and that reproduction is the committed cell.
+* **MY OWN REFACTOR MADE THAT CELL INERT, AND ONLY THE ARMING PASS FOUND IT.** The first draft
+  factored the scenario into a helper that RETURNED from inside its `try`, so `session.close()` --
+  **measured at ~1.2 s** -- ran before the caller asserted. **The teardown silently became the wait.**
+  The premise then held at any lag under a second whether the fix existed or not, the mutation aimed
+  at the fix SURVIVED, and the flake would have been closed by an ordering accident nothing stated.
+  **A refactor that moves an assertion past a teardown moves it past a wait nobody declared** --
+  and the tell was a SURVIVOR, not a failure. Fixed as a SHAPE rather than a comment: an
+  `asynccontextmanager` keeps the assertions where the original had them, and the yielded `hits` is a
+  SNAPSHOT, so turning it back into a `return` cannot reintroduce it.
+* **THE SIBLINGS ARE SAFE FOR REASONS, NOT BY LUCK -- CHECKED, BECAUSE THAT IS THIS FILE'S OWN RULE.**
+  `_serve_pre_true` is a real form POST, a full-page navigation the browser waits for, and asserts
+  nothing on `hits`; `test_record._serve_deferred_write` ends its demo on `wait_for("DEFERRED-SAVED")`,
+  which waits for the response to paint. The racy shape is narrow and worth naming: **a
+  fire-and-forget `fetch` that the product observes on SEND and returns from without awaiting the
+  response.** One site.
+* **ARMED 3 KILLED + 1 DELIBERATE SURVIVOR, and the survivor is the load-bearing one.** Delete the
+  wait -> the new cell dies with the CI message while the OLD cell survives, which is precisely what
+  made this CI-only. Fixture never posts -> both die. Wait deleted AND lag removed -> the new cell
+  SURVIVES: the inert control proving the kill comes from the window the lag builds and not from
+  something else in the harness.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

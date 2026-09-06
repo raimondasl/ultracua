@@ -12,7 +12,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**70 open**, 76 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**70 open**, 77 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **70 open**, 76 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **70 open**, 77 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -1134,6 +1134,23 @@ if and only if that branch is ever resumed.
 **PUBLISHED, NOT HIDDEN.** Both rows are in `KNOWN_WRONG_BINDS` with a reason, so `silent_wrong` goes 2 -> 6 and `no_unexpected_wrong` holds. `baselines/drift_v2.json` is re-recorded deliberately (`fixtures_version` 2 -> 3, corpus 185 -> 187) and `baselines/README.md` states what a rising wrong-bind count means here, because it normally reads as a regression and this is its opposite. **Deleting an entry is what closing D2 or D3 looks like.**
 
 **AND THE RESIDUALS ARE PINNED AT THE RESOLVER, not only in the bench.** Two cells in `tests/test_locators.py` reproduce each hole directly in **2 seconds** rather than a 187-row run, on the pattern the token-less retarget already had -- so a resolver change that closes one fails there and names the allowlist entry to delete. Plus an OFFLINE cell deriving the allowlist against the curated rows BOTH ways, because an entry naming a row that no longer exists is a silencer with nothing to silence. **6 mutations, 6 killed** -- and the anti-vacuity floor needed its own isolated mutation, because shrinking the allowlist also orphans the declared rows and was being killed by the wrong assertion. |
+| R4.151 | fixed | **A CI-ONLY FLAKE ON `main`: THE PREMISE ASSERTION ASKS THE SLOWER OF TWO WITNESSES, AND IT WINS BY 1.6 ms.** `test_the_heal_waits_for_a_deferred_write_before_judging` failed on the post-merge push run at `c7d31a5` (ubuntu shard 2/2, 1 of 9 jobs) with its own premise: *"the fixture did not POST; this test would prove nothing"* -- while the SAME run's log carries the product's *"heal: the proposed action fired a WRITE on the wire -- refusing to persist it"*. Both are true, and that pair is the whole finding.
+
+**TWO OBSERVERS WATCH ONE POST AND CANNOT SEE IT AT THE SAME MOMENT.** The product watches `page.on("request")` (`flow.py:1903`), which fires when the browser SENDS the request; the fixture appends to `hits` on the server's handler thread, once it has crossed the loopback socket and been dispatched. `_maybe_heal` returns on the earlier signal, so reading `hits` the instant it returns is a race. **MEASURED over six reps on an idle host, one clock: send -> handler 1.0 ms, send -> assertion 2.6 ms, margin 1.5-1.8 ms.** This is not a rare exotic race -- the cell is ALWAYS within two milliseconds of failing, and passing is the luck.
+
+**NOT A REGRESSION FROM EITHER PR IT SAT BETWEEN.** `git diff b51cc51 c7d31a5` is EMPTY, so the green `pull_request` check and the red `push` run executed identical trees. And note which run is which: the PR checks that gate the merge run against `refs/pull/N/merge`, the post-merge run against the merge commit on `main`. `gh run list --branch main` shows only the second, which is why a red main can sit under two green PRs.
+
+**FIXED AT 0.175.0 BY WAITING, WHICH IS THE MEDICINE THE CELL EXISTS TO PROVE THE PRODUCT TAKES.** R3's entire subject is *"WAIT for the write, don't just glance"* -- `_maybe_heal` was given `expect_request` for exactly this -- and the cell asserting it was glancing, one level out. `_await_post` polls the server's own record for a bounded 5 s.
+
+**THE TEMPTING FIX IS VACUOUS AND WAS REFUSED: do not ask the PRODUCT whether it saw a write.** That is the thing under test, so a premise reading it passes against a fixture that never posted at all -- the counterexample-as-assertion shape this register already files. The server's record is the INDEPENDENT witness; what changed is WHEN it is read, never WHAT is asserted, and an absent POST still fails loud with the same message one bounded wait later (armed, both cells).
+
+**REPRODUCED DETERMINISTICALLY RATHER THAN FISHED FOR (R4.26's rule).** Waiting for a loaded runner to lose a 1.6 ms race is not a reproduction. `server_lag_ms` delays the HANDLER and not the page -- the POST is sent on time and RECORDED late -- so the window is BUILT. At 300 ms (~200x the margin) the failure reproduces with the CI signature; the committed cell is that reproduction, and it is RED against a bare `assert hits`.
+
+**AND MY OWN REFACTOR MADE THE NEW CELL INERT, WHICH ONLY THE ARMING PASS FOUND.** The first draft factored the scenario into a helper that RETURNED from inside its `try`, so `session.close()` -- **measured at ~1.2 s** -- ran before the caller asserted. **The teardown silently became the wait**: the premise then held at any lag under a second whether the fix existed or not, the mutation aimed at the fix SURVIVED, and the flake would have been closed by an accident of ordering that nothing stated. Fixed as a shape, not a comment -- an `asynccontextmanager` keeps the assertions where the original had them, and the yielded `hits` is a SNAPSHOT, so a future refactor back to a `return` cannot reintroduce it. **A refactor that moves an assertion past a teardown moves it past a wait nobody declared.**
+
+**SIBLINGS CHECKED, AND THE SHAPE IS NARROW.** The two other loopback fixtures reading a server-side record are both safe, for reasons rather than by luck: `_serve_pre_true` is a real form POST (a full-page navigation the browser waits for) and asserts nothing on `hits`; `test_record._serve_deferred_write` ends its demo on `page.get_by_text("DEFERRED-SAVED").wait_for()`, which waits for the POST's response to paint. The racy shape is specifically **a fire-and-forget `fetch` the product observes on SEND and returns from without awaiting the response** -- one site.
+
+**ARMED: 3 killed, 1 deliberate survivor.** Delete the wait -> the new cell dies with the CI message and the OLD cell survives (it still wins its race here, which is what made this CI-only); the fixture never posting -> BOTH die; wait deleted AND lag removed -> the new cell SURVIVES, the inert control proving the kill comes from the window the lag builds. |
 <!-- /generated:r4-index -->
 
 
