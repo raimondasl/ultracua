@@ -12,7 +12,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**70 open**, 75 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**71 open**, 75 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **70 open**, 75 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **71 open**, 75 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -1098,6 +1098,31 @@ if and only if that branch is ever resumed.
 **AND MY OWN GUARD WAS GREEN THROUGHOUT, because it read a different object from the code it guards.** `test_exactly_the_substrates_that_cannot_serve_empty_declare_so` asked `cls.serves_before_seed`; `check()` asks `sub.serves_before_seed`. The class said False, every instance said True, and the test could not see the gap. It reads an INSTANCE now, and a second assertion pins that the name is not in `dataclasses.fields(Substrate)` — the mechanism itself, which is invisible from either attribute alone. **A guard that reads a different object from the thing it guards is green for a living.**
 
 **AND THE SECOND FIX WAS REPRODUCED BEFORE IT WAS BELIEVED, which is the whole difference.** The first was written from the CI log alone and shipped inert. The second was driven against a genuinely wiped local Odoo — `down(wipe=True)`, then the real `substrate_check` — failing identically to CI first, then `ok: true` with `serves_before_seed: false`, `up_s` 4.7, `seed_s` 97.8, `ready_s` 103.9. This repo's oldest rule, arriving on a substrate: reproduce before fixing, and reproduce the FIX. |
+| R4.150 | open | **S1b's PREMISE IS STALE AND ITS CONCLUSION IS HALF RIGHT: D3 IS ADJUDICABLE TODAY, D2 IS NOT, AND NEITHER FOR THE REASON S1b GIVES.** Verified at 0.173.0 for **$0.00** -- one free `drift_bench` run (194.7 s, 185 rows x 2 arms) plus static reads. Bought because Phase 3 became eligible for the first time (it is sequenced after 0.6 and 2.4, both now done) and S1b is its stated prerequisite.
+
+**ALL SIX FIXTURE FAMILIES S1b ASKS FOR ALREADY EXIST.** It says the bench *"has no fixtures for the shapes they change"* and lists six to add. Measured: shared-href and shared-testid rows (`_positional_rows`/`_shared_action_rows` give all 12 rows `href="/done"` and `data-testid="cart-row"`), hidden rows, positional `data-index` (`row-positional`), nested icon-only action lists (`row-nested-icon`, `row-nested-action`) and fuzzy-name decoys (`fuzzy-decoy`). **Two were purpose-built for these very decisions and say so in their own comments** -- `row-positional`: *"this scenario is what a D3 narrowing would be measured against"*; `fuzzy-decoy`: *"a wrong bind here is a `silent_wrong` row, which is exactly the number D2 must move"*. Following S1b as written would build six things that are there.
+
+**D3 IS ADJUDICABLE NOW, WITH AN ACCEPTANCE NUMBER RATHER THAN AN ARGUMENT.** `silent_wrong` is **2** (one row x two arms) and its sole cause is **`anchor-link/positional-css-retarget-tokenless`**, `bound_by: ['css']` -- a purely positional css path retargeting onto the wrong element, which is precisely what D3 rejects. So the benefit side is *silent_wrong 2 -> 0*, and the cost side is priced by `row-positional` (8 survived / 6 drifted per arm). Both halves of that scenario's own framing -- *accept-and-be-wrong versus refuse-and-lose-survival* -- are already measurable.
+
+**D2 IS NOT ADJUDICABLE, FOR TWO INDEPENDENT REASONS THAT POINT AT DIFFERENT FIXES.**
+  (1) **ITS PURPOSE-BUILT FIXTURE NEVER FAILS.** `fuzzy-decoy` measures **11 survived / 3 drifted / 0 wrong**, and its 4 `role+name~` binds per arm all land on the TARGET, never on the decoy. The number D2 must move is **zero on the row built to move it**, so a measurement taken today shows pure cost and no benefit and would refute D2 for the wrong reason. The gap is not a missing fixture, it is a missing MUTATION: one under which the sole surviving fuzzy candidate is the DECOY.
+  (2) **THE DECISION'S SCOPE AND ITS FIXTURE DISAGREE.** D2 is written *"for MUTATING steps"*; `fuzzy-decoy` is a READ (no `write` key). And the corpus's only write scenario, `order-form`, binds `testid` x88 and `role+name` x4 -- **0 fuzzy binds across all 20 write rows, on BOTH arms**. So a mutating-scoped D2 is invisible to the entire corpus, and closing (1) alone would not change that.
+
+**WHY THIS WAS WORTH AN HOUR.** Without it the path was: build S1b (six fixtures, none needed), measure D2, receive *not worth it*, and file a confident wrong answer against a live write-safety rule. That is this register's single most-repeated failure -- a green measurement taken on a population where the mechanism cannot fire, which R4.144 recorded TWICE for the cost of one retry loop.
+
+**AND MY OWN FIRST INFERENCE WAS WRONG, caught by a fixture comment rather than by a test.** `bound_by` reports **`anchor` 0 times in 370 row-arms**, and I nearly concluded D3 was unadjudicable on it. D3's subject is the positional TOKEN, not the `anchor` TIER -- the token binds through `css`, which is exactly the wrong row above. A measurement can be right and its reading wrong in one step.
+
+**CORRECTION, BEFORE MERGE: D3 IS NOT ADJUDICABLE EITHER, AND I MADE THE EXACT ERROR THIS FINDING IS ABOUT.** The paragraph above claims *D3 IS ADJUDICABLE NOW* with the acceptance number `silent_wrong` 2 -> 0. **Both halves are wrong.**
+
+**(a) IT IS THE WRONG ROW.** `anchor-link/positional-css-retarget-tokenless` is a positional CSS PATH (`#order > a:nth-of-type(1)`) re-matching a sibling that slid into the target's slot, on a page with no rows at all. **D3's subject is a positional row-identity TOKEN** -- `data-index`, `id="row-N"`. Two different mechanisms sharing the word *positional*, and I matched them on the word without checking. **(b) AND THAT ROW IS ALREADY REFUTED FOUR WAYS.** It is a published `KNOWN_WRONG_BINDS` entry whose comment records four remedies ruled out BY MEASUREMENT and says so explicitly *"so they are not re-proposed"* -- dropping the css candidate (measured to turn two `conflict` rows into silent wrong-binds), N-of-M corroboration (predicted to drop v1 parity to 10/12), text similarity, and the neighbour anchor. The bench calls the residual *an information limit of the recorded field set, not an oversight*.
+
+**WHAT IS ACTUALLY TRUE IS SIMPLER AND BETTER: NEITHER D2 NOR D3 IS ADJUDICABLE, FOR ONE SHARED REASON.** Both fixtures carry the dangerous SHAPE and neither ever produces the dangerous EVENT.
+  * `fuzzy-decoy` has the decoy; every fuzzy bind lands on the TARGET. 0 wrong.
+  * `row-positional` has `data-index` and `id="row-N"` on all 12 rows -- and **0 wrong across all 14 mutations**, surviving `sibling_removed` via `role+name`. The reason is mechanical: `sibling_removed` is `sibs[0].remove()` against STATIC HTML, so the survivors keep their original numbers. **No mutation in the corpus renumbers anything** -- verified across all 16. A real list re-renders and row 4 becomes row 3, which is the ENTIRE reason positional identity is dangerous, and the corpus never does it.
+
+**SO S1b's CONCLUSION IS RIGHT AND ITS PRESCRIPTION IS WRONG.** The bench genuinely cannot adjudicate D2 or D3. But the gap is not six missing FIXTURES -- it is two missing MUTATIONS: a renumber (for D3) and a decoy-wins fuzzy strip (for D2). That is a much smaller and much better specified slice, and it is what a corrected S1b should say.
+
+**THE SELF-CORRECTION IS THE PART WORTH KEEPING.** This finding exists because a measurement was taken on a population where the mechanism cannot fire. I then read one `silent_wrong` row, matched it to a decision BY KEYWORD, did not check that the mechanism was the same one, and wrote it up as an acceptance number -- **the identical error, inside the write-up of catching it, within the hour.** What caught it the second time was reading the fixture's own comment before starting the fix, which is the same thing that caught it the first time. |
 <!-- /generated:r4-index -->
 
 

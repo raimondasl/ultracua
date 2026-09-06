@@ -37,11 +37,42 @@ Actions: save the branch diff as a patch artifact; record all 20 round-4 audit f
   control writes; assert the gated step IS the writing step, and that the keyed replay request is the
   commit. Same fix in `test_multiwrite`. Print what each cell exercises before believing it. Also
   hoist the AB-1 pinning test here (it graduates from "pin" to "closed" when S6 lands).
-- **S1b. drift_bench corpus extension.** The bench is named adjudicator for S9/D2/D3 yet its corpus
-  has no fixtures for the shapes they change — "byte-identical baseline" would be trivially, meaninglessly
-  satisfied. Add rows: shared-href rows, shared data-testid rows, hidden rows, positional
-  `data-index` tokens, nested icon-only action lists, fuzzy-name decoys. Re-baseline deliberately,
-  with the new rows' semantics stated in `baselines/README.md`.
+- **S1b. drift_bench corpus extension.**
+  ⛔ **MOSTLY DONE ALREADY — DO NOT BUILD IT AS WRITTEN (R4.150, 0.173.0, $0.00).** Verified against a
+  real bench run: **all six fixture families below exist**, and two of them were purpose-built for the
+  very decisions this entry says cannot be judged — `row-positional` (*"what a D3 narrowing would be
+  measured against"*) and `fuzzy-decoy` (*"a wrong bind here is a `silent_wrong` row, which is exactly
+  the number D2 must move"*). Following this entry would rebuild what is there.
+
+  **NEITHER D2 NOR D3 IS ADJUDICABLE, AND IT IS ONE SHARED REASON: the fixtures carry the dangerous
+  SHAPE and never produce the dangerous EVENT.** So this entry's CONCLUSION stands and its
+  PRESCRIPTION does not — the gap is two missing MUTATIONS, not six missing fixtures.
+
+  * **D3** — `row-positional` has `data-index` and `id="row-N"` on all 12 rows and produces **0 wrong
+    binds across all 14 mutations**, surviving `sibling_removed` via `role+name`. Mechanically:
+    `sibling_removed` is `sibs[0].remove()` against STATIC HTML, so survivors keep their original
+    numbers, and **no mutation in the corpus renumbers anything** (verified across all 16). A real
+    list re-renders and row 4 becomes row 3 — which is the whole reason positional identity is
+    dangerous. **Missing: a RENUMBER mutation.**
+  * **D2** — `fuzzy-decoy` is 11 survived / 3 drifted / **0 wrong**, every fuzzy bind landing on the
+    target. **Missing: a mutation under which the sole surviving fuzzy candidate is the DECOY.** And
+    separately, D2 is scoped *"for MUTATING steps"* while `fuzzy-decoy` is a read and the only write
+    scenario (`order-form`) binds `testid`/`role+name` with **0 fuzzy binds across 20 write rows on
+    both arms** — so the scope and the fixture disagree, and the mutation alone does not fix that.
+
+  ⚠️ **DO NOT REACH FOR `silent_wrong` AS D3's ACCEPTANCE NUMBER.** A first draft of this entry did:
+  the bench's one wrong row is `anchor-link/positional-css-retarget-tokenless`, which is a positional
+  CSS PATH re-matching a slid-in sibling on a page with no rows — not a row-identity TOKEN. Two
+  mechanisms sharing the word *positional*. That row is also a published `KNOWN_WRONG_BINDS` residual
+  whose comment records **four remedies ruled out by measurement** and says so *"so they are not
+  re-proposed"*, the nearest of which (dropping the css candidate) was measured to turn two `conflict`
+  rows into silent wrong-binds.
+
+  ~~The bench is named adjudicator for S9/D2/D3 yet its corpus has no fixtures for the shapes they
+  change — "byte-identical baseline" would be trivially, meaninglessly satisfied. Add rows:
+  shared-href rows, shared data-testid rows, hidden rows, positional `data-index` tokens, nested
+  icon-only action lists, fuzzy-name decoys.~~ Re-baseline deliberately if rows ARE added, with the
+  new rows' semantics stated in `baselines/README.md`.
 
 ## Phase 2 — Measured write-safety defects, ordered by argued user harm (one slice each)
 

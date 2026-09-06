@@ -2930,6 +2930,64 @@ is complete; the plan has no `pending` step left.
   two open flake findings sit on rows that scored 3/3, so three passes is a flake detector and not a
   stability certificate.
 
+## S1b was already built, and neither decision's fixture ever fails (R4.150, 0.173.0)
+
+Phase 3 became eligible for the first time -- it is sequenced after 0.6 and 2.4, both now done -- and
+S1b is its stated prerequisite. Verifying that prerequisite cost **$0.00**: one free `drift_bench`
+run and some reading. It changed the next two slices.
+
+* **THE PREREQUISITE'S PREMISE IS STALE, AND THE FIXTURES NAME THEIR OWN DECISIONS.** S1b says the
+  bench *"has no fixtures for the shapes they change"* and lists six to add. **All six exist** --
+  shared-href and shared-testid rows (all 12 rows carry `href="/done"` and `data-testid="cart-row"`),
+  hidden rows, positional `data-index`, nested icon-only action lists, fuzzy-name decoys. Two were
+  purpose-built for D2 and D3 and say so in their own comments. **Following the plan entry would have
+  rebuilt what is already there** -- and this is the third time a plan row has outlived its subject
+  (2.4b's note went five slices stale, R4.113 found three sentences outliving their fix).
+* **NEITHER D2 NOR D3 IS ADJUDICABLE, AND IT IS ONE SHARED REASON: both fixtures carry the dangerous
+  SHAPE and neither produces the dangerous EVENT.** `row-positional` has `data-index` and
+  `id="row-N"` on all 12 rows and returns **0 wrong binds across all 14 mutations**, surviving
+  `sibling_removed` via `role+name`. Mechanically: `sibling_removed` is `sibs[0].remove()` against
+  STATIC HTML, so survivors keep their original numbers, and **no mutation in the corpus renumbers
+  anything** -- verified across all 16. A real list re-renders and row 4 becomes row 3, which is the
+  ENTIRE reason positional identity is dangerous, and the corpus never does it.
+* **THE SAME SHAPE ON D2's SIDE: ITS FIXTURE NEVER SPRINGS ITS OWN TRAP.** `fuzzy-decoy` exists, was built
+  for D2, and its comment says *"a wrong bind here is a `silent_wrong` row, which is exactly the
+  number D2 must move"*. Measured: **11 survived / 3 drifted / 0 wrong**, with all four `role+name~`
+  binds per arm landing on the TARGET rather than the decoy. **The number D2 must move is zero on the
+  row built to move it**, so a measurement taken today shows pure cost and no benefit -- and would
+  refute a live write-safety rule for a reason that is an artifact of the harness. What is missing is
+  not a fixture but a MUTATION: one under which the sole surviving fuzzy candidate is the DECOY.
+* **AND D2 CARRIES A SECOND REASON D3 DOES NOT: THE DECISION AND THE FIXTURE DISAGREE ABOUT SCOPE.**
+  D2 is written
+  *"for MUTATING steps"*; `fuzzy-decoy` is a READ. The corpus's only write scenario, `order-form`,
+  binds `testid` x88 and `role+name` x4 -- **0 fuzzy binds across all 20 write rows, on both arms**.
+  So a mutating-scoped D2 is invisible to the whole corpus, and closing the mutation gap alone would
+  not change that. **Two reasons pointing at two different fixes is worth more than one reason**:
+  make the trap spring, AND decide whether D2 is really write-only.
+* **AND THE CORRECTION ITSELF INTRODUCED A DEFECT, which is the third order of the same lesson.**
+  Replacing the wrong *D3 IS ADJUDICABLE TODAY* bullet left the next one opening **"D2 IS NOT, and
+  the FIRST reason..."** -- a contrast whose antecedent had just been deleted, sitting under a bullet
+  that already said neither is adjudicable and already gave the shared reason. Caught by re-reading
+  the section before calling the PR ready, not by any test. **A correction is a new claim and rots
+  its neighbours**, exactly as a fix does (R4.113); prose has no guard but the next reading.
+* **THIS IS THE FAILURE THE REGISTER FILES MOST, caught before it was bought.** The path without the
+  check was: build six unneeded fixtures, measure D2, receive *not worth it*, file it. R4.144 records
+  the same shape twice for the cost of one retry loop -- a number taken on a population where the
+  mechanism cannot fire. **A prerequisite is a claim about the tree and gets verified like one.**
+* **SO S1b's CONCLUSION IS RIGHT AND ITS PRESCRIPTION IS WRONG.** The bench genuinely cannot
+  adjudicate either decision -- but the gap is **two missing MUTATIONS**, a renumber for D3 and a
+  decoy-wins fuzzy strip for D2, not six missing fixtures. That is a far smaller and better-specified
+  slice than the entry asks for.
+* **AND I MADE THE EXACT ERROR THIS SECTION IS ABOUT, INSIDE THE WRITE-UP OF CATCHING IT.** The first
+  draft claimed *D3 is adjudicable today* with the acceptance number `silent_wrong` **2 -> 0**. Wrong
+  twice. The bench's one wrong row is a positional CSS PATH re-matching a slid-in sibling on a page
+  with **no rows at all** -- D3's subject is a positional row-identity TOKEN. **Two mechanisms sharing
+  the word *positional*, matched on the word.** And that row is a published `KNOWN_WRONG_BINDS`
+  residual whose comment lists **four remedies already ruled out by measurement**, explicitly *"so
+  they are not re-proposed"* -- the nearest of them, dropping the css candidate, measured to turn two
+  `conflict` rows into silent wrong-binds. **A keyword match is not a mechanism match**, and the thing
+  that caught it both times was reading the fixture's own comment before starting the fix.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
