@@ -44,18 +44,29 @@ Actions: save the branch diff as a patch artifact; record all 20 round-4 audit f
   measured against"*) and `fuzzy-decoy` (*"a wrong bind here is a `silent_wrong` row, which is exactly
   the number D2 must move"*). Following this entry would rebuild what is there.
 
-  **D3 IS ADJUDICABLE TODAY, with a number rather than an argument**: `silent_wrong` is **2** and its
-  sole cause is `anchor-link/positional-css-retarget-tokenless`, `bound_by: ['css']` — a purely
-  positional path retargeting onto the wrong element, which is what D3 rejects. Benefit side
-  *2 → 0*; cost side priced by `row-positional` (8 survived / 6 drifted per arm).
+  **NEITHER D2 NOR D3 IS ADJUDICABLE, AND IT IS ONE SHARED REASON: the fixtures carry the dangerous
+  SHAPE and never produce the dangerous EVENT.** So this entry's CONCLUSION stands and its
+  PRESCRIPTION does not — the gap is two missing MUTATIONS, not six missing fixtures.
 
-  **D2 IS NOT, and the remaining work is narrow rather than six fixtures.** Its own fixture never
-  fails — `fuzzy-decoy` is 11 survived / 3 drifted / **0 wrong**, every fuzzy bind landing on the
-  target — so D2 measured today shows pure cost and would be refuted for the wrong reason. What is
-  missing is a MUTATION under which the sole surviving fuzzy candidate is the DECOY. Separately, D2 is
-  scoped *"for MUTATING steps"* while `fuzzy-decoy` is a read and the only write scenario
-  (`order-form`) binds `testid`/`role+name` with **0 fuzzy binds across 20 write rows on both arms** —
-  so the scope and the fixture disagree, and closing the mutation gap alone does not fix that.
+  * **D3** — `row-positional` has `data-index` and `id="row-N"` on all 12 rows and produces **0 wrong
+    binds across all 14 mutations**, surviving `sibling_removed` via `role+name`. Mechanically:
+    `sibling_removed` is `sibs[0].remove()` against STATIC HTML, so survivors keep their original
+    numbers, and **no mutation in the corpus renumbers anything** (verified across all 16). A real
+    list re-renders and row 4 becomes row 3 — which is the whole reason positional identity is
+    dangerous. **Missing: a RENUMBER mutation.**
+  * **D2** — `fuzzy-decoy` is 11 survived / 3 drifted / **0 wrong**, every fuzzy bind landing on the
+    target. **Missing: a mutation under which the sole surviving fuzzy candidate is the DECOY.** And
+    separately, D2 is scoped *"for MUTATING steps"* while `fuzzy-decoy` is a read and the only write
+    scenario (`order-form`) binds `testid`/`role+name` with **0 fuzzy binds across 20 write rows on
+    both arms** — so the scope and the fixture disagree, and the mutation alone does not fix that.
+
+  ⚠️ **DO NOT REACH FOR `silent_wrong` AS D3's ACCEPTANCE NUMBER.** A first draft of this entry did:
+  the bench's one wrong row is `anchor-link/positional-css-retarget-tokenless`, which is a positional
+  CSS PATH re-matching a slid-in sibling on a page with no rows — not a row-identity TOKEN. Two
+  mechanisms sharing the word *positional*. That row is also a published `KNOWN_WRONG_BINDS` residual
+  whose comment records **four remedies ruled out by measurement** and says so *"so they are not
+  re-proposed"*, the nearest of which (dropping the css candidate) was measured to turn two `conflict`
+  rows into silent wrong-binds.
 
   ~~The bench is named adjudicator for S9/D2/D3 yet its corpus has no fixtures for the shapes they
   change — "byte-identical baseline" would be trivially, meaninglessly satisfied. Add rows:

@@ -1110,7 +1110,19 @@ if and only if that branch is ever resumed.
 
 **WHY THIS WAS WORTH AN HOUR.** Without it the path was: build S1b (six fixtures, none needed), measure D2, receive *not worth it*, and file a confident wrong answer against a live write-safety rule. That is this register's single most-repeated failure -- a green measurement taken on a population where the mechanism cannot fire, which R4.144 recorded TWICE for the cost of one retry loop.
 
-**AND MY OWN FIRST INFERENCE WAS WRONG, caught by a fixture comment rather than by a test.** `bound_by` reports **`anchor` 0 times in 370 row-arms**, and I nearly concluded D3 was unadjudicable on it. D3's subject is the positional TOKEN, not the `anchor` TIER -- the token binds through `css`, which is exactly the wrong row above. A measurement can be right and its reading wrong in one step. |
+**AND MY OWN FIRST INFERENCE WAS WRONG, caught by a fixture comment rather than by a test.** `bound_by` reports **`anchor` 0 times in 370 row-arms**, and I nearly concluded D3 was unadjudicable on it. D3's subject is the positional TOKEN, not the `anchor` TIER -- the token binds through `css`, which is exactly the wrong row above. A measurement can be right and its reading wrong in one step.
+
+**CORRECTION, BEFORE MERGE: D3 IS NOT ADJUDICABLE EITHER, AND I MADE THE EXACT ERROR THIS FINDING IS ABOUT.** The paragraph above claims *D3 IS ADJUDICABLE NOW* with the acceptance number `silent_wrong` 2 -> 0. **Both halves are wrong.**
+
+**(a) IT IS THE WRONG ROW.** `anchor-link/positional-css-retarget-tokenless` is a positional CSS PATH (`#order > a:nth-of-type(1)`) re-matching a sibling that slid into the target's slot, on a page with no rows at all. **D3's subject is a positional row-identity TOKEN** -- `data-index`, `id="row-N"`. Two different mechanisms sharing the word *positional*, and I matched them on the word without checking. **(b) AND THAT ROW IS ALREADY REFUTED FOUR WAYS.** It is a published `KNOWN_WRONG_BINDS` entry whose comment records four remedies ruled out BY MEASUREMENT and says so explicitly *"so they are not re-proposed"* -- dropping the css candidate (measured to turn two `conflict` rows into silent wrong-binds), N-of-M corroboration (predicted to drop v1 parity to 10/12), text similarity, and the neighbour anchor. The bench calls the residual *an information limit of the recorded field set, not an oversight*.
+
+**WHAT IS ACTUALLY TRUE IS SIMPLER AND BETTER: NEITHER D2 NOR D3 IS ADJUDICABLE, FOR ONE SHARED REASON.** Both fixtures carry the dangerous SHAPE and neither ever produces the dangerous EVENT.
+  * `fuzzy-decoy` has the decoy; every fuzzy bind lands on the TARGET. 0 wrong.
+  * `row-positional` has `data-index` and `id="row-N"` on all 12 rows -- and **0 wrong across all 14 mutations**, surviving `sibling_removed` via `role+name`. The reason is mechanical: `sibling_removed` is `sibs[0].remove()` against STATIC HTML, so the survivors keep their original numbers. **No mutation in the corpus renumbers anything** -- verified across all 16. A real list re-renders and row 4 becomes row 3, which is the ENTIRE reason positional identity is dangerous, and the corpus never does it.
+
+**SO S1b's CONCLUSION IS RIGHT AND ITS PRESCRIPTION IS WRONG.** The bench genuinely cannot adjudicate D2 or D3. But the gap is not six missing FIXTURES -- it is two missing MUTATIONS: a renumber (for D3) and a decoy-wins fuzzy strip (for D2). That is a much smaller and much better specified slice, and it is what a corrected S1b should say.
+
+**THE SELF-CORRECTION IS THE PART WORTH KEEPING.** This finding exists because a measurement was taken on a population where the mechanism cannot fire. I then read one `silent_wrong` row, matched it to a decision BY KEYWORD, did not check that the mechanism was the same one, and wrote it up as an acceptance number -- **the identical error, inside the write-up of catching it, within the hour.** What caught it the second time was reading the fixture's own comment before starting the fix, which is the same thing that caught it the first time. |
 <!-- /generated:r4-index -->
 
 

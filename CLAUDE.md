@@ -2930,7 +2930,7 @@ is complete; the plan has no `pending` step left.
   two open flake findings sit on rows that scored 3/3, so three passes is a flake detector and not a
   stability certificate.
 
-## S1b was already built, and D2's own fixture never fails (R4.150, 0.173.0)
+## S1b was already built, and neither decision's fixture ever fails (R4.150, 0.173.0)
 
 Phase 3 became eligible for the first time -- it is sequenced after 0.6 and 2.4, both now done -- and
 S1b is its stated prerequisite. Verifying that prerequisite cost **$0.00**: one free `drift_bench`
@@ -2943,12 +2943,13 @@ run and some reading. It changed the next two slices.
   purpose-built for D2 and D3 and say so in their own comments. **Following the plan entry would have
   rebuilt what is already there** -- and this is the third time a plan row has outlived its subject
   (2.4b's note went five slices stale, R4.113 found three sentences outliving their fix).
-* **D3 IS ADJUDICABLE TODAY, WITH A NUMBER INSTEAD OF AN ARGUMENT.** `silent_wrong` is **2**, and its
-  sole cause is `anchor-link/positional-css-retarget-tokenless` bound by **`css`** -- a purely
-  positional path retargeting onto the wrong element, which is exactly what D3 rejects. So the
-  benefit side is *2 -> 0* and the cost side is priced by `row-positional`, 8 survived / 6 drifted.
-  That scenario's own comment framed the trade as *accept-and-be-wrong versus refuse-and-lose-
-  survival*; both halves are already measurable.
+* **NEITHER D2 NOR D3 IS ADJUDICABLE, AND IT IS ONE SHARED REASON: both fixtures carry the dangerous
+  SHAPE and neither produces the dangerous EVENT.** `row-positional` has `data-index` and
+  `id="row-N"` on all 12 rows and returns **0 wrong binds across all 14 mutations**, surviving
+  `sibling_removed` via `role+name`. Mechanically: `sibling_removed` is `sibs[0].remove()` against
+  STATIC HTML, so survivors keep their original numbers, and **no mutation in the corpus renumbers
+  anything** -- verified across all 16. A real list re-renders and row 4 becomes row 3, which is the
+  ENTIRE reason positional identity is dangerous, and the corpus never does it.
 * **D2 IS NOT, AND THE FIRST REASON IS THAT ITS FIXTURE NEVER FAILS.** `fuzzy-decoy` exists, was built
   for D2, and its comment says *"a wrong bind here is a `silent_wrong` row, which is exactly the
   number D2 must move"*. Measured: **11 survived / 3 drifted / 0 wrong**, with all four `role+name~`
@@ -2966,11 +2967,19 @@ run and some reading. It changed the next two slices.
   check was: build six unneeded fixtures, measure D2, receive *not worth it*, file it. R4.144 records
   the same shape twice for the cost of one retry loop -- a number taken on a population where the
   mechanism cannot fire. **A prerequisite is a claim about the tree and gets verified like one.**
-* **AND MY OWN FIRST READING WAS WRONG, caught by a fixture comment rather than a test.** `bound_by`
-  reports **`anchor` 0 times across 370 row-arms**, and I nearly concluded D3 unadjudicable on it.
-  D3's subject is the positional TOKEN, not the `anchor` TIER -- the token binds through `css`, which
-  is precisely the one wrong row in the bench. **A measurement can be right and its reading wrong in
-  a single step**, and the thing that caught it was a comment somebody wrote next to the fixture.
+* **SO S1b's CONCLUSION IS RIGHT AND ITS PRESCRIPTION IS WRONG.** The bench genuinely cannot
+  adjudicate either decision -- but the gap is **two missing MUTATIONS**, a renumber for D3 and a
+  decoy-wins fuzzy strip for D2, not six missing fixtures. That is a far smaller and better-specified
+  slice than the entry asks for.
+* **AND I MADE THE EXACT ERROR THIS SECTION IS ABOUT, INSIDE THE WRITE-UP OF CATCHING IT.** The first
+  draft claimed *D3 is adjudicable today* with the acceptance number `silent_wrong` **2 -> 0**. Wrong
+  twice. The bench's one wrong row is a positional CSS PATH re-matching a slid-in sibling on a page
+  with **no rows at all** -- D3's subject is a positional row-identity TOKEN. **Two mechanisms sharing
+  the word *positional*, matched on the word.** And that row is a published `KNOWN_WRONG_BINDS`
+  residual whose comment lists **four remedies already ruled out by measurement**, explicitly *"so
+  they are not re-proposed"* -- the nearest of them, dropping the css candidate, measured to turn two
+  `conflict` rows into silent wrong-binds. **A keyword match is not a mechanism match**, and the thing
+  that caught it both times was reading the fixture's own comment before starting the fix.
 
 ## The pattern that predicts the next bug
 
