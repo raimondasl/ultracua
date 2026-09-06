@@ -72,15 +72,42 @@ def docker_report() -> dict:
 def check(name: str, *, seed: bool = True, keep: bool = False) -> dict:
     """Bring one substrate up, prove it serves and can be written to, and report the timings."""
     sub = SUBSTRATES[name]()
-    report: dict = {"substrate": name, "images": S.substrate_report()["images"]}
+    report: dict = {"substrate": name, "images": S.substrate_report()["images"],
+                    "serves_before_seed": sub.serves_before_seed}
+
+    # A SUBSTRATE THAT CANNOT SERVE UNSEEDED CANNOT BE CHECKED UNSEEDED, and saying so is better
+    # than the vacuous pass. With `--no-seed` there would be no readiness layer left to assert at
+    # all for such a substrate: `start()` proves only that containers exist. Refusing names the
+    # remedy; passing would report a green check over nothing.
+    if not seed and not sub.serves_before_seed:
+        raise SystemExit(
+            f"{name}: --no-seed is meaningless here. This substrate does not serve until it has "
+            f"been seeded (a virgin Odoo returns the database manager at every URL, R4.89), so "
+            f"without the seed there is no readiness to prove and this check would pass having "
+            f"started two containers. Drop --no-seed."
+        )
+
     try:
         t0 = time.monotonic()
-        report["up_s"] = round(sub.up(), 1)
-        # `up()` already calls `await_ready`, which is health + a substantive body + writability.
-        # Calling `assert_writable` again is not redundant: `up` is the composite and this names the
-        # layer, so a failure here says WRITABLE rather than the generic readiness message.
-        sub.assert_writable()
-        report["ready_s"] = round(time.monotonic() - t0, 1)
+        if sub.serves_before_seed:
+            report["up_s"] = round(sub.up(), 1)
+            # `up()` already calls `await_ready`, which is health + a substantive body + writability.
+            # Calling `assert_writable` again is not redundant: `up` is the composite and this names
+            # the layer, so a failure here says WRITABLE rather than the generic readiness message.
+            sub.assert_writable()
+            report["ready_s"] = round(time.monotonic() - t0, 1)
+        else:
+            # CONTAINERS ONLY. The app does not exist yet, so there is nothing to be ready. `seed()`
+            # below establishes readiness itself -- it stops the service, creates the database in a
+            # `run --rm` container, starts the service and calls `await_ready()` -- and the
+            # `assert_writable` after it is what names the layer, exactly as above.
+            #
+            # THIS ORDERING IS THE FIX FOR THE ODOO LEG'S FIRST CI RUN. `check()` used to call
+            # `up()` unconditionally, so it asserted readiness BEFORE the database existed and
+            # failed in 65 s with the very message that tells you to seed first. The image was never
+            # the problem -- Odoo came up in about a minute, and the "~1.5 GB base may be too slow
+            # for CI" worry this leg was added to measure is REFUTED.
+            report["up_s"] = round(sub.start(), 1)
         if seed:
             t1 = time.monotonic()
             sub.seed()
@@ -104,6 +131,12 @@ def check(name: str, *, seed: bool = True, keep: bool = False) -> dict:
             # accepts a write; it says nothing about the corpus's own fixtures existing, which is
             # what every scenario's expected answer is computed from. It also proves the substrate
             # came back UP after `snapshot()` stopped it.
+            if not sub.serves_before_seed:
+                # The readiness layer for this substrate, asserted at the only point it CAN hold.
+                # `seed()` awaited it internally; this names it in the report so an operator can see
+                # that the layer ran rather than inferring it from the absence of an error.
+                sub.await_ready()
+                report["ready_s"] = round(time.monotonic() - t0, 1)
             sub.assert_writable()
         report["ok"] = True
     finally:
@@ -124,11 +157,11 @@ def main(argv=None) -> int:
     print("docker: " + json.dumps(env))
     if not env.get("version"):
         print("\nNO DOCKER DAEMON REACHABLE HERE.\n"
-              "  This is a FACT about the machine, not about the benchmark. Two modules in this "
-              "package assert that CI has no daemon; if this message is printing on a "
-              "GitHub-hosted ubuntu runner then that assertion is CONFIRMED and reshape-plan 2.4's "
-              "weekly run needs a self-hosted runner. If it is printing on a developer host, start "
-              "Docker Desktop.", file=sys.stderr)
+              "  This is a FACT about the machine, not about the benchmark. A GitHub-hosted ubuntu "
+              "runner HAS one -- measured at 0.137.0, Docker 28.0.4 and Compose 2.38.2, with Gitea "
+              "up in 12.5 s (R4.109) -- so this printing on CI means the runner image changed, not "
+              "that the weekly run needs a self-hosted machine. If it is printing on a developer "
+              "host, start Docker Desktop.", file=sys.stderr)
         return 2
 
     names = sorted(SUBSTRATES) if args.substrate == "all" else [args.substrate]

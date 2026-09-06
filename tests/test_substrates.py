@@ -18,6 +18,8 @@ reader to discover.
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
 from benchmarks import substrates as S
@@ -920,3 +922,76 @@ def test_a_real_odoo_skeleton_is_refused_and_a_real_page_is_not() -> None:
         S.assert_not_a_skeleton(_Obs(S.MEASURED_SKELETON_ELEMENTS), substrate="odoo", scenario="x")
     S.assert_not_a_skeleton(_Obs(S.MEASURED_SMALLEST_RENDERED_ELEMENTS), substrate="odoo",
                             scenario="x")
+
+
+def test_up_is_start_plus_await_ready() -> None:
+    """`up()` was split at 0.172.0 so `start()` could be reached without asserting readiness. Its
+    CONTRACT must not have moved: a split that quietly dropped the readiness half would leave every
+    caller of `up()` believing a substrate serves when only its containers exist.
+
+    Derived from the source rather than driven, because driving it needs Docker and this file's
+    autouse guard makes that raise — deliberately (a cell that reaches Docker passes here against a
+    live substrate and fails both CI arms).
+    """
+    src = inspect.getsource(S.Substrate.up)
+    assert "self.start(" in src, (
+        "`up()` no longer delegates to `start()`. The two exist as a pair so that `substrate_check` "
+        "can bring containers up WITHOUT asserting readiness for a substrate that cannot be ready "
+        "until it is seeded; if they have diverged, that caller is starting something else."
+    )
+    assert "self.await_ready(" in src, (
+        "`up()` no longer awaits readiness. That is its entire difference from `start()`, and every "
+        "caller of `up()` relies on it — `customer_bench` calls it and then drives scenarios."
+    )
+    assert "await_ready" not in inspect.getsource(S.Substrate.start), (
+        "`start()` has grown a readiness wait, which collapses it back into `up()` and re-breaks the "
+        "substrate that cannot be ready before it is seeded."
+    )
+
+
+def test_exactly_the_substrates_that_cannot_serve_empty_declare_so() -> None:
+    """The declared set, pinned BOTH ways so a new substrate has to decide consciously.
+
+    `serves_before_seed` picks which lifecycle `substrate_check` runs, and it is declared rather than
+    probed because probing means bringing a substrate up to find out. A wrong declaration is silent
+    in one direction and loud in the other: claiming False for a substrate that does serve merely
+    skips a redundant check, while claiming True for one that does not is the red CI job this
+    replaced.
+    """
+    # The map lives in `scored_run`, which is the module that OWNS the substrate set the
+    # benchmark actually drives -- deriving it from there rather than from a list here is
+    # what makes a new substrate show up in this assertion at all.
+    from benchmarks.scored_run import SUBSTRATES
+
+    # READ OFF AN INSTANCE, NOT THE CLASS, and that distinction is the whole reason this cell was
+    # rewritten. `check()` asks `sub.serves_before_seed` of an INSTANCE. The first version of this
+    # guard asked the CLASS, passed, and the Odoo CI leg failed anyway -- because `Substrate` is a
+    # `@dataclass` and the annotated base declaration had become a FIELD, so the generated
+    # `__init__` assigned the default to every instance and shadowed `Odoo`'s override. Measured:
+    # `Odoo.serves_before_seed` False, `Odoo().serves_before_seed` True. A guard that reads a
+    # different object from the code it guards is green for a living.
+    cannot = {n for n, cls in SUBSTRATES.items() if not cls().serves_before_seed}
+    assert cannot == {"odoo"}, (
+        f"the substrates declaring they cannot serve before seeding are {sorted(cannot)}, not "
+        f"['odoo']. A virgin Odoo returns the database manager at every URL (R4.89) so readiness is "
+        f"establishable only after `seed()`; a new substrate joining that set needs the same "
+        f"evidence, and one LEAVING it means its readiness check changed."
+    )
+    assert S.Substrate.serves_before_seed is True, (
+        "the BASE default must stay True: a substrate that serves empty is the ordinary case, and a "
+        "default of False would silently skip the pre-seed readiness layer for every new substrate."
+    )
+
+    # AND IT MUST NOT BE A DATACLASS FIELD. This is the mechanism that made the first fix inert, and
+    # it is invisible from either attribute on its own: as a field the base default is re-assigned
+    # per instance, so the class says one thing and every object says another. Asserted directly so
+    # the next person to add a `: bool` annotation here gets a red test naming the reason.
+    import dataclasses
+
+    fields = {f.name for f in dataclasses.fields(S.Substrate)}
+    assert "serves_before_seed" not in fields, (
+        "`serves_before_seed` has become a dataclass FIELD again. The generated `__init__` will "
+        "assign the base default to every instance and silently shadow `Odoo`'s override -- which "
+        "is exactly how the Odoo preflight kept failing against a green test. Declare it WITHOUT a "
+        "type annotation so it stays an ordinary class constant."
+    )

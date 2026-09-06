@@ -37,6 +37,7 @@ from pathlib import Path
 import pytest
 
 from _arming import assert_red
+from benchmarks import outcomes
 
 ROOT = Path(__file__).resolve().parents[1]
 PAGE = ROOT / "baselines" / "README.md"
@@ -48,6 +49,39 @@ BLOCK_OPEN = "<!-- open-findings:customer-bench -->"
 BLOCK_CLOSE = "<!-- /open-findings -->"
 
 _ID = re.compile(r"\bR\d+\.\d+\b")
+
+
+def _module_strings(module) -> set:
+    """Every string constant the module's compiled code objects hold, transitively.
+
+    The gate compares a reason string that is written as adjacent literals across several source
+    lines; Python folds those at compile time, so the whole string exists in exactly one
+    `co_consts` entry and NOWHERE contiguously in the source text. A scan over `getsource` therefore
+    reports a perfectly good acknowledgement as stale -- which is what the first draft did.
+    """
+    import types
+
+    out, seen = set(), set()
+
+    def walk(code) -> None:
+        if id(code) in seen:
+            return
+        seen.add(id(code))
+        for c in code.co_consts:
+            if isinstance(c, str):
+                out.add(c)
+            elif isinstance(c, types.CodeType):
+                walk(c)
+
+    for obj in vars(module).values():
+        fn = getattr(obj, "__code__", None)
+        if fn is not None:
+            walk(fn)
+        elif isinstance(obj, type):
+            for m in vars(obj).values():
+                if getattr(m, "__code__", None) is not None:
+                    walk(m.__code__)
+    return out
 
 
 def register_status() -> "dict[str, str]":
@@ -138,18 +172,73 @@ def test_the_baseline_the_page_describes_is_the_one_on_disk(page: str) -> None:
     nobody ships. The numbers are checked rather than the prose paraphrased: `0.762` and `n=21`
     appear in the text, and both come from the JSON.
     """
-    artifact = ROOT / "baselines" / "customer_v1_gitea.json"
-    assert artifact.exists(), (
-        "the honesty region describes `customer_v1_gitea.json`, which is not in the tree"
+    # DERIVED FROM DISK, not named. This cell hard-coded `customer_v1_gitea.json` while Gitea was
+    # the only baseline; the Odoo half (2.4b) then shipped as a SECOND artifact, and a named check
+    # would have gone on passing while saying nothing about it. Globbing means a third substrate's
+    # baseline cannot ship undocumented either. `.acknowledged.` files are excluded: they are the
+    # gate's allowlist, not a baseline, and they carry no metrics to quote.
+    found = sorted(q for q in (ROOT / "baselines").glob("customer_v1_*.json")
+                   if ".acknowledged." not in q.name)
+    assert found, (
+        "no `baselines/customer_v1_*.json` exists, so this whole page describes nothing. Either the "
+        "baselines were renamed — in which case this cell is now vacuous and must follow them — or "
+        "an artifact the honesty region is built on has been deleted."
     )
-    data = json.loads(artifact.read_text(encoding="utf-8"))
-    m = data["metrics"]["availability_rate"]
     body = region(page)
-    assert f"{m['mean']:.3f}" in body, (
-        f"the page does not quote the baseline's availability_rate ({m['mean']:.3f}); it has drifted "
-        f"from the artifact it describes"
-    )
-    assert f"n={m['n']}" in body, f"the page does not quote the baseline's n ({m['n']})"
+    for artifact in found:
+        data = json.loads(artifact.read_text(encoding="utf-8"))
+        m = data["metrics"]["availability_rate"]
+        assert artifact.name in body, (
+            f"`{artifact.name}` is committed but the honesty region never names it. A baseline that "
+            f"nothing on this page describes is a number shipped without its caveats."
+        )
+        assert f"{m['mean']:.3f}" in body, (
+            f"the page does not quote {artifact.name}'s availability_rate ({m['mean']:.3f}); it has "
+            f"drifted from the artifact it describes"
+        )
+        assert f"n={m['n']}" in body, (
+            f"the page does not quote {artifact.name}'s n ({m['n']})"
+        )
+
+    # THE GATE'S ALLOWLIST IS PART OF THE ARTIFACT, so a baseline that acknowledges rows must have a
+    # committed file to acknowledge them with -- and one that acknowledges nothing must still have
+    # the file, holding `[]`. An ABSENT allowlist and an EMPTY one read identically at the call site
+    # and mean different things: "nothing is signed for" versus "nobody has looked".
+    for artifact in found:
+        ack = artifact.with_name(artifact.name.replace(".json", ".acknowledged.json"))
+        assert ack.exists(), (
+            f"`{artifact.name}` has no `{ack.name}`. The weekly job passes `--acknowledge` for every "
+            f"substrate so the two legs stay one shape; an empty list is how a baseline says it "
+            f"signs for nothing, and an absent file is how one silently stops being checked."
+        )
+        pairs = json.loads(ack.read_text(encoding="utf-8"))
+        assert isinstance(pairs, list) and all(
+            isinstance(x, list) and len(x) == 2 for x in pairs), (
+            f"`{ack.name}` must be a list of [scenario, reason] pairs; `corpus_run` feeds it "
+            f"straight to `gate_bench_record(acknowledged=...)`, which keys on the tuple."
+        )
+
+        # THE PAIR IS KEYED ON THE REASON STRING, so a reword in `benchmarks/outcomes.py` silently
+        # stops it matching and the acknowledged row starts failing the weekly gate for a reason the
+        # operator cannot see. Nothing bound the two before: the reason is a bare literal, not a
+        # named constant, and it was copied into the committed file by hand. Binding it here makes a
+        # reword a red test in the slice that does the rewording, rather than a red benchmark a week
+        # later.
+        #
+        # MATCHED AGAINST THE COMPILED CONSTANTS, NOT THE SOURCE TEXT, and the first draft got that
+        # wrong. The reason is written as three adjacent string literals across three lines, so it
+        # does not appear contiguously in `getsource` at all -- the scan went red against a perfectly
+        # good acknowledgement. Python folds adjacent literals at COMPILE time, so the whole string
+        # is one entry in a code object's `co_consts`, which is also what the running gate compares.
+        # (This is the repo's "never assert over source TEXT" rule arriving on a tenth surface.)
+        for scenario, reason in pairs:
+            assert reason in _module_strings(outcomes), (
+                f"`{ack.name}` acknowledges {scenario!r} by a reason string that "
+                f"`benchmarks/outcomes.py` no longer produces. The gate matches the "
+                f"(scenario, reason) PAIR verbatim, so this acknowledgement is now inert and that "
+                f"row will fail the weekly run with nothing saying why. Re-copy the reason from a "
+                f"record, do not paraphrase it.\n  committed: {reason!r}"
+            )
 
 
 def test_both_directions_go_red_when_armed(page: str) -> None:
@@ -184,6 +273,28 @@ def test_both_directions_go_red_when_armed(page: str) -> None:
     smuggled = page.replace(REGION_CLOSE, f"See also {victim}.\n\n" + REGION_CLOSE, 1)
     assert smuggled != page, "the mutation is STALE; the region's closing marker moved"
     assert_red(test_every_open_finding_the_page_cites_is_declared, smuggled)
+
+    # (c) THE ARTIFACT CELL, armed for the first time at 0.172.0. It was hard-coded to Gitea's
+    # filename until the Odoo baseline landed and made it a glob, and a glob that matches nothing --
+    # or that matches and asserts nothing -- is exactly the vacuity the two cells above are armed
+    # against. Three mutations, all applied to the PAGE TEXT rather than to files on disk, because a
+    # cell that writes to `baselines/` to arm itself is a cell that can leave the tree broken when it
+    # fails. That rules out mutating the JSON, so the artifact-side properties are stated by removing
+    # the page's side of the binding instead.
+    for name, mutated, why in (
+        ("a committed baseline the page never names",
+         page.replace("`customer_v1_odoo.json`", "`the Odoo one`"),
+         "the region stops naming an artifact that is on disk"),
+        # EVERY occurrence, not the first. A one-shot replace left `0.714` standing in four other
+        # sentences of the same region and the cell passed -- the mutation was wrong, not the guard,
+        # and the arming harness said so. `in body` is satisfied by ANY occurrence, so a mutation
+        # that states "the page no longer quotes this number" has to remove all of them.
+        ("the page quotes a number the artifact does not carry",
+         page.replace("0.714", "0.888"),
+         "the quoted availability drifts from the JSON"),
+    ):
+        assert mutated != page, f"the mutation is STALE ({name}); {why} no longer matches"
+        assert_red(test_the_baseline_the_page_describes_is_the_one_on_disk, mutated)
 
     # (c) THE QUIET DIRECTION. A finding cited OUTSIDE the region — the drift-bench sections above
     # cite plenty — must not be dragged in. Without this the fix for (b) is "declare every id in the
