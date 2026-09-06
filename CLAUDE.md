@@ -2950,19 +2950,26 @@ run and some reading. It changed the next two slices.
   STATIC HTML, so survivors keep their original numbers, and **no mutation in the corpus renumbers
   anything** -- verified across all 16. A real list re-renders and row 4 becomes row 3, which is the
   ENTIRE reason positional identity is dangerous, and the corpus never does it.
-* **D2 IS NOT, AND THE FIRST REASON IS THAT ITS FIXTURE NEVER FAILS.** `fuzzy-decoy` exists, was built
+* **THE SAME SHAPE ON D2's SIDE: ITS FIXTURE NEVER SPRINGS ITS OWN TRAP.** `fuzzy-decoy` exists, was built
   for D2, and its comment says *"a wrong bind here is a `silent_wrong` row, which is exactly the
   number D2 must move"*. Measured: **11 survived / 3 drifted / 0 wrong**, with all four `role+name~`
   binds per arm landing on the TARGET rather than the decoy. **The number D2 must move is zero on the
   row built to move it**, so a measurement taken today shows pure cost and no benefit -- and would
   refute a live write-safety rule for a reason that is an artifact of the harness. What is missing is
   not a fixture but a MUTATION: one under which the sole surviving fuzzy candidate is the DECOY.
-* **AND THE SECOND REASON IS THAT THE DECISION AND THE FIXTURE DISAGREE ABOUT SCOPE.** D2 is written
+* **AND D2 CARRIES A SECOND REASON D3 DOES NOT: THE DECISION AND THE FIXTURE DISAGREE ABOUT SCOPE.**
+  D2 is written
   *"for MUTATING steps"*; `fuzzy-decoy` is a READ. The corpus's only write scenario, `order-form`,
   binds `testid` x88 and `role+name` x4 -- **0 fuzzy binds across all 20 write rows, on both arms**.
   So a mutating-scoped D2 is invisible to the whole corpus, and closing the mutation gap alone would
   not change that. **Two reasons pointing at two different fixes is worth more than one reason**:
   make the trap spring, AND decide whether D2 is really write-only.
+* **AND THE CORRECTION ITSELF INTRODUCED A DEFECT, which is the third order of the same lesson.**
+  Replacing the wrong *D3 IS ADJUDICABLE TODAY* bullet left the next one opening **"D2 IS NOT, and
+  the FIRST reason..."** -- a contrast whose antecedent had just been deleted, sitting under a bullet
+  that already said neither is adjudicable and already gave the shared reason. Caught by re-reading
+  the section before calling the PR ready, not by any test. **A correction is a new claim and rots
+  its neighbours**, exactly as a fix does (R4.113); prose has no guard but the next reading.
 * **THIS IS THE FAILURE THE REGISTER FILES MOST, caught before it was bought.** The path without the
   check was: build six unneeded fixtures, measure D2, receive *not worth it*, file it. R4.144 records
   the same shape twice for the cost of one retry loop -- a number taken on a population where the
