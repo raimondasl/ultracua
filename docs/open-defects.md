@@ -12,7 +12,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**70 open**, 77 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**70 open**, 78 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **70 open**, 77 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **70 open**, 78 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -1157,6 +1157,19 @@ if and only if that branch is ever resumed.
 **A DEADLINE, NOT A TICK COUNT.** The first draft bounded the wait with `range(500)` over `asyncio.sleep(0.01)`, commented "5 s". Measured, a 10 ms sleep costs **16.5 ms** on this Windows host, so the real bound was **8.2 s** here and ~5 s on the ubuntu arm -- one constant meaning two things on the two platforms CI runs.
 
 **ARMED 6 MUTATIONS: 5 KILLED, 3 DECLARED SURVIVORS**, and the survivors carry the argument. Remove the wait -> the new cell dies with the CI message while the OLD cell SURVIVES, which is precisely what made this CI-only. Fixture never posts -> both die, and the sibling too. Wait removed AND lag removed -> the new cell survives, the inert control proving the kill comes from the window the lag builds. Sibling at an 800 ms lag, beyond its teardown grace -> dies without the wait, survives with it. |
+| R4.152 | fixed | **D3 IS DECIDED: NO CHANGE, AND ITS PRESCRIPTION WAS A MEASURED NO-OP.** Phase 3's D3 asks the resolver to *reject purely positional row-identity tokens*. Rejecting the token sets `anchor_id` to None, and `resolve` returns early on a falsy `anchor_id` -- reading it as NO GUARD. Measured on `row-positional/positional-row-renumber`: `WRONG(row4)` with the token and `WRONG(row4)` without it. **Zero wrong binds removed.** The harm merely moves from *the guard agreed wrongly* to *the guard never ran*, which is the overloaded `anchor_id=None` sensor D5 already blocks two attempts on -- reached here from a third direction.
+
+**THREE ALTERNATIVE SENSORS WERE BUILT AND REFUSED, each by a different instrument.**
+  * *value tracks its row index* -- refuted by the corpus's own control. `row-shared-action`'s `hidden:widget=3`, the per-record key R3.1's discrimination rule was built for, scores positional=True: on an unmutated page a sequential record key and a slot number are the same string.
+  * *refuse the echo* -- the row guard is structurally an echo on any row with an id, since `cssPath` stops at the first ancestor id and `_rowCands` offers `id:` first, so a css bind and the identity checking it are one token. Measured on the full corpus: 0-LLM survivals **84 -> 79** and `heal_invalidates_approval` **FAILS** -- two of the extra refusals re-ground to a byte-identical recipe (R4.35) and would be refused again every run.
+  * *echo + the row's own text* -- prices at **84 -> 83 with every invariant holding**, and is still refused: `test_an_edited_row_still_binds` went RED, because an edited row (a price, a status) is the SAME record and this refuses it. **The corpus understated the cost and the standing suite did not** -- that cell's docstring had already recorded a text-keyed check costing 4 rows.
+  * *corroborate with a different discriminating candidate* -- works on `#order-3`, whose `href:/cancel/3` is independent, and fails on the row D3 is about: `row-positional`'s other candidate is `data-index:3`, which renumbers in lockstep with the id.
+
+**SO THE PREMISE IS REFUTED BY A SENTENCE ALREADY STANDING IN `_ROWID_JS`**: *nothing observable in a single capture separates a positional token from a real key*. Four sensors confirmed it from four directions. What would reopen D3 is a sensor that sees ACROSS TIME -- a second identity recorded at learn and re-checked at replay -- which is a cache-format change and a different slice.
+
+**THE INSTRUMENT SHIPS WITH THE REFUSAL** (`benchmarks/row_echo_probe.py`, ~20 s, $0.00), because a conclusion of the form *do not change `src/`* is worth what its reproducibility is worth (R4.111's rule). `tests/test_row_echo_probe.py` holds its two load-bearing claims against the engine's own source, so a probe describing a resolver the code no longer has fails there rather than answering confidently a release later.
+
+**AND A CANDIDATE I MEASURED WAS NOT THE CANDIDATE I IMPLEMENTED.** The priced rule carried a `bound_by == "css"` precondition; the first implementation asked only of the spec, which is true however the element was found. The bench put survivals at **81 against the 83 the measured candidate scored** -- `role+name~` binds were being second-guessed too -- and the docstring had already argued the wrong thing before the number contradicted it. **Re-running the adjudicator against the REAL implementation is what caught it**; trusting the probe's number would have shipped a different rule than the one that was justified. |
 <!-- /generated:r4-index -->
 
 

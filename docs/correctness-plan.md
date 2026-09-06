@@ -419,6 +419,48 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   provisional too, not just its prescribed fix.
 - **D2.** Refuse sole-candidate fuzzy (`role+name~`) binds for MUTATING steps (AB-2).
 - **D3.** Reject purely positional row-identity tokens (`data-index`, `id="row-N"`) (AB-3).
+  ⛔ **DECIDED 2026-09-06, 0.176.0: NO CHANGE. The prescription is a MEASURED NO-OP, and three
+  alternative sensors were built and refused.** $0.00 -- no LLM, no substrate.
+  Reproduce with `python -m benchmarks.row_echo_probe`.
+
+  **1. REJECTING THE TOKEN REMOVES ZERO WRONG BINDS.** It sets `anchor_id` to None, and `resolve`
+  reads a falsy `anchor_id` as NO GUARD, so the identical wrong bind happens one branch earlier.
+  Measured on `row-positional/positional-row-renumber`: `WRONG(row4)` either way. The harm moves
+  from *the guard agreed wrongly* to *the guard never ran* -- which is the overloaded `anchor_id=None`
+  sensor D5 blocks further attempts on, arrived at from a third direction.
+
+  **2. A VALUE-TRACKS-POSITION DETECTOR IS REFUTED BY THE CORPUS'S OWN CONTROL.** `row-shared-action`'s
+  `hidden:widget=3` -- the per-record key R3.1's discrimination rule was built for -- scores
+  positional=True. On an unmutated page a sequential record key and a slot number are the same string;
+  the difference appears only AFTER a delete, which no single capture can see.
+
+  **3. REFUSING THE ECHO COSTS FIVE ROWS AND BREAKS AN INVARIANT.** The row guard is structurally an
+  echo on any row with an id -- `cssPath` stops at the first ancestor id and emits `#<id>`, `_rowCands`
+  offers `id:<row id>` first, so a css bind and the identity checking it are the same token and the
+  guard cannot disagree. Refusing on that alone: 0-LLM survivals **84 -> 79** and
+  `heal_invalidates_approval` **FAILS**, because two of the extra refusals re-ground to a
+  byte-identical recipe (R4.35) and would be refused again on every future run.
+
+  **4. CORROBORATING THE ECHO WITH THE ROW'S TEXT PRICES AT 84 -> 83 WITH EVERY INVARIANT HOLDING,
+  AND IS STILL REFUSED -- by a guarantee the corpus does not contain.**
+  `test_row_identity_binding.py::test_an_edited_row_still_binds` went RED: an edited `#order-3` binds
+  by css, the guard is an echo, the row text moved, and the rule refuses a row that is the SAME
+  record. Row TEXT is deliberately not an identity -- a price or a status changing does not make a
+  row a different record -- and that cell's own docstring already recorded a text-keyed check costing
+  4 rows. **The corpus understated the cost; the standing suite priced it.**
+
+  **5. AND "CORROBORATE WITH A DIFFERENT CANDIDATE" DIES ON THE SAME FACT.** It works on `#order-3`
+  (whose `href:/cancel/3` is independent) and fails on the row D3 is about: `row-positional`'s other
+  discriminating candidate is `data-index:3`, which renumbers in lockstep with the id it would be
+  corroborating.
+
+  **SO THE PREMISE IS REFUTED BY A SENTENCE ALREADY STANDING IN `_ROWID_JS`** -- *nothing observable
+  in a single capture separates a positional token from a real key*. Four sensors, four ways of
+  learning it. The residual stays PUBLISHED as `row-positional/positional-row-renumber` in
+  `KNOWN_WRONG_BINDS`, which is the honest state: a hole that is measured, named, and not yet
+  closable. **What would reopen this is a sensor that sees ACROSS TIME rather than within one
+  capture** -- a second identity recorded at learn and re-checked at replay, which is a cache-format
+  change and a different slice.
 - **D4.** Learn-path WebSocket parity with the recorder (AB-8): a sent WS frame during learn is a
   write-suspect; an undeclared one refuses. The register's named sibling-gap shape.
 - **D1.** Vision tier screenshots secrets (AB-6): refuse secret slots under the vision tier
