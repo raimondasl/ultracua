@@ -38,7 +38,9 @@ Actions: save the branch diff as a patch artifact; record all 20 round-4 audit f
   commit. Same fix in `test_multiwrite`. Print what each cell exercises before believing it. Also
   hoist the AB-1 pinning test here (it graduates from "pin" to "closed" when S6 lands).
 - **S1b. drift_bench corpus extension.**
-  ⛔ **MOSTLY DONE ALREADY — DO NOT BUILD IT AS WRITTEN (R4.150, 0.173.0, $0.00).** Verified against a
+  ✅ **DONE AT 0.174.0 — as TWO MUTATIONS, not six fixtures (R4.150).** `row-positional/positional-row-renumber` (D3: a re-render renumbers, so a recorded `#row-3` names what was row 4 — binds by `css`, opens the wrong record, and reaches the GOAL PAGE, so only the act trail catches it) and `fuzzy-decoy/fuzzy-decoy-wins` (D2: the recorded name stops matching the target and starts matching the decoy as a substring — binds by `role+name~`, `locators.py`'s own stated residual). Both published in `KNOWN_WRONG_BINDS`, `silent_wrong` 2 → 6, `baselines/drift_v2.json` re-recorded deliberately. **D2 AND D3 ARE NOW ADJUDICABLE**: each has a benefit side that is a real wrong bind to remove, against the survival cost its own scenario prices. Deleting an allowlist entry is what closing one looks like.
+
+  ⛔ **AND ITS PRESCRIPTION WAS WRONG — DO NOT BUILD THE SIX FIXTURES (R4.150, 0.173.0, $0.00).** Verified against a
   real bench run: **all six fixture families below exist**, and two of them were purpose-built for the
   very decisions this entry says cannot be judged — `row-positional` (*"what a D3 narrowing would be
   measured against"*) and `fuzzy-decoy` (*"a wrong bind here is a `silent_wrong` row, which is exactly

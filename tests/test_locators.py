@@ -174,3 +174,62 @@ async def test_a_tokenless_positional_retarget_is_still_undetectable() -> None:
                        css="#checkout > a", anchor="Checkout", anchor_source="heading")
     bound, _sink = await _resolve_on(html, spec)
     assert bound == "decoy", "the token-less retarget now resolves differently — update KNOWN_WRONG_BINDS"
+
+
+async def test_a_renumbered_positional_row_still_binds_the_stranger() -> None:
+    """D3's RESIDUAL, pinned at the resolver so it does not depend on a 187-row bench run.
+
+    A real list RE-RENDERS after a delete and the survivors renumber, so the recorded `#row-3` names
+    what used to be row 4. With the row's own name gone, the positional css path is what decides, and
+    it decides wrongly — the bound element is a different RECORD, opened silently.
+
+    THE CORPUS COULD NOT PRODUCE THIS UNTIL 0.174.0 (R4.150). `row-positional` carried `data-index`
+    and `id="row-N"` on all 12 rows and returned ZERO wrong binds across all 14 mutations, because
+    `sibling_removed` is `sibs[0].remove()` against STATIC html and nothing renumbered. Counted now in
+    drift-bench's `KNOWN_WRONG_BINDS` as `row-positional/positional-row-renumber`.
+
+    If this starts failing the hole has been closed, and the allowlist entry goes with it.
+    """
+    html = """<!doctype html><html><body><table><tbody>
+      <tr id="row-1" data-index="1" data-testid="cart-row"><td>Widget 2</td>
+        <td><a href="/done" data-oracle="row2">Details</a></td></tr>
+      <tr id="row-2" data-index="2" data-testid="cart-row"><td>Widget 3</td>
+        <td><a href="/done" data-oracle="go">Details</a></td></tr>
+      <tr id="row-3" data-index="3" data-testid="cart-row"><td>Widget 4</td>
+        <td><a href="/wrong" data-oracle="row4">Details</a></td></tr>
+    </tbody></table></body></html>"""
+    # Recorded against the PRISTINE page, where the target sat in `#row-3`. Its own accessible name is
+    # gone (the re-render dropped the per-row aria-label), so the positional path is all that is left.
+    spec = LocatorSpec(role="link", name="Details for widget 3", tag="a", text="Details",
+                       css="#row-3 > td:nth-of-type(2) > a", anchor="Widget 3", anchor_source="row")
+    bound, _sink = await _resolve_on(html, spec)
+    assert bound == "row4", (
+        f"the renumbered positional row now resolves to {bound!r} rather than the stranger — the hole "
+        f"D3 exists to close may have shut, so re-measure and update KNOWN_WRONG_BINDS")
+
+
+async def test_a_sole_surviving_fuzzy_candidate_still_binds_a_substring_decoy() -> None:
+    """D2's RESIDUAL, and `locators.py` states it in its own comment: *"when role+name~ is the ONLY
+    surviving Tier-1 candidate and a substring decoy exists, it still binds outright with no
+    corroboration"*. `role+name~` is Tier 1 and the loop returns the first unique match OUTRIGHT, so
+    Tier 2's css cross-check — built to stop exactly this — never runs.
+
+    THE MEASURED SHAPE, from `locators.py`'s own example: a redesign renames the primary control and
+    the old wording lands on a neighbour, so the recorded name stops matching the target and starts
+    matching the DECOY as a substring. Counted in `KNOWN_WRONG_BINDS` as `fuzzy-decoy/fuzzy-decoy-wins`.
+
+    THE TARGET'S TEXT MATTERS AND IS WHY THE FIRST DRAFT OF THE BENCH ROW MEASURED NOTHING: leaving it
+    intact lets `exact-text` — which sits ABOVE the demoted fuzzy tier — bind correctly, so the fuzzy
+    candidate is never reached and the row scores `survived`. Both names have to go.
+    """
+    html = """<!doctype html><html><body>
+      <div><a href="/wrong" data-oracle="wrong-decoy"
+             aria-label="Save the document as a draft">Save draft</a></div>
+      <div><a href="/done" data-oracle="go" aria-label="Publish">Publish</a></div>
+    </body></html>"""
+    spec = LocatorSpec(role="link", name="Save the document", tag="a", text="Save",
+                       css="body > div:nth-of-type(2) > a", anchor=None, anchor_source=None)
+    bound, _sink = await _resolve_on(html, spec)
+    assert bound == "wrong-decoy", (
+        f"the sole-surviving fuzzy candidate now resolves to {bound!r} rather than the decoy — the "
+        f"hole D2 exists to close may have shut, so re-measure and update KNOWN_WRONG_BINDS")

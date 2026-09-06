@@ -12,7 +12,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**71 open**, 75 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**70 open**, 76 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **71 open**, 75 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **70 open**, 76 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -1098,7 +1098,7 @@ if and only if that branch is ever resumed.
 **AND MY OWN GUARD WAS GREEN THROUGHOUT, because it read a different object from the code it guards.** `test_exactly_the_substrates_that_cannot_serve_empty_declare_so` asked `cls.serves_before_seed`; `check()` asks `sub.serves_before_seed`. The class said False, every instance said True, and the test could not see the gap. It reads an INSTANCE now, and a second assertion pins that the name is not in `dataclasses.fields(Substrate)` — the mechanism itself, which is invisible from either attribute alone. **A guard that reads a different object from the thing it guards is green for a living.**
 
 **AND THE SECOND FIX WAS REPRODUCED BEFORE IT WAS BELIEVED, which is the whole difference.** The first was written from the CI log alone and shipped inert. The second was driven against a genuinely wiped local Odoo — `down(wipe=True)`, then the real `substrate_check` — failing identically to CI first, then `ok: true` with `serves_before_seed: false`, `up_s` 4.7, `seed_s` 97.8, `ready_s` 103.9. This repo's oldest rule, arriving on a substrate: reproduce before fixing, and reproduce the FIX. |
-| R4.150 | open | **S1b's PREMISE IS STALE AND ITS CONCLUSION IS HALF RIGHT: D3 IS ADJUDICABLE TODAY, D2 IS NOT, AND NEITHER FOR THE REASON S1b GIVES.** Verified at 0.173.0 for **$0.00** -- one free `drift_bench` run (194.7 s, 185 rows x 2 arms) plus static reads. Bought because Phase 3 became eligible for the first time (it is sequenced after 0.6 and 2.4, both now done) and S1b is its stated prerequisite.
+| R4.150 | fixed | **S1b's PREMISE IS STALE AND ITS CONCLUSION IS HALF RIGHT: D3 IS ADJUDICABLE TODAY, D2 IS NOT, AND NEITHER FOR THE REASON S1b GIVES.** Verified at 0.173.0 for **$0.00** -- one free `drift_bench` run (194.7 s, 185 rows x 2 arms) plus static reads. Bought because Phase 3 became eligible for the first time (it is sequenced after 0.6 and 2.4, both now done) and S1b is its stated prerequisite.
 
 **ALL SIX FIXTURE FAMILIES S1b ASKS FOR ALREADY EXIST.** It says the bench *"has no fixtures for the shapes they change"* and lists six to add. Measured: shared-href and shared-testid rows (`_positional_rows`/`_shared_action_rows` give all 12 rows `href="/done"` and `data-testid="cart-row"`), hidden rows, positional `data-index` (`row-positional`), nested icon-only action lists (`row-nested-icon`, `row-nested-action`) and fuzzy-name decoys (`fuzzy-decoy`). **Two were purpose-built for these very decisions and say so in their own comments** -- `row-positional`: *"this scenario is what a D3 narrowing would be measured against"*; `fuzzy-decoy`: *"a wrong bind here is a `silent_wrong` row, which is exactly the number D2 must move"*. Following S1b as written would build six things that are there.
 
@@ -1122,7 +1122,18 @@ if and only if that branch is ever resumed.
 
 **SO S1b's CONCLUSION IS RIGHT AND ITS PRESCRIPTION IS WRONG.** The bench genuinely cannot adjudicate D2 or D3. But the gap is not six missing FIXTURES -- it is two missing MUTATIONS: a renumber (for D3) and a decoy-wins fuzzy strip (for D2). That is a much smaller and much better specified slice, and it is what a corrected S1b should say.
 
-**THE SELF-CORRECTION IS THE PART WORTH KEEPING.** This finding exists because a measurement was taken on a population where the mechanism cannot fire. I then read one `silent_wrong` row, matched it to a decision BY KEYWORD, did not check that the mechanism was the same one, and wrote it up as an acceptance number -- **the identical error, inside the write-up of catching it, within the hour.** What caught it the second time was reading the fixture's own comment before starting the fix, which is the same thing that caught it the first time. |
+**THE SELF-CORRECTION IS THE PART WORTH KEEPING.** This finding exists because a measurement was taken on a population where the mechanism cannot fire. I then read one `silent_wrong` row, matched it to a decision BY KEYWORD, did not check that the mechanism was the same one, and wrote it up as an acceptance number -- **the identical error, inside the write-up of catching it, within the hour.** What caught it the second time was reading the fixture's own comment before starting the fix, which is the same thing that caught it the first time.
+
+**FIXED AT 0.174.0 BY ADDING THE TWO MISSING MUTATIONS, AND BOTH TRAPS NOW SPRING.** Not six fixtures -- two CURATED rows, which is the vehicle that states exactly the condition and touches nothing else. Adding two PRIMITIVES instead would re-roll `compose()`'s sample at every k and re-baseline the whole corpus for two rows' worth of subject.
+
+  * **D3 -- `row-positional/positional-row-renumber`.** Deletes a row above the target and RENUMBERS the survivors, as a re-render does, then drops the target's own aria-label so the positional token is what decides. Measured: `bound_by: ['css']`, acts `['row4', 'DONE']`. **It reaches the GOAL PAGE** -- every positional row links to `/done` -- so the wrong record is caught only by the act trail's `data-oracle`. That is the harm in its most dangerous dress: a wrong record opened silently behind a success-looking destination.
+  * **D2 -- `fuzzy-decoy/fuzzy-decoy-wins`.** Renames the target and moves the old wording onto the neighbour, so the recorded name stops matching the target and starts matching the DECOY as a substring. Measured: `bound_by: ['role+name~']`, acts `['wrong-decoy', 'WRONG-PAGE']`. This is `locators.py`'s OWN stated residual reproduced, and its own measured example (a control named 'Coupon code' capturing a recorded 'Code').
+
+**THE FIRST D2 DRAFT MEASURED NOTHING, AND THE BENCH SAID WHY IN ONE FIELD.** Renaming only the aria-label left the target's TEXT intact, and `exact-text` sits ABOVE the demoted fuzzy tier -- the row scored `survived` with `bound_by: ['exact-text']`. Both names have to go. **The trap I built to spring did not spring, and `bound_by` is what told me**, which is the same field this finding's own diagnosis rested on.
+
+**PUBLISHED, NOT HIDDEN.** Both rows are in `KNOWN_WRONG_BINDS` with a reason, so `silent_wrong` goes 2 -> 6 and `no_unexpected_wrong` holds. `baselines/drift_v2.json` is re-recorded deliberately (`fixtures_version` 2 -> 3, corpus 185 -> 187) and `baselines/README.md` states what a rising wrong-bind count means here, because it normally reads as a regression and this is its opposite. **Deleting an entry is what closing D2 or D3 looks like.**
+
+**AND THE RESIDUALS ARE PINNED AT THE RESOLVER, not only in the bench.** Two cells in `tests/test_locators.py` reproduce each hole directly in **2 seconds** rather than a 187-row run, on the pattern the token-less retarget already had -- so a resolver change that closes one fails there and names the allowlist entry to delete. Plus an OFFLINE cell deriving the allowlist against the curated rows BOTH ways, because an entry naming a row that no longer exists is a silencer with nothing to silence. **6 mutations, 6 killed** -- and the anti-vacuity floor needed its own isolated mutation, because shrinking the allowlist also orphans the declared rows and was being killed by the wrong assertion. |
 <!-- /generated:r4-index -->
 
 

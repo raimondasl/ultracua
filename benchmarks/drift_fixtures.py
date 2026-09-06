@@ -48,7 +48,17 @@ from typing import Optional
 # 2: added the `row-nested-icon` scenario (R4.33) — the faithful R3.7 shape the `row-nested-action` row
 # was believed to be. A new corpus row changes `corpus_hash` too, so the re-baseline is required either
 # way; this makes the reason explicit rather than leaving it to a hash diff.
-FIXTURES_VERSION = 2
+#
+# 3: two CURATED rows that make correctness-plan decisions D2 and D3 measurable for the first time
+# (R4.150). `row-positional/positional-row-renumber` and `fuzzy-decoy/fuzzy-decoy-wins`. Both scenarios
+# were purpose-built for those decisions and BOTH returned zero wrong binds across every mutation,
+# because the corpus carried the dangerous SHAPE and no mutation produced the dangerous EVENT — nothing
+# renumbered, and no fuzzy candidate ever pointed at the decoy. Measured after: they bind by `css` and
+# `role+name~` respectively, onto the wrong element, and are published in `KNOWN_WRONG_BINDS`.
+# Curated rather than generated on purpose: adding two PRIMITIVES re-rolls `compose()`'s sample at every
+# k and re-baselines the whole corpus, where a curated row states exactly the condition and touches
+# nothing else.
+FIXTURES_VERSION = 3
 
 # ---------------------------------------------------------------------------------------------------
 # The act log. Capture-phase, so it records what was actuated even if a handler stops propagation.
@@ -703,6 +713,28 @@ SCENARIOS: tuple = (
                    "intent": "open the third widget's details"},
                   {"action": "done", "intent": "done"}],
         "golden": ["go", "DONE"], "source": "generated",
+        # THE EVENT D3 IS ABOUT, WHICH NO GENERATED COMPOSITION CAN PRODUCE (R4.150, 0.174.0).
+        # The rows carry positional tokens, and until now nothing RENUMBERED them: `sibling_removed`
+        # is `sibs[0].remove()` against STATIC html, so the survivors keep the numbers they were
+        # served with and `#row-3` still names row 3. Measured before this row existed:
+        # `row-positional` returned 0 wrong binds across all 14 mutations, so a D3 narrowing could
+        # only ever show cost. A real list RE-RENDERS after a delete and row 4 becomes row 3 --
+        # which is the entire reason positional identity is dangerous.
+        #
+        # TWO EDITS, BOTH LOAD-BEARING, and the second is not padding: the renumber alone changes
+        # nothing, because `role+name` ("Details for widget 3", from the row's aria-label) is Tier 1
+        # and binds the RIGHT row whatever the numbers say. Dropping that label is what makes the
+        # positional token the thing that decides -- which is the only condition under which D3 has
+        # a subject at all.
+        "curated_rows": [
+            {"name": "positional-row-renumber", "target_sel": '[data-oracle="go"]',
+             "js": "const tr = t.closest('tr'); const tb = tr.parentElement;"
+                   "tb.children[0].remove();"
+                   "Array.from(tb.children).forEach(function (r, n) {"
+                   "  r.id = 'row-' + (n + 1); r.setAttribute('data-index', String(n + 1)); });"
+                   "t.removeAttribute('aria-label');",
+             "expected": "wrong", "kind": "residual-hole"},
+        ],
     },
     {
         # A nested action list — `tr > td > ul.actions > li > a` — with a LABELLED control. Added for
@@ -751,6 +783,27 @@ SCENARIOS: tuple = (
                    "intent": "save the document"},
                   {"action": "done", "intent": "done"}],
         "golden": ["go", "DONE"], "source": "generated",
+        # THE EVENT D2 IS ABOUT, WHICH THIS PAGE COULD NOT PRODUCE ON ITS OWN (R4.150, 0.174.0).
+        # The scenario was built for D2 and its comment says a wrong bind here is the number D2 must
+        # move -- but measured, it never produced one: 11 survived / 3 drifted / 0 wrong, with every
+        # `role+name~` bind landing on the TARGET. `get_by_role(name=..., exact=False)` is a
+        # SUBSTRING match, and the recorded name "Save the document" is not a substring of the
+        # decoy's "Save draft", so the fuzzy tier could only ever find the right element.
+        #
+        # THIS IS `locators.py`'S OWN STATED RESIDUAL, REPRODUCED: *"when role+name~ is the ONLY
+        # surviving Tier-1 candidate and a substring decoy exists, it still binds outright with no
+        # corroboration"*, whose measured example is a control named "Coupon code" capturing a
+        # recorded "Code". Modelled here as a redesign that renames the primary control and moves
+        # the old wording onto a neighbour -- so the recorded name stops matching the target and
+        # starts matching the DECOY. Tier 1 returns the first unique match OUTRIGHT, so Tier 2's
+        # css cross-check never runs; that short-circuit IS the hole.
+        "curated_rows": [
+            {"name": "fuzzy-decoy-wins", "target_sel": '[data-oracle="go"]',
+             "js": "const d = document.querySelector('[data-oracle=\"wrong-decoy\"]');"
+                   "t.setAttribute('aria-label', 'Publish'); t.textContent = 'Publish';"
+                   "d.setAttribute('aria-label', 'Save the document as a draft');",
+             "expected": "wrong", "kind": "residual-hole"},
+        ],
     },
     {
         "name": "order-form", "path": "/order-form", "goal": "place the order",
