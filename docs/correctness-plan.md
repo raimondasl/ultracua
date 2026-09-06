@@ -37,11 +37,31 @@ Actions: save the branch diff as a patch artifact; record all 20 round-4 audit f
   control writes; assert the gated step IS the writing step, and that the keyed replay request is the
   commit. Same fix in `test_multiwrite`. Print what each cell exercises before believing it. Also
   hoist the AB-1 pinning test here (it graduates from "pin" to "closed" when S6 lands).
-- **S1b. drift_bench corpus extension.** The bench is named adjudicator for S9/D2/D3 yet its corpus
-  has no fixtures for the shapes they change — "byte-identical baseline" would be trivially, meaninglessly
-  satisfied. Add rows: shared-href rows, shared data-testid rows, hidden rows, positional
-  `data-index` tokens, nested icon-only action lists, fuzzy-name decoys. Re-baseline deliberately,
-  with the new rows' semantics stated in `baselines/README.md`.
+- **S1b. drift_bench corpus extension.**
+  ⛔ **MOSTLY DONE ALREADY — DO NOT BUILD IT AS WRITTEN (R4.150, 0.173.0, $0.00).** Verified against a
+  real bench run: **all six fixture families below exist**, and two of them were purpose-built for the
+  very decisions this entry says cannot be judged — `row-positional` (*"what a D3 narrowing would be
+  measured against"*) and `fuzzy-decoy` (*"a wrong bind here is a `silent_wrong` row, which is exactly
+  the number D2 must move"*). Following this entry would rebuild what is there.
+
+  **D3 IS ADJUDICABLE TODAY, with a number rather than an argument**: `silent_wrong` is **2** and its
+  sole cause is `anchor-link/positional-css-retarget-tokenless`, `bound_by: ['css']` — a purely
+  positional path retargeting onto the wrong element, which is what D3 rejects. Benefit side
+  *2 → 0*; cost side priced by `row-positional` (8 survived / 6 drifted per arm).
+
+  **D2 IS NOT, and the remaining work is narrow rather than six fixtures.** Its own fixture never
+  fails — `fuzzy-decoy` is 11 survived / 3 drifted / **0 wrong**, every fuzzy bind landing on the
+  target — so D2 measured today shows pure cost and would be refuted for the wrong reason. What is
+  missing is a MUTATION under which the sole surviving fuzzy candidate is the DECOY. Separately, D2 is
+  scoped *"for MUTATING steps"* while `fuzzy-decoy` is a read and the only write scenario
+  (`order-form`) binds `testid`/`role+name` with **0 fuzzy binds across 20 write rows on both arms** —
+  so the scope and the fixture disagree, and closing the mutation gap alone does not fix that.
+
+  ~~The bench is named adjudicator for S9/D2/D3 yet its corpus has no fixtures for the shapes they
+  change — "byte-identical baseline" would be trivially, meaninglessly satisfied. Add rows:
+  shared-href rows, shared data-testid rows, hidden rows, positional `data-index` tokens, nested
+  icon-only action lists, fuzzy-name decoys.~~ Re-baseline deliberately if rows ARE added, with the
+  new rows' semantics stated in `baselines/README.md`.
 
 ## Phase 2 — Measured write-safety defects, ordered by argued user harm (one slice each)
 

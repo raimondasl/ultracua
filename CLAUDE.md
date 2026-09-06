@@ -2930,6 +2930,48 @@ is complete; the plan has no `pending` step left.
   two open flake findings sit on rows that scored 3/3, so three passes is a flake detector and not a
   stability certificate.
 
+## S1b was already built, and D2's own fixture never fails (R4.150, 0.173.0)
+
+Phase 3 became eligible for the first time -- it is sequenced after 0.6 and 2.4, both now done -- and
+S1b is its stated prerequisite. Verifying that prerequisite cost **$0.00**: one free `drift_bench`
+run and some reading. It changed the next two slices.
+
+* **THE PREREQUISITE'S PREMISE IS STALE, AND THE FIXTURES NAME THEIR OWN DECISIONS.** S1b says the
+  bench *"has no fixtures for the shapes they change"* and lists six to add. **All six exist** --
+  shared-href and shared-testid rows (all 12 rows carry `href="/done"` and `data-testid="cart-row"`),
+  hidden rows, positional `data-index`, nested icon-only action lists, fuzzy-name decoys. Two were
+  purpose-built for D2 and D3 and say so in their own comments. **Following the plan entry would have
+  rebuilt what is already there** -- and this is the third time a plan row has outlived its subject
+  (2.4b's note went five slices stale, R4.113 found three sentences outliving their fix).
+* **D3 IS ADJUDICABLE TODAY, WITH A NUMBER INSTEAD OF AN ARGUMENT.** `silent_wrong` is **2**, and its
+  sole cause is `anchor-link/positional-css-retarget-tokenless` bound by **`css`** -- a purely
+  positional path retargeting onto the wrong element, which is exactly what D3 rejects. So the
+  benefit side is *2 -> 0* and the cost side is priced by `row-positional`, 8 survived / 6 drifted.
+  That scenario's own comment framed the trade as *accept-and-be-wrong versus refuse-and-lose-
+  survival*; both halves are already measurable.
+* **D2 IS NOT, AND THE FIRST REASON IS THAT ITS FIXTURE NEVER FAILS.** `fuzzy-decoy` exists, was built
+  for D2, and its comment says *"a wrong bind here is a `silent_wrong` row, which is exactly the
+  number D2 must move"*. Measured: **11 survived / 3 drifted / 0 wrong**, with all four `role+name~`
+  binds per arm landing on the TARGET rather than the decoy. **The number D2 must move is zero on the
+  row built to move it**, so a measurement taken today shows pure cost and no benefit -- and would
+  refute a live write-safety rule for a reason that is an artifact of the harness. What is missing is
+  not a fixture but a MUTATION: one under which the sole surviving fuzzy candidate is the DECOY.
+* **AND THE SECOND REASON IS THAT THE DECISION AND THE FIXTURE DISAGREE ABOUT SCOPE.** D2 is written
+  *"for MUTATING steps"*; `fuzzy-decoy` is a READ. The corpus's only write scenario, `order-form`,
+  binds `testid` x88 and `role+name` x4 -- **0 fuzzy binds across all 20 write rows, on both arms**.
+  So a mutating-scoped D2 is invisible to the whole corpus, and closing the mutation gap alone would
+  not change that. **Two reasons pointing at two different fixes is worth more than one reason**:
+  make the trap spring, AND decide whether D2 is really write-only.
+* **THIS IS THE FAILURE THE REGISTER FILES MOST, caught before it was bought.** The path without the
+  check was: build six unneeded fixtures, measure D2, receive *not worth it*, file it. R4.144 records
+  the same shape twice for the cost of one retry loop -- a number taken on a population where the
+  mechanism cannot fire. **A prerequisite is a claim about the tree and gets verified like one.**
+* **AND MY OWN FIRST READING WAS WRONG, caught by a fixture comment rather than a test.** `bound_by`
+  reports **`anchor` 0 times across 370 row-arms**, and I nearly concluded D3 unadjudicable on it.
+  D3's subject is the positional TOKEN, not the `anchor` TIER -- the token binds through `css`, which
+  is precisely the one wrong row in the bench. **A measurement can be right and its reading wrong in
+  a single step**, and the thing that caught it was a comment somebody wrote next to the fixture.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
