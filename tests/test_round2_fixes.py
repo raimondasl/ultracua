@@ -28,6 +28,8 @@ from pathlib import Path
 
 import pytest
 
+from _server_witness import recorded
+
 import ultracua.flows as flowsmod
 from ultracua.browser import BrowserSession
 from ultracua.cache import CachedFlow, CachedStep, FlowCache, flow_key
@@ -357,47 +359,32 @@ def _serve_deferred(hits: list, defer_ms: int, second_button: bool = False,
     return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
 
 
-# THE PREMISE HAS TO OUTLIVE THE RACE IT READS ACROSS (R4.151, 0.175.0).
+# THE PREMISE HAS TO OUTLIVE THE RACE IT READS ACROSS (R4.151, 0.175.0). `tests/_server_witness.py`
+# holds the rule and the measurement; this is the cell that lost it. `main` went red at c7d31a5 with
+# the product logging *"heal: the proposed action fired a WRITE on the wire"* while the very next line
+# asserted on an empty list — a margin of 1.5-1.8 ms, which a loaded ubuntu runner does not win.
 #
-# TWO OBSERVERS WATCH THIS ONE POST AND THEY CANNOT SEE IT AT THE SAME MOMENT. `hits` is appended on the
-# SERVER's handler thread, once the request has crossed the loopback socket and been dispatched; the
-# product watches `page.on("request")`, which fires when the browser SENDS it. `_maybe_heal` returns on
-# that earlier signal, so reading `hits` the instant it returns is a race. MEASURED on an idle host over
-# six reps: send -> handler 1.0 ms, send -> assertion 2.6 ms, **margin 1.5-1.8 ms**. A loaded CI runner
-# loses that, which is exactly what happened on `main` at c7d31a5 — the product logged *"heal: the
-# proposed action fired a WRITE on the wire"* and the very next line asserted on an empty list.
-#
-# SO THE WAIT IS THE SAME MEDICINE THE TEST EXISTS TO PROVE THE PRODUCT TAKES. R3's whole subject is
-# *"WAIT for the write, don't just glance"*, and the cell asserting it was glancing, one level out.
-#
-# WHAT MUST NOT BE DONE INSTEAD, because it is the tempting fix: ask the PRODUCT whether it saw a write.
-# That is the thing under test, so a premise reading it is vacuous by construction — it would pass
-# against a fixture that never posted at all. The server's own record is the INDEPENDENT witness. What
-# changes here is WHEN it is read, never WHAT is asserted, and the failure stays loud: a fixture that
-# genuinely does not post still fails, with the same message, one bounded wait later.
-_POST_WAIT_TICKS = 500      # x 10 ms = 5 s. A local POST is recorded ~1 ms after it is sent; this is slack
-                            # for a starved runner, and it is spent only when something is already wrong.
-
-
-async def _await_post(hits: list) -> None:
-    """Give the server's handler thread a bounded chance to record the POST the browser already sent."""
-    for _ in range(_POST_WAIT_TICKS):
-        if hits:
-            return
-        await asyncio.sleep(0.01)
-
-
+# THE WAIT IS THE SAME MEDICINE THIS CELL EXISTS TO PROVE THE PRODUCT TAKES. R3's whole subject is
+# *"WAIT for the write, don't just glance"* — `_maybe_heal` was given `expect_request` for exactly
+# this — and the cell asserting it was glancing, one level out.
 @contextlib.asynccontextmanager
 async def _deferred_heal(server_lag_ms: int = 0):
     """Drive the REAL `_maybe_heal` against a page whose POST fires 25 ms after the click.
 
     A CONTEXT MANAGER, AND NOT A FUNCTION RETURNING A TUPLE, FOR A REASON THAT COST A MUTATION.
-    The first draft here returned from inside the `try`, so `session.close()` — measured at ~1.2 s —
-    ran BEFORE the caller's assertion. The teardown silently became the wait: the premise then held at
-    any lag under a second whether `_await_post` existed or not, so the cell written to prove the fix
-    could not fail, and the flake would have been "fixed" by an accident of ordering that nothing
-    stated. Yielding keeps the assertions exactly where the original had them — after the work, before
-    the teardown — so the bounded wait is the only thing standing between the premise and the race."""
+    The first draft here returned from inside the `try`, so the whole teardown ran BEFORE the caller's
+    assertion — **measured at ~0.50 s, of which `httpd.shutdown()` is ~435 ms** (socketserver's
+    `serve_forever` poll interval) and `session.close()` only ~63 ms. The teardown silently became the
+    wait: the premise then held at any lag under about half a second whether the wait existed or not,
+    so the cell written to prove the fix could not fail, the mutation aimed at it SURVIVED, and the
+    flake would have been "fixed" by an accident of ordering that nothing stated. Yielding keeps the
+    assertions exactly where the original had them — after the work, before the teardown — so the
+    bounded wait is the only thing standing between the premise and the race.
+
+    (The first write-up of this said `session.close()` cost ~1.2 s. That number was the whole helper,
+    browser startup and `goto` included, and the component named was the wrong one by ~20x. The
+    dominant term is the SERVER's shutdown, which matters for anyone reasoning about a fixture whose
+    teardown is cheaper — they would have far less accidental slack than the sentence implied.)"""
     from ultracua.flow import _maybe_heal
     from ultracua.providers.scripted import ScriptedProvider
     from ultracua.timing import StepTrace
@@ -413,12 +400,12 @@ async def _deferred_heal(server_lag_ms: int = 0):
             session, step, ScriptedProvider([{"action": "click", "role": "button", "name": "Continue",
                                               "intent": "open the daily report"}]),
             StepTrace(index=0), "open the daily report", "drift")
-        await _await_post(hits)
-        # SNAPSHOT, so the ordering above is enforced by CONSTRUCTION and not by the `yield`. Handing
-        # out the live list would leave the bug one refactor away: turn this back into a `return` and
-        # the caller reads `hits` after the teardown has already given the server its second chance.
-        # A copy taken HERE says what was recorded by the time the wait ended, whenever it is read.
-        yield list(hits), ok, note, step
+        # The probe SNAPSHOTS, so the ordering above is enforced by CONSTRUCTION and not by the
+        # `yield`. Handing out the live list would leave the bug one refactor away: turn this back
+        # into a `return` and the caller reads `hits` after the teardown has already given the server
+        # its second chance. A copy taken HERE says what was recorded by the time the wait ended,
+        # whenever it is read.
+        yield await recorded(lambda: list(hits)), ok, note, step
     finally:
         await session.close()
         httpd.shutdown()
