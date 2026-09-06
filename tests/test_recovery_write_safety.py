@@ -33,6 +33,8 @@ from pathlib import Path
 
 import pytest
 
+from _server_witness import recorded
+
 from ultracua.browser import BrowserSession
 from ultracua.cache import CachedStep, FlowCache, flow_key
 from ultracua.flow import _maybe_heal, run_cached
@@ -134,7 +136,23 @@ async def test_the_heal_refuses_to_persist_a_proposal_that_wrote_on_the_wire() -
         _JS_PAGE,
         {"action": "click", "role": "button", "name": "Continue", "intent": "open the daily report"},
         hits)
-    assert hits.writes, "the fixture did not POST; this test would prove nothing"
+    # THE NEAREST SIBLING OF R4.151, AND THE ONLY CELL HERE THAT NEEDS THIS. `_JS_PAGE` fires a
+    # fire-and-forget `fetch(..., {method:'POST'})`; `_maybe_heal` returns on `page.on("request")`,
+    # which fires when the browser SENDS; `hits.writes` is appended on the handler thread, on RECEIPT.
+    # Same two observers, same order, same premise string as the cell that took `main` red at c7d31a5.
+    #
+    # IT HAS NOT FLAKED, AND THAT IS AN ACCIDENT RATHER THAN A REASON: `_heal_against` returns from
+    # inside its `try`, so ~0.5 s of teardown (dominated by `httpd.shutdown()`'s poll interval) runs
+    # before this line and hands the server its second chance. That is ~300x the 1.6 ms the flaky cell
+    # had — and it is exactly the undeclared slack whose REMOVAL, by the obvious tidy-up of turning
+    # this helper into a context manager, would make this cell as fragile as that one. Declared here
+    # so the protection survives that refactor; the wait is free when the record is already written.
+    #
+    # ITS TWO SIBLING CELLS DELIBERATELY DO NOT TAKE IT. They assert `hits.writes == []`, a NEGATIVE,
+    # which cannot fail by being read late — reading it late is what makes it STRONGER — so waiting
+    # there would burn the deadline on every call and weaken nothing but the clock.
+    writes = await recorded(lambda: list(hits.writes))
+    assert writes, "the fixture did not POST; this test would prove nothing"
     assert ok is False
     assert "WRITE on the wire" in note
     assert step.locator.name == "Daily report"     # NOT re-pointed at the write control
