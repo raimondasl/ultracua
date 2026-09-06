@@ -185,8 +185,28 @@ ESCALATE_ROW = ("interstitial", "escalate", "document.title='Checking your brows
 # (both renames record zero corroborating tokens, so it refuses them — predicted to drop v1 parity to
 # 10/12); text similarity (the renames change text exactly as the retarget does); and the neighbour anchor
 # (it MATCHES on the retarget row, since the decoy is inserted into the same section).
+#
+# THE OTHER TWO ARRIVED AT 0.174.0 AND ARE THE POINT OF THE SLICE, NOT ITS COST (R4.150). Each is the
+# hole a PENDING correctness-plan decision exists to close, made measurable for the first time. Before
+# them, `row-positional` and `fuzzy-decoy` -- both purpose-built for those decisions -- returned ZERO
+# wrong binds across every mutation, so D2 and D3 could only ever have been measured as pure cost with
+# no benefit, and would have been refused on an artifact of this harness. **Deleting an entry here is
+# what closing the decision looks like**; until then a published hole is honest and a hidden one is not.
+#
+#   * `row-positional/positional-row-renumber` -- D3. A real list RE-RENDERS after a delete and the
+#     survivors renumber, so the recorded `#row-3` names what was row 4. Measured: binds by `css`,
+#     clicks row 4, and the act trail reads `['row4', 'DONE']` -- it reaches the GOAL PAGE, so only the
+#     trail's `data-oracle` catches it. That is the shape of the harm exactly: a wrong record, opened
+#     silently, with a success-looking destination.
+#   * `fuzzy-decoy/fuzzy-decoy-wins` -- D2, and it is `locators.py`'s OWN stated residual reproduced:
+#     *"when role+name~ is the ONLY surviving Tier-1 candidate and a substring decoy exists, it still
+#     binds outright with no corroboration"*. Measured: binds by `role+name~`, clicks the decoy, trail
+#     `['wrong-decoy', 'WRONG-PAGE']`. Tier 1 returns the first unique match OUTRIGHT, so Tier 2's css
+#     cross-check -- built to stop exactly this -- never runs.
 KNOWN_WRONG_BINDS = (
     ("anchor-link", "positional-css-retarget-tokenless"),
+    ("row-positional", "positional-row-renumber"),
+    ("fuzzy-decoy", "fuzzy-decoy-wins"),
 )
 
 # Recovered rows whose repair does NOT move the recipe digest, so `heal_invalidates_approval` cannot

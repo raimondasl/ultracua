@@ -294,3 +294,48 @@ def test_every_anchor_name_is_known() -> None:
         for a in (*p.kills, *p.points_elsewhere):
             assert a in ANCHORS
     assert set(PRIMITIVES_BY_NAME) == {p.name for p in PRIMITIVES}
+
+
+def test_every_published_wrong_bind_names_a_row_that_exists_and_vice_versa() -> None:
+    """`KNOWN_WRONG_BINDS` is the allowlist that keeps inviolable #2 honest, and it is hand-typed at one
+    end and hand-typed at the other. Both directions rot, differently:
+
+      * an entry naming a row that no longer exists is a SILENCER with nothing to silence — and worse,
+        it stays green while the hole it documents may have been closed, so nobody deletes it;
+      * a curated row declaring `expected: "wrong"` and NOT listed would fail `no_unexpected_wrong` on a
+        187-row browser run, minutes into a shard, where this fails offline in milliseconds.
+
+    Derived from the two structures rather than restated, so adding a curated row or an allowlist entry
+    cannot leave the pair inconsistent. Scoped to CURATED rows: a generated composition's outcome is a
+    measurement, not a declaration, so it has no `expected: "wrong"` to compare against.
+    """
+    from benchmarks import drift_bench as db
+
+    curated = {(sc["name"], cr["name"]): cr
+               for sc in db.SCENARIOS for cr in (sc.get("curated_rows") or ())}
+    listed = set(db.KNOWN_WRONG_BINDS)
+
+    # Every allowlist entry must name a row that exists. `anchor-link`'s entry is the historical one and
+    # is a curated row too, so the whole set is checkable without an exception.
+    orphans = sorted(f"{s}/{n}" for s, n in listed if (s, n) not in curated)
+    assert not orphans, (
+        f"KNOWN_WRONG_BINDS names rows that no longer exist: {orphans}. An allowlist entry with no row "
+        f"silences nothing and hides whether its hole is still open — delete it, or restore the row."
+    )
+
+    # And every curated row that DECLARES a wrong bind must be listed, or the bench goes red on a
+    # browser run instead of here.
+    declared = sorted(f"{s}/{n}" for (s, n), cr in curated.items()
+                      if cr.get("expected") == "wrong" and (s, n) not in listed)
+    assert not declared, (
+        f"these curated rows declare `expected: 'wrong'` and are not in KNOWN_WRONG_BINDS: {declared}. "
+        f"A published hole is honest; an unpublished one fails `no_unexpected_wrong` minutes into a "
+        f"browser shard."
+    )
+
+    # ANTI-VACUITY. Both assertions above are satisfied by an empty corpus, and the slice that added
+    # D2's and D3's rows is exactly when this cell must have something to check.
+    assert len(listed) >= 3, (
+        f"only {len(listed)} published wrong binds; the corpus should carry at least the token-less "
+        f"positional retarget plus D2's and D3's residuals (R4.150)"
+    )

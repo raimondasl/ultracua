@@ -2988,6 +2988,47 @@ run and some reading. It changed the next two slices.
   `conflict` rows into silent wrong-binds. **A keyword match is not a mechanism match**, and the thing
   that caught it both times was reading the fixture's own comment before starting the fix.
 
+## Two mutations, and both traps sprang on the second try (R4.150 FIXED, 0.174.0)
+
+R4.150 said the bench could not adjudicate D2 or D3 because both fixtures carried the dangerous SHAPE
+and neither produced the dangerous EVENT. The remedy was two MUTATIONS, not S1b's six fixtures.
+`silent_wrong` **2 -> 6**, and every one of those is the point of the slice rather than its cost.
+
+* **CURATED ROWS, NOT PRIMITIVES, AND THE REASON IS MECHANICAL.** `compose()` enumerates every
+  combination of `PRIMITIVES` up to length 5 and samples per k, so adding two primitives re-rolls the
+  sample at EVERY rung and re-baselines the whole corpus -- for two rows' worth of subject. A curated
+  row states exactly the condition, lands outside the v1-parity block by construction, and touches
+  nothing else. `anchor-link` already carried one for precisely this reason.
+* **D3 REACHES THE GOAL PAGE, WHICH IS THE PART WORTH KNOWING.** `positional-row-renumber` deletes a
+  row above the target and renumbers the survivors, so the recorded `#row-3` names what was row 4.
+  Measured: `bound_by: ['css']`, acts **`['row4', 'DONE']`**. Every positional row links to `/done`,
+  so the wrong record is caught ONLY by the act trail's `data-oracle` -- a wrong bind wearing a
+  success-looking destination. I nearly filed the shared href as a fixture defect and checked first:
+  `_ACTLOG_JS` records the clicked element's oracle and `survived` requires `acts == golden`, so the
+  design is right and my suspicion was not.
+* **D2's FIRST DRAFT MEASURED NOTHING, AND ONE FIELD SAID WHY.** Renaming only the aria-label left the
+  target's TEXT intact, and `exact-text` sits ABOVE the demoted fuzzy tier -- the row scored
+  `survived` with `bound_by: ['exact-text']`. Both names have to go. **The trap I built to spring did
+  not spring, and `bound_by` is what told me** -- the same field this finding's own diagnosis rested
+  on. With the text renamed: `bound_by: ['role+name~']`, acts `['wrong-decoy', 'WRONG-PAGE']`, which
+  is `locators.py`'s own stated residual reproduced word for word.
+* **A RISING WRONG-BIND COUNT NORMALLY READS AS A REGRESSION, so the page says otherwise.**
+  `baselines/README.md` now states what the three published holes mean: the resolver is UNCHANGED and
+  what moved is the corpus's ability to see two holes it always carried. `fixtures_version` 2 -> 3,
+  corpus 185 -> 187, `drift_v2.json` re-recorded deliberately -- which is what S1b asked for and the
+  one part of its prescription that survived.
+* **PINNED AT THE RESOLVER, NOT ONLY IN THE BENCH.** Two cells in `tests/test_locators.py` reproduce
+  each hole in **2 seconds** against a 187-row run, on the pattern the token-less retarget already
+  had, and each names the allowlist entry to delete if it ever starts passing. Plus an OFFLINE cell
+  deriving `KNOWN_WRONG_BINDS` against the curated rows BOTH ways: an entry naming a row that no
+  longer exists is a silencer with nothing to silence, and it stays green while the hole it documents
+  may have closed.
+* **AND THE ANTI-VACUITY FLOOR WAS BEING KILLED BY THE WRONG ASSERTION.** Shrinking the allowlist also
+  ORPHANS the declared rows, so the mutation meant for the floor died on the orphan check and the
+  floor itself was unarmed. Isolating it needed the curated rows and their entries deleted TOGETHER.
+  **A mutation that kills is not evidence that the assertion you aimed it at works** -- read the
+  message, not the verdict. 6 mutations, 6 killed once the fifth was aimed properly.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

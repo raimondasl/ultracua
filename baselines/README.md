@@ -7,9 +7,29 @@ best-of-N** baselines come from the variance harness
 is produced by `drift_sandbox.py` (scripted/**key-less**) and `recorder_ceiling.json` by
 `recorder_ceiling.py`.
 
+**What the three published wrong-binds MEAN, because a rising count normally reads as a regression
+and here it is the opposite (R4.150, 0.174.0).** `silent_wrong` went 2 → 6 (three rows × two arms)
+and every one of the two new rows was ADDED ON PURPOSE, to make a hole that already existed
+measurable for the first time:
+
+* `row-positional/positional-row-renumber` — correctness-plan **D3**. A real list re-renders after a
+  delete and the survivors renumber, so a recorded `#row-3` names what was row 4. Measured: binds by
+  `css`, opens the wrong record, and the act trail reads `['row4', 'DONE']` — it reaches the GOAL
+  PAGE, so only the trail's `data-oracle` catches it at all.
+* `fuzzy-decoy/fuzzy-decoy-wins` — correctness-plan **D2**, and `locators.py`'s own stated residual:
+  when `role+name~` is the only surviving Tier-1 candidate and a substring decoy exists, it binds
+  outright with no corroboration. Measured: binds by `role+name~`, clicks the decoy, trail
+  `['wrong-decoy', 'WRONG-PAGE']`.
+
+**Neither is a new defect and neither is a regression in the resolver** — the resolver is unchanged.
+What changed is that the corpus can now SEE two holes it carried the shape of and never produced the
+event for: both scenarios were purpose-built for these decisions and both returned **zero** wrong
+binds across every mutation. Until D2 and D3 are decided, these are published holes; **deleting an
+entry from `KNOWN_WRONG_BINDS` is what closing one looks like.**
+
 | File | Bench | Captured | Headline |
 |---|---|---|---|
-| `drift_v2.json` | **drift-bench v2** (10 scenarios, 171 rows × 2 arms) | 2026-08-05 | 0-LLM survival **falls 10/12 → 0/6** across mutation intensity k=1…7 (k50=6); **23 recovery-eligible rows where v1 had 0**; heal MECHANISM **14/14**, replan **2/10**; **1 published wrong-bind** (the *token-less* positional retarget, 0.9% of rows — its token-bearing half closed in 0.62.0) — the key-less CI gate |
+| `drift_v2.json` | **drift-bench v2** (11 scenarios, 187 rows × 2 arms) | 2026-09-06 | 0-LLM survival **falls across mutation intensity k=1…7** (k50=6); **58 recovery-eligible rows where v1 had 0**; heal MECHANISM **36/38**, replan **2/20**; **3 published wrong-binds** — the key-less CI gate |
 | `demo.json` | demo-shop (4-step) | 2026-06-19 | 5/5 replay, speedup **86.3× ± 20.9**, ~$0.27 — no discovery variance (cost/speedup reference) |
 | `miniwob.json` | MiniWoB++ ×10 (N=1) | 2026-06-19 | replay success **52% ± 13%** (40–70%), pass^k=0, ~$4.24 — the discovery-reliability reference |
 | `miniwob_bestof3.json` | MiniWoB++ ×10 (**N=3 best-of-N**) | 2026-06-20 | **60% ± 0%** (6/10 every rep), ~$6.58 (1.55×) — best-of-N vs the N=1 baseline: +8 pts and **variance → 0** |
