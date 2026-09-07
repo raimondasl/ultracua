@@ -10,7 +10,9 @@ re-drives the flow, and it caches as a read. `recorder.py:745` had already chose
 said so; two paths never got it.
 
 THIS PROBE MEASURES THE OTHER DIRECTION, which is the one that gets a change like this refused.
-Context is a strict SUPERSET, so the risk is not blindness but NOISE: a background request from
+Context is a superset of the page for dedicated workers, service workers and popups -- though NOT
+for a SHARED worker, which escapes both scopes (R4.154). Over the realms it does add, the risk is
+not blindness but NOISE: a background request from
 another realm landing inside a step's act window, classified as a write, and marking a step mutating
 that never wrote. That is D0's over-refusal shape -- *a `mutating` mark is a GUESS; be conservative
 because of one, never refuse a flow for one* -- and on this codebase over-gating costs 0-LLM replay.

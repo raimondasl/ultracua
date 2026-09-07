@@ -3166,10 +3166,26 @@ no LLM, no substrate rep. `python -m benchmarks.watcher_scope_probe` re-derives 
   receiver expression and handler name, with the exact mistake as one of its mutations. **When you
   move a registration, the removal is a second site with the same name and a different object.**
 * **THE OVER-REFUSAL DIRECTION IS MEASURED, because that is what refuses a change like this.**
-  Context is a strict superset, so the risk is noise marking a step that never wrote -- D0's shape.
+  Context adds dedicated workers, service workers and popups, so the risk is noise marking a step
+  that never wrote -- D0's shape.
   All 14 corpus start pages, both live substrates: **Gitea 0 extra on 7 of 7; Odoo 8 extra, 0
   write-classified**, every one a GET -- including `GET /web/service-worker.js`, so page scope could
   not even see Odoo registering a worker. `drift_bench` is byte-identical to the baseline.
+* **AND IT IS NOT A SUPERSET OF EVERY REALM -- THE ADVERSARIAL PASS PROVED THAT WITH MY OWN
+  FIXTURE.** `recorder.py` had said "strict SUPERSET" since it was written; this slice copied the
+  claim into `flow.py` and into its own register entry, and **nobody had measured it**. Four realms
+  in one page: a SHARED worker's write reaches the server and reaches NEITHER `page.on` NOR
+  `page.context.on` (`context.route` misses it too). Swapping `ServiceWorker` for `SharedWorker` in
+  this slice's own committed fixture reproduces **saves=2, cached as a read, ON THIS BRANCH** -- the
+  exact harm, one realm over, and Odoo's bus is a SharedWorker. Filed as **R4.154**, OPEN, and the
+  false line corrected at its source. **A justification inherited from a sibling is inherited whole,
+  including the part that is wrong.**
+* **AND THE HEAL WATCHER HAS NO ACT WINDOW, so this WIDENS a loud over-refusal (R4.155, OPEN).**
+  `_watch` there trips on any write it sees, bounded only by a listener lifetime that spans an
+  `expect_request` running its full ~1 s for a cross-realm write. A background heartbeat therefore
+  discards a legitimate locator repair and reports *"the heal fired a WRITE on the wire"* about a
+  click that issued nothing. Pre-existing for page-realm traffic, widened here, measured ZERO on both
+  live substrates -- **which is not the same as bounded**, and is why it is filed rather than noted.
 * **WHAT IS DELIBERATELY LEFT ALONE, said rather than left to be noticed.** `browser.py:244`'s
   in-flight counter stays page-scoped: under-counting makes the readiness poll give up EARLIER, which
   is loud, and moving it is a readiness question owing its own cost measurement. And the WebSocket

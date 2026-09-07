@@ -542,19 +542,31 @@ async def _author_steps(
     if page is not None:
         # CONTEXT scope, not page — the same choice `recorder.py` made and wrote down, applied to the
         # path that decides `performed_write`. A Service Worker or other cross-realm fetch is surfaced
-        # at the CONTEXT and never at the page, so a page-scoped watcher misses such a write entirely:
-        # `wrote`/`posted` stay unset, `performed_write` is False, and the verify-by-replay gate below
+        # at the CONTEXT and never at the page, so a page-scoped watcher misses such a write entirely.
+        # `posted` is then unset, and `wrote` is unset UNLESS some step was independently marked by
+        # the classifier or a wire promotion (see the `if mutating: wrote["hit"] = True` below) — the
+        # harm needs the whole recipe to be classifier-blind, which a formless cross-realm fetch
+        # typically is (the classifier's measured recall without form context is ~45%). Then
+        # `performed_write` is False, and the verify-by-replay gate below
         # re-drives the whole flow — firing the write a SECOND time at learn — then caches it as a
         # READ, so every later replay re-fires it ungated and unkeyed. Both clauses of inviolable #3.
         # Measured (`test_a_write_issued_by_a_service_worker_is_never_fired_twice`): `saves=2`,
         # `performed_write=False`, `cached=True` on page scope; `saves=1` on context scope.
         #
-        # Context is a strict SUPERSET (page + workers + service workers + popups), so the only
-        # direction it can move is MORE visibility — and more wire evidence makes this watcher gate
-        # more, never less. That is the safe direction here, and it is the opposite of D0's
-        # over-refusal shape because `_in_act_window()` still bounds every request to a step's own
-        # act window: traffic from another realm that is not caused by this run is filtered exactly
-        # as page traffic already was.
+        # WHAT CONTEXT SCOPE ADDS, AND WHAT IT STILL DOES NOT SEE. It is a superset of the page for
+        # dedicated workers, service workers and popups — but it is NOT a superset of every realm:
+        # measured, four realms in one page, a SHARED worker's write reaches the server and reaches
+        # NEITHER listener. (`recorder.py` claimed a strict superset until 0.177.0; that line is
+        # corrected at its source rather than copied, and this one was copied FROM it.) So this
+        # closes the service-worker realm
+        # and leaves the shared-worker one open — R4.154, filed rather than implied, with a live
+        # instance on this project's own corpus: Odoo's bus is a SharedWorker.
+        #
+        # The over-refusal direction is bounded HERE by `_in_act_window()`, which filters a request
+        # from any realm that is not inside a step's own act window exactly as it already filtered
+        # page traffic. Measured on both live substrates over all 14 corpus start pages: 8 extra
+        # requests, 0 write-classified. That argument does NOT carry to the heal watcher, which has
+        # no window at all — see the comment there.
         page.context.on("request", _watch_request)
     for i in range(max_steps):
         tr = StepTrace(index=i)
@@ -1920,6 +1932,16 @@ async def _maybe_heal(
         # service-worker write invisible to it, so the heal persists a write control as an ordinary
         # read step and every future 0-LLM replay re-fires it. The two watchers are the same guard and
         # were the two that never got the recorder's scope.
+        #
+        # AND THE LEARN WATCHER'S OVER-REFUSAL ARGUMENT DOES NOT CARRY HERE, which is why it is not
+        # repeated. `_watch` below has NO act window and no owner rule — its only bound is this
+        # listener's lifetime, which spans an `expect_request` that runs its full `write_settle_ms`
+        # whenever the write is cross-realm. So ANY background write in that ~1 s window refuses the
+        # repair, and tells the operator "the heal fired a WRITE on the wire" about a click that
+        # issued nothing. That hole is PRE-EXISTING — a page-realm background POST already does it on
+        # main — and context scope WIDENS the set of realms that can trip it. Measured zero on both
+        # live substrates, and filed as R4.155 rather than left for a reader to discover, because
+        # "measured zero on our two apps" is not the same as bounded.
         page.context.on("request", _watch)
     try:
         with tr.measure("heal_act"):
