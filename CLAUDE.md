@@ -3092,6 +3092,50 @@ on the wire"*. Both true, and that pair is the finding.
   builds. Sibling with an 800 ms lag (beyond its teardown grace) -> dies without the wait, survives
   with it.
 
+## D3 decided: four sensors, four refutations, and the file already said so (R4.152, 0.176.0)
+
+Phase 3's first real decision, and the answer is NO CHANGE. **$0.00** -- no LLM, no substrate.
+Reproduce with `python -m benchmarks.row_echo_probe`.
+
+* **THE PRESCRIPTION IS A NO-OP, AND THAT IS THE FIRST THING TO MEASURE ABOUT ANY PLAN ENTRY.**
+  D3 says *reject purely positional row-identity tokens*. Rejecting one sets `anchor_id` to None,
+  and `resolve` returns early on a falsy `anchor_id` -- reading it as NO GUARD. Measured on the
+  renumber: `WRONG(row4)` with the token and `WRONG(row4)` without it. **Zero wrong binds removed**;
+  the harm moves from *the guard agreed wrongly* to *the guard never ran*, which is the overloaded
+  `anchor_id=None` sensor D5 already blocks two attempts on, reached from a third direction.
+* **THREE ALTERNATIVES WERE BUILT AND EACH DIED TO A DIFFERENT INSTRUMENT.** *Value tracks its row
+  index* -- refuted by the corpus's own control, since `row-shared-action`'s `hidden:widget=3` is
+  R3.1's per-record key and scores positional=True. *Refuse the echo* (the guard is an echo
+  wherever a css bind's path is anchored on the ROW's id: `cssPath` starts at the TARGET and stops at
+  the first element carrying one, `_rowCands` offers `id:` first -- narrower than the "any row with an
+  id" the first draft claimed, since a target with its own id, or three wrapper divs, dissolves it)
+  -- **84 -> 79** survivals and
+  `heal_invalidates_approval` FAILS, two refusals re-grounding to byte-identical recipes (R4.35).
+  *Echo + the row's own text* -- **84 -> 83 with every invariant holding**, and still refused.
+* **THE CORPUS UNDERSTATED THE COST AND THE STANDING SUITE DID NOT.** `test_an_edited_row_still_binds`
+  went RED: an edited `#order-3` binds by css, the guard is an echo, the row text moved, and the rule
+  refuses a row that is the SAME record. Row text is deliberately not an identity -- a price changing
+  does not make a different record -- and that cell's docstring had already recorded a text-keyed
+  check costing 4 rows. **A clean bench is not a clean change**: 187 rows said -1 and one pre-existing
+  cell said no.
+* **AND THE FOURTH SENSOR DIES ON THE SAME FACT.** *Corroborate with a different discriminating
+  candidate* works on `#order-3` (`href:/cancel/3` is independent) and fails on the row D3 is about:
+  `row-positional`'s other candidate is `data-index:3`, which renumbers in lockstep with the id it
+  would be corroborating. **The premise is refuted by a sentence already standing in `_ROWID_JS`** --
+  *nothing observable in a single capture separates a positional token from a real key*. What would
+  reopen it is a sensor that sees ACROSS TIME, which is a cache-format change and a different slice.
+* **A CANDIDATE I MEASURED WAS NOT THE CANDIDATE I IMPLEMENTED, and only re-running the adjudicator
+  caught it.** The priced rule carried a `bound_by == "css"` precondition; the first implementation
+  asked only of the spec -- true however the element was found. The bench came back at **81 against
+  the 83 the measured candidate scored**, because `role+name~` binds were being second-guessed too,
+  and the docstring had already argued the wrong thing before the number contradicted it. **Trusting
+  a probe's number for code you then wrote differently is how a justified change ships as a different
+  one.**
+* **THE RESIDUAL STAYS PUBLISHED.** `row-positional/positional-row-renumber` remains in
+  `KNOWN_WRONG_BINDS`, which is the honest state: a hole that is measured, named and not yet
+  closable. Deleting that entry is still what closing D3 would look like -- and this slice is the
+  record of why it cannot be deleted yet.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
