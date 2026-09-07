@@ -540,7 +540,22 @@ async def _author_steps(
             pass
 
     if page is not None:
-        page.on("request", _watch_request)
+        # CONTEXT scope, not page — the same choice `recorder.py` made and wrote down, applied to the
+        # path that decides `performed_write`. A Service Worker or other cross-realm fetch is surfaced
+        # at the CONTEXT and never at the page, so a page-scoped watcher misses such a write entirely:
+        # `wrote`/`posted` stay unset, `performed_write` is False, and the verify-by-replay gate below
+        # re-drives the whole flow — firing the write a SECOND time at learn — then caches it as a
+        # READ, so every later replay re-fires it ungated and unkeyed. Both clauses of inviolable #3.
+        # Measured (`test_a_write_issued_by_a_service_worker_is_never_fired_twice`): `saves=2`,
+        # `performed_write=False`, `cached=True` on page scope; `saves=1` on context scope.
+        #
+        # Context is a strict SUPERSET (page + workers + service workers + popups), so the only
+        # direction it can move is MORE visibility — and more wire evidence makes this watcher gate
+        # more, never less. That is the safe direction here, and it is the opposite of D0's
+        # over-refusal shape because `_in_act_window()` still bounds every request to a step's own
+        # act window: traffic from another realm that is not caused by this run is filtered exactly
+        # as page traffic already was.
+        page.context.on("request", _watch_request)
     for i in range(max_steps):
         tr = StepTrace(index=i)
         with tr.measure("snapshot"):
@@ -764,7 +779,7 @@ async def _author_steps(
         if remaining > 0:
             await asyncio.sleep(remaining)
         try:
-            page.remove_listener("request", _watch_request)
+            page.context.remove_listener("request", _watch_request)
         except Exception:  # noqa: BLE001
             pass
     # PROMOTE: a step that provably wrote on the wire IS a write, whatever the classifier said. The
@@ -1900,7 +1915,12 @@ async def _maybe_heal(
 
     page = session.page
     if page is not None:
-        page.on("request", _watch)
+        # CONTEXT scope, for the learn watcher's reason one path over. This listener decides whether a
+        # healed proposal is REFUSED PERSISTENCE for having written on the wire; page scope makes a
+        # service-worker write invisible to it, so the heal persists a write control as an ordinary
+        # read step and every future 0-LLM replay re-fires it. The two watchers are the same guard and
+        # were the two that never got the recorder's scope.
+        page.context.on("request", _watch)
     try:
         with tr.measure("heal_act"):
             try:
@@ -1949,7 +1969,7 @@ async def _maybe_heal(
     finally:
         if page is not None:
             try:
-                page.remove_listener("request", _watch)
+                page.context.remove_listener("request", _watch)
             except Exception:  # noqa: BLE001
                 pass
     if spec is not None:

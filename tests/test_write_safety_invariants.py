@@ -42,6 +42,7 @@ only as a side effect of two unrelated guards, and it halves the moment either i
 
 from __future__ import annotations
 
+import asyncio
 import http.server
 import threading
 from pathlib import Path
@@ -851,6 +852,199 @@ async def test_a_body_demoted_call_that_really_writes_is_never_fired_twice(tmp_p
             f"re-driven -- verify-by-replay is no longer skipped once `performed_write` clears, and "
             f"that is the double-submit D7's condition 3 names. Inviolable #3.")
     finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# ---------------------------------------------------------------------------------------------
+# THE WATCHER'S SCOPE: a write issued from a SERVICE WORKER
+#
+# `recorder.py:745` chose `page.context.on("request")` and wrote down why: *"a Service Worker /
+# cross-realm fetch is surfaced at the context, NOT the page, so a page-scoped watcher would MISS a
+# SW write entirely (no marker either -> cached ungated, a fail-open)."* `dryrun.py:187` chose
+# context scope too, for its own stated reason. The LEARN watcher (`flow.py`) and the HEAL watcher
+# did not -- the guard exists on two sibling paths and was never applied to these.
+#
+# This is a DIMENSION rather than a bespoke cell beside the fix, which is what this repository asks
+# for after a write-safety change: the matrix above already drives page-realm writes at every timing,
+# and the realm the write is issued FROM is the axis none of them vary.
+#
+# `saves == 1` IS THE PREMISE, for the same reason as the D7 cell above: a cell asserting only "a
+# flow was cached" passes while the double-fire it exists to catch happens underneath.
+# ---------------------------------------------------------------------------------------------
+_SW_JS = """self.addEventListener('message', (e) => {
+  // The write leaves the SERVICE WORKER's realm, not the page's.
+  e.waitUntil(fetch('/save', {method: 'POST', body: 'from=sw'}));
+});"""
+
+_SW_PAGE = """<h1>Panel</h1><button type=button id='go'>Continue</button>
+<script>
+  navigator.serviceWorker.register('/sw.js');
+  document.getElementById('go').addEventListener('click', function () {
+    // THE STATE CHANGE IS SYNCHRONOUS AND STRUCTURAL, AND BOTH HALVES WERE LEARNED BY GETTING THEM
+    // WRONG. A first draft awaited `serviceWorker.ready` before touching the page, so on the heal
+    // path nothing had changed when `_maybe_heal` looked; a second changed an `<h1>`'s text, which
+    // the fingerprint cannot see -- it is STRUCTURAL, over interactable elements in visual order.
+    // Both times the proposal was refused by the "heal had no effect" check rather than the wire
+    // check: safe by ACCIDENT, silent about a write having left the browser, and exactly the masking
+    // `flow.py`'s own comment warns about. Relabelling the BUTTON moves an element's accessible name,
+    // so the only thing left that can refuse this proposal is the watcher -- which is the point.
+    document.getElementById('go').textContent = 'Done';
+    // `ready` rather than `controller`: the worker need not CONTROL this page to write, and
+    // requiring control would need a claim plus a reload -- ceremony that only adds ways for the
+    // fixture to be wrong. The write follows a moment later, inside the act window's grace tail.
+    navigator.serviceWorker.ready.then(function (reg) { reg.active.postMessage('write'); });
+  });
+</script>"""
+
+
+class _SwSite:
+    """Serves the page and the worker, and COUNTS the writes the worker issues."""
+
+    def __init__(self) -> None:
+        self.saves = 0
+        self.paths: list[str] = []
+
+    def serve(self):
+        site = self
+
+        class _H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a) -> None:
+                pass
+
+            def _send(self, body: str, ctype: str) -> None:
+                b = body.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(b)))
+                self.send_header("Service-Worker-Allowed", "/")
+                self.end_headers()
+                self.wfile.write(b)
+
+            def do_GET(self) -> None:  # noqa: N802
+                path = self.path.split("?")[0]
+                if path == "/sw.js":
+                    self._send(_SW_JS, "text/javascript")
+                else:
+                    self._send(_SW_PAGE, "text/html")
+
+            def do_POST(self) -> None:  # noqa: N802
+                n = int(self.headers.get("Content-Length") or 0)
+                if n:
+                    self.rfile.read(n)
+                site.paths.append(self.path.split("?")[0])
+                site.saves += 1
+                self._send("{}", "application/json")
+
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        return httpd, f"http://127.0.0.1:{httpd.server_port}"
+
+
+async def test_a_write_issued_by_a_service_worker_is_never_fired_twice(tmp_path: Path) -> None:
+    """INVIOLABLE #3, on the realm axis. The click makes the SERVICE WORKER issue the write, so a
+    page-scoped watcher sees nothing: `wrote`/`posted` stay unset, `performed_write` is False, and
+    `flow.py`'s `if opts.verify_replay and not performed_write and not posted_any:` re-drives the
+    whole flow -- firing the write a SECOND time at learn. The flow is then cached as a READ, so
+    every later replay re-fires it ungated, with no precondition and no Idempotency-Key.
+
+    The flow may be cached or refused; that is not this cell's business. The server must never see
+    the save twice."""
+    from ultracua.cache import FlowCache
+    from ultracua.flows import FlowSpec, _learn_once
+    from ultracua.providers.scripted import ScriptedProvider
+
+    site = _SwSite()
+    httpd, base = site.serve()
+    cache = FlowCache(root=tmp_path / "c")
+    try:
+        spec = FlowSpec(name="sw", goal="work the panel", start_url=f"{base}/", headless=True)
+        res = await _learn_once(
+            spec,
+            provider=ScriptedProvider([
+                {"action": "click", "role": "button", "name": "Continue", "intent": "continue"},
+                {"action": "done", "intent": "done"},
+            ]),
+            router=None, cache=cache, verify_replay=True)
+        await asyncio.sleep(0.5)        # the worker's fetch is not synchronous with the click
+        print(f"    saves={site.saves}  paths={site.paths}  cached={bool(res.cached)}  "
+              f"performed_write={res.performed_write}")
+        if site.saves == 0:
+            raise RuntimeError(
+                "PREMISE LOST: the service worker never wrote, so this cell exercises nothing. "
+                "Check that the worker registered and that `navigator.serviceWorker.ready` resolved.")
+        assert site.saves == 1, (
+            f"the server committed {site.saves} times. A service-worker write is invisible to a "
+            f"PAGE-scoped request watcher, so `performed_write` stayed False and verify-by-replay "
+            f"re-drove the flow. `recorder.py` chose context scope for exactly this reason and said "
+            f"so; the learn watcher did not. Inviolable #3.")
+
+        # THE SECOND HALF OF THE HARM, and it needs its own assertion. `saves == 1` alone is
+        # satisfied by a run that never wrote twice AND cached the write as an ordinary read step --
+        # which is the durable half: every later 0-LLM replay would then re-fire it with no gate, no
+        # precondition and no Idempotency-Key. A flow REFUSED here is fine (nothing is cached to
+        # re-fire); a flow cached with no mutating step is not.
+        # `res.cached` is a BOOL, not the recipe -- a first draft read `.steps` off it and died with
+        # an AttributeError, which is a cell dying on the way rather than noticing anything. The
+        # recipe has to come from the cache.
+        stored = cache.get(flow_key(spec.goal, spec.start_url, spec.scope))
+        if stored is not None:
+            assert any(s.mutating for s in stored.steps), (
+                f"the flow cached with no mutating step after a write reached the server: "
+                f"{[(s.action, s.mutating) for s in stored.steps]}. The wire promotion never saw the "
+                f"write, so it is stored as a READ and every replay re-fires it ungated and unkeyed.")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+async def test_a_heal_onto_a_service_worker_write_is_refused_persistence(tmp_path: Path) -> None:
+    """THE SIBLING, and it gets its own cell because the fix touched TWO watchers.
+
+    `_maybe_heal`'s wire check decides whether a healed proposal may be PERSISTED. Its listener was
+    page-scoped too, so a proposal whose click makes a service worker write looked like an ordinary
+    read: the heal persists the write control into the cached recipe, and every future 0-LLM replay
+    re-fires it ungated. Same guard, same omission, one path over -- which is the shape this
+    repository names as most predictive of the next defect.
+
+    The premise waits on the SERVER's own record (R4.151): the product observes a request when the
+    browser SENDS it and the fixture records it on receipt, so reading the count the instant
+    `_maybe_heal` returns is a race this repo has already paid for once."""
+    from _server_witness import recorded
+
+    from ultracua.browser import BrowserSession
+    from ultracua.cache import CachedStep
+    from ultracua.flow import _maybe_heal
+    from ultracua.locators import LocatorSpec
+    from ultracua.providers.scripted import ScriptedProvider
+    from ultracua.timing import StepTrace
+
+    site = _SwSite()
+    httpd, base = site.serve()
+    session = await BrowserSession(headless=True).start()
+    try:
+        await session.goto(base + "/")
+        step = CachedStep(intent="open the daily report", action="click", mutating=False,
+                          locator=LocatorSpec(role="link", name="Daily report", tag="a"))
+        ok, note, _did = await _maybe_heal(
+            session, step,
+            ScriptedProvider([{"action": "click", "role": "button", "name": "Continue",
+                               "intent": "open the daily report"}]),
+            StepTrace(index=0), "open the daily report", "drift")
+        saves = await recorded(lambda: list(site.paths))
+        print(f"    saves={len(saves)} {saves}  ok={ok}  note={note[:60]!r}  "
+              f"locator={step.locator.name!r}")
+        if not saves:
+            raise RuntimeError(
+                "PREMISE LOST: the service worker never wrote, so this cell exercises nothing.")
+        assert ok is False, (
+            f"the heal accepted a proposal whose click made a SERVICE WORKER write (ok={ok}, "
+            f"note={note!r}). A page-scoped watcher cannot see that write, so the write control is "
+            f"persisted as an ordinary read step and every 0-LLM replay re-fires it. Inviolable #3.")
+        assert "WRITE on the wire" in note, f"refused for the wrong reason: {note!r}"
+        assert step.locator.name == "Daily report", "the recipe was re-pointed at the write control"
+    finally:
+        await session.close()
         httpd.shutdown()
         httpd.server_close()
 
