@@ -434,10 +434,13 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   positional=True. On an unmutated page a sequential record key and a slot number are the same string;
   the difference appears only AFTER a delete, which no single capture can see.
 
-  **3. REFUSING THE ECHO COSTS FIVE ROWS AND BREAKS AN INVARIANT.** The row guard is structurally an
-  echo on any row with an id -- `cssPath` stops at the first ancestor id and emits `#<id>`, `_rowCands`
-  offers `id:<row id>` first, so a css bind and the identity checking it are the same token and the
-  guard cannot disagree. Refusing on that alone: 0-LLM survivals **84 -> 79** and
+  **3. REFUSING THE ECHO COSTS FIVE ROWS AND BREAKS AN INVARIANT.** The row guard is an echo
+  wherever a css bind's path is anchored on the ROW's id -- `cssPath` starts at the TARGET and stops at
+  the first element carrying one, `_rowCands` offers `id:<row id>` first, so where both land on the row
+  a css bind and the identity checking it are the same token. (A first draft said "any row with an id",
+  which the audit refuted: a target with its own id gives `#details-3` and no echo, three wrapper divs
+  push the row id out of the five-element window, and on a self-id page renumbering rows but not
+  controls REFUSES via `elem_id`. Narrower than claimed, which weakens the case for refusing it.) Refusing on that alone: 0-LLM survivals **84 -> 79** and
   `heal_invalidates_approval` **FAILS**, because two of the extra refusals re-ground to a
   byte-identical recipe (R4.35) and would be refused again on every future run.
 

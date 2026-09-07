@@ -22,10 +22,16 @@ WHAT THIS ESTABLISHES, in the order the measurements were taken:
    string. The difference appears only AFTER a delete -- a real key keeps its value, a slot number
    does not -- which no single capture can see.
 
-3. THE ROW GUARD IS STRUCTURALLY AN ECHO ON ANY ROW WITH AN id, AND THAT IS NOT A CORPUS QUIRK.
-   `cssPath` walks up and stops at the first ancestor carrying an `id`, emitting `#<id>`; `_rowCands`
-   offers `id:<row id>` first. So a css bind and the identity checking it are THE SAME TOKEN and the
-   guard cannot disagree. Refusing every echo was measured on the full corpus: 0-LLM survivals
+3. THE ROW GUARD IS AN ECHO WHEREVER A css BIND'S PATH IS ANCHORED ON THE ROW'S OWN id.
+   `cssPath` starts at the TARGET and stops at the first element carrying an `id`, emitting `#<id>`;
+   `_rowCands` offers `id:<row id>` first. Where both land on the row, a css bind and the identity
+   checking it are THE SAME TOKEN and the guard cannot disagree.
+   **THE FIRST WRITE-UP SAID "ANY ROW WITH AN id" AND THAT IS FALSE, measured two ways.** A target
+   carrying its OWN id gives `css='#details-3'` and no echo; and three wrapper divs push the row id
+   out of the five-element window (the corpus's `row-nested-action` is already `tr > td > ul > li >
+   a`, one wrapper short). A third case falsifies the "cannot disagree" half outright: on a
+   self-id page, renumbering the rows but not the controls REFUSES, bound by `elem_id`. The echo is
+   narrower than claimed -- which makes the case for refusing it weaker, not stronger. Refusing every echo was measured on the full corpus: 0-LLM survivals
    84 -> 79 and `heal_invalidates_approval` FAILS, because two of the extra refusals re-ground to a
    byte-identical recipe (R4.35) and would be refused again on every future run.
 
@@ -52,7 +58,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import copy
-import re
 import sys
 from pathlib import Path
 
@@ -72,45 +77,61 @@ RENUMBER = ("const t = document.querySelector('[data-oracle=\"go\"]');"
             "  r.id = 'row-' + (n + 1); r.setAttribute('data-index', String(n + 1)); });"
             "t.removeAttribute('aria-label');")
 
-# Every sibling's identity candidates, so the SEQUENCE can be inspected (measurement 2).
-SIBS_JS = """() => {
-  const t = document.querySelector('[data-oracle="go"]');
-  if (!t) return null;
-  const row = t.closest('tr, li, [role=row], [role=listitem]');
-  if (!row || !row.parentElement) return null;
-  return Array.from(row.parentElement.children).map((r, i) => {
-    const out = [];
-    if (r.id) out.push('id:' + r.id);
-    for (const a of Array.from(r.attributes || [])) {
-      if (a.name.indexOf('data-') === 0 && a.value) out.push(a.name + ':' + a.value);
-    }
-    for (const h of Array.from(r.querySelectorAll('input[type=hidden]'))) {
-      const n = h.getAttribute('name'), v = h.getAttribute('value');
-      if (n && v) out.push('hidden:' + n + '=' + v);
-    }
-    return {i: i, cands: out};
-  });
+# THE TOKEN-SHAPE QUERY. Asked of the DOCUMENT, never of "the row's siblings", and that is a
+# correction rather than a preference. A first draft walked to the row with
+# `t.closest('tr, li, [role=row], [role=listitem]')` and enumerated ITS siblings -- a second
+# implementation of a walk the engine already owns, and the two disagreed exactly where the corpus
+# has a fixture for the disagreement. On `row-nested-icon` the control sits in `tr > td > ul > li`,
+# so the probe stopped at the `<li>` and found ONE sibling, while `anchorOf` -- which produced the
+# `id:widget-row-3` being classified -- climbs past the icon-only `<li>` to the `<tr>`. The
+# `len(seen) >= 3` floor then reported `tracks position? False` for a token that tracks its position
+# perfectly across all 12 rows. **The instrument written to adjudicate D3 reproduced the two-walk
+# divergence R3.7's fixture exists to expose** (`_nested_icon_rows`' docstring says so in as many
+# words), and printed a wrong cell in the shipped census for it.
+#
+# So the question is asked directly of the token instead: the elements bearing this token SHAPE, in
+# document order, against the numbers they carry. No walk, nothing to diverge from.
+SHAPE_JS = r"""(spec) => {
+  const [kind, value] = spec;
+  const m = /^(.*?)(\d+)$/.exec(value);
+  if (!m) return null;
+  const prefix = m[1];
+  // `hidden:name=value` is queried by NAME, not by attribute presence. Dropping this branch is how
+  // the first correction quietly un-refuted measurement 2: `row-shared-action`'s `hidden:widget=3`
+  // stopped being flagged, and the false positive the whole refutation rests on disappeared from the
+  // census. A detector that cannot see the token it is refuted BY is not the detector under test.
+  let els;
+  if (kind === 'hidden') {
+    const eq = prefix.indexOf('=');
+    const name = prefix.slice(0, eq);
+    els = Array.from(document.querySelectorAll('input[type=hidden][name="' + name + '"]'))
+            .map((e) => e.getAttribute('value'));
+  } else {
+    const sel = kind === 'id' ? '[id]' : '[' + kind + ']';
+    els = Array.from(document.querySelectorAll(sel))
+            .map((e) => (kind === 'id' ? e.id : e.getAttribute(kind)))
+            .filter((v) => v && v.indexOf(prefix) === 0)
+            .map((v) => v.slice(prefix.length));
+  }
+  const out = [];
+  for (const v of els) {
+    const mm = /^(\d+)$/.exec(v || '');
+    if (mm) out.push(parseInt(mm[1], 10));
+  }
+  return out;
 }"""
 
 
-def tracks_position(token, sibs) -> bool:
-    """Measurement 2's detector: does the token's numeric part equal the row's index, up to one
-    constant offset, across the siblings carrying the same token shape?"""
-    if not token:
+async def tracks_position(pg, anchor_id) -> bool:
+    """Measurement 2's detector: do the elements carrying this token SHAPE appear in document order
+    matching the numbers they carry, up to one constant offset?"""
+    kind, _, value = (anchor_id or "").partition(":")
+    if kind == "href":
+        return False        # a path carries no positional shape this detector can read
+    nums = await pg.evaluate(SHAPE_JS, [kind, value])
+    if not nums or len(nums) < 3:
         return False
-    m = re.search(r"(\d+)", token)
-    if not m:
-        return False
-    prefix = token[:m.start()]
-    seen = []
-    for s in sibs:
-        for c in s["cands"]:
-            if c.startswith(prefix):
-                mm = re.search(r"(\d+)", c[len(prefix):])
-                if mm:
-                    seen.append((s["i"], int(mm.group(1))))
-                break
-    return len(seen) >= 3 and len({n - i for i, n in seen}) == 1
+    return len({n - i for i, n in enumerate(nums)}) == 1
 
 
 def is_echo(spec) -> bool:
@@ -166,8 +187,7 @@ async def census(pg) -> None:
         spec = await _spec_for(pg, html)
         if spec is None or spec.anchor_source != "row":
             continue
-        sibs = await pg.evaluate(SIBS_JS) or []
-        pos = tracks_position(spec.anchor_id, sibs)
+        pos = await tracks_position(pg, spec.anchor_id)
         note = ""
         if s["name"] == "row-shared-action" and pos:
             note = "  <-- FALSE POSITIVE: R3.1's per-record key"
@@ -178,13 +198,29 @@ async def census(pg) -> None:
 async def prescription(pg) -> None:
     print("\n=== 2. THE PLAN'S PRESCRIPTION, APPLIED: reject the token -> anchor_id None ===\n")
     spec = await _spec_for(pg, F.POSITIONAL_PAGE)
+    seen = []
     for label, s in (("today (token accepted)", spec),
                      ("D3 as written (token rejected)", _without_anchor_id(spec))):
         verdict, sink = await _bind(pg, F.POSITIONAL_PAGE, s, RENUMBER)
+        seen.append(verdict)
         print(f"  {label:34} anchor_id={str(s.anchor_id):12} by={str(sink.get('bound_by')):6} "
               f"-> {verdict}")
-    print("\n  Both open the same stranger. `resolve` reads a falsy `anchor_id` as NO GUARD, so the")
-    print("  prescription moves the failure one branch earlier and removes zero wrong binds.")
+
+    # THE VERDICT IS DERIVED FROM WHAT WAS JUST MEASURED, never printed as a literal. The first
+    # draft ended with an unconditional "Both open the same stranger ... removes zero wrong binds",
+    # and under a mutated `resolve` the adversarial pass got that sentence printed four lines under
+    # a table reading `-> refused`. An instrument whose conclusion cannot disagree with its own data
+    # is the echo this slice is about, wearing a print statement.
+    today, rejected = seen
+    if today == rejected == "WRONG(row4)":
+        print("\n  Both open the same stranger. `resolve` reads a falsy `anchor_id` as NO GUARD, so")
+        print("  the prescription moves the failure one branch earlier and removes zero wrong binds.")
+    elif today.startswith("WRONG") and rejected != today:
+        print(f"\n  ** THE PRESCRIPTION NOW CHANGES THE OUTCOME ({today} -> {rejected}). R4.152 said")
+        print("  it could not. `resolve`'s falsy-anchor_id branch has moved: RE-ADJUDICATE D3.")
+    else:
+        print(f"\n  ** NEITHER ARM REPRODUCES THE WRONG BIND (today={today}, rejected={rejected}).")
+        print("  The corpus row or the resolver has changed; R4.152's measurement 1 is stale.")
 
 
 async def second_source(pg) -> None:

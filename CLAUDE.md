@@ -3105,9 +3105,11 @@ Reproduce with `python -m benchmarks.row_echo_probe`.
   `anchor_id=None` sensor D5 already blocks two attempts on, reached from a third direction.
 * **THREE ALTERNATIVES WERE BUILT AND EACH DIED TO A DIFFERENT INSTRUMENT.** *Value tracks its row
   index* -- refuted by the corpus's own control, since `row-shared-action`'s `hidden:widget=3` is
-  R3.1's per-record key and scores positional=True. *Refuse the echo* (the guard is structurally an
-  echo on any row with an id: `cssPath` stops at the first ancestor id, `_rowCands` offers `id:`
-  first, so a css bind and the identity checking it are one token) -- **84 -> 79** survivals and
+  R3.1's per-record key and scores positional=True. *Refuse the echo* (the guard is an echo
+  wherever a css bind's path is anchored on the ROW's id: `cssPath` starts at the TARGET and stops at
+  the first element carrying one, `_rowCands` offers `id:` first -- narrower than the "any row with an
+  id" the first draft claimed, since a target with its own id, or three wrapper divs, dissolves it)
+  -- **84 -> 79** survivals and
   `heal_invalidates_approval` FAILS, two refusals re-grounding to byte-identical recipes (R4.35).
   *Echo + the row's own text* -- **84 -> 83 with every invariant holding**, and still refused.
 * **THE CORPUS UNDERSTATED THE COST AND THE STANDING SUITE DID NOT.** `test_an_edited_row_still_binds`
