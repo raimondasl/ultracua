@@ -1049,6 +1049,50 @@ async def test_a_heal_onto_a_service_worker_write_is_refused_persistence(tmp_pat
         httpd.server_close()
 
 
+def test_every_request_listener_is_removed_from_the_object_it_was_added_to() -> None:
+    """A listener added to the CONTEXT is not removed by `page.remove_listener`, and nothing at
+    runtime says so -- it simply accumulates for the life of the context, once per learn and once per
+    heal. I made exactly that mistake moving these two watchers to context scope: both registrations
+    changed and neither `finally` did.
+
+    Read from the AST, never from the source TEXT. A scan for the string `page.remove_listener` would
+    go red on this very docstring, which has happened ten times in this repository; and the property
+    is about the RECEIVER EXPRESSION, which is a fact about the tree rather than about the characters.
+
+    Scoped to `flow.py` because these two are per-RUN listeners with a `finally` that must undo them.
+    `browser.py`'s in-flight counter is deliberately page-scoped and session-lived, and is left alone
+    -- under-counting there gives up earlier, which is loud, and changing it is a readiness question
+    with its own cost measurement rather than a write-safety one."""
+    import ast
+
+    from ultracua import flow as flow_mod
+
+    tree = ast.parse(inspect.getsource(flow_mod))
+    adds: list[tuple[str, str, int]] = []
+    removes: set[tuple[str, str]] = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr not in ("on", "remove_listener") or len(node.args) != 2:
+            continue
+        ev = node.args[0]
+        if not (isinstance(ev, ast.Constant) and ev.value == "request"):
+            continue
+        recv, handler = ast.unparse(node.func.value), ast.unparse(node.args[1])
+        if node.func.attr == "on":
+            adds.append((recv, handler, node.lineno))
+        else:
+            removes.add((recv, handler))
+
+    assert adds, ("no `.on(\"request\", ...)` registration found in flow.py -- this pin has gone "
+                  "stale and is asserting nothing.")
+    orphans = [(r, h, ln) for r, h, ln in adds if (r, h) not in removes]
+    assert not orphans, (
+        "these request listeners are added to one object and removed from another (or not at all), "
+        "so they LEAK for the life of the browser context: "
+        + "; ".join(f"{r}.on('request', {h}) at flow.py:{ln}" for r, h, ln in orphans))
+
+
 # ---------------------------------------------------------------------------------------------
 # R4.115 sites (2) and (3): the gate settles before deciding drift
 # ---------------------------------------------------------------------------------------------
