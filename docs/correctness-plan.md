@@ -512,6 +512,41 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   change and a different slice.
 - **D4.** Learn-path WebSocket parity with the recorder (AB-8): a sent WS frame during learn is a
   write-suspect; an undeclared one refuses. The register's named sibling-gap shape.
+  ⛔ **DECIDED 2026-09-08, 0.179.0: NO CHANGE, and building it would be WORSE than not.** $0.00 — no
+  LLM, no substrate rep. Reproduce with `python -m benchmarks.ws_population_probe --calibrate`
+  (offline, ~3 s) and `python -m benchmarks.ws_population_probe` (both substrates).
+
+  **1. THERE IS NO SCOPE TO ACHIEVE PARITY WITH.** The 0.177.0 request watchers had a real choice and
+  took the wider one (R4.153). A websocket watcher has none: measured from Playwright's own event
+  tables, `WebSocket` exists on `Page` and NOT on `BrowserContext`, which offers `ServiceWorker` and
+  nothing for shared workers or sockets. The recorder's `page.on("websocket")` is not a scope
+  oversight — it is the only scope there is.
+
+  **2. THE WATCHER HAS ZERO POPULATION ON THIS CORPUS.** All 14 start pages, both live substrates,
+  authenticated: **0 sockets observed**. The sensor is CALIBRATED rather than trusted — a local page
+  opening one socket from the page realm and one from a shared worker shows it firing on the first
+  and blind to the second. (Its first draft pointed both at port 9, which is on Chrome's blocked-port
+  list, so nothing was created and the page-realm CONTROL read False. Read the control first.)
+
+  **3. AND THE ZERO HAS TWO DIFFERENT CAUSES, WHICH IS THE WHOLE DECISION.** On **Gitea** there is no
+  websocket at all — its shared worker is `eventsource.sharedworker.js` and opens an `EventSource`,
+  an HTTP GET. On **Odoo** a websocket DOES exist: the shared worker
+  `websocket_worker_bundle?v=17.0-3` does `new WebSocket(this.websocketURL)`, and it is structurally
+  invisible to the only event Playwright offers. So the watcher would be **inert where there is
+  nothing and BLIND where there is something** — and its zero would read as *no websocket writes
+  happened*, which is a sensor that cannot fail wearing a write-safety hat. That is strictly worse
+  than not having it, and it is the reason this is `NO CHANGE` rather than `not yet`.
+
+  **WHAT WOULD REOPEN IT**, pinned rather than remembered: a Playwright release that adds a
+  context-level `WebSocket` event fails `test_websocket_is_a_page_event_and_not_a_context_one` by
+  name, and a reachable realm makes the population question worth re-asking.
+
+  **AND IT PRICED R4.154 AS A BY-PRODUCT, in the direction that widens it.** The shared-worker realm
+  is on **14 of 14** corpus pages across **both** substrates, where the register had recorded it as
+  an Odoo property. CDP `Target.setAutoAttach` DOES auto-attach `shared_worker` targets — so the
+  realm is reachable in principle — but Playwright's `CDPSession.send(method, params)` takes no
+  `sessionId` and exposes no child session, so the attached worker cannot be addressed through it.
+  R4.154's remedy therefore needs a raw CDP client or a proxy, which is a slice, not a parameter.
 - **D1.** Vision tier screenshots secrets (AB-6): refuse secret slots under the vision tier
   (recommended) or document-and-pin only.
 
