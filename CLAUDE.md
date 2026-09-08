@@ -3192,6 +3192,57 @@ no LLM, no substrate rep. `python -m benchmarks.watcher_scope_probe` re-derives 
   half of D4 is untouched -- a SHARED-worker socket is invisible to `page.on("websocket")` too, so
   copying the recorder's shape there would copy a claim that needs correcting first.
 
+## D2 decided: the scope clause was a no-op and the named remedy was the expensive one (R4.156, 0.178.0)
+
+Phase 3's second decision. **$0.00** -- no LLM, no substrate. Reproduce with
+`python -m benchmarks.fuzzy_bind_probe` (~15 s, four arms) and `--census` (~200 s, the real bench).
+The answer is CHANGE, and neither half of the entry's own prescription survived.
+
+* **THE SCOPE CLAUSE MAKES IT A MEASURED NO-OP, which is D3's shape one decision over.** D2 says
+  refuse the sole-candidate fuzzy bind *"for MUTATING steps"*. Censused over the corpus: **22 rows
+  bind by `role+name~` (11 per arm) and ZERO are on a write scenario** -- `order-form`, the only
+  write, binds `testid` x88 and `role+name` x4. A mutating-scoped rule never fires. R4.150 predicted
+  it from the fixture; this is the measurement from the run, and it is why the shipped rule is
+  scope-wide.
+* **THE REMEDY THE CODE ITSELF NAMED IS THE ONE THAT COSTS.** `locators.py` and `HEALING.md` both
+  said closing this *"needs a css-agreement gate like Tier 2's, which measured at the same cost as
+  full deletion"* -- quoted twice, re-measured never. Reproduced: css AGREEMENT gives 0-LLM survivals
+  **84 -> 79** and k50 **6 -> 2**, identical to withholding the candidate. **The mechanism is the
+  finding, not the number**: a positive-agreement gate can only accept a bind Tier 2 would have made
+  anyway, so the candidate collapses into `css`, and all five lost rows are `rename_augment+wrap`
+  where the wrap breaks the recorded path -- corroboration is impossible EXACTLY where this candidate
+  is the only thing left.
+* **CONTRADICTION-ONLY IS FREE, AND IT IS NOT A NEW DOCTRINE.** Refuse when the recorded css path
+  resolves uniquely to a DIFFERENT element; an absent or ambiguous css says nothing. `silent_wrong`
+  **6 -> 4**, survival curve **BYTE-IDENTICAL**, k50 unchanged at 6, `role+name~` 11 -> 10 -- the one
+  bind removed is the wrong one. Tier 2 has always refused when its two guesses resolve uniquely to
+  different elements; `role+name~` is the one Tier-1 candidate that is itself a guess and never got
+  that cross-check. A REFUSAL only, so it cannot bind anything new and does not go near D0.
+* **A POST-FILTER WOULD HAVE MEASURED THE WRONG THING, and that shaped the probe.** A refused Tier-1
+  fuzzy bind FALLS THROUGH to Tier 2, where css can re-bind the same element under a different label
+  -- so "pretend the bind was refused" over the shipped resolver's own output makes contradiction-only
+  look identical to agreement. The arms are real patched copies of `src/` on `PYTHONPATH`, and the
+  probe ASSERTS the swap took effect by checking the resolved module path (R4.75).
+* **ONE NUMBER MOVED THAT READS AS A REGRESSION AND IS NOT**: heal MECHANISM **36/38 (95%) -> 36/39
+  (92%)**. The refused row LEFT the wrong-bind set and JOINED the recovery-eligible population, where
+  the heal correctly declines to re-ground onto the decoy. A wrong bind is unrecoverable by
+  construction and never entered that denominator; a loud refusal does.
+* **DELETING THE ALLOWLIST ENTRY IS WHAT CLOSING A DECISION LOOKS LIKE**, and the ROW is kept,
+  re-declared `expected: "drifted"` -- so a regression fails as an UNEXPECTED wrong bind by name
+  rather than being silenced. `test_drift_corpus`'s anti-vacuity floor came DOWN 3 -> 2 for the same
+  reason: a floor that refused to move would make closing a decision fail the cell that exists to keep
+  the allowlist honest.
+* **THE STANDING SUITE PRICED D3 AND HAD NOTHING TO SAY HERE**, which is worth recording because it is
+  the opposite of last time. D3 died on `test_an_edited_row_still_binds`; D2's only red cell was the
+  0.174.0 pin written to detect this exact hole closing, whose own message says *"the hole D2 exists
+  to close may have shut, so re-measure and update KNOWN_WRONG_BINDS"*. It is INVERTED rather than
+  deleted, and paired with a cost control -- without that second cell the refusal is satisfied by
+  refusing every fuzzy bind, which is the 84 -> 79 variant.
+* **THE RESIDUAL, STATED:** the bind is still uncorroborated when nothing contradicts it. A css path
+  that has ITSELF drifted while the fuzzy match is CORRECT would now be refused -- loud, never a wrong
+  bind, measured at zero cost -- but the corpus contains no such row, which is a gap in the instrument
+  rather than evidence of absence.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

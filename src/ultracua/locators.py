@@ -549,9 +549,13 @@ async def _resolve(page: Page, spec: LocatorSpec, unique: bool = False,
         # label was lightly AUGMENTED ("Proceed" -> "Proceed now") when no exact anchor survives. Measured
         # at zero cost on the drift corpus — deletion loses a 0-LLM row, this reorder loses none.
         #
-        # RESIDUAL, worth stating: when role+name~ is the ONLY surviving Tier-1 candidate and a substring
-        # decoy exists, it still binds outright with no corroboration. Closing that needs a css-agreement
-        # gate like Tier 2's, which measured at the same cost as full deletion. See HEALING.md.
+        # THAT RESIDUAL IS CLOSED AT 0.178.0 (D2 / R4.156), and NOT by the remedy this comment used to
+        # name. It read: *"closing that needs a css-agreement gate like Tier 2's, which measured at the
+        # same cost as full deletion"* — true of AGREEMENT, and the reason is mechanical rather than
+        # incidental, so it is recorded at the check itself in the Tier-1 loop below. What ships instead
+        # refuses only on CONTRADICTION, which is free on this corpus. The bind is still uncorroborated
+        # when nothing contradicts it; what can no longer happen is binding a decoy while the recorded
+        # structural path points somewhere else.
         confident.append(("role+name~", page.get_by_role(spec.role, name=spec.name, exact=False)))  # type: ignore[arg-type]
 
     # --- Tier 2: the two independent "guess" locators (cross-checked against each other) ---
@@ -668,6 +672,41 @@ async def _resolve(page: Page, spec: LocatorSpec, unique: bool = False,
     for label, loc in confident:
         kind, first = await classify(loc)
         if kind == "unique":
+            if label == "role+name~" and css_loc is not None:
+                # D2 (0.178.0): the ONE Tier-1 candidate that is itself a guess gets Tier 2's
+                # cross-check — but only in the DISAGREEMENT direction, which is what makes it free.
+                #
+                # `role+name~` is a substring match "wearing an identity anchor's clothes" (this
+                # file's own words, four comments up). Tier 2 already refuses when its two guesses
+                # resolve uniquely to DIFFERENT elements: *neither is trustworthy -> fail loud*. This
+                # is that same doctrine applied one tier up, and it is a REFUSAL only — it can never
+                # bind something the resolver would not otherwise have bound.
+                #
+                # WHY CONTRADICTION AND NOT AGREEMENT, which is the whole measurement (R4.156).
+                # Requiring css to AGREE was the remedy HEALING.md named, and it was measured here at
+                # the same cost as deleting the candidate outright: 0-LLM survivals 84 -> 79, k50
+                # 6 -> 2. The mechanism is that a positive-agreement gate can only ever accept a bind
+                # Tier 2 would have made anyway, so the candidate collapses into `css` and its whole
+                # remaining value — a lightly AUGMENTED label ("Proceed" -> "Proceed now") on a page
+                # whose structure ALSO moved — is exactly what it destroys. All five lost rows were
+                # `rename_augment+wrap`, where `wrap` breaks the css path so corroboration is
+                # impossible precisely when this candidate is the only thing left.
+                #
+                # Refusing only on CONTRADICTION inverts that: an absent or ambiguous css says
+                # nothing and costs nothing, while a css that resolves uniquely SOMEWHERE ELSE is
+                # positive evidence that the substring landed on a decoy. Measured over the same 187
+                # rows: `silent_wrong` 6 -> 4 with the 0-LLM survival curve BYTE-IDENTICAL to the
+                # control and k50 unchanged at 6 — the one bind it removes is the wrong one, and all
+                # ten legitimate augmented-label binds across five scenarios survive.
+                #
+                # `classify` sets `saw["any"]`, and that is deliberately harmless here: the fuzzy
+                # candidate already classified `unique`, so `saw["any"]` is True before this runs and
+                # R4.115's readiness sensor cannot be moved by this call.
+                css_kind, css_first = await classify(css_loc)
+                if css_kind == "unique" and not await _same_element(first, css_first):
+                    if sink is not None:
+                        sink["fuzzy_contradicted"] = True
+                    continue
             _bound(label)
             return first
         if kind == "ambiguous" and not unique and ambiguous is None:

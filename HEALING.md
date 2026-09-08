@@ -268,10 +268,19 @@ These are the measured limits as of **drift-bench v2** ([`baselines/drift_v2.jso
   ordered LAST in the tier, which the drift bench measured as **free** — the histogram, the survival curve,
   `silent_wrong`, the mechanism rates and the predictor's agreement are all byte-identical, and the
   candidate still carries its 2 binds. Deleting it instead would have cost a 0-LLM row (a lightly augmented
-  label, "Proceed" -> "Proceed now", is the case it exists for). **The residual:** when `role+name~` is the
-  ONLY surviving Tier-1 candidate *and* a substring decoy exists, it still binds outright with nothing to
-  corroborate it. Gating it on css agreement the way Tier 2 does would close that — and measured at the same
-  cost as full deletion, so it is not obviously worth it. Named here rather than left implicit.
+  label, "Proceed" -> "Proceed now", is the case it exists for). **The residual — CLOSED at 0.178.0, and not
+  by the remedy named here (D2 / R4.156).** It read: when `role+name~` is the ONLY surviving Tier-1
+  candidate *and* a substring decoy exists, it binds outright with nothing to corroborate it; *"gating it on
+  css agreement the way Tier 2 does would close that — and measured at the same cost as full deletion, so it
+  is not obviously worth it."* **That sentence was right about AGREEMENT and it is why the shipped rule is
+  something else.** Re-measured on the 187-row corpus: requiring css to agree costs 0-LLM survivals
+  **84 -> 79** and k50 **6 -> 2**, identical to withholding the candidate entirely — because a positive
+  gate can only ever accept a bind Tier 2 would have made anyway, so the candidate collapses into `css` and
+  the five `rename_augment+wrap` rows, where a wrap breaks the recorded path, are refused exactly where it
+  is the only thing left. Refusing only on **contradiction** — css resolves uniquely to a DIFFERENT element
+  — measured `silent_wrong` **6 -> 4** with the survival curve **byte-identical** and k50 unchanged at 6.
+  The bind is still uncorroborated when nothing contradicts it; what can no longer happen is binding a decoy
+  while the recorded structural path points somewhere else.
 - **A per-row write is protected only when the row carries an identity.** Deleting the row you recorded is
   exactly what makes its control *unique* — with "Acme Corp #3" gone, the one remaining `Cancel` matches
   uniquely and would bind outright, against a different customer. (The mutation gate cannot catch this:
