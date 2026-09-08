@@ -208,19 +208,22 @@ async def test_a_renumbered_positional_row_still_binds_the_stranger() -> None:
         f"D3 exists to close may have shut, so re-measure and update KNOWN_WRONG_BINDS")
 
 
-async def test_a_sole_surviving_fuzzy_candidate_still_binds_a_substring_decoy() -> None:
-    """D2's RESIDUAL, and `locators.py` states it in its own comment: *"when role+name~ is the ONLY
-    surviving Tier-1 candidate and a substring decoy exists, it still binds outright with no
-    corroboration"*. `role+name~` is Tier 1 and the loop returns the first unique match OUTRIGHT, so
-    Tier 2's css cross-check — built to stop exactly this — never runs.
+async def test_a_sole_surviving_fuzzy_candidate_is_refused_when_css_contradicts_it() -> None:
+    """D2, DECIDED AND CLOSED at 0.178.0 (R4.156). This cell used to assert the HOLE — that the sole
+    surviving `role+name~` candidate bound the decoy outright — and it is inverted here rather than
+    deleted, because the direction that matters now is the regression.
 
     THE MEASURED SHAPE, from `locators.py`'s own example: a redesign renames the primary control and
     the old wording lands on a neighbour, so the recorded name stops matching the target and starts
-    matching the DECOY as a substring. Counted in `KNOWN_WRONG_BINDS` as `fuzzy-decoy/fuzzy-decoy-wins`.
+    matching the DECOY as a substring. The recorded css path is UNTOUCHED by that rename, so it still
+    resolves uniquely to the target — the two disagree, and a disagreement is what Tier 2 has always
+    treated as *neither is trustworthy -> fail loud*. The bind is refused.
 
     THE TARGET'S TEXT MATTERS AND IS WHY THE FIRST DRAFT OF THE BENCH ROW MEASURED NOTHING: leaving it
     intact lets `exact-text` — which sits ABOVE the demoted fuzzy tier — bind correctly, so the fuzzy
-    candidate is never reached and the row scores `survived`. Both names have to go.
+    candidate is never reached at all. Both names have to go for this cell to reach its subject, and
+    `fuzzy_contradicted` is asserted so a refusal arriving from some OTHER branch cannot be read as
+    this one working.
     """
     html = """<!doctype html><html><body>
       <div><a href="/wrong" data-oracle="wrong-decoy"
@@ -229,7 +232,72 @@ async def test_a_sole_surviving_fuzzy_candidate_still_binds_a_substring_decoy() 
     </body></html>"""
     spec = LocatorSpec(role="link", name="Save the document", tag="a", text="Save",
                        css="body > div:nth-of-type(2) > a", anchor=None, anchor_source=None)
-    bound, _sink = await _resolve_on(html, spec)
-    assert bound == "wrong-decoy", (
-        f"the sole-surviving fuzzy candidate now resolves to {bound!r} rather than the decoy — the "
-        f"hole D2 exists to close may have shut, so re-measure and update KNOWN_WRONG_BINDS")
+    bound, sink = await _resolve_on(html, spec)
+    assert bound is None, (
+        f"the sole-surviving fuzzy candidate bound {bound!r}; D2's refusal has regressed and "
+        f"`fuzzy-decoy/fuzzy-decoy-wins` is a silent wrong-target click again")
+    assert sink.get("fuzzy_contradicted"), (
+        "the bind was refused, but NOT by D2's contradiction check — this cell would pass for the "
+        "wrong reason if some other refusal moved in front of it")
+
+
+async def test_a_fuzzy_bind_survives_when_the_css_path_is_gone() -> None:
+    """D2's COST CONTROL, and the reason the shipped rule refuses on CONTRADICTION rather than
+    requiring AGREEMENT. Without this cell the refusal above is satisfied by refusing every fuzzy
+    bind, which measured 0-LLM survivals 84 -> 79 and k50 6 -> 2 on the drift corpus.
+
+    A lightly AUGMENTED label ("Proceed" -> "Proceed now") is the case `role+name~` exists for, and
+    the bench's five `rename_augment+wrap` rows pair it with a structural change that breaks the
+    recorded css path. An absent css cannot contradict anything, so the bind must still stand.
+    """
+    html = """<!doctype html><html><body>
+      <div><span><a href="/done" data-oracle="go">Proceed now</a></span></div>
+    </body></html>"""
+    spec = LocatorSpec(role="link", name="Proceed", tag="a", text="Proceed",
+                       css="body > div > a", anchor=None, anchor_source=None)   # path broken by the wrap
+    bound, sink = await _resolve_on(html, spec)
+    assert bound == "go", (
+        f"the augmented label no longer binds (got {bound!r}) — D2's check has become an AGREEMENT "
+        f"gate, which is the variant measured to cost five 0-LLM rows")
+    assert sink.get("bound_by") == "role+name~", (
+        f"bound by {sink.get('bound_by')!r} rather than the fuzzy candidate, so this cell no longer "
+        f"exercises the candidate whose cost it exists to pin")
+
+
+async def test_when_the_css_path_is_the_drifted_one_the_refusal_is_still_LOUD() -> None:
+    """D2's RESIDUAL, pinned in the only direction that matters (R4.156, 0.178.0).
+
+    The contradiction check treats a unique css match as evidence against the fuzzy name match. It
+    cannot tell WHICH of the two drifted — so when the css path is the one that moved and the fuzzy
+    match is CORRECT, a 0-LLM bind is lost. Measured at zero cost on the drift corpus, but the corpus
+    contains no row of this shape, which is a gap in the instrument rather than evidence of absence.
+
+    MEASURED, AND IT IS A REAL LOSS: on this exact page the PRE-D2 resolver binds the CORRECT target
+    (`go`, via the fuzzy candidate) and the shipped one refuses. So the residual is not hypothetical --
+    it costs a 0-LLM bind wherever this shape occurs, and the corpus's zero is the absence of the shape
+    rather than the absence of the cost.
+
+    WHAT THIS CELL GUARANTEES IS THE DIRECTION, NOT THE COST: the outcome is a LOUD refusal and never
+    a wrong bind. That is the property a future attempt to widen this check must not trade away — the
+    tempting "trust css, it is structural" would bind the stranger here, silently, at 0-LLM.
+
+    The page: the recorded path `body > div:nth-of-type(2) > a` now lands on an UNRELATED control
+    because a div was inserted above, while the target keeps a name the recorded one is a substring
+    of. Both resolve uniquely, to different elements.
+    """
+    html = """<!doctype html><html><body>
+      <div><a href="/x" data-oracle="inserted">Unrelated</a></div>
+      <div><a href="/y" data-oracle="stranger">Archive</a></div>
+      <div><a href="/done" data-oracle="go">Proceed now</a></div>
+    </body></html>"""
+    spec = LocatorSpec(role="link", name="Proceed", tag="a", text="Proceed",
+                       css="body > div:nth-of-type(2) > a", anchor=None, anchor_source=None)
+    bound, sink = await _resolve_on(html, spec)
+    assert bound != "stranger", (
+        "the drifted css path was BOUND — a silent wrong-target click at 0-LLM, which is the one "
+        "outcome this check must never produce")
+    assert bound is None, (
+        f"expected a loud refusal, got {bound!r}; if this now binds the correct target the residual "
+        f"has been closed and this cell should record how")
+    assert sink.get("fuzzy_contradicted"), (
+        "refused, but not by D2's check — the residual this cell documents is no longer reached here")

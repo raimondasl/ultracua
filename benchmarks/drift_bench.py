@@ -198,15 +198,16 @@ ESCALATE_ROW = ("interstitial", "escalate", "document.title='Checking your brows
 #     clicks row 4, and the act trail reads `['row4', 'DONE']` -- it reaches the GOAL PAGE, so only the
 #     trail's `data-oracle` catches it. That is the shape of the harm exactly: a wrong record, opened
 #     silently, with a success-looking destination.
-#   * `fuzzy-decoy/fuzzy-decoy-wins` -- D2, and it is `locators.py`'s OWN stated residual reproduced:
+#   * `fuzzy-decoy/fuzzy-decoy-wins` -- D2. **ITS ENTRY IS GONE, AND THAT DELETION IS WHAT CLOSING A
+#     DECISION LOOKS LIKE** (0.178.0, R4.156). It reproduced `locators.py`'s OWN stated residual --
 #     *"when role+name~ is the ONLY surviving Tier-1 candidate and a substring decoy exists, it still
-#     binds outright with no corroboration"*. Measured: binds by `role+name~`, clicks the decoy, trail
-#     `['wrong-decoy', 'WRONG-PAGE']`. Tier 1 returns the first unique match OUTRIGHT, so Tier 2's css
-#     cross-check -- built to stop exactly this -- never runs.
+#     binds outright with no corroboration"* -- binding by `role+name~` and clicking the decoy for a
+#     trail of `['wrong-decoy', 'WRONG-PAGE']`. The row still exists and now declares `expected:
+#     "drifted"`: it is the REGRESSION GUARD for the fix rather than a published hole, and if the
+#     refusal ever regresses it fails as an UNEXPECTED wrong bind instead of being silenced.
 KNOWN_WRONG_BINDS = (
     ("anchor-link", "positional-css-retarget-tokenless"),
     ("row-positional", "positional-row-renumber"),
-    ("fuzzy-decoy", "fuzzy-decoy-wins"),
 )
 
 # Recovered rows whose repair does NOT move the recipe digest, so `heal_invalidates_approval` cannot

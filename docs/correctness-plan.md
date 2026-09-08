@@ -418,6 +418,52 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   Two entries in a row where the register's own text understated the finding. Treat a filing's SCOPE as
   provisional too, not just its prescribed fix.
 - **D2.** Refuse sole-candidate fuzzy (`role+name~`) binds for MUTATING steps (AB-2).
+  ✅ **DECIDED 2026-09-08, 0.178.0: CHANGE, but NOT the change this entry describes.** $0.00 — no
+  LLM, no substrate. Reproduce with `python -m benchmarks.fuzzy_bind_probe`.
+
+  **1. AS WRITTEN IT IS A MEASURED NO-OP, which is D3's shape one decision over.** The scope clause
+  is *"for MUTATING steps"*. Censused over the full corpus: **22 rows bind by `role+name~` (11 per
+  arm) and ZERO are on a write scenario.** The corpus's only write, `order-form`, binds `testid` ×88
+  and `role+name` ×4. So a mutating-scoped refusal removes no wrong bind and costs nothing, because
+  it never fires. R4.150 predicted this from the fixture and it is now measured from the run.
+
+  **2. THE HARM IS REAL AND IT IS ON READS.** Of those 22 rows, 20 are `rename_augment` /
+  `rename_augment+wrap` across five scenarios and all SURVIVED — the lightly-augmented label
+  (`"Proceed"` → `"Proceed now"`) the candidate exists for. The other 2 are
+  `fuzzy-decoy/fuzzy-decoy-wins`, which binds the DECOY and clicks it: trail
+  `['wrong-decoy', 'WRONG-PAGE']`, a silent wrong-target click reaching a plausible page.
+
+  **3. THE REMEDY THE CODE ITSELF NAMED WAS REFUTED BY RE-MEASURING IT.** `locators.py` and
+  `HEALING.md` both said closing this *"needs a css-agreement gate like Tier 2's, which measured at
+  the same cost as full deletion"*. Reproduced: requiring css to AGREE gives 0-LLM survivals
+  **84 → 79** and k50 **6 → 2**, identical to withholding the candidate entirely. The mechanism is
+  why, not the number: a positive-agreement gate can only accept a bind Tier 2 would have made
+  anyway, so the candidate collapses into `css` — and all five lost rows are `rename_augment+wrap`,
+  where the wrap breaks the recorded path, so corroboration is impossible exactly where this
+  candidate is the only thing left.
+
+  **4. WHAT SHIPS IS CONTRADICTION-ONLY, AND IT IS FREE.** Refuse the fuzzy bind when the recorded
+  css path resolves uniquely to a DIFFERENT element; an absent or ambiguous css says nothing.
+  Measured over the same 187 rows: `silent_wrong` **6 → 4**, the 0-LLM survival curve
+  **byte-identical** to the control, k50 unchanged at 6, `role+name~` 11 → 10 per arm — the one bind
+  removed is the wrong one. Invariants ALL HOLD and the committed `drift_v2.json` gate passes
+  unchanged. This is not a new doctrine: Tier 2 has always refused when its two guesses resolve
+  uniquely to different elements, and `role+name~` is the one Tier-1 candidate that is itself a
+  guess and never got that cross-check.
+
+  **5. SO THE SCOPE CLAUSE IS THE PART THAT WAS WRONG.** Restricting to mutating steps would have
+  bought nothing; the rule is scope-wide, and it is a REFUSAL only — it can never bind something the
+  resolver would not otherwise have bound, so it does not go near D0. `KNOWN_WRONG_BINDS` loses its
+  `fuzzy-decoy/fuzzy-decoy-wins` entry, which is what closing a decision looks like here; the ROW
+  stays and now declares `expected: "drifted"`, so a regression fails as an unexpected wrong bind by
+  name instead of being silenced.
+
+  **THE RESIDUAL, MEASURED:** the bind is still uncorroborated when nothing contradicts it, and the
+  check cannot tell WHICH locator drifted. Where the css path is the one that moved and the fuzzy
+  match is CORRECT, the shipped rule refuses a bind the pre-D2 resolver got RIGHT — reproduced on a
+  purpose-built page, control binds `go`, shipped returns None. **The corpus's zero cost is the
+  absence of that SHAPE, not the absence of the cost.** Pinned in the only direction that matters: a
+  loud refusal, never the stranger the drifted css points at.
 - **D3.** Reject purely positional row-identity tokens (`data-index`, `id="row-N"`) (AB-3).
   ⛔ **DECIDED 2026-09-06, 0.176.0: NO CHANGE. The prescription is a MEASURED NO-OP, and three
   alternative sensors were built and refused.** $0.00 -- no LLM, no substrate.

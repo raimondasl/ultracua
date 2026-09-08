@@ -797,12 +797,26 @@ SCENARIOS: tuple = (
         # the old wording onto a neighbour -- so the recorded name stops matching the target and
         # starts matching the DECOY. Tier 1 returns the first unique match OUTRIGHT, so Tier 2's
         # css cross-check never runs; that short-circuit IS the hole.
+        #
+        # THE HOLE IS CLOSED AT 0.178.0 (D2 / R4.156) AND THIS ROW IS NOW THE REGRESSION GUARD.
+        # `expected` moved `wrong` -> `drifted` and the `KNOWN_WRONG_BINDS` entry was DELETED, which
+        # is what closing a decision looks like here. What changed in `src/` is one clause: the fuzzy
+        # Tier-1 candidate is refused when the recorded css path resolves uniquely to a DIFFERENT
+        # element. On THIS row the structure is untouched, so css still points at the target while the
+        # substring points at the decoy -- a contradiction, and the bind is refused LOUD.
+        #
+        # THE ROW'S VALUE IS NOW THE OTHER DIRECTION, so do not delete it: if the refusal regresses it
+        # produces an UNEXPECTED wrong bind and `no_unexpected_wrong` fails by name, where before the
+        # allowlist would have silenced it. Its sibling `rename_augment+wrap` rows are the cost
+        # control -- they bind by `role+name~` with css broken by the wrap, and a fix that reached for
+        # css AGREEMENT instead of contradiction loses all five of them (survivals 84 -> 79, k50
+        # 6 -> 2, measured).
         "curated_rows": [
             {"name": "fuzzy-decoy-wins", "target_sel": '[data-oracle="go"]',
              "js": "const d = document.querySelector('[data-oracle=\"wrong-decoy\"]');"
                    "t.setAttribute('aria-label', 'Publish'); t.textContent = 'Publish';"
                    "d.setAttribute('aria-label', 'Save the document as a draft');",
-             "expected": "wrong", "kind": "residual-hole"},
+             "expected": "drifted", "kind": "closed-hole"},
         ],
     },
     {

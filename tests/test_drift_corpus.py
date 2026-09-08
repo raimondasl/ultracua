@@ -335,7 +335,17 @@ def test_every_published_wrong_bind_names_a_row_that_exists_and_vice_versa() -> 
 
     # ANTI-VACUITY. Both assertions above are satisfied by an empty corpus, and the slice that added
     # D2's and D3's rows is exactly when this cell must have something to check.
-    assert len(listed) >= 3, (
+    #
+    # THE FLOOR CAME DOWN 3 -> 2 AT 0.178.0, AND THE DIRECTION IS THE WHOLE POINT. D2's entry
+    # (`fuzzy-decoy/fuzzy-decoy-wins`) was DELETED because the hole was CLOSED (R4.156) -- the row
+    # still exists and now declares `expected: "drifted"`, so the pair-wise assertions above still
+    # adjudicate it, in the other direction. A floor that refused to move would have made closing a
+    # decision fail this cell, which is the opposite of what it is for; a floor that moved without
+    # the row being re-declared would be a silenced hole. Both are checked above, so this number only
+    # has to stop the SET going empty. It may drop to 1 when D3 closes and no lower: the token-less
+    # positional retarget is R4.35's published residual with four remedies already refused by
+    # measurement, so nothing is expected to remove it.
+    assert len(listed) >= 2, (
         f"only {len(listed)} published wrong binds; the corpus should carry at least the token-less "
-        f"positional retarget plus D2's and D3's residuals (R4.150)"
+        f"positional retarget plus D3's residual (R4.150). D2's was closed at 0.178.0 (R4.156)."
     )

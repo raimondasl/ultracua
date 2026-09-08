@@ -134,6 +134,28 @@ _KNOWN_HEAL_DECLINES = {
     # proved that the expensive way.
     "row-nested-action/reparent",
     "row-nested-icon/reparent",
+    # 0.178.0 (D2 / R4.156). NEW TO THIS LIST BECAUSE THE ROW IS HEAL-ELIGIBLE FOR THE FIRST TIME:
+    # until D2 closed, the fuzzy candidate bound the DECOY and the row scored `wrong`, so the heal
+    # never ran. It now refuses LOUD, which makes it drifted-with-target-present, i.e. eligible.
+    #
+    # THE REASON IS MEASURED, NOT INFERRED — this list's own comment above records that two rewrites
+    # of the entries beside it named a cause that was not the cause. Captured from the report's own
+    # trace: `note = 'locator unresolved or ambiguous (drift); the heal proposed a MUTATING action —
+    # refusing (fail loud)'`. That is `_maybe_heal`'s GUARD 1, and the token that trips it is the
+    # PROPOSED ELEMENT'S NAME, not the intent: this row's mutation renames the target to **"Publish"**,
+    # and `publish` is in `MUTATING_KEYWORDS`. Verified both ways —
+    # `classify_mutation("click", "", "Publish", {})` is True and
+    # `classify_mutation("click", "save the document", "Continue", {})` is False.
+    #
+    # SO IT IS INVIOLABLE #3 WORKING, NOT A MECHANISM DEFECT: the heal correctly declines to re-point
+    # a cached recipe at a control it believes writes. The honest end state of closing D2 on this row
+    # is a silent wrong-target click becoming a loud refusal that cannot be auto-repaired, which is
+    # strictly better and is not a recovery.
+    #
+    # AND IT IS NOT CAUSED BY D2's CHECK, which was the first thing suspected and was refuted by
+    # measurement: the decline reproduces IDENTICALLY on the `refuse_all` and `agreement` arms, which
+    # carry no contradiction logic at all (`python -m benchmarks.fuzzy_bind_probe` builds both).
+    "fuzzy-decoy/fuzzy-decoy-wins",
 }
 
 

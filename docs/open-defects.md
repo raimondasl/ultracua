@@ -12,7 +12,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**72 open**, 79 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**72 open**, 80 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **72 open**, 79 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **72 open**, 80 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -1219,6 +1219,21 @@ if and only if that branch is ever resumed.
 **PRE-EXISTING, AND WIDENED BY R4.153.** The same false refusal already fires on `main` for a page-realm background POST that escapes `is_telemetry_host`; moving the listener to context scope widens the set of realms that can trip it. Filed OPEN rather than folded into R4.153's closure, because a residual inside a closed finding is one nobody re-reads.
 
 **WHY IT IS NOT FIXED IN THAT SLICE.** The failure is LOUD and in the safe direction (a discarded repair; `mode="auto"` falls through to a re-author), and it measures ZERO on both live substrates over all 14 corpus start pages. Giving this watcher a causality bound is a sensor question of its own -- the learn path's `_in_act_window()` plus owner attribution is a real mechanism, not a line to copy -- and it should be priced before it is built. **"Measured zero on our two apps" is not the same as bounded**, which is why this is written down. |
+| R4.156 | fixed | **D2 IS DECIDED: CHANGE, BUT NOT THE CHANGE THE PLAN DESCRIBES -- ITS SCOPE CLAUSE MAKES IT A MEASURED NO-OP, AND THE REMEDY THE CODE ITSELF NAMED IS THE EXPENSIVE ONE.** Phase 3's D2 asks the resolver to *refuse sole-candidate fuzzy (`role+name~`) binds for MUTATING steps*. $0.00 -- no LLM, no substrate. Reproduce with `python -m benchmarks.fuzzy_bind_probe` (~15 s, four arms) and `--census` (~200 s, the real bench).
+
+**1. THE SCOPE CLAUSE IS THE PART THAT WAS WRONG, and it is D3's shape one decision over.** Censused over the full corpus: **22 rows bind by `role+name~` (11 per arm) and ZERO are on a write scenario** -- the only write, `order-form`, binds `testid` x88 and `role+name` x4. A mutating-scoped refusal removes no wrong bind and costs nothing, because it never fires. R4.150 predicted this from the fixture; this is the measurement from the run.
+
+**2. THE HARM IS REAL AND IT IS ON READS.** Of the 22, twenty are `rename_augment` / `rename_augment+wrap` across five scenarios and all SURVIVED -- the lightly-augmented label (`Proceed` -> `Proceed now`) the candidate exists for. The other two are `fuzzy-decoy/fuzzy-decoy-wins`, which binds the DECOY and clicks it: act trail `['wrong-decoy', 'WRONG-PAGE']`, a silent wrong-target click that reaches a plausible page and reports success.
+
+**3. THE REMEDY `locators.py` AND `HEALING.md` BOTH NAMED WAS REFUTED BY RE-MEASURING IT.** Both said closing this *needs a css-agreement gate like Tier 2's, which measured at the same cost as full deletion*. Reproduced exactly: requiring css to AGREE gives 0-LLM survivals **84 -> 79** and k50 **6 -> 2**, identical to withholding the candidate entirely. **The mechanism is the finding, not the number**: a positive-agreement gate can only ever accept a bind Tier 2 would have made anyway, so the candidate collapses into `css` -- and all five lost rows are `rename_augment+wrap`, where the wrap breaks the recorded path, so corroboration is impossible EXACTLY where this candidate is the only thing left. A standing claim that had been quoted twice and re-measured never.
+
+**4. WHAT SHIPS IS CONTRADICTION-ONLY, AND IT IS FREE.** Refuse the fuzzy bind when the recorded css path resolves uniquely to a DIFFERENT element; an absent or ambiguous css says nothing and costs nothing. Measured over the same 187 rows: `silent_wrong` **6 -> 4**, the 0-LLM survival curve **BYTE-IDENTICAL** to the control, k50 unchanged at 6, `role+name~` 11 -> 10 per arm -- the single bind removed is the wrong one, and all ten legitimate augmented-label binds survive. Invariants ALL HOLD and the committed `drift_v2.json` gate passes with `corpus_hash` unchanged. **It is not a new doctrine**: Tier 2 has always refused when its two guesses resolve uniquely to different elements, and `role+name~` -- *a fuzzy matcher wearing an identity anchor's clothes*, in that file's own words -- is the one Tier-1 candidate that is itself a guess and never got that cross-check. It is a REFUSAL only and can never bind something the resolver would not otherwise have bound, so it does not go near D0.
+
+**5. THE ALLOWLIST ENTRY IS DELETED, WHICH IS WHAT CLOSING A DECISION LOOKS LIKE HERE** -- and the ROW is kept, re-declared `expected: "drifted"`, so a regression fails as an UNEXPECTED wrong bind by name instead of being silenced. `test_drift_corpus`'s anti-vacuity floor came DOWN 3 -> 2 for the same reason, with both pairing directions still adjudicating the row.
+
+**AND ONE NUMBER MOVED THAT READS AS A REGRESSION AND IS NOT**: heal MECHANISM **36/38 (95%) -> 36/39 (92%)**. Nothing got worse -- the refused row LEFT the wrong-bind set and JOINED the recovery-eligible population, where the heal correctly declines to re-ground onto the decoy. A wrong bind is unrecoverable by construction and never entered that denominator; a loud refusal does. Recorded because a reader diffing the summary sees a rate fall.
+
+**THE RESIDUAL, MEASURED RATHER THAN HEDGED:** the bind is still uncorroborated when nothing contradicts it, and the check cannot tell WHICH of the two locators drifted. Where the css path is the one that moved and the fuzzy match is CORRECT, the shipped rule refuses a bind the PRE-D2 resolver got RIGHT -- reproduced on a purpose-built page in `test_when_the_css_path_is_the_drifted_one_the_refusal_is_still_LOUD`, where the control binds `go` and the shipped arm returns None. **So the corpus's zero cost is the absence of the SHAPE, not the absence of the cost**, and the cell pins the DIRECTION that must never be traded away: a loud refusal, never the stranger the drifted css points at. That is a gap in the instrument rather than evidence of absence, and it is the population a future attempt should build before widening this check further. |
 <!-- /generated:r4-index -->
 
 
