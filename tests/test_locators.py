@@ -262,3 +262,42 @@ async def test_a_fuzzy_bind_survives_when_the_css_path_is_gone() -> None:
     assert sink.get("bound_by") == "role+name~", (
         f"bound by {sink.get('bound_by')!r} rather than the fuzzy candidate, so this cell no longer "
         f"exercises the candidate whose cost it exists to pin")
+
+
+async def test_when_the_css_path_is_the_drifted_one_the_refusal_is_still_LOUD() -> None:
+    """D2's RESIDUAL, pinned in the only direction that matters (R4.156, 0.178.0).
+
+    The contradiction check treats a unique css match as evidence against the fuzzy name match. It
+    cannot tell WHICH of the two drifted — so when the css path is the one that moved and the fuzzy
+    match is CORRECT, a 0-LLM bind is lost. Measured at zero cost on the drift corpus, but the corpus
+    contains no row of this shape, which is a gap in the instrument rather than evidence of absence.
+
+    MEASURED, AND IT IS A REAL LOSS: on this exact page the PRE-D2 resolver binds the CORRECT target
+    (`go`, via the fuzzy candidate) and the shipped one refuses. So the residual is not hypothetical --
+    it costs a 0-LLM bind wherever this shape occurs, and the corpus's zero is the absence of the shape
+    rather than the absence of the cost.
+
+    WHAT THIS CELL GUARANTEES IS THE DIRECTION, NOT THE COST: the outcome is a LOUD refusal and never
+    a wrong bind. That is the property a future attempt to widen this check must not trade away — the
+    tempting "trust css, it is structural" would bind the stranger here, silently, at 0-LLM.
+
+    The page: the recorded path `body > div:nth-of-type(2) > a` now lands on an UNRELATED control
+    because a div was inserted above, while the target keeps a name the recorded one is a substring
+    of. Both resolve uniquely, to different elements.
+    """
+    html = """<!doctype html><html><body>
+      <div><a href="/x" data-oracle="inserted">Unrelated</a></div>
+      <div><a href="/y" data-oracle="stranger">Archive</a></div>
+      <div><a href="/done" data-oracle="go">Proceed now</a></div>
+    </body></html>"""
+    spec = LocatorSpec(role="link", name="Proceed", tag="a", text="Proceed",
+                       css="body > div:nth-of-type(2) > a", anchor=None, anchor_source=None)
+    bound, sink = await _resolve_on(html, spec)
+    assert bound != "stranger", (
+        "the drifted css path was BOUND — a silent wrong-target click at 0-LLM, which is the one "
+        "outcome this check must never produce")
+    assert bound is None, (
+        f"expected a loud refusal, got {bound!r}; if this now binds the correct target the residual "
+        f"has been closed and this cell should record how")
+    assert sink.get("fuzzy_contradicted"), (
+        "refused, but not by D2's check — the residual this cell documents is no longer reached here")

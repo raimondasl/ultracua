@@ -3238,10 +3238,13 @@ The answer is CHANGE, and neither half of the entry's own prescription survived.
   to close may have shut, so re-measure and update KNOWN_WRONG_BINDS"*. It is INVERTED rather than
   deleted, and paired with a cost control -- without that second cell the refusal is satisfied by
   refusing every fuzzy bind, which is the 84 -> 79 variant.
-* **THE RESIDUAL, STATED:** the bind is still uncorroborated when nothing contradicts it. A css path
-  that has ITSELF drifted while the fuzzy match is CORRECT would now be refused -- loud, never a wrong
-  bind, measured at zero cost -- but the corpus contains no such row, which is a gap in the instrument
-  rather than evidence of absence.
+* **THE RESIDUAL IS MEASURED, NOT HEDGED, AND IT IS A REAL LOSS.** The check cannot tell WHICH of the
+  two locators drifted. On a purpose-built page where the css path is the one that moved and the fuzzy
+  match is CORRECT, the PRE-D2 resolver binds the right target and the shipped one REFUSES -- so the
+  corpus's zero cost is the absence of that SHAPE, not the absence of the cost. Pinned in the only
+  direction that must never be traded away: a loud refusal, never the stranger the drifted css points
+  at. **Writing "measured at zero cost" and stopping there would have been the hedge that reads as
+  evidence**; building the page took ten minutes and turned it into a number.
 
 ## The pattern that predicts the next bug
 

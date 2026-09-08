@@ -458,10 +458,12 @@ adjudicated on the EXTENDED corpus from S1b. Deciding "no change" is acceptable;
   stays and now declares `expected: "drifted"`, so a regression fails as an unexpected wrong bind by
   name instead of being silenced.
 
-  **THE RESIDUAL, STATED:** the bind is still uncorroborated when nothing contradicts it. A css path
-  that has itself drifted onto a wrong element while the fuzzy name match is CORRECT would now be
-  refused — loud, never a wrong bind, and measured at zero cost on this corpus, but the corpus
-  contains no such row and that is a gap in the instrument rather than evidence of absence.
+  **THE RESIDUAL, MEASURED:** the bind is still uncorroborated when nothing contradicts it, and the
+  check cannot tell WHICH locator drifted. Where the css path is the one that moved and the fuzzy
+  match is CORRECT, the shipped rule refuses a bind the pre-D2 resolver got RIGHT — reproduced on a
+  purpose-built page, control binds `go`, shipped returns None. **The corpus's zero cost is the
+  absence of that SHAPE, not the absence of the cost.** Pinned in the only direction that matters: a
+  loud refusal, never the stranger the drifted css points at.
 - **D3.** Reject purely positional row-identity tokens (`data-index`, `id="row-N"`) (AB-3).
   ⛔ **DECIDED 2026-09-06, 0.176.0: NO CHANGE. The prescription is a MEASURED NO-OP, and three
   alternative sensors were built and refused.** $0.00 -- no LLM, no substrate.
