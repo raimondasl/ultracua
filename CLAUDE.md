@@ -3136,6 +3136,62 @@ Reproduce with `python -m benchmarks.row_echo_probe`.
   closable. Deleting that entry is still what closing D3 would look like -- and this slice is the
   record of why it cannot be deleted yet.
 
+## The two watchers that never got the recorder's scope (R4.153, 0.177.0)
+
+A write issued from a SERVICE WORKER is surfaced at the browser CONTEXT and never at the page.
+`recorder.py:749` chose `page.context.on("request")` and wrote down why; `dryrun.py:187` chose
+context scope for its own reason. `flow.py`'s LEARN and HEAL watchers were page-scoped. **$0.00** --
+no LLM, no substrate rep. `python -m benchmarks.watcher_scope_probe` re-derives the safety half.
+
+* **BOTH CLAUSES OF INVIOLABLE #3, FROM ONE MISSING WORD.** `wrote`/`posted` are set ONLY inside
+  `_watch_request`, so an unseen write leaves `performed_write` False and `flow.py`'s
+  `if opts.verify_replay and not performed_write and not posted_any:` re-drives the whole flow -- a
+  real double-submit AT LEARN -- and it then caches as a READ, so every later replay re-fires it
+  ungated and unkeyed. Measured through the real `_learn_once`: **saves=2 before, saves=1 after**.
+* **READING THE CHAIN IS NOT DRIVING IT, and the slice's first act was a failing test.** The harm was
+  traced by reading `flow.py` and could have been wrong at any link; the cell was written against
+  UNMODIFIED `src/` and watched go red before a line changed. `saves == 1` alone is not enough
+  either -- it is satisfied by a run that never wrote twice and still stored the write as a read, so
+  the durable half gets its own assertion on the cached recipe's `mutating`.
+* **TWO OF MY OWN FIXTURES MASKED THE HARM, both in the direction this file already warns about.**
+  Awaiting `serviceWorker.ready` before touching the page, then changing an `<h1>`'s text, each left
+  the heal proposal refused by the *"heal had no effect"* check instead of the wire check -- **safe
+  by ACCIDENT and silent about the write**, which is exactly what `_maybe_heal`'s own comment says
+  that check does. **The fingerprint is STRUCTURAL, over interactable elements**, so an `<h1>` cannot
+  move it and a button relabel can. A base arm red for the WRONG reason reads exactly like one red
+  for the right reason.
+* **THE FIX SHIPPED A LISTENER LEAK AND THE SLICE CAUGHT IT.** Both registrations moved to the
+  context; both `finally` blocks still said `page.remove_listener`, which removes nothing from a
+  context -- one leak per learn and per heal, for the life of the context. Pinned over the AST by
+  receiver expression and handler name, with the exact mistake as one of its mutations. **When you
+  move a registration, the removal is a second site with the same name and a different object.**
+* **THE OVER-REFUSAL DIRECTION IS MEASURED, because that is what refuses a change like this.**
+  Context adds dedicated workers, service workers and popups, so the risk is noise marking a step
+  that never wrote -- D0's shape.
+  All 14 corpus start pages, both live substrates: **Gitea 0 extra on 7 of 7; Odoo 8 extra, 0
+  write-classified**, every one a GET -- including `GET /web/service-worker.js`, so page scope could
+  not even see Odoo registering a worker. `drift_bench` is byte-identical to the baseline.
+* **AND IT IS NOT A SUPERSET OF EVERY REALM -- THE ADVERSARIAL PASS PROVED THAT WITH MY OWN
+  FIXTURE.** `recorder.py` had said "strict SUPERSET" since it was written; this slice copied the
+  claim into `flow.py` and into its own register entry, and **nobody had measured it**. Four realms
+  in one page: a SHARED worker's write reaches the server and reaches NEITHER `page.on` NOR
+  `page.context.on` (`context.route` misses it too). Swapping `ServiceWorker` for `SharedWorker` in
+  this slice's own committed fixture reproduces **saves=2, cached as a read, ON THIS BRANCH** -- the
+  exact harm, one realm over, and Odoo's bus is a SharedWorker. Filed as **R4.154**, OPEN, and the
+  false line corrected at its source. **A justification inherited from a sibling is inherited whole,
+  including the part that is wrong.**
+* **AND THE HEAL WATCHER HAS NO ACT WINDOW, so this WIDENS a loud over-refusal (R4.155, OPEN).**
+  `_watch` there trips on any write it sees, bounded only by a listener lifetime that spans an
+  `expect_request` running its full ~1 s for a cross-realm write. A background heartbeat therefore
+  discards a legitimate locator repair and reports *"the heal fired a WRITE on the wire"* about a
+  click that issued nothing. Pre-existing for page-realm traffic, widened here, measured ZERO on both
+  live substrates -- **which is not the same as bounded**, and is why it is filed rather than noted.
+* **WHAT IS DELIBERATELY LEFT ALONE, said rather than left to be noticed.** `browser.py:244`'s
+  in-flight counter stays page-scoped: under-counting makes the readiness poll give up EARLIER, which
+  is loud, and moving it is a readiness question owing its own cost measurement. And the WebSocket
+  half of D4 is untouched -- a SHARED-worker socket is invisible to `page.on("websocket")` too, so
+  copying the recorder's shape there would copy a claim that needs correcting first.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the

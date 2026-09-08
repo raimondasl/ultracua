@@ -744,8 +744,15 @@ async def record_demo(
 
     # CONTEXT scope (not page) for the request watcher: a Service Worker / cross-realm fetch is surfaced at the
     # context, NOT the page, so a page-scoped watcher would MISS a SW write entirely (no marker either -> cached
-    # ungated, a fail-open). Context scope is a superset (page + workers + SW + any popup); extra wire
-    # visibility only ever makes the per-url reconciliation fail MORE loud (a shortfall), never fail open.
+    # ungated, a fail-open). Context scope covers the page, dedicated workers, service workers and
+    # popups; extra wire visibility only ever makes the per-url reconciliation fail MORE loud (a
+    # shortfall), never fail open.
+    #
+    # IT IS NOT A SUPERSET OF EVERY REALM, and this line used to say it was. Measured at 0.177.0 with
+    # four realms in one page: a SHARED worker's write reaches the server and reaches NEITHER
+    # `page.on("request")` NOR `page.context.on("request")`. `context.route("**/*")` misses it too, so
+    # `dryrun.py`'s primary hold is blind to the same realm. Odoo's bus is a SharedWorker, so this is
+    # live on this project's own corpus. R4.154.
     page.context.on("request", _watch_request)
     page.on("websocket", _watch_ws)
     page.on("framenavigated", _on_nav)
