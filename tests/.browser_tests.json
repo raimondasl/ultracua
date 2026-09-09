@@ -1,6 +1,6 @@
 {
  "_comment": "DERIVED, never hand-edited. A test is a browser test iff it was OBSERVED launching one, OR the fast tier later caught it launching (attribution is order-dependent when a module shares browser work through a fixture). Regenerate with `pytest -q --store-browser-marks` then `python scripts/derive_test_tiers.py`, which iterates to the fixed point. An unclassified test makes a tiered run fail loudly rather than skip it.",
- "total": 2489,
+ "total": 2493,
  "browser": [
   "tests/test_actions_taken.py::test_a_decision_to_stop_is_not_an_action",
   "tests/test_actions_taken.py::test_a_real_zero_action_learn_now_mints_no_actions_needed",
@@ -1474,6 +1474,10 @@
   "tests/test_inviolable_properties.py::test_no_typed_error_is_both_retryable_and_post_actuation",
   "tests/test_inviolable_properties.py::test_the_door_list_covers_every_public_replay_verb",
   "tests/test_inviolable_properties.py::test_the_no_llm_fixture_actually_intercepts_every_binding",
+  "tests/test_js_payload_probe.py::test_breaking_a_payload_refuses_a_stale_anchor",
+  "tests/test_js_payload_probe.py::test_every_payload_is_either_evaluated_or_spliced_into_one_that_is",
+  "tests/test_js_payload_probe.py::test_the_classification_is_not_degenerate",
+  "tests/test_js_payload_probe.py::test_the_consumer_set_covers_every_playwright_entry_point_src_actually_uses",
   "tests/test_landed_arms_the_ledger.py::test_a_landed_write_is_never_handed_the_auth_refresh_retry",
   "tests/test_landed_arms_the_ledger.py::test_every_failure_return_in_attempt_replay_goes_through_the_arming_helper",
   "tests/test_learn_capture_evidence.py::test_a_zero_is_reported_as_a_real_zero",
