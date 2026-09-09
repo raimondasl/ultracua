@@ -3246,6 +3246,48 @@ The answer is CHANGE, and neither half of the entry's own prescription survived.
   at. **Writing "measured at zero cost" and stopping there would have been the hedge that reads as
   evidence**; building the page took ten minutes and turned it into a number.
 
+## D4 decided: a watcher with nowhere to look, and no wider scope to move to (R4.157, 0.179.0)
+
+Phase 3's third decision, and the third settled by the FREE first question. **$0.00**. Reproduce with
+`python -m benchmarks.ws_population_probe --calibrate` (offline, ~3 s) then without the flag.
+
+* **THERE IS NO SCOPE TO ACHIEVE PARITY WITH, which is not what I expected going in.** R4.153's
+  request watchers had a real choice and took the wider one. A websocket watcher has none: measured
+  from Playwright's own event tables, **`WebSocket` is on `Page` and NOT on `BrowserContext`**, which
+  offers `ServiceWorker` and nothing for shared workers or sockets. The recorder's
+  `page.on("websocket")` is the only scope that exists. **I had written that D4 was entangled with
+  R4.154 because it would "copy the recorder's shape" -- that framing assumed a choice it never had**,
+  and one command against the event tables corrected it.
+* **ZERO POPULATION, AND THE CALIBRATION CAUGHT ITSELF FIRST.** All 14 corpus start pages, both live
+  substrates, authenticated: **0 sockets**, with **14 of 14 carrying a shared worker**. A zero is
+  worth its control, so `--calibrate` drives a page opening one socket from the PAGE realm and one
+  from a SHARED WORKER. Its first draft pointed both at **port 9, on Chrome's blocked-port list**, so
+  nothing was created and the page-realm CONTROL read False. **A probe whose control fails is
+  measuring itself** -- and this one said so before a single corpus number was taken.
+* **THE ZERO HAS TWO DIFFERENT CAUSES, AND THAT IS THE DECISION.** Gitea has NO websocket --
+  `eventsource.sharedworker.js` opens an `EventSource`, an HTTP GET. Odoo HAS one --
+  `websocket_worker_bundle` does `new WebSocket(this.websocketURL)` from a shared worker, invisible to
+  the only event available. So the prescribed watcher is **inert where there is nothing and BLIND
+  where there is something**, and its zero would read as *no websocket writes happened*: a sensor that
+  cannot fail, wearing a write-safety hat. **That is why it is NO CHANGE and not "not yet"** -- the
+  artefact would be actively misleading rather than merely useless.
+* **WHAT WOULD REOPEN IT IS PINNED, NOT REMEMBERED.** A Playwright release adding a context-level
+  `WebSocket` event fails `test_websocket_is_a_page_event_and_not_a_context_one` by name and says to
+  reopen D4. Armed by adding the event to the class in-process; the recorder's page scope is armed by
+  moving it.
+* **IT PRICED R4.154 AS A BY-PRODUCT, AND WIDENED IT.** That entry called the realm an Odoo property.
+  It is on **14 of 14 pages, both substrates** -- though what they CARRY differs and the difference
+  matters: Odoo writes from it, Gitea's EventSource is a GET, so Gitea's exposure is structural rather
+  than live. And the candidate sensor is measured: CDP `Target.setAutoAttach` DOES attach
+  `shared_worker` targets, but **`CDPSession.send(method, params)` takes no `sessionId`** and exposes
+  no child session, so the worker cannot be addressed through Playwright at all. R4.154 needs a raw
+  CDP client or a proxy -- a slice, not a parameter.
+* **AND A SURVIVOR WAS A BROKEN MUTATION, NOT A HOLE.** The calibration cell survived its first
+  arming; the mutation had been mangled by shell escaping and never applied. Re-applied with a count
+  asserted first, it kills. **A survivor is as often a wrong mutation as a weak cell** -- the same
+  rule 0.174.0 records from the other direction, and the fix both times was to read the message rather
+  than the verdict.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
