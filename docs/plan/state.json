@@ -71,7 +71,8 @@
    "trigger": "1.1",
    "trigger_fired": true,
    "artifact": "tests/test_must_agree_pairs.py",
-   "forward_declared": true
+   "forward_declared": true,
+   "note": "trigger FIRED at 0.115.0 (1.1 done) and the step stays HELD deliberately -- it was held by OMISSION for 64 versions, which is the defect this note closes. Its three parts were verified against the tree at 0.180.0 (R4.158) and two are already settled. (1) CONTRACT TESTS FOR THE MUST-AGREE PAIRS: the one pair the plan names -- `_LANDMARKS` vs the `const LM` literal, `_ROW_OF_JS` vs `rowIdOf` -- was closed by UNIFICATION rather than by a test. `_ROWID_JS` is now one implementation included verbatim by both callers and `LM` is spliced from the shared Python constant, so there is nothing left for a contract test to compare; that is the shape change CLAUDE.md's opening rule prescribes over another per-branch cell. (2) `Client` IN `_SDK_CTORS`: landed early with 0.4a, as this step's own narrative predicted. (3) `node --check` OVER EVERY ASSEMBLED PAYLOAD: still unbuilt and still the only live part, and MEASURED to buy feedback speed rather than correctness. 11 of 15 payloads are evaluated directly and FIVE are consumed only by fail-open sites -- three of them write-safety guards -- so those are the only ones whose syntax error the suite could miss. All five were broken with an unbalanced brace and all five were caught (7/5/3/3/1 failures). Re-derive with `python -m benchmarks.js_payload_probe` and `--break <name>`. Unholding is a decision, not an inference: what would justify it is a NEW fail-open consumer that the probe lists and the suite does not cover."
   },
   {
    "id": "0.6",

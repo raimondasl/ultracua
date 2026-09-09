@@ -596,12 +596,24 @@ same decision. Both now carry `trigger_fired` in `docs/plan/state.json`, so the 
 document states it rather than leaving it to be re-derived by whoever next reads these three bullets.
 Neither is re-opened here — that is a call to make with a slice in hand, not in a documentation fix.
 
-* **0.5 — contract tests for the "must agree" pairs.** Held to land beside **1.1** (both are AST-pin work
-  over the same tree). **One line of it is taken early, with 0.4a:** `_SDK_CTORS`
-  (`tests/test_inviolable_properties.py:148`) does not contain `Client`, and that tuple is what makes
-  `llm.build_client` provably the choke point for inviolable #1. Verified safe to widen — the only
-  `Client(` construction in `src/` is `genai.Client()` at `llm/gemini.py:101`, inside a leaf adapter, so
-  the pin lands green.
+* **0.5 — contract tests for the "must agree" pairs. HELD DELIBERATELY as of 0.180.0, and two of its
+  three parts are already settled (R4.158).** It had been held by OMISSION for 64 versions — the one
+  step with a fired trigger and no recorded reason — so the reason is now measured rather than assumed.
+  * **The contract tests are obsolete for the pair this plan names.** `_LANDMARKS` vs the `const LM`
+    literal, and `_ROW_OF_JS` vs `rowIdOf`, were closed by **UNIFICATION**: `_ROWID_JS` is one
+    implementation included verbatim by both callers and `LM` is spliced from the shared Python
+    constant, so there is nothing left for a contract test to compare. `locators.py` says so itself —
+    *"It used to be two copies with a comment saying they MUST agree; they did not, and could not be
+    made to reliably."* That is this document's own preferred remedy, taken already.
+  * **`Client` in `_SDK_CTORS` landed early with 0.4a**, exactly as the previous wording predicted;
+    the tuple now reads `("AsyncAnthropic", "AsyncOpenAI", "OpenAI", "GenerativeModel", "Client")`.
+  * **`node --check` over every assembled payload is the only live part, and it buys SPEED rather
+    than safety.** Payloads are assembled at import time, so a syntax error breaks every test that
+    drives one — except for payloads consumed ONLY by fail-open sites, where degrading silently is
+    the designed behaviour. Measured: **5 of the 11 directly-evaluated payloads are fail-open only**,
+    three of them write-safety guards (`_ROW_OF_JS`, `SCOPE_JS`, `_MUTATION_CTX_JS`) — and **all five
+    are caught anyway** when broken with an unbalanced brace. `python -m benchmarks.js_payload_probe`
+    re-derives the classification; `--break <name>` re-derives the verdict.
 * **0.6 — the scheduled mutation sweep. DONE at 0.136.0, and the reasoning here was half right.**
   It correctly said the per-PR half already existed and that the missing piece was the part a merge
   gate cannot afford. It named that part as *generic operators*, and the part that actually shipped is

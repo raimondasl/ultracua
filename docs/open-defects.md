@@ -12,7 +12,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**72 open**, 81 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**72 open**, 82 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +773,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **72 open**, 81 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **72 open**, 82 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -1245,6 +1245,19 @@ if and only if that branch is ever resumed.
 **WHAT WOULD REOPEN IT IS PINNED RATHER THAN REMEMBERED.** A Playwright release adding a context-level `WebSocket` event fails `test_websocket_is_a_page_event_and_not_a_context_one` BY NAME and says to reopen D4. The recorder's page scope is pinned over the AST for the same reason -- 'parity with the recorder' stops meaning what this entry says the moment that moves.
 
 **AND IT WAS THE FREE FIRST QUESTION, WHICH IS THE THIRD DECISION IN A ROW SETTLED THAT WAY.** D3 was a measured no-op, D2's scope clause was a measured no-op, and D4's watcher has no reachable population. **Before building what a plan entry prescribes, measure whether it can fire** -- all three cost $0.00 and all three would otherwise have been slices. |
+| R4.158 | fixed | **0.5 IS HELD BY DECISION RATHER THAN BY OMISSION, AND TWO OF ITS THREE PARTS WERE ALREADY SETTLED.** reshape-plan step 0.5 (*contract tests for the must-agree pairs*) had a trigger that fired at 0.115.0 and, unlike 0.7, **no recorded reason** -- the one step held by omission, 64 versions on. $0.00, no `src/` change. Reproduce with `python -m benchmarks.js_payload_probe` and `--break <payload>`.
+
+**1. THE CONTRACT TESTS ARE OBSOLETE FOR THE PAIR THE PLAN NAMES, and this is the FOURTH plan entry to outlive its subject** (after 2.4b's five-slice-stale note, R4.113's three sentences and S1b's six already-built fixtures). `_LANDMARKS` vs the `const LM` literal, and `_ROW_OF_JS` vs `rowIdOf`, were closed by UNIFICATION: `_ROWID_JS` is ONE implementation included verbatim by both callers, `LM` is spliced from the shared Python constant. `locators.py` records why in its own comment -- *'It used to be two copies with a comment saying they MUST agree; they did not, and could not be made to reliably'* -- which is CLAUDE.md's opening rule (change the SHAPE so the invariant is enforced once) already applied. A contract test comparing two copies is unwritable when there is one copy.
+
+**2. `Client` IS ALREADY IN `_SDK_CTORS`**, landed with 0.4a as the step's own narrative predicted.
+
+**3. THE SYNTAX CHECK IS THE ONLY LIVE PART, AND IT BUYS SPEED RATHER THAN SAFETY.** ~1,150 lines of in-page JS are assembled from Python strings and nothing anywhere checks their syntax. Because assembly happens at import time the text is identical every run, so a broken payload breaks every test that drives it -- **except** where the consumer CATCHES the exception and returns a benign value, which makes the mechanism a silent no-op while the suite stays green, since failing open is the DESIGNED behaviour. **Measured: 5 of the 11 directly-evaluated payloads are fail-open only**, and three are write-safety guards -- `_ROW_OF_JS` (the row-containment guard, returns `""` == refuse), `SCOPE_JS` (the mutation gate's scope, falls back to whole-page) and `_MUTATION_CTX_JS` (the pre-act classifier's context, returns `{}` == KEYWORD-ONLY, whose measured recall without form context is 45%).
+
+**THE HYPOTHESIS WAS THAT `_MUTATION_CTX_JS` WOULD BE INVISIBLE, AND IT IS REFUTED.** Broken with an unbalanced brace it produced **7 failures**, including `test_write_classification`'s over-refusal cell and the write-safety matrix in BOTH directions -- the *must remain learnable* clause CLAUDE.md calls load-bearing is what catches it. Rather than generalise from the one I had argued was most dangerous, all five were broken in turn: `_ROW_OF_JS` 5 failures, `SCOPE_JS` 3, `_FOCUSED_REF_JS` 3, `_DETECT_JS` 1. **Five for five.** So the fail-open class does not hide a syntax error and `node --check` would move a failure from 40 minutes to 1 second -- convenience, not correctness.
+
+**WHAT SHIPS IS THE CLASSIFICATION, NOT THE VERDICT.** *Which payload can degrade silently* is a question anyone touching this surface wants answered, and `benchmarks/js_payload_probe.py` DERIVES it from the tree rather than from a typed list, so a new fail-open consumer appears without anyone remembering to add it. Its guards pin the two ways the census rots -- an unrecognised consumer (silently dropping a payload) and an unrecognised handler (reporting that nothing can degrade) -- plus that no payload is dead and that `--break` refuses a stale anchor. 4 cells, all armed.
+
+**WHAT WOULD UNHOLD 0.5**, stated so it is a decision next time too: a NEW fail-open consumer that the probe lists and the suite does not cover. That is checkable in one command, which is the point of shipping the census rather than the conclusion. |
 <!-- /generated:r4-index -->
 
 

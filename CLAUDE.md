@@ -3288,6 +3288,45 @@ Phase 3's third decision, and the third settled by the FREE first question. **$0
   rule 0.174.0 records from the other direction, and the fix both times was to read the message rather
   than the verdict.
 
+## 0.5 asked for three things and two were already done (R4.158, 0.180.0)
+
+The one plan step held by OMISSION -- trigger fired at 0.115.0, and unlike 0.7 no recorded reason, 64
+versions on. **$0.00, no `src/` change.** Reproduce with `python -m benchmarks.js_payload_probe` and
+`--break <payload>`.
+
+* **THE FOURTH PLAN ENTRY TO OUTLIVE ITS SUBJECT**, after 2.4b's stale note, R4.113's three sentences
+  and S1b's six already-built fixtures. 0.5's contract tests target `_LANDMARKS` vs the `const LM`
+  literal and `_ROW_OF_JS` vs `rowIdOf` -- **closed by UNIFICATION**, not waiting for a test.
+  `_ROWID_JS` is ONE implementation included verbatim by both callers; `locators.py` says *"It used to
+  be two copies with a comment saying they MUST agree; they did not, and could not be made to
+  reliably."* That is this file's own opening rule already applied, and **a contract test comparing
+  two copies is unwritable when there is one copy.** `Client` in `_SDK_CTORS` landed with 0.4a.
+* **SO ONLY THE SYNTAX CHECK WAS LIVE, AND THE INTERESTING QUESTION IS NARROW.** ~1,150 lines of
+  in-page JS are assembled from Python strings with no syntax check anywhere. Payloads assemble at
+  IMPORT time, so the text is identical every run and a broken one breaks every test that drives it --
+  **except** where the consumer catches the exception and returns a benign value, because then the
+  mechanism silently no-ops **while the suite stays green, failing open being the DESIGNED behaviour**.
+* **MEASURED: 5 of 11 directly-evaluated payloads are fail-open only, and THREE are write-safety
+  guards** -- `_ROW_OF_JS` (row containment, returns `""` == refuse), `SCOPE_JS` (the mutation gate's
+  scope, falls back to whole-page), `_MUTATION_CTX_JS` (the pre-act classifier's context, returns `{}`
+  == keyword-only, 45% recall). That looked like a live inviolable-#3 hole and it is not.
+* **THE HYPOTHESIS WAS REFUTED BY BREAKING IT, WHICH IS THE WHOLE SLICE.** `_MUTATION_CTX_JS` broken
+  with an unbalanced brace -> **7 failures**, including the write-safety matrix in BOTH directions;
+  the *must remain learnable* clause this file calls load-bearing is what catches it. **And I did not
+  generalise from the one I had argued was most dangerous** -- all five were broken in turn:
+  `_ROW_OF_JS` 5, `SCOPE_JS` 3, `_FOCUSED_REF_JS` 3, `_DETECT_JS` 1. **Five for five.** So
+  `node --check` moves a failure from 40 minutes to 1 second: convenience, not correctness.
+* **WHAT SHIPS IS THE CENSUS, NOT THE CONCLUSION.** *Which payload can degrade silently* is worth
+  answering whenever this surface is touched, and it is DERIVED from the tree rather than typed, so a
+  new fail-open consumer appears without anyone remembering. Its guards pin the two ways a census rots
+  -- an unrecognised consumer silently drops a payload, an unrecognised handler reports that nothing
+  can degrade -- and both are armed, because either failure produces a clean report of nothing.
+* **AND A HELD STEP NOW SAYS WHY.** 0.5 keeps `held` (the vocabulary is `done`/`pending`/`held`, and a
+  `done` step must have its artifact) and gains a NOTE in the shape 0.7 already had. **Held by
+  omission and held by decision read identically in a status column and are not the same thing** --
+  that gap is what let B2 nearly get built twice. What would unhold it is named: a new fail-open
+  consumer the probe lists and the suite does not cover, checkable in one command.
+
 ## The pattern that predicts the next bug
 
 Most defects found here are **a guard that already exists on a sibling path and was never applied to the
