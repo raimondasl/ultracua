@@ -1,15 +1,47 @@
 # ultracua — status & observations (2026-07-01)
 
-> **Counts refreshed 2026-08-14 (0.107.0, 1071 tests — 1061 passing + 10 strict-xfail for R3.7, R4.5, R4.30, R4.34, R4.37, R4.38 and R4.39); the NARRATIVE below is still the 2026-07-01
-> snapshot and lags ~16 versions.** What it says about the shipped core remains true; what it omits is
-> everything the correctness plan has landed since 0.75.0 — S2–S9, S17 and S6/AB-1, the CLI exit-truth
-> and fleet-visibility work, and the standing defect register's growth to a round-4 series of 40. The
-> honest current state of the open findings is `docs/open-defects.md` (2 open in round 3, 23 in round
-> 4, both machine-checked) and `docs/correctness-plan.md`, not this file. Rewriting the narrative is
-> Phase 7's job; the numbers are corrected here so nobody quotes a stale one in the meantime.
+> ## ⚠ Read this banner, not the narrative below
+>
+> **Refreshed 2026-09-09 at 0.180.0. Everything under this banner is a dated snapshot whose header
+> still says 2026-07-01, and it has NOT been brought current** — its `file:line` pointers have all
+> moved, and several of its numbers are superseded by the corrections in this banner. Treat the
+> narrative as history. The artifacts that own the live numbers are `baselines/README.md` (the
+> benchmark honesty page), `docs/register/state.json` (the defect register) and
+> `docs/plan/state.json` (programme status); each is machine-checked against the tree, and this file
+> is not.
+>
+> **Suite.** 2,493 collected tests — 1,894 in the browser-free `fast` tier, 599 browser. The fast
+> tier ran in ~100 s here on 2026-09-09 (it was 89 s over 1,450 tests at 0.125.0; the population has
+> grown, the per-test cost has not).
+>
+> **What the narrative omits** — everything after ~0.75.0 for the correctness plan (S2–S9, S17,
+> S6/AB-1, the CLI exit-truth and fleet-visibility work) and the whole programme after 0.107.0: the
+> reshape work (a keyword-only engine chain, two frozen option/hook bundles, **28** distinct refusal
+> codes, a single `RunRecord` writer, a committed door-policy table checked against the source), the
+> readiness layer that made a client-rendered SPA replayable at all, `body_says_read` (which clears
+> Odoo-shaped `call_kw` reads served over POST — the JSON-RPC half of R4.27; **GraphQL reads over POST
+> are untouched**), and the **customer benchmark**: two live substrates, 14 scenarios, server-side
+> oracles, a weekly gated run.
+>
+> **Findings.** `docs/open-defects.md`: **2 open in round 3** (R3.2, R3.7); round 4 is a 158-finding
+> series at **72 open / 82 fixed / 4 parked**.
+>
+> **The two numbers a reader most needs.** `availability_rate` **0.762** on Gitea (cut 2026-08-26)
+> and **0.714** on Odoo (cut 2026-09-05 from a series run at 0.169.0), each over n=21
+> scenario-observations (3 passes × 7 scenarios). **Neither is re-cut against 0.180.0**, and a later
+> Gitea series measured 0.857 — read them as the level, not the current rate. No silently-wrong
+> outcome is recorded in any committed customer-benchmark series; `drift_bench` is a different
+> instrument and publishes its own non-zero wrong-bind allowlist (see `baselines/README.md`).
+>
+> **Speed.** There is no committed artifact behind a "2–7× on real sites" figure, and this file used
+> to imply one — the WebArena runs it rests on are on-disk only and three months old. What the tree
+> supports: the fixture benchmarks show **38–114×**, which measures *removed LLM latency on a local
+> page* and does not transfer; and the shipped `examples/hn_digest.py` learned in 30 s and replayed in
+> 5 s against a live site on 2026-09-09 (one flow, one run). The customer benchmark records
+> availability only — it has **no timing field at all**.
 
 A dated, honest snapshot covering through the recorder arc: what's shipped, how proven it is, what the
-latest benchmark runs measured, the known fragilities (with `file:line`), and the prioritized path forward. The
+latest benchmark runs measured, the known fragilities (with the `file:line` they had when it was written -- every one has since moved; do not follow them as pointers), and the prioritized path forward. The
 forward-looking phase plan lives in [ROADMAP.md](ROADMAP.md) — Phases A–D are shipped, and several
 of the longer-term phases have since landed (E fleet supervisor, F suffix-replan, H pinned 0-LLM
 reads, J CI); the full plan (E–J) is in *"Beyond Phase D"* there.
@@ -21,8 +53,9 @@ engine is the moat, and it is not yet hardened for unattended production.** Phas
 engine), A–C (the Flow API: define → learn → approve → replay → auth-refresh → health), and D
 (write flows) are shipped and merged, and the ops layer has since hardened (logging, CI,
 retry/backoff, fleet supervisor + freshness canary, a cross-process meta lock, and a standing
-locator-resilience benchmark). **1071 tests**, all key-less (real headless Chromium against local
-fixtures, run in CI on Linux + Windows, sharded two ways per OS); version **0.107.0**. Secrets handling is a real strength:
+locator-resilience benchmark). **2,493 tests**, all key-less (real headless Chromium against local
+fixtures, run in CI on Linux + Windows, sharded two ways per OS, plus a ~100-second browser-free `fast`
+tier and a mutation `red-proof` job); version **0.180.0**. Secrets handling is a real strength:
 credentials are env-sourced at runtime and **never persisted** — only the resulting `storage_state`
 cookies are saved (atomically).
 
@@ -30,11 +63,11 @@ cookies are saved (atomically).
 
 | Layer | Shipped & solid | Thin / fragile |
 |---|---|---|
-| **Engine** (`flow.py`) | learn → replay → heal loop; **verify-by-replay before cache** (a learned read flow is cached only if it reproduces on a fresh 0-LLM replay — most discovery failures are caught here); **suffix-replan** (re-author the broken tail, keep the prefix) when single-step heal can't fix a drifted step; ranked resilient locators (testid → role+name → **neighbor-anchor** → css) that **fail loud on an ambiguous bind, never silently first-match** (`resolve(unique=True)`); mutation gate that **fails loud, never LLM-heals a write** — incl. *refless* Enter-submits, now gated on the **focused field's** form-scope (#55), not the whole page; stuck/interstitial detection; pacing governor; resilience measured by **drift-bench v2** — 0-LLM survival falls 11/12 -> 0/6 as mutation intensity destroys 1 -> 7 locator anchors; heal's MECHANISM ceiling 13/13 and suffix-replan 2/10 (v1 could measure neither); write recovery refused 14/14; the positional-css retarget's TOKEN-BEARING half closed in 0.62.0 (a css bind that falsifies a recorded data-testid is refused), the token-less half still published at 0.9% of rows | a mutating **navigate** submit (rare) still falls back to the whole-page fingerprint; the TOKEN-LESS positional-css retarget is still open and is the common case (8 of 10 css binds record no identity token) — nothing `describe()` captures separates a renamed target from a substituted one, so it stays published and pinned by its own benchmark row; the model-accuracy half of the heal rate remains unmeasured (the paid bench arm is built but unrun); the heal LLM call still grounds from a single snapshot (no multi-modal/vision tie-break) |
+| **Engine** (`flow.py`) | learn → replay → heal loop; **verify-by-replay before cache** (a learned read flow is cached only if it reproduces on a fresh 0-LLM replay — most discovery failures are caught here); **suffix-replan** (re-author the broken tail, keep the prefix) when single-step heal can't fix a drifted step; ranked resilient locators (testid → role+name → **neighbor-anchor** → css) that **fail loud on an ambiguous bind, never silently first-match** (`resolve(unique=True)`); mutation gate that **fails loud, never LLM-heals a write** — incl. *refless* Enter-submits, now gated on the **focused field's** form-scope (#55), not the whole page; stuck/interstitial detection; pacing governor; resilience measured by **drift-bench v2** — 0-LLM survival falls 20/27 -> 0/6 as mutation intensity destroys more of a target's locator anchors (k50 = 6); heal's MECHANISM ceiling 36/39 and suffix-replan 2/20 (v1 could measure neither); write recovery refused 14/14; the positional-css retarget's TOKEN-BEARING half closed in 0.62.0 (a css bind that falsifies a recorded data-testid is refused), the token-less half still published, as one of the two rows named in `KNOWN_WRONG_BINDS` | ANY target with no enclosing form/section falls back to the whole-page fingerprint -- measured at 40% of targets across 14 surveyed sites and 5 of 5 calls on Odoo (R4.148, open); a mutating navigate submit is one such case, not the only one; the TOKEN-LESS positional-css retarget is still open and is the common case (the 8-of-10 census behind that phrasing is v1-era and has not been re-derived) — nothing `describe()` captures separates a renamed target from a substituted one, so it stays published and pinned by its own benchmark row; the model-accuracy half of the heal rate remains unmeasured (the paid bench arm is built but unrun); the heal LLM call still grounds from a single snapshot (no multi-modal/vision tie-break) |
 | **Flow API** (`flows.py`) | full lifecycle; approval gate — **bound to a digest of the reviewed steps** (0.60.0), so a re-authored recipe refuses (`stale_approval`) instead of running under a stale approval bit; data-shape drift; fail-loud `FlowReplayError`; auth-refresh; fleet health + **fleet supervisor** (`flow run-all`: concurrent replay, pass/fail/skip classification, non-zero exit, alert webhook) + a cheap read-only **freshness canary** (`flow canary`: does each flow still *start*? — catches entry-page rot before a scheduled run fails); Phase D writes with action-completion + opt-in idempotency precheck; the health read-modify-write is now **cross-process locked** (#54), so concurrent scheduled processes can't lose a health update | no built-in **scheduler** (by design — point cron / Task Scheduler at `flow run-all` + `flow canary`); the canary is intentionally shallow (entry step only — mid-flow drift still needs the full `run-all`) |
 | **Providers** (`llm/`, `providers/`) | provider-neutral types; Anthropic path with real prompt-cache + streaming TTFT; reusable extraction; **Router retry/backoff/timeout** (transient-aware, capped exponential + jitter); **per-run token + est. $ cost accounting** (`FlowReport.extra["usage"]`); **all three adapters' `.complete()` glue covered by key-less live-path tests**; JSON-RPC daemon + Node client | the live-path tests replay **recorded/synthetic** responses, not a real API call (no keys in CI); Gemini's test injects the SDK response object rather than exercising its HTTP/deserialization layer |
 | **Ops / packaging** | config via `ULTRACUA_*` env; data kept off C:; `.env` gitignored; **stdlib logging** with a per-run `run_id` contextvar; **GitHub Actions CI** (Linux + Windows, key-less suite); **single-sourced version** (`importlib.metadata`) | the JSON-RPC daemon is single-flight, unauthenticated, and (now **documented as**) the raw *engine* surface that bypasses the Flow safety gates — engine-only, not a service; a real service daemon (auth + the Flow verbs) is Phase I |
-| **Recorder** (`recorder.py`, `flow record`) | **capture fidelity** (click / type / select / press(Enter) / scroll); **nav handshake** (survives same-origin navigation via a sessionStorage queue drained post-nav); **write gate + per-write attribution** (an init-script instruments fetch / XHR.send / sendBeacon to tie each non-idempotent request to the commit in its synchronous turn — declared writes are gated + approval-gated + idempotency-keyed, and an un-instrumentable / ambiguous write is **refused, never cached ungated**); verify-by-replay then cache; **intent caption** (best-effort post-hoc LLM relabel for self-heal hints + inspect + the keyword side of `classify_mutation`; replay stays 0-LLM) | **cross-origin** is a **loud refusal** (orphaned writes fail loud, not silently cached); **iframe / shadow-DOM** capture and **WebSocket** writes are not yet attributable |
+| **Recorder** (`recorder.py`, `flow record`) | **capture fidelity** (click / type / select / press(Enter) / scroll); **nav handshake** (survives same-origin navigation via a sessionStorage queue drained post-nav); **write gate + per-write attribution** (an init-script instruments fetch / XHR.send / sendBeacon to tie each non-idempotent request to the commit in its synchronous turn — declared writes are gated + approval-gated + idempotency-keyed, and an un-instrumentable / ambiguous write is **refused, never cached ungated**); verify-by-replay then cache; **intent caption** (best-effort post-hoc LLM relabel for self-heal hints + inspect + the keyword side of `classify_mutation`; replay stays 0-LLM) | **cross-origin** is a **loud refusal** (orphaned writes fail loud, not silently cached); **iframe / shadow-DOM** capture, **WebSocket** writes and **shared-worker** writes are not yet attributable (R4.154, open -- a shared-worker write is invisible to page AND context scope) |
 
 ## Benchmarks (run 2026-06-18)
 
@@ -44,7 +77,7 @@ cookies are saved (atomically).
 | Demo-shop | scripted (key-less) | correct, 0-LLM | 1.2× | expected — scripted teacher has ~0 LLM latency |
 | MiniWoB++ ×10 | Anthropic `--all` | **6/10 learn+replay; 10/10 replay 0-LLM** | **37.5–94.0×** on successes | **all 4 failures are at LEARN (discovery); zero replay failures** |
 | MiniWoB++ ×3 | oracle (key-less) | 3/3 replay, 3/3 0-LLM | 1.2–1.3× | harness sanity, no LLM latency |
-| WebArena-Verified | — | not re-run this session (needs Docker/WSL2) | — | prior on-disk live runs: shopping_admin **6/8**, shopping **6/8** replay@1.0, with **2 replay regressions** (tasks 126, 150) |
+| WebArena-Verified | — | not re-run this session (needs Docker/WSL2) | — | prior on-disk live runs: shopping_admin **6/8**, shopping **6/8** replay@1.0, with **2 replay regressions** (tasks 126, 150) -- **artifact not committed**, so this is unverifiable from the tree and should not be quoted as evidence |
 
 A saved prior MiniWoB run scored **8/10 @ 49–280×**; today's fresh run scored 6/10 @ 37–94×, with
 `click-link` and `focus-text-2` failing to *author* this time. That swing is the headline insight,
@@ -121,7 +154,7 @@ multi-step/auth pages, and (3) operability — *not* in making replay faster (it
 
 ## Open defects (2026-07-31 audit)
 
-A six-lens adversarial audit at 0.63.0 produced **20 surviving findings**. 4 were fixed in 0.64.0; on
+A six-lens adversarial audit at 0.63.0 produced **20 surviving findings** (the register's own fix roll-call enumerates 18 -- reconcile against `docs/open-defects.md` before quoting either number). 4 were fixed in 0.64.0; on
 2026-08-01 the remaining 14 were each attacked again by an independent verifier required to run a real
 probe, and **all 14 were CONFIRMED** — none was misdiagnosed the way A1 had been. 4 more (C2, A12, A14,
 C1) were fixed in 0.65.0, 6 (A5, A6, A7, A8, A9, A10) in 0.66.0, the two secrets items (B1, B2) in
@@ -220,7 +253,7 @@ and for a second independent reason.
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
 phases have kept landing since: **#33–#35 CI (Phase J), #36 pinned 0-LLM reads (Phase H), #37 fleet
 supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 → **145** tests
-(key-less); version **0.22.0** *at the time* — it has since grown to **781 tests / 0.75.0** as the
+(key-less); version **0.22.0** *at the time* — it has since grown to **2,493 tests / 0.180.0** as the
 trust-hardening below landed. Original near-term list with the PR that landed each:
 
 1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`
