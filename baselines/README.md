@@ -33,6 +33,29 @@ like, and D2 is the first to do it.** D3 remains a published hole: it was DECIDE
 **no change**, with four candidate sensors built and refused, so its entry is honest rather than
 pending — a hole that is measured, named, and not yet closable.
 
+**AND THE RECORD ITSELF SAID 6 UNTIL 0.181.0, WHILE EVERY WORD ABOVE SAID 4 (R4.159).** The
+paragraphs above have been right since D2 landed at 0.178.0; `drift_v2.json` was last WRITTEN at
+0.174.0 and nothing re-recorded it, so for two releases this page's prose and this page's data
+disagreed — with the DATA carrying the older answer, which is the worse direction, and with the
+headline row directly below claiming *2 published wrong-binds* over a file that listed three.
+`test_the_baseline_is_current` was green throughout and correct: it compares `corpus_hash`,
+`corpus_size`, `mutator_version`, `fixtures_version` and `action_timeout_ms` — WHICH POPULATION the
+record describes — and D2 changed the RESOLVER and left the corpus alone, so all five were
+byte-identical. **A baseline has two halves and only one was checked.** Re-recorded 2026-09-09 from a
+live run whose diff is exactly D2's effect and nothing else (`predicted_mismatches` gained nothing,
+all 20 invariants hold), and the missing join now exists:
+`test_the_committed_baseline_publishes_the_holes_the_tree_still_has` compares this file's
+`known_wrong_binds` against the tree's `KNOWN_WRONG_BINDS`, both ways, in 0.6 s.
+
+**THE FULL SET OF FIELDS D2 MOVED IN THE RECORD**, listed because R4.159 was filed for the record
+disagreeing with this page and a cross-reference is only worth what its completeness is worth:
+`silent_wrong` 6 → 4, `known_wrong_rate` 0.016 → 0.0107, `heal_eligible` and
+`mechanism_heal_attempted` 38 → 39, `mechanism_heal_declined` 2 → 3, `mechanism_heal_rate`
+0.9474 → 0.9231, `recovery_eligible` 58 → 59, `mechanism_ladder_rate` 0.6552 → 0.6441, and
+`bound_by_hist` `role+name~` 11 → 10 with `none` 58 → 59. Nothing else moved but per-row `wall_ms`,
+the two `fuzzy-decoy` rows' own outcome fields, and `steps_hash` — which folds the fixture server's
+ephemeral port and therefore differs on every run.
+
 **AND ONE NUMBER MOVED THAT READS AS A REGRESSION AND IS NOT.** Closing D2 took the heal MECHANISM
 from **36/38 (95%)** to **36/39 (92%)**. Nothing got worse: the refused row LEFT the wrong-bind set
 and JOINED the recovery-eligible population, where the heal correctly declines to re-ground onto the
@@ -41,7 +64,7 @@ refusal does.
 
 | File | Bench | Captured | Headline |
 |---|---|---|---|
-| `drift_v2.json` | **drift-bench v2** (11 scenarios, 187 rows × 2 arms) | 2026-09-06 | 0-LLM survival **falls across mutation intensity k=1…7** (k50=6); **59 recovery-eligible rows where v1 had 0**; heal MECHANISM **36/39**, replan **2/20**; **2 published wrong-binds** (D2's closed at 0.178.0) — the key-less CI gate |
+| `drift_v2.json` | **drift-bench v2** (11 scenarios, 187 rows × 2 arms) | 2026-09-09 | 0-LLM survival **falls across mutation intensity k=1…7** (k50=6); **59 recovery-eligible rows where v1 had 0**; heal MECHANISM **36/39**, replan **2/20**; **2 published wrong-binds** (D2's closed at 0.178.0) — the key-less CI gate |
 | `demo.json` | demo-shop (4-step) | 2026-06-19 | 5/5 replay, speedup **86.3× ± 20.9**, ~$0.27 — no discovery variance (cost/speedup reference) |
 | `miniwob.json` | MiniWoB++ ×10 (N=1) | 2026-06-19 | replay success **52% ± 13%** (40–70%), pass^k=0, ~$4.24 — the discovery-reliability reference |
 | `miniwob_bestof3.json` | MiniWoB++ ×10 (**N=3 best-of-N**) | 2026-06-20 | **60% ± 0%** (6/10 every rep), ~$6.58 (1.55×) — best-of-N vs the N=1 baseline: +8 pts and **variance → 0** |
@@ -445,8 +468,11 @@ the model on every replay, and "one call" is a floor rather than the figure. **T
 `llm_calls: 0` and `zero_llm: true`** — on this corpus they are the only rows that demonstrate the
 0-LLM claim at all.
 
-**The gate's width, measured.** The Wilson 95% lower bound on 15/21 is **0.500**, so a weekly pass
-must land **≥ 4/7** against 5/7 observed in every rep. One failure beyond the two known-bad rows
+**The gate's width, measured.** The Wilson 95% lower bound on 15/21 is **0.500**, so a gated pass
+must land **≥ 4/7** against 5/7 observed in every rep. (It said *a weekly pass* until 0.181.0. There
+are no more weekly passes — `customer-bench` came off the schedule when active development stopped
+on 2026-09-09 — so this width now describes a pass somebody DISPATCHES, which is the only kind left.
+The arithmetic is unchanged.) One failure beyond the two known-bad rows
 still passes; two do not. That bound moves with `n`, and nothing recomputes this sentence — check it
 the next time the corpus changes size.
 

@@ -1,5 +1,12 @@
 # The reshape plan — stop manufacturing the defect classes
 
+> ## ⚠ CLOSED. Active development stopped on 2026-09-09, at 0.181.0.
+>
+> The programme this file sequences is finished: `docs/plan/state.json` has no `pending` step, and the
+> two `held` steps (0.5, 0.7) will stay held. Nothing below is upcoming work. Its per-step narratives
+> remain the record of what each slice measured, which is why it is kept rather than deleted.
+>
+
 **STATUS IS DATA, and this table is the only place to read it.** It is rendered from
 `docs/plan/state.json`, and every row is adjudicated against the tree by `tests/test_plan_state.py` —
 a `done` step must have its artifact present, a `pending` or `held` step must have it ABSENT. The four

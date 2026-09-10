@@ -472,3 +472,46 @@ def test_the_sweep_reads_the_manifest_the_TIER_MACHINERY_is_currently_using() ->
         if prior is not None:
             os.environ[_tiers._MANIFEST_ENV] = prior
         importlib.reload(sweep)
+
+
+def test_the_paid_job_cannot_be_reached_by_the_schedule(text: str = "") -> None:
+    """THE ONLY BEHAVIOURAL CHANGE OF THE CLOSE-OUT, PINNED (0.181.0).
+
+    Active development stopped on 2026-09-09, so `customer-bench` — the one job here that spends
+    money, ~$1.20 a pass across its two substrate legs — came off the `schedule` trigger. Nothing in
+    the tree could fail for that being undone: re-adding `github.event_name == 'schedule'` to the
+    `if:` restores a recurring charge on a repository nobody is watching any more, silently and
+    forever, and the only signal would be a bill.
+
+    ASSERTED IN BOTH DIRECTIONS, because each alone is satisfiable by the wrong file.
+
+      * the `if:` must NOT admit `schedule` — the money half;
+      * it MUST still admit `run_bench` — a job disabled by deleting its trigger and its button is
+        one that can never re-measure anything, which is not what was decided. The decision was to
+        stop paying on a timer, not to lose the instrument.
+
+    Deliberately NOT a scan for the string `schedule` over the whole file: the workflow's own header
+    explains at length why the paid job is off the schedule, and this repository has gone red on the
+    prose explaining a fix TEN times. The read is scoped to the `if:` line of that one job.
+    """
+    text = text or WEEKLY.read_text(encoding="utf-8")
+
+    m = re.search(r"^  customer-bench:\n(?:.*\n)*?    if: (?P<cond>.*)$", text, re.M)
+    assert m, (
+        "no `customer-bench` job with an `if:` was found in the weekly workflow. If the job was "
+        "renamed, rename it here; if it was DELETED, that is a bigger change than this cell — the "
+        "close-out kept it dispatchable on purpose."
+    )
+    cond = m.group("cond")
+
+    assert "schedule" not in cond, (
+        f"`customer-bench`'s `if:` is {cond!r}, which admits the SCHEDULE trigger again. That is a "
+        f"recurring ~$1.20/week charge on a project whose active development stopped on 2026-09-09 "
+        f"(see the close-out banner in docs/open-defects.md). If that is intended, delete this test "
+        f"in the same commit and say why — do not widen the condition quietly."
+    )
+    assert "run_bench" in cond, (
+        f"`customer-bench`'s `if:` is {cond!r}, which no longer admits a manual dispatch either. The "
+        f"close-out stopped the timer, not the instrument: a benchmark that cannot be re-run is one "
+        f"whose baselines can never be checked against a future change."
+    )

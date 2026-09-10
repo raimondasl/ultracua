@@ -2,7 +2,17 @@
 
 > ## ⚠ Read this banner, not the narrative below
 >
-> **Refreshed 2026-09-09 at 0.180.0. Everything under this banner is a dated snapshot whose header
+> **ACTIVE DEVELOPMENT STOPPED ON 2026-09-09, AT 0.181.0.** Nothing below is planned work any more.
+> The **74** open findings are an inventory rather than a backlog (round 4's 72 plus round 3's R3.2
+> and R3.7). The paid weekly benchmark no longer runs on a schedule; **every free gate still runs** —
+> the full suite on both OSes and `red-proof` on each PR, the mutation sweep on its weekly cron. And
+> the two `availability_rate` baselines below will not be re-cut, which makes them dated observations
+> by construction — **neither file records the version or date it was cut against**, so the figures
+> quoted here and in `baselines/README.md` are the only provenance those numbers have. The close-out
+> banner at the top of `docs/open-defects.md` says what all this means for a finding you are thinking
+> of picking up.
+>
+> **Refreshed 2026-09-09 at 0.180.0 and again at 0.181.0. Everything under this banner is a dated snapshot whose header
 > still says 2026-07-01, and it has NOT been brought current** — its `file:line` pointers have all
 > moved, and several of its numbers are superseded by the corrections in this banner. Treat the
 > narrative as history. The artifacts that own the live numbers are `baselines/README.md` (the
@@ -10,9 +20,11 @@
 > `docs/plan/state.json` (programme status); each is machine-checked against the tree, and this file
 > is not.
 >
-> **Suite.** 2,493 collected tests — 1,894 in the browser-free `fast` tier, 599 browser. The fast
-> tier ran in ~100 s here on 2026-09-09 (it was 89 s over 1,450 tests at 0.125.0; the population has
-> grown, the per-test cost has not).
+> **Suite.** 2,495 collected tests — 1,899 in the browser-free `fast` tier, 596 browser (re-derived
+> at 0.181.0: two tests added, and three `test_readiness_poll.py` cells DE-classified because 0.169.0
+> made them scripted and nothing re-derived the manifest until now). The fast tier ran in 91 s here
+> on 2026-09-09 and the full suite in 37m55s (it was 89 s over 1,450 tests at 0.125.0; the population
+> has grown, the per-test cost has not).
 >
 > **What the narrative omits** — everything after ~0.75.0 for the correctness plan (S2–S9, S17,
 > S6/AB-1, the CLI exit-truth and fleet-visibility work) and the whole programme after 0.107.0: the
@@ -21,22 +33,24 @@
 > readiness layer that made a client-rendered SPA replayable at all, `body_says_read` (which clears
 > Odoo-shaped `call_kw` reads served over POST — the JSON-RPC half of R4.27; **GraphQL reads over POST
 > are untouched**), and the **customer benchmark**: two live substrates, 14 scenarios, server-side
-> oracles, a weekly gated run.
+> oracles, and a gated run that WAS weekly until 0.181.0 and is now dispatch-only.
 >
-> **Findings.** `docs/open-defects.md`: **2 open in round 3** (R3.2, R3.7); round 4 is a 158-finding
-> series at **72 open / 82 fixed / 4 parked**.
+> **Findings.** `docs/open-defects.md`: **2 open in round 3** (R3.2, R3.7); round 4 is a 159-finding
+> series at **72 open / 83 fixed / 4 parked**.
 >
 > **The two numbers a reader most needs.** `availability_rate` **0.762** on Gitea (cut 2026-08-26)
 > and **0.714** on Odoo (cut 2026-09-05 from a series run at 0.169.0), each over n=21
-> scenario-observations (3 passes × 7 scenarios). **Neither is re-cut against 0.180.0**, and a later
+> scenario-observations (3 passes × 7 scenarios). **Neither is re-cut against 0.181.0**, and a later
 > Gitea series measured 0.857 — read them as the level, not the current rate. No silently-wrong
 > outcome is recorded in any committed customer-benchmark series; `drift_bench` is a different
 > instrument and publishes its own non-zero wrong-bind allowlist (see `baselines/README.md`).
 >
 > **Speed.** There is no committed artifact behind a "2–7× on real sites" figure, and this file used
 > to imply one — the WebArena runs it rests on are on-disk only and three months old. What the tree
-> supports: the fixture benchmarks show **38–114×**, which measures *removed LLM latency on a local
-> page* and does not transfer; and the shipped `examples/hn_digest.py` learned in 30 s and replayed in
+> supports: `baselines/demo.json` records a fixture speedup of **62–114×** (mean 86.3 ± 20.9, n=5),
+> which measures *removed model latency against a local page* and does not transfer. (This line said
+> **38–114×** when the banner was written at 0.180.0; no artifact in this tree contains a 38, and the
+> committed floor is 62.0 — corrected at 0.181.0.) and the shipped `examples/hn_digest.py` learned in 30 s and replayed in
 > 5 s against a live site on 2026-09-09 (one flow, one run). The customer benchmark records
 > availability only — it has **no timing field at all**.
 
@@ -53,9 +67,9 @@ engine is the moat, and it is not yet hardened for unattended production.** Phas
 engine), A–C (the Flow API: define → learn → approve → replay → auth-refresh → health), and D
 (write flows) are shipped and merged, and the ops layer has since hardened (logging, CI,
 retry/backoff, fleet supervisor + freshness canary, a cross-process meta lock, and a standing
-locator-resilience benchmark). **2,493 tests**, all key-less (real headless Chromium against local
+locator-resilience benchmark). **2,495 tests**, all key-less (real headless Chromium against local
 fixtures, run in CI on Linux + Windows, sharded two ways per OS, plus a ~100-second browser-free `fast`
-tier and a mutation `red-proof` job); version **0.180.0**. Secrets handling is a real strength:
+tier and a mutation `red-proof` job); version **0.181.0**. Secrets handling is a real strength:
 credentials are env-sourced at runtime and **never persisted** — only the resulting `storage_state`
 cookies are saved (atomically).
 
@@ -253,7 +267,7 @@ and for a second independent reason.
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
 phases have kept landing since: **#33–#35 CI (Phase J), #36 pinned 0-LLM reads (Phase H), #37 fleet
 supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 → **145** tests
-(key-less); version **0.22.0** *at the time* — it has since grown to **2,493 tests / 0.180.0** as the
+(key-less); version **0.22.0** *at the time* — it has since grown to **2,495 tests / 0.181.0** as the
 trust-hardening below landed. Original near-term list with the PR that landed each:
 
 1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`

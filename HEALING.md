@@ -22,6 +22,14 @@ and measured numbers).
   **write** step's context drifted, or if the returned **data looks wrong**, ultracua **fails loud and
   escalates to a human** instead of silently doing the wrong thing. This is the deliberate trade: it heals a
   lot for free, and refuses the risky cases by design.
+- **⚠ THESE FIGURES ARE PRE-v2 AND ONE OF THEM IS NOW CONTRADICTED BY THE ARTIFACT (noted 2026-09-09).**
+  They describe drift-bench **v1**; the CI gate has been `drift_v2.json` since, and it currently records
+  0-LLM survival **20/27 at k=1 falling to 0/6 at k=7**, heal MECHANISM **36/39**, replan **2/20**, and
+  **TWO** published wrong-binds — not one. The one below went to three at 0.174.0 (two mutations added
+  to make D2's and D3's holes measurable) and back to two at 0.178.0 when D2 was closed. Read
+  [baselines/README.md](baselines/README.md) for the current numbers and what each does and does not
+  prove; the bullet below is kept as written because rewriting a measurement one cannot re-run is how a
+  document acquires numbers with no artifact behind them.
 - **What is actually measured** (key-less, CI-enforced — `benchmarks/drift_bench.py`): 0-LLM survival across
   a graded distribution of *compounding* DOM mutations, falling from **11/12** when one locator anchor is
   destroyed to **0/6** when all seven are; the heal machinery recovering **12/12** of those total-destruction

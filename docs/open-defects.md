@@ -1,5 +1,51 @@
 # Open defects — the standing register
 
+> ## ⚠ ACTIVE DEVELOPMENT STOPPED ON 2026-09-09, AT 0.181.0
+>
+> **The 74 open findings below are an INVENTORY, not a backlog.** Nobody is working them and nobody
+> is going to. That is a decision, taken on 2026-09-09 after a review of whether this project has a
+> niche worth its per-application cost. **74 = round 4's 72 plus round 3's R3.2 and R3.7**, said out
+> loud because every count in this file is scoped to one round and the total is the number a reader
+> actually wants. The review itself is NOT in this repository — it was written outside it — so do not
+> go hunting for it; what IS here is every measurement it rests on, which is the whole of this file.
+>
+> **WHAT AN OPEN FINDING MEANS NOW.** Exactly what it always meant: a defect that was measured, named
+> and not closed. It does not mean *scheduled*, and it never did. Some are residuals PUBLISHED rather
+> than pending — `row-positional/positional-row-renumber` sits in `KNOWN_WRONG_BINDS` because
+> correctness-plan D3 was decided at 0.176.0 as **no change**, with four candidate sensors built and
+> refused. (D2, D3 and D4 are plan DECISIONS, not entries in this register, and they did not all go
+> the same way: D3 and D4 were NO CHANGE, **D2 shipped a resolver change** at 0.178.0 and closed its
+> hole — R4.156.) **R3.2 and R3.7 are BLOCKED by
+> `D5`'s two-strikes gate** and need a new SENSOR CLASS rather than another attempt — and R4.34 and
+> R4.37 are the other two doors into R3.7's fault, so a fix that does not dispose of all three has
+> now failed twice. Anyone picking one up should read `D5` — it is in the decisions block above the
+> round-4 section, not at the top of this file — and should assume the last measurement is the last.
+>
+> **WHAT IS STILL RUNNING.** The merge gate is untouched: the full suite on ubuntu AND windows,
+> `red-proof`, the shard-coverage check, the free weekly mutation sweep, and the substrate preflight
+> on every pull request touching the bench. **What stopped is the one channel that costs money** —
+> `customer-bench` no longer accepts the `schedule` trigger (~$1.20 a week), because a weekly paid
+> measurement of a tree that does not move buys nothing. It is still dispatchable by hand, unchanged,
+> gated against the same committed baselines.
+>
+> **SO EVERY BASELINE IN `baselines/` IS NOW A DATED OBSERVATION BY CONSTRUCTION.**
+> `customer_v1_gitea.json` (0.762, cut 2026-08-26) and `customer_v1_odoo.json` (0.714, cut
+> 2026-09-05 from a series run at 0.169.0) will not be re-cut — 0.172.0 already recorded that they
+> *should* be when R4.130 or R4.148 lands and that nothing would tell you to. A later Gitea series
+> measured **0.857** and was never cut. Read them as a level, never as the current rate.
+>
+> **AND NEITHER FILE RECORDS WHEN OR AGAINST WHAT IT WAS CUT** — no `meta`, no version, no timestamp.
+> The dates above live only in `baselines/README.md`'s prose and in `CLAUDE.md`. That was survivable
+> while a weekly run kept re-asking the question, and it is not survivable now; it is stated here
+> rather than fixed, because adding a field to an artifact at the moment of freezing it changes the
+> thing being frozen. `drift_v2.json` shows what the gap costs — it was two releases stale, nothing
+> could see it, and that is R4.159, the last finding in this file.
+>
+> **AND THE REGISTER'S OWN HONESTY MACHINERY STILL WORKS**, which is why this banner is prose and the
+> counts beside it are not. The R4 index is rendered from `docs/register/state.json`; the R3 count is
+> parsed from the headings; both are asserted by `tests/test_register_count.py` on every run. A
+> sentence in this banner can rot. The numbers cannot.
+
 **ROUND 1** (2026-07-31, at v0.63.0): 20 findings, all fixed in 0.64.0–0.69.0.
 **ROUND 2** (2026-08-02, scoped to everything written SINCE): 10 findings, 2 critical — all fixed
 (R1/R2 in 0.71.0, R3–R10 in 0.72.0). Most were holes in the round-1 fixes.
@@ -12,7 +58,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**72 open**, 82 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**72 open**, 83 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -773,7 +819,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **72 open**, 82 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **72 open**, 83 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -1258,6 +1304,21 @@ if and only if that branch is ever resumed.
 **WHAT SHIPS IS THE CLASSIFICATION, NOT THE VERDICT.** *Which payload can degrade silently* is a question anyone touching this surface wants answered, and `benchmarks/js_payload_probe.py` DERIVES it from the tree rather than from a typed list, so a new fail-open consumer appears without anyone remembering to add it. Its guards pin the two ways the census rots -- an unrecognised consumer (silently dropping a payload) and an unrecognised handler (reporting that nothing can degrade) -- plus that no payload is dead and that `--break` refuses a stale anchor. 4 cells, all armed.
 
 **WHAT WOULD UNHOLD 0.5**, stated so it is a decision next time too: a NEW fail-open consumer that the probe lists and the suite does not cover. That is checkable in one command, which is the point of shipping the census rather than the conclusion. |
+| R4.159 | fixed | **A COMMITTED BASELINE PUBLISHED A RESOLVER THAT NO LONGER EXISTS, FOR TWO RELEASES, AND THE GUARD BUILT TO KEEP IT CURRENT IS GREEN AND RIGHT ABOUT WHAT IT ASSERTS.** `baselines/drift_v2.json` was last written at 0.174.0. D2 landed at 0.178.0 (R4.156), closed `fuzzy-decoy/fuzzy-decoy-wins` and deleted its `KNOWN_WRONG_BINDS` entry -- and the record went on publishing that hole, with `silent_wrong: 6` where the tree measures **4**. Noticed while making the front door true (0.180.0) and DISCLOSED there rather than filed, because filing it would have falsified the register counts that same commit was writing. Fixed here for **$0.00** -- one free key-less bench run.
+
+**1. THE ARTIFACT WAS WRONG AND THE PROSE WAS RIGHT, WHICH IS THE INVERSE OF THIS REGISTER'S USUAL ROT AND READS WORSE.** R4.113 is three sentences outliving their fix, and everything this file has learned says trust the data and distrust the sentence. Here `baselines/README.md` had it right in the present tense from the day D2 landed -- `silent_wrong` 6 -> 4, the heal mechanism 36/38 -> 36/39, *"its entry is GONE from `KNOWN_WRONG_BINDS`"* -- and its own summary table claimed **2 published wrong-binds** for a file that listed three. **So the reader who distrusted the prose and opened the JSON got the older answer.**
+
+**2. WHY THE CURRENCY GUARD COULD NOT SEE IT, and that is not a hole in the cell.** `test_the_baseline_is_current` compares `corpus_hash`, `corpus_size`, `mutator_version`, `fixtures_version` and `action_timeout_ms`. Measured on the re-record: **all five byte-identical**, which is not luck -- D2 changed the RESOLVER, the bench's SUBJECT, and left the corpus alone. **A baseline has two halves -- WHICH POPULATION it describes and WHAT IT MEASURED -- and the second was checked only in ONE narrow place.** `test_no_new_prediction_mismatches_vs_the_baseline` does read a measured field, and correctly: `predicted_mismatches`, as a SUBSET (`current - baseline`), so a stale baseline makes it MORE permissive rather than red. That is deliberate and right for what it guards -- the resolver diverging from the corpus model -- and it is precisely why it could not fire here: D2 removed a wrong bind and added no mismatch. So the honest statement is not *nothing checked the measurement*; it is that **every check of a measured field was one-directional or population-scoped, and no check at all bound the record to the tree's own allowlist.**
+
+**3. THE RE-RECORD IS D2's DOCUMENTED EFFECT AND NOTHING ELSE, which is what makes it a correction rather than a fresh measurement.** Eight scalars moved: `silent_wrong` 6 -> 4, `known_wrong_rate` 0.016 -> 0.0107, `heal_eligible` and `mechanism_heal_attempted` 38 -> 39, `mechanism_heal_declined` 2 -> 3, `mechanism_heal_rate` 0.9474 -> 0.9231, `recovery_eligible` 58 -> 59, `mechanism_ladder_rate` 0.6552 -> 0.6441, and `bound_by` `role+name~` 11 -> 10 with `none` 58 -> 59. **As filed, this entry claimed all eight were "already named in `baselines/README.md`'s D2 paragraph" -- and the audit refuted it: ONE was (`silent_wrong`), three appeared only as a rounded denominator or a post-change value, and FOUR (`known_wrong_rate`, `mechanism_heal_declined`, `mechanism_ladder_rate`, the `bound_by_hist` entries) appeared nowhere in that 46 KB file.** Rather than narrow the sentence, the eight were ADDED to that page, so the cross-reference is now true and checkable. A corroboration that does not check out is worse than none, and this one was load-bearing for the paragraph's own headline. **`predicted_mismatches` is the IDENTICAL 25-row set in both directions** and `predicted_agreement` is unchanged at 0.7807 — so the resolver's decision surface did not move, which is the one thing a re-record could have hidden. All 20 invariants hold, and wall went 189.3s -> 188.1s, so the host is not the difference. The remainder of the diff is: `known_wrong_binds` and `wrong_rows` losing the closed row (the change itself, named separately above); the two `fuzzy-decoy` rows' own outcome fields, which is where D2 actually bit; `steps_hash`, which folds the fixture server's ephemeral port and therefore differs on EVERY run, as `KNOWN_NO_DIGEST_MOVE`'s own comment says; and per-row `wall_ms`. **The first draft of this sentence said only "`steps_hash` and per-row `wall_ms`", which read as though the substantive change were confined to the eight scalars** -- an under-enumeration in the flattering direction, in the paragraph whose job is to account for a 2,300-line diff.
+
+**4. FIXED AS THE MISSING JOIN, NOT BY RE-RECORDING ONCE.** Re-recording repairs today and leaves the trap standing. `test_the_committed_baseline_publishes_the_holes_the_tree_still_has` compares the record's `known_wrong_binds` against the live `KNOWN_WRONG_BINDS` as a SET, **both ways**, browser-free, in 0.6 s. The allowlist is the field a slice EDITS when it closes a hole, so it is the field that DATES the record; the rates are deliberately not compared, because re-deriving those needs the 187-row browser run they already live in. **Verified RED against the stale record** -- it names `fuzzy-decoy/fuzzy-decoy-wins` as the extra item -- and green after, so it would have failed at 0.178.0. Its anti-vacuity floor is armed separately, because two empty sets are equal and an empty allowlist is precisely what a mis-edit produces.
+
+**5. THE THIRD LEG OF A JOIN THAT ALREADY HAD TWO.** `test_every_published_wrong_bind_names_a_row_that_exists_and_vice_versa` binds the constant to the curated ROWS in both directions and was added at 0.174.0 for this same allowlist. Nobody bound it to the RECORD -- and the record is the end that went stale. Two of three edges checked is the shape R4.88 already filed one instrument over (`corpus.py` and `oracles.REGISTRY` as two derivations of one set), and it is worth stating as a rule: **when a hand-typed constant appears in three places, count the edges, not the places.**
+
+**6. WHAT IT DOES NOT CLOSE, STATED BECAUSE THE SAME SHAPE LIVES ONE DIRECTORY OVER.** `baselines/customer_v1_gitea.json` and `_odoo.json` are UNTOUCHED by this. 0.172.0 already recorded that they must be re-cut when R4.130 or R4.148 lands and that **nothing will tell you to** -- `_flip_findings` reports only rows that got WORSE, so an improvement produces no finding at all. They will now never be re-cut, because active development stopped on 2026-09-09, which makes them dated observations of the versions named in their own `meta` by construction rather than by neglect. This finding closes the drift-bench end, where a constant and a record could be joined for the price of a file read; it makes no claim about a baseline whose currency is a RATE and cannot be checked without spending money.
+
+**7. AND THE SLICE THAT FIXED THIS DE-CLASSIFIED THREE TESTS, which is a second finding in one line and belongs here because nothing else would record it.** Re-deriving the tier manifest moved `tests/test_readiness_poll.py`'s three scripted poll cells from the browser tier to the fast tier. They stopped launching a browser at **0.169.0** -- commit `b769a00`, *"descope three poll cells from real-page timing"* -- and no slice re-derived the manifest for twelve releases, so all three sat deselected from every fast tier in between. **It is the SECOND de-classifying delta and the better example of the two**, because CLAUDE.md's standing refusal to switch the manifest to merge-mode rests entirely on de-classification being real: merge-mode would have left those marks on forever. Corrected there. Two residuals stated rather than fixed: nothing makes a slice that descopes a cell re-derive the manifest, and this re-derivation was measured on ONE platform, so if any of the three launches on ubuntu its `fast` job will now raise -- which is that job working, and the loudest possible way to find out. |
 <!-- /generated:r4-index -->
 
 

@@ -38,7 +38,7 @@ name: weekly
 #                    averaged $0.603, Odoo's $0.602), so ~$1.20 a week for both. Do NOT read the
 #                    baselines' `cost_usd` as the spend: those are 0.842 and 0.664 because a
 #                    baseline records the MAXIMUM observed as its alarm threshold (R4.106).
-#                    Schedule, or a dispatch that explicitly asks for it. Never on a pull request.
+#                    **OFF THE SCHEDULE SINCE 0.181.0** -- dispatch only. See the job's own header.
 #
 # WHY `substrates` RUNS ON PULL REQUESTS AND THE OTHER TWO DO NOT. It is the only free one, and it
 # guards the premise the paid one rests on: the benchmark's dollars are wasted if the substrate was
@@ -46,8 +46,11 @@ name: weekly
 # served with HTTP 200 at every URL readiness looked at). Running it per-PR also stops it rotting —
 # a container layer nothing exercises between weekly runs is one that breaks silently.
 #
-# MONEY IS NEVER SPENT BY ACCIDENT. `run_bench` defaults to FALSE, so dispatching this workflow to
-# re-run the mutation sweep does not also buy a benchmark pass.
+# MONEY IS NEVER SPENT BY ACCIDENT, AND SINCE 0.181.0 IT IS NOT SPENT ON A TIMER EITHER.
+# `run_bench` defaults to FALSE, so dispatching this workflow to re-run the mutation sweep does not
+# also buy a benchmark pass -- and `customer-bench` no longer accepts the `schedule` trigger at all,
+# because active development stopped on 2026-09-09 and a weekly paid measurement of a tree that does
+# not move buys nothing. Everything free here is unchanged and still runs.
 
 on:
   schedule:
@@ -57,7 +60,7 @@ on:
   workflow_dispatch:
     inputs:
       run_bench:
-        description: "also run the customer benchmark, BOTH substrates (SPENDS ~$1.20, needs ANTHROPIC_API_KEY)"
+        description: "also run the customer benchmark, BOTH substrates (SPENDS ~$1.20, needs ANTHROPIC_API_KEY) -- the ONLY way to run it since 0.181.0"
         type: boolean
         default: false
   # PULL REQUESTS reach the `substrates` job only — see the header. Path-filtered, because the
@@ -210,10 +213,11 @@ jobs:
   # 0, which is TIGHTER than Gitea was when its own baseline was cut, and `over_gated/drift` has been
   # 0 since 0.158.0.
   #
-  # THIS ROUGHLY DOUBLES THE WEEKLY SPEND, because it adds a second substrate at a similar
-  # per-substrate cost: the three Gitea passes averaged $0.603 and the three Odoo passes $0.602, so
-  # ~$0.60 becomes ~$1.20 a week (~$5.20/month). Said out loud because going weekly rather than
-  # nightly was itself a cost decision.
+  # IT USED TO DOUBLE THE WEEKLY SPEND, and since 0.181.0 there IS no weekly spend -- this job is off
+  # the schedule. Kept as the price of a DISPATCH, which is what a reader now needs: a second
+  # substrate at a similar per-substrate cost, the three Gitea passes averaging $0.603 and the three
+  # Odoo passes $0.602, so dispatching both legs costs ~$1.20. It was ~$1.20 a WEEK (~$5.20/month)
+  # from 0.172.0 until 0.181.0.
   #
   # THE BASELINES' `cost_usd` IS NOT THE SPEND and must not be quoted as it — 0.842 for Gitea and
   # 0.664 for Odoo are the MAXIMUM observed pass, recorded as the alarm threshold (R4.106). A first
@@ -223,9 +227,33 @@ jobs:
   # quietly does not run is worse than one that is red, because the first reads as "we are measuring"
   # and the second reads as "fix me". The remedy is one action by one person and is stated in the
   # step, which is what makes the alarm dischargeable rather than noise (R3.9/CLI-1).
+  # WHY THIS NO LONGER RUNS ON THE SCHEDULE (0.181.0). Active development of this project stopped on
+  # 2026-09-09; see the close-out banner at the top of `docs/open-defects.md`. A weekly paid run
+  # measures whether a change regressed the product, and there are no more changes -- so it would
+  # spend ~$1.20 a week to re-answer a question about a tree that does not move. That is the whole
+  # reason, and it is worth stating rather than leaving the reader to infer it from a deleted line.
+  #
+  # IT IS DISABLED BY REMOVING THE TRIGGER, NOT BY MAKING THE JOB QUIET. The `if:` no longer admits
+  # `schedule`; everything else is untouched, so a dispatch with `run_bench: true` still buys a full
+  # gated pass against the committed baselines. Commenting the job out, deleting it, or wrapping the
+  # paid step in `|| true` would each have cost something this repository deliberately keeps: the
+  # first two lose the ability to re-measure at all, and the third is the `|| true` that R3.9/CLI-1
+  # says takes every other channel dark with it.
+  #
+  # WHAT IS STILL WATCHED, because "we stopped paying" must not read as "we stopped checking": the
+  # merge gate in `ci.yml` runs the full suite on both OSes, `red-proof` still proves the mutation
+  # registries red on every PR, `sweep` still runs weekly and free, and `substrates` still runs on
+  # every pull request touching the bench. The only thing that stopped is the one that costs money.
+  #
+  # WHAT THE BASELINES MEAN NOW. `baselines/customer_v1_gitea.json` (0.762) and `_odoo.json` (0.714)
+  # are the last measurements taken, and NOTHING will re-take them. Read them as dated observations,
+  # not as the current rate -- a later Gitea series measured 0.857 and was never cut as a baseline.
+  # NEITHER FILE RECORDS ITS OWN CUT DATE OR VERSION: the 2026-08-26 and 2026-09-05 (at 0.169.0)
+  # dates live only in `baselines/README.md` and `CLAUDE.md`. That is a real gap, recorded in the
+  # close-out banner rather than papered over by adding a field while freezing the artifact.
   customer-bench:
     name: the customer benchmark, gated against its baseline (${{ matrix.substrate }})
-    if: github.event_name == 'schedule' || github.event.inputs.run_bench == 'true'
+    if: github.event.inputs.run_bench == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -275,9 +303,11 @@ jobs:
       # the substrate is already running. That assumption cost 2.4a's first real weekly run: all
       # seven scenarios raised `no seed at /data/gitea/seed.db` (R4.110).
       #
-      # `needs: substrates` still earns its place — it fails the cheap job first, so a broken
-      # container layer costs nothing rather than a paid pass. What it never did was hand this job a
-      # running substrate.
+      # (That last paragraph is the record of a `needs: substrates` that was REMOVED at 0.172.0 --
+      # see the block above the job key, which measured that the fan-in protected no dollars, since
+      # the provisioning step below already fails before a cent is spent. `substrates` still runs,
+      # still on every bench PR; it simply does not gate this job. The paragraph is kept rather than
+      # deleted because the reason it was once there is the reason somebody would re-add it.)
       - name: Provision ${{ matrix.substrate }} for the scored run
         timeout-minutes: 25
         run: >
