@@ -2,8 +2,12 @@
 
 > ## ⚠ Read this banner, not the narrative below
 >
-> **ACTIVE DEVELOPMENT STOPPED ON 2026-09-09, AT 0.181.0.** Nothing below is planned work any more.
-> The **74** open findings are an inventory rather than a backlog (round 4's 72 plus round 3's R3.2
+> **ACTIVE DEVELOPMENT STOPPED ON 2026-09-09.** Nothing below is planned work any more.
+>
+> (**The date is the decision; the version is not.** This banner said *at 0.181.0* until 0.182.0,
+> which is a boundary claim every close-out commit falsifies — and 0.182.0 is the one that
+> publishes to PyPI. Releases after 2026-09-09 are close-out work only.)
+> The **75** open findings are an inventory rather than a backlog (round 4's 73 plus round 3's R3.2
 > and R3.7). The paid weekly benchmark no longer runs on a schedule; **every free gate still runs** —
 > the full suite on both OSes and `red-proof` on each PR, the mutation sweep on its weekly cron. And
 > the two `availability_rate` baselines below will not be re-cut, which makes them dated observations
@@ -12,7 +16,7 @@
 > banner at the top of `docs/open-defects.md` says what all this means for a finding you are thinking
 > of picking up.
 >
-> **Refreshed 2026-09-09 at 0.180.0 and again at 0.181.0. Everything under this banner is a dated snapshot whose header
+> **Refreshed 2026-09-09 at 0.180.0, 0.181.0 and 0.182.0. Everything under this banner is a dated snapshot whose header
 > still says 2026-07-01, and it has NOT been brought current** — its `file:line` pointers have all
 > moved, and several of its numbers are superseded by the corrections in this banner. Treat the
 > narrative as history. The artifacts that own the live numbers are `baselines/README.md` (the
@@ -35,12 +39,12 @@
 > are untouched**), and the **customer benchmark**: two live substrates, 14 scenarios, server-side
 > oracles, and a gated run that WAS weekly until 0.181.0 and is now dispatch-only.
 >
-> **Findings.** `docs/open-defects.md`: **2 open in round 3** (R3.2, R3.7); round 4 is a 159-finding
-> series at **72 open / 83 fixed / 4 parked**.
+> **Findings.** `docs/open-defects.md`: **2 open in round 3** (R3.2, R3.7); round 4 is a 160-finding
+> series at **73 open / 83 fixed / 4 parked**.
 >
 > **The two numbers a reader most needs.** `availability_rate` **0.762** on Gitea (cut 2026-08-26)
 > and **0.714** on Odoo (cut 2026-09-05 from a series run at 0.169.0), each over n=21
-> scenario-observations (3 passes × 7 scenarios). **Neither is re-cut against 0.181.0**, and a later
+> scenario-observations (3 passes × 7 scenarios). **Neither is re-cut against 0.182.0**, and neither file records its own cut date or version. A later
 > Gitea series measured 0.857 — read them as the level, not the current rate. No silently-wrong
 > outcome is recorded in any committed customer-benchmark series; `drift_bench` is a different
 > instrument and publishes its own non-zero wrong-bind allowlist (see `baselines/README.md`).
@@ -69,7 +73,7 @@ engine), A–C (the Flow API: define → learn → approve → replay → auth-r
 retry/backoff, fleet supervisor + freshness canary, a cross-process meta lock, and a standing
 locator-resilience benchmark). **2,495 tests**, all key-less (real headless Chromium against local
 fixtures, run in CI on Linux + Windows, sharded two ways per OS, plus a ~100-second browser-free `fast`
-tier and a mutation `red-proof` job); version **0.181.0**. Secrets handling is a real strength:
+tier and a mutation `red-proof` job); version **0.182.0**. Secrets handling is a real strength:
 credentials are env-sourced at runtime and **never persisted** — only the resulting `storage_state`
 cookies are saved (atomically).
 
@@ -267,7 +271,7 @@ and for a second independent reason.
 **Update: all seven shipped** across PRs #27 (1–3), #28 (4–5), #29 (6–7) — and the longer-term
 phases have kept landing since: **#33–#35 CI (Phase J), #36 pinned 0-LLM reads (Phase H), #37 fleet
 supervisor (Phase E), #38 suffix-replan (Phase F)**. The suite grew from 105 → **145** tests
-(key-less); version **0.22.0** *at the time* — it has since grown to **2,495 tests / 0.181.0** as the
+(key-less); version **0.22.0** *at the time* — it has since grown to **2,495 tests / 0.182.0** as the
 trust-hardening below landed. Original near-term list with the PR that landed each:
 
 1. ✅ **Correctness/packaging nits** (#27) — single-sourced the version; `_save_meta` / `cache.put`

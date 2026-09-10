@@ -9,13 +9,17 @@ real-site example at 30 s learn / 5 s replay. A multiplier on real sites is not 
 quote 38–114×**: 0.180.0 wrote that into `STATUS.md` and 0.181.0 copied it here, and no artifact in
 this tree contains a 38.)
 
-> ## ⚠ ACTIVE DEVELOPMENT STOPPED ON 2026-09-09, AT 0.181.0
+> ## ⚠ ACTIVE DEVELOPMENT STOPPED ON 2026-09-09
+>
+> (**The date is the decision; the version is not.** This banner said *at 0.181.0* until 0.182.0,
+> which is a boundary claim every close-out commit falsifies — and 0.182.0 is the one that
+> publishes to PyPI. Releases after 2026-09-09 are close-out work only.)
 >
 > Everything below is worth reading before touching this code — it is the record of what was measured
 > and why, and it is why the numbers here are trustworthy. It is NOT guaranteed current: this file has
 > shipped false sentences before and the fix has always been the next reading, so treat a claim here
 > the way this file tells you to treat any other — derive it, then cite it. What changed on 2026-09-09
-> is that **nothing more is planned**. The **74** open findings in `docs/open-defects.md` (round 4's 72
+> is that **nothing more is planned**. The **75** open findings in `docs/open-defects.md` (round 4's 73
 > plus R3.2 and R3.7) are an inventory, not a backlog; the two `held` steps in `docs/plan/state.json`
 > will stay held; and the paid weekly benchmark no longer runs on a schedule. **Every FREE gate still
 > runs** — the full suite on both OSes and `red-proof` on every PR, the mutation sweep on its weekly

@@ -1,5 +1,10 @@
 # Phase-I recorder — scoping spike
 
+> **⚠ Archived. Active development stopped on 2026-09-09.** Nothing here is planned work, and the
+> numbers are dated observations that will not be re-measured. The live status is the close-out
+> banner at the top of [docs/open-defects.md](https://github.com/raimondasl/ultracua/blob/main/docs/open-defects.md),
+> which also says what its 75 open findings mean now.
+
 **Status:** SHIPPED (#63–#72 + intent caption) — this is the original scoping doc, kept for the design
 rationale + verdict; the open questions below are resolved inline (see each ✅). Code:
 [`src/ultracua/recorder.py`](../src/ultracua/recorder.py); proof: [`tests/test_recorder_spike.py`](../tests/test_recorder_spike.py) (+ `test_recorder_fidelity.py`, `test_record.py`, `test_record_caption.py`); fixture: `benchmarks/fixtures/recorder_checkboxes.html`.

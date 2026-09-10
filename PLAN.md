@@ -1,4 +1,11 @@
 > HISTORICAL — original design plan (~#62, pre-recorder). The Phase 0-4 design still matches the code; see STATUS.md / ROADMAP.md for live status (recorder + Phases A-I shipped since).
+>
+> **AND ARCHIVED: active development stopped on 2026-09-09.** ROADMAP.md is closed too, so the
+> pointer above leads to two documents that are records rather than plans. **This file headlines
+> a 5-10x speed claim in eight places and NO artifact in this tree measures one** -- what is
+> committed is what replay removes (0 model calls on a write with no readback, one on a data
+> read) plus a 62-114x FIXTURE speedup against a local page. Read it as the original design
+> reasoning, never as a performance claim.
 
 # ultracua — Implementation Plan
 

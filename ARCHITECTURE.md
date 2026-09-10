@@ -1,5 +1,10 @@
 # Architecture & internals
 
+> **⚠ Archived. Active development stopped on 2026-09-09.** Nothing here is planned work, and the
+> numbers are dated observations that will not be re-measured. The live status is the close-out
+> banner at the top of [docs/open-defects.md](https://github.com/raimondasl/ultracua/blob/main/docs/open-defects.md),
+> which also says what its 75 open findings mean now.
+
 How ultracua works inside, and how to work on it. For *using* the Flow API see [GUIDE.md](GUIDE.md);
 for the original design rationale, research basis, and the phased build log see [PLAN.md](PLAN.md);
 for the current honest status + measured numbers see [STATUS.md](STATUS.md).

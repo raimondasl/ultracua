@@ -1,4 +1,7 @@
-"""Flow cache — the spine of the 5-10x speedup (PLAN.md component 2 / §4).
+"""Flow cache — what makes a replay deterministic and model-free (PLAN.md component 2 / §4).
+
+(This line claimed "the spine of the 5-10x speedup" until 0.182.0. No artifact in this tree
+measures a 5-10x figure; see `__init__.py` for what is actually committed.)
 
 A learned flow is an ordered list of `CachedStep`s — each a resilient `LocatorSpec` +
 the action + its intent + the page fingerprint at record time. Flows are keyed by
