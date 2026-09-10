@@ -1,11 +1,30 @@
 [project]
 name = "ultracua"
-version = "0.181.0"
+version = "0.182.0"
 description = "A Computer Use Agent that learns a browser flow once with an LLM, then replays it deterministically with no model in the loop."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
+authors = [{ name = "Raimondas Lencevicius" }]
+keywords = [
+    "browser-automation", "computer-use-agent", "playwright", "llm-agent",
+    "deterministic-replay", "web-scraping", "rpa",
+]
+# `Development Status :: 7 - Inactive` IS THE LOAD-BEARING ONE. PyPI renders it as a badge, and it is
+# the only MACHINE-READABLE way to say what the README's banner says in prose: active development
+# stopped on 2026-09-09. A package that omits it reads as maintained BY DEFAULT, which is the
+# quiet-wrong direction this project spent four audit rounds refusing everywhere else.
+classifiers = [
+    "Development Status :: 7 - Inactive",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP :: Browsers",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = [
     "anthropic>=0.109.2",
     "playwright>=1.60.0",
@@ -13,6 +32,17 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "xxhash>=3.7.0",
 ]
+
+# WHY THESE EXIST AT ALL, since the package is archived: a reader who lands on the PyPI page must be
+# able to REACH `docs/open-defects.md`. The close-out decision (2026-09-09) was to publish the METHOD
+# rather than the product, and the method lives in the register and in CLAUDE.md -- neither of which
+# ships inside the sdist. Without a Project-URL the page is a dead end and the one artifact worth
+# reading is unreachable from the one place a stranger will find this.
+[project.urls]
+Repository = "https://github.com/raimondasl/ultracua"
+"Defect register" = "https://github.com/raimondasl/ultracua/blob/main/docs/open-defects.md"
+"Honest status" = "https://github.com/raimondasl/ultracua/blob/main/STATUS.md"
+"Benchmark numbers" = "https://github.com/raimondasl/ultracua/blob/main/baselines/README.md"
 
 [project.scripts]
 ultracua = "ultracua:main"

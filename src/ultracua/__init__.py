@@ -1,6 +1,14 @@
-"""ultracua — a Computer Use Agent that drives a browser at 5-10x human speed.
+"""ultracua — a Computer Use Agent that learns a browser flow once with an LLM, then replays it
+deterministically with no model in the loop.
 
-See PLAN.md for the full roadmap. Phase 1 adds the learn-once / replay-fast flow cache.
+This said *drives a browser at 5-10x human speed* until 0.182.0. Nothing in this tree measures that:
+what is committed is what replay REMOVES (0 model calls on all 24 write replays in the benchmark
+series, one on 43 of 51 read replays) plus `baselines/demo.json`'s FIXTURE speedup of 62-114x, which
+is removed model latency against a LOCAL page and does not transfer to a real site. See `README.md`.
+
+ACTIVE DEVELOPMENT STOPPED ON 2026-09-09. `docs/open-defects.md` carries 74 open findings and the
+close-out banner explaining what that means; read it before adopting this. `PLAN.md` and `ROADMAP.md`
+are kept as the record of what was intended, not as a statement of what is coming.
 """
 
 from __future__ import annotations

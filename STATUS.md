@@ -3,7 +3,7 @@
 > ## ⚠ Read this banner, not the narrative below
 >
 > **ACTIVE DEVELOPMENT STOPPED ON 2026-09-09, AT 0.181.0.** Nothing below is planned work any more.
-> The **74** open findings are an inventory rather than a backlog (round 4's 72 plus round 3's R3.2
+> The **75** open findings are an inventory rather than a backlog (round 4's 73 plus round 3's R3.2
 > and R3.7). The paid weekly benchmark no longer runs on a schedule; **every free gate still runs** —
 > the full suite on both OSes and `red-proof` on each PR, the mutation sweep on its weekly cron. And
 > the two `availability_rate` baselines below will not be re-cut, which makes them dated observations
@@ -35,8 +35,8 @@
 > are untouched**), and the **customer benchmark**: two live substrates, 14 scenarios, server-side
 > oracles, and a gated run that WAS weekly until 0.181.0 and is now dispatch-only.
 >
-> **Findings.** `docs/open-defects.md`: **2 open in round 3** (R3.2, R3.7); round 4 is a 159-finding
-> series at **72 open / 83 fixed / 4 parked**.
+> **Findings.** `docs/open-defects.md`: **2 open in round 3** (R3.2, R3.7); round 4 is a 160-finding
+> series at **73 open / 83 fixed / 4 parked**.
 >
 > **The two numbers a reader most needs.** `availability_rate` **0.762** on Gitea (cut 2026-08-26)
 > and **0.714** on Odoo (cut 2026-09-05 from a series run at 0.169.0), each over n=21

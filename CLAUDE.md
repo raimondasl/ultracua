@@ -15,7 +15,7 @@ this tree contains a 38.)
 > and why, and it is why the numbers here are trustworthy. It is NOT guaranteed current: this file has
 > shipped false sentences before and the fix has always been the next reading, so treat a claim here
 > the way this file tells you to treat any other — derive it, then cite it. What changed on 2026-09-09
-> is that **nothing more is planned**. The **74** open findings in `docs/open-defects.md` (round 4's 72
+> is that **nothing more is planned**. The **75** open findings in `docs/open-defects.md` (round 4's 73
 > plus R3.2 and R3.7) are an inventory, not a backlog; the two `held` steps in `docs/plan/state.json`
 > will stay held; and the paid weekly benchmark no longer runs on a schedule. **Every FREE gate still
 > runs** — the full suite on both OSes and `red-proof` on every PR, the mutation sweep on its weekly

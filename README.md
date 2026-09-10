@@ -7,12 +7,12 @@ deterministically** — not by clicking faster, but by taking the planning model
 A replayed **write** makes no model call at all (measured: 0 calls on all 24 write replays in the
 committed benchmark series); a **data read** makes one, to read the answer off the page (one call on
 43 of 51 read replays, two on the other 8). That holds for `replay_flow()` / `flow replay`, which run
-`mode="replay"`; the bare `ultracua <url> <goal>` CLI defaults to `--mode auto`, which may self-heal
-or re-author and is *not* 0-LLM.
+`mode="replay"`; the one-shot CLI (`ultracua --url URL --goal GOAL`) defaults to `--mode auto`, which
+may self-heal or re-author and is *not* 0-LLM.
 
 > **Status: active development stopped on 2026-09-09, at 0.181.0.** This is a finished
 > experiment, not a maintained product. Everything described below was measured and the measurements
-> stand; what stopped is new work. There are **74 open defects**, published in
+> stand; what stopped is new work. There are **75 open defects**, published in
 > [docs/open-defects.md](docs/open-defects.md) along with what each one costs you — reading that
 > register is the honest way to decide whether this fits your case. The benchmark numbers quoted here
 > are dated observations that will not be re-cut, and the baseline files themselves record no version
@@ -141,8 +141,8 @@ Hacker News (read-only) and is built to record: `uv run python examples/hn_diges
 | **[GUIDE.md](GUIDE.md)** | developer guide: the Flow API + CLI in depth (auth, write flows, record by demonstration, health, providers) |
 | **[HEALING.md](HEALING.md)** | how it self-heals (and deliberately doesn't) when a page's elements change: resilient locators, LLM heal/re-plan, and the fail-loud boundaries |
 | **[docs/comparison-stagehand.md](docs/comparison-stagehand.md)** | ultracua vs. Stagehand — a design-philosophy comparison (drift/self-heal, write safety, data correctness), dated + sourced |
-| **[docs/open-defects.md](docs/open-defects.md)** | the standing defect register — **four** adversarial rounds. Rounds 1–2 are fixed; of the 13 R3-numbered entries (round 3 found 11, R3.12–R3.13 were filed later), **2 remain open** (R3.2, R3.7); round 4 began as a pre-merge audit that *parked* a change rather than ship it and became a standing per-slice log — **159 findings, 72 open / 83 fixed / 4 parked**. Records the residuals it decided not to fix, including the decisions closed as NO CHANGE. Its R4 index is rendered from `docs/register/state.json` and its R3 count is parsed from the headings — both machine-checked; **this table row is prose and is not**, which is why it said "nine remain open" for five weeks after that stopped being true. Check the register's own index, not this row. **Read before starting new work.** |
-| **[docs/correctness-plan.md](docs/correctness-plan.md)** | **closed at 0.181.0** — the plan behind Phases 0–7, grounded on the v0.75.0 survey (round-3 findings, test-machinery holes, unpinned residuals) — worst user harm first, test-first, one slice per PR. It does **not** sequence the round-4 register: most of the 72 open findings post-date it, and `docs/reshape-plan.md` §13 plus `docs/plan/state.json` are the operative order. |
+| **[docs/open-defects.md](docs/open-defects.md)** | the standing defect register — **four** adversarial rounds. Rounds 1–2 are fixed; of the 13 R3-numbered entries (round 3 found 11, R3.12–R3.13 were filed later), **2 remain open** (R3.2, R3.7); round 4 began as a pre-merge audit that *parked* a change rather than ship it and became a standing per-slice log — **160 findings, 73 open / 83 fixed / 4 parked**. Records the residuals it decided not to fix, including the decisions closed as NO CHANGE. Its R4 index is rendered from `docs/register/state.json` and its R3 count is parsed from the headings — both machine-checked; **this table row is prose and is not**, which is why it said "nine remain open" for five weeks after that stopped being true. Check the register's own index, not this row. **Read before starting new work.** |
+| **[docs/correctness-plan.md](docs/correctness-plan.md)** | **closed at 0.181.0** — the plan behind Phases 0–7, grounded on the v0.75.0 survey (round-3 findings, test-machinery holes, unpinned residuals) — worst user harm first, test-first, one slice per PR. It does **not** sequence the round-4 register: most of the 73 open findings post-date it, and `docs/reshape-plan.md` §13 plus `docs/plan/state.json` are the operative order. |
 | **[docs/correctness-survey.md](docs/correctness-survey.md)** | the measured inventory the plan is built on: **59 items** across the register, CI/eval machinery, the user-facing surface and the accepted residuals in `src/`, produced 2026-08-04 at v0.75.0 and not re-derived since. |
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | how it works inside + how to contribute (engine, safety, tiers, benchmarks, layout) |
 | **[STATUS.md](STATUS.md)** | honest status, measured benchmarks, known fragilities |

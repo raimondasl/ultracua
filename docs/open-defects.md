@@ -2,9 +2,9 @@
 
 > ## ⚠ ACTIVE DEVELOPMENT STOPPED ON 2026-09-09, AT 0.181.0
 >
-> **The 74 open findings below are an INVENTORY, not a backlog.** Nobody is working them and nobody
+> **The 75 open findings below are an INVENTORY, not a backlog.** Nobody is working them and nobody
 > is going to. That is a decision, taken on 2026-09-09 after a review of whether this project has a
-> niche worth its per-application cost. **74 = round 4's 72 plus round 3's R3.2 and R3.7**, said out
+> niche worth its per-application cost. **75 = round 4's 73 plus round 3's R3.2 and R3.7**, said out
 > loud because every count in this file is scoped to one round and the total is the number a reader
 > actually wants. The review itself is NOT in this repository — it was written outside it — so do not
 > go hunting for it; what IS here is every measurement it rests on, which is the whole of this file.
@@ -58,7 +58,7 @@ CONFIRMED BY EXECUTION and fixed on the branch, 3 left open — and the branch w
 shipped**. It was green (785 tests, drift_bench byte-identical) and still wrong: the THIRD consecutive
 green-but-wrong change in this area. See the round-4 section below and `docs/parked/README.md`.
 The round-4 series has since grown to R4.57 as later slices filed against it:
-**72 open**, 83 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
+**73 open**, 83 fixed, 4 parked — indexed and token-checked in the R4 STATUS INDEX at the top of that
 section. (This sentence used to wrap between `13 fixed,` and `4 parked`, which put it OUT of reach of
 `_R4_CLAIM` in `tests/test_register_count.py` — so the file's most-read count was the one number the
 guard could not see. Kept on one line deliberately; the test loops over every claim it can match.)
@@ -819,7 +819,7 @@ refused a flow that must stay learnable.
 
 # Round 4 — the 2026-08-04 pre-merge audit of the causal-attribution attempt (PARKED, not merged)
 
-## R4 STATUS INDEX — the machine-checked one. **72 open**, 83 fixed, 4 parked
+## R4 STATUS INDEX — the machine-checked one. **73 open**, 83 fixed, 4 parked
 
 *Round 3's count is derived from its headings and pinned by `tests/test_register_count.py`; round 4's
 was not, and it is the larger series. It is now, but NOT by parsing prose: R4 findings are declared in
@@ -1319,6 +1319,15 @@ if and only if that branch is ever resumed.
 **6. WHAT IT DOES NOT CLOSE, STATED BECAUSE THE SAME SHAPE LIVES ONE DIRECTORY OVER.** `baselines/customer_v1_gitea.json` and `_odoo.json` are UNTOUCHED by this. 0.172.0 already recorded that they must be re-cut when R4.130 or R4.148 lands and that **nothing will tell you to** -- `_flip_findings` reports only rows that got WORSE, so an improvement produces no finding at all. They will now never be re-cut, because active development stopped on 2026-09-09, which makes them dated observations of the versions named in their own `meta` by construction rather than by neglect. This finding closes the drift-bench end, where a constant and a record could be joined for the price of a file read; it makes no claim about a baseline whose currency is a RATE and cannot be checked without spending money.
 
 **7. AND THE SLICE THAT FIXED THIS DE-CLASSIFIED THREE TESTS, which is a second finding in one line and belongs here because nothing else would record it.** Re-deriving the tier manifest moved `tests/test_readiness_poll.py`'s three scripted poll cells from the browser tier to the fast tier. They stopped launching a browser at **0.169.0** -- commit `b769a00`, *"descope three poll cells from real-page timing"* -- and no slice re-derived the manifest for twelve releases, so all three sat deselected from every fast tier in between. **It is the SECOND de-classifying delta and the better example of the two**, because CLAUDE.md's standing refusal to switch the manifest to merge-mode rests entirely on de-classification being real: merge-mode would have left those marks on forever. Corrected there. Two residuals stated rather than fixed: nothing makes a slice that descopes a cell re-derive the manifest, and this re-derivation was measured on ONE platform, so if any of the three launches on ubuntu its `fast` job will now raise -- which is that job working, and the loudest possible way to find out. |
+| R4.160 | open | **THE `ultracua-daemon` CONSOLE SCRIPT IGNORES ARGV ENTIRELY, SO `--help` SILENTLY STARTS A SERVER.** Found by Day 3 of the close-out doing the thing nobody had done: installing the built wheel into a clean venv and typing the first command a stranger types. `daemon.main()` takes no parameters and never reads `sys.argv`; it configures logging and calls `asyncio.run(serve())`. **Measured against the installed 0.182.0 wheel, three ways:** with stdin closed it exits **0 with no output**; with stdin held open it **blocks for as long as stdin lives** (4 s test, exit 0 after 4 s); and fed `{"jsonrpc":"2.0","id":1,"method":"ping"}` it **answers the protocol** -- `{"error":{"code":-32000,"message":"unknown method: 'ping'"}}` -- while `--help` sits unread in argv.
+
+**1. IT IS INVIOLABLE #2 ON THE USER-FACING SURFACE.** The user asked for help and got a running server; nothing said no. In a terminal that reads as a hang, and in a script as a silent success -- the two quiet-wrong directions this register spends four rounds refusing everywhere else. The same is true of every argv: `ultracua-daemon --version`, `--port 9000` and `ultracua-daemon nonsense` all start the same server.
+
+**2. WHY IT WAS INVISIBLE UNTIL A CLEAN INSTALL.** The suite drives `serve()` directly and `python -m ultracua.daemon` goes through `__main__.py`, which has the same shape. **Nothing in the tree had ever executed the CONSOLE SCRIPT** -- `[project.scripts]`'s `ultracua-daemon = "ultracua.daemon:main"` was declared, tested by nobody, and correct only in the sense that it resolves. Its sibling `ultracua = "ultracua:main"` DOES parse argv and prints a usage block, which is what made the contrast visible in one command.
+
+**3. NOT FIXED HERE, AND THE REASON IS THE SLICE BOUNDARY RATHER THAN THE COST.** The fix is small -- refuse unknown argv, or print a usage line naming stdio JSON-RPC as the interface. But this slice is the RELEASE: its job is to make the published artifact honest, and changing the behaviour of a shipped entry point inside the commit that publishes it fuses two questions the one-slice-per-PR rule exists to keep apart. It is filed rather than fixed because active development stopped on 2026-09-09 and the register is where honest gaps live now.
+
+**4. WHAT A READER SHOULD DO INSTEAD**, since a finding on an archived project owes its remedy to the reader rather than to a future slice: drive the daemon as `python -m ultracua.daemon` or via the Node client in `clients/node/`, and read `GUIDE.md` for the JSON-RPC surface. There is no help output to find because there never was one. |
 <!-- /generated:r4-index -->
 
 
