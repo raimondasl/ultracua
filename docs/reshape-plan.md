@@ -1,6 +1,10 @@
 # The reshape plan — stop manufacturing the defect classes
 
-> ## ⚠ CLOSED. Active development stopped on 2026-09-09, at 0.181.0.
+> ## ⚠ CLOSED. Active development stopped on 2026-09-09.
+>
+> (**The date is the decision; the version is not.** This banner said *at 0.181.0* until 0.182.0,
+> which is a boundary claim every close-out commit falsifies — and 0.182.0 is the one that
+> publishes to PyPI. Releases after 2026-09-09 are close-out work only.)
 >
 > The programme this file sequences is finished: `docs/plan/state.json` has no `pending` step, and the
 > two `held` steps (0.5, 0.7) will stay held. Nothing below is upcoming work. Its per-step narratives

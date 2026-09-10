@@ -1,6 +1,10 @@
 # ultracua — Roadmap: from validated prototype to usable
 
-> ## ⚠ THIS ROADMAP IS CLOSED. Active development stopped on 2026-09-09, at 0.181.0.
+> ## ⚠ THIS ROADMAP IS CLOSED. Active development stopped on 2026-09-09.
+>
+> (**The date is the decision; the version is not.** This banner said *at 0.181.0* until 0.182.0,
+> which is a boundary claim every close-out commit falsifies — and 0.182.0 is the one that
+> publishes to PyPI. Releases after 2026-09-09 are close-out work only.)
 >
 > Nothing below is planned. It is kept as the record of what the project intended, because a
 > roadmap deleted at close-out hides what was chosen and what was skipped. The live status is the

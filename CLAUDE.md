@@ -9,7 +9,11 @@ real-site example at 30 s learn / 5 s replay. A multiplier on real sites is not 
 quote 38–114×**: 0.180.0 wrote that into `STATUS.md` and 0.181.0 copied it here, and no artifact in
 this tree contains a 38.)
 
-> ## ⚠ ACTIVE DEVELOPMENT STOPPED ON 2026-09-09, AT 0.181.0
+> ## ⚠ ACTIVE DEVELOPMENT STOPPED ON 2026-09-09
+>
+> (**The date is the decision; the version is not.** This banner said *at 0.181.0* until 0.182.0,
+> which is a boundary claim every close-out commit falsifies — and 0.182.0 is the one that
+> publishes to PyPI. Releases after 2026-09-09 are close-out work only.)
 >
 > Everything below is worth reading before touching this code — it is the record of what was measured
 > and why, and it is why the numbers here are trustworthy. It is NOT guaranteed current: this file has

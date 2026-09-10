@@ -1,6 +1,10 @@
 # The correctness plan — no new capability, only truth
 
-> ## ⚠ CLOSED. Active development stopped on 2026-09-09, at 0.181.0.
+> ## ⚠ CLOSED. Active development stopped on 2026-09-09.
+>
+> (**The date is the decision; the version is not.** This banner said *at 0.181.0* until 0.182.0,
+> which is a boundary claim every close-out commit falsifies — and 0.182.0 is the one that
+> publishes to PyPI. Releases after 2026-09-09 are close-out work only.)
 >
 > Nothing sequenced below is going to happen. This file is kept because it is the record of what was
 > decided and why — including the decisions closed as NO CHANGE (D3 at 0.176.0, D4 at 0.179.0) and the

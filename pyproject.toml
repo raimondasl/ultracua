@@ -1,7 +1,7 @@
 [project]
 name = "ultracua"
 version = "0.182.0"
-description = "A Computer Use Agent that learns a browser flow once with an LLM, then replays it deterministically with no model in the loop."
+description = "A Computer Use Agent that learns a browser flow once with an LLM, then replays it deterministically with no planning model in the loop."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -21,16 +21,32 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
+    # 3.13 is DELIBERATELY ABSENT. CI runs 3.12 on both OSes and `.python-version` is 3.12, so
+    # this package has never been executed on 3.13. Claiming it would be an unmeasured support
+    # claim in permanent metadata, which is the one thing this release exists to avoid. For the
+    # same reason `requires-python` stays >=3.12 rather than widening to 3.11: dropping the floor
+    # would be an unmeasured widening, and nothing will ever test it.
     "Topic :: Internet :: WWW/HTTP :: Browsers",
     "Topic :: Software Development :: Testing",
 ]
+# UPPER BOUNDS ARE NOT OPTIONAL ON AN ARCHIVED PACKAGE, and this one was measured rather than
+# feared. With `anthropic>=0.109.2` unbounded, a clean `pip install ultracua` on 2026-09-10 resolves
+# to **anthropic 1.4.0**, whose `messages.create` no longer accepts `temperature` -- and
+# `providers/llm_agent.py:131` passes it on every authoring call. Reproduced against the installed
+# wheel: `TypeError: AsyncMessages.create() got an unexpected keyword argument 'temperature'`, raised
+# BEFORE any network call. So every learn run of a freshly-installed 0.182.0 would have died on its
+# first model call, which is the product's primary path.
+#
+# `uv.lock` pins anthropic 0.109.2, and that is the ONLY version this suite has ever exercised. The
+# caps are therefore the next MAJOR in each case -- the boundary where a removal like that belongs --
+# and they are a statement about what was tested, not a prediction about what will break. A package
+# that will never be updated again cannot rely on "upstream stays compatible"; nothing is watching.
 dependencies = [
-    "anthropic>=0.109.2",
-    "playwright>=1.60.0",
-    "pydantic>=2.13.4",
-    "python-dotenv>=1.2.2",
-    "xxhash>=3.7.0",
+    "anthropic>=0.109.2,<1.0",
+    "playwright>=1.60.0,<2.0",
+    "pydantic>=2.13.4,<3.0",
+    "python-dotenv>=1.2.2,<2.0",
+    "xxhash>=3.7.0,<5.0",
 ]
 
 # WHY THESE EXIST AT ALL, since the package is archived: a reader who lands on the PyPI page must be
@@ -38,6 +54,16 @@ dependencies = [
 # rather than the product, and the method lives in the register and in CLAUDE.md -- neither of which
 # ships inside the sdist. Without a Project-URL the page is a dead end and the one artifact worth
 # reading is unreachable from the one place a stranger will find this.
+# EXTRAS EXIST BECAUSE `[dependency-groups]` BELOW DOES NOT REACH A pip USER. Those groups are
+# PEP-735, which uv understands and `pip install` does not -- they produce no `Provides-Extra` in the
+# wheel metadata at all. So README's "Multi-provider -- Anthropic / OpenAI / Gemini" and the MCP
+# server were advertised on the PyPI page with no way to install their dependencies: a pip user
+# reaching `providers/openai.py` got a bare `ModuleNotFoundError` naming no remedy. The groups stay
+# for the development workflow; these mirror the two a CONSUMER needs.
+[project.optional-dependencies]
+providers = ["google-genai>=2.8.0,<3.0", "openai>=2.42.0,<3.0"]
+mcp = ["mcp>=1.28.0,<2.0"]
+
 [project.urls]
 Repository = "https://github.com/raimondasl/ultracua"
 "Defect register" = "https://github.com/raimondasl/ultracua/blob/main/docs/open-defects.md"

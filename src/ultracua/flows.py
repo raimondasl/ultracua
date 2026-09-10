@@ -3736,8 +3736,9 @@ async def replay(
 
     `params={slot: value}` (H3 typed templates) substitutes validated per-run values into the flow's
     slot-marked fill/type/select/press steps (0-LLM pre-flight validation; `flow_key` unchanged, so
-    values never enter identity). Read flows only in this slice — parameterizing a WRITE flow is
-    refused (write templates + row-keyed idempotency are the next slice).
+    values never enter identity). Read flows only: parameterizing a WRITE flow is REFUSED, and that
+    is now permanent — write templates plus row-keyed idempotency were the next slice, and active
+    development stopped on 2026-09-09 without it.
     """
     # THE SINGLE EXIT. `replay()` has sixteen of them and any one can be the last thing that happens
     # to a run, so "did every path write the record?" used to be sixteen questions — and B1 got eight

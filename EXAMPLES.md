@@ -1,5 +1,10 @@
 # Examples — a real, read-only recurring data-pull
 
+> **⚠ Archived. Active development stopped on 2026-09-09.** Nothing here is planned work, and the
+> numbers are dated observations that will not be re-measured. The live status is the close-out
+> banner at the top of [docs/open-defects.md](https://github.com/raimondasl/ultracua/blob/main/docs/open-defects.md),
+> which also says what its 75 open findings mean now.
+
 A worked end-to-end example on a **real website**, read-only (no login, no writes): pull a fresh data
 point each morning, returning it as structured JSON. It's the cleanest way to *see* ultracua's one
 trick — **learn a navigation once with an LLM, then replay it deterministically at 0-LLM** — and it

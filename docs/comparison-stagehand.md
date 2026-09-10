@@ -1,5 +1,10 @@
 # ultracua vs. Stagehand
 
+> **⚠ Archived. Active development stopped on 2026-09-09.** Nothing here is planned work, and the
+> numbers are dated observations that will not be re-measured. The live status is the close-out
+> banner at the top of [docs/open-defects.md](https://github.com/raimondasl/ultracua/blob/main/docs/open-defects.md),
+> which also says what its 75 open findings mean now.
+
 *A design-philosophy comparison, focused on self-healing / drift resilience, write safety, and data
 correctness. Companion to [../HEALING.md](../HEALING.md).*
 

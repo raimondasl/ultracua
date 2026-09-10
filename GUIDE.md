@@ -1,5 +1,10 @@
 # Developer guide
 
+> **⚠ Archived. Active development stopped on 2026-09-09.** Nothing here is planned work, and the
+> numbers are dated observations that will not be re-measured. The live status is the close-out
+> banner at the top of [docs/open-defects.md](https://github.com/raimondasl/ultracua/blob/main/docs/open-defects.md),
+> which also says what its 75 open findings mean now.
+
 How to *use* ultracua — the Flow API and the `ultracua` CLI in depth. For a runnable real-site
 walkthrough start with [EXAMPLES.md](EXAMPLES.md); for how it works inside see
 [ARCHITECTURE.md](ARCHITECTURE.md).

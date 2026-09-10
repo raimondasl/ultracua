@@ -1,6 +1,10 @@
 # Open defects — the standing register
 
-> ## ⚠ ACTIVE DEVELOPMENT STOPPED ON 2026-09-09, AT 0.181.0
+> ## ⚠ ACTIVE DEVELOPMENT STOPPED ON 2026-09-09
+>
+> (**The date is the decision; the version is not.** This banner said *at 0.181.0* until 0.182.0,
+> which is a boundary claim every close-out commit falsifies — and 0.182.0 is the one that
+> publishes to PyPI. Releases after 2026-09-09 are close-out work only.)
 >
 > **The 75 open findings below are an INVENTORY, not a backlog.** Nobody is working them and nobody
 > is going to. That is a decision, taken on 2026-09-09 after a review of whether this project has a
@@ -1327,7 +1331,9 @@ if and only if that branch is ever resumed.
 
 **3. NOT FIXED HERE, AND THE REASON IS THE SLICE BOUNDARY RATHER THAN THE COST.** The fix is small -- refuse unknown argv, or print a usage line naming stdio JSON-RPC as the interface. But this slice is the RELEASE: its job is to make the published artifact honest, and changing the behaviour of a shipped entry point inside the commit that publishes it fuses two questions the one-slice-per-PR rule exists to keep apart. It is filed rather than fixed because active development stopped on 2026-09-09 and the register is where honest gaps live now.
 
-**4. WHAT A READER SHOULD DO INSTEAD**, since a finding on an archived project owes its remedy to the reader rather than to a future slice: drive the daemon as `python -m ultracua.daemon` or via the Node client in `clients/node/`, and read `GUIDE.md` for the JSON-RPC surface. There is no help output to find because there never was one. |
+**4. WHAT A READER SHOULD DO INSTEAD**, since a finding on an archived project owes its remedy to the reader rather than to a future slice: drive it as `python -m ultracua.daemon`, which is the same server and at least says so in `__main__.py`'s docstring, and read `GUIDE.md` for the JSON-RPC surface. There is no help output to find because there never was one.
+
+**AND THE FIRST DRAFT OF THAT CLAUSE POINTED A pip USER AT SOMETHING THEY DO NOT HAVE**, which the release audit caught. It named `clients/node/` as an alternative. That directory is real and is in the repository -- but the sdist ships only `src/`, `LICENSE`, `README.md` and `pyproject.toml`, the wheel ships only the package, and nothing is published to npm. So the remedy was reachable by someone who had cloned the repo and useless to exactly the reader this entry was written for. **A remedy is part of the finding and gets checked like one**; naming a path without asking whether the reader can reach it is the same shape as naming a `meta` field that does not exist (0.181.0). |
 <!-- /generated:r4-index -->
 
 

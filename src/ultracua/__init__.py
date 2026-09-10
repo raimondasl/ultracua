@@ -6,9 +6,10 @@ what is committed is what replay REMOVES (0 model calls on all 24 write replays 
 series, one on 43 of 51 read replays) plus `baselines/demo.json`'s FIXTURE speedup of 62-114x, which
 is removed model latency against a LOCAL page and does not transfer to a real site. See `README.md`.
 
-ACTIVE DEVELOPMENT STOPPED ON 2026-09-09. `docs/open-defects.md` carries 74 open findings and the
-close-out banner explaining what that means; read it before adopting this. `PLAN.md` and `ROADMAP.md`
-are kept as the record of what was intended, not as a statement of what is coming.
+ACTIVE DEVELOPMENT STOPPED ON 2026-09-09. The defect register carries **75 open findings** and a
+close-out banner explaining what that means; read it before adopting this. It is not in this package
+-- the sdist ships only `src/`, the LICENSE and this README -- so it is linked from the PyPI page and
+lives at https://github.com/raimondasl/ultracua/blob/main/docs/open-defects.md
 """
 
 from __future__ import annotations
