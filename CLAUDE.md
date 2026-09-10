@@ -3,17 +3,24 @@
 A Computer Use Agent: **learn a browser flow once, replay it deterministically at 0-LLM, failing LOUD
 on drift.** (This line said *5–10× faster* until 0.181.0. The README's copy of the claim went at 0.180.0 and this one survived a release longer, which is the ordinary way a corrected sentence leaves a sibling standing. Nothing in this tree measures it. The
 nearest committed numbers are what replay REMOVES — 0 model calls on all 24 write replays and one on
-43 of 51 read replays — plus fixture-only speedups of 38–114× and a single dated real-site example at
-30 s learn / 5 s replay. A multiplier on real sites is not among them; see `README.md`.)
+43 of 51 read replays — plus `baselines/demo.json`'s fixture speedup of **62–114×** (mean 86.3 ± 20.9,
+n=5, `metrics.speedup`), which measures removed model latency against a LOCAL page, and one dated
+real-site example at 30 s learn / 5 s replay. A multiplier on real sites is not among them. **Do not
+quote 38–114×**: 0.180.0 wrote that into `STATUS.md` and 0.181.0 copied it here, and no artifact in
+this tree contains a 38.)
 
 > ## ⚠ ACTIVE DEVELOPMENT STOPPED ON 2026-09-09, AT 0.181.0
 >
-> Everything below is still TRUE and still worth reading before touching this code — it is the record
-> of what was measured and why, and it is why the numbers here are trustworthy. What changed is that
-> **nothing more is planned**. The 72 open findings in `docs/open-defects.md` are an inventory, not a
-> backlog; the two `held` steps in `docs/plan/state.json` will stay held; the paid weekly benchmark no
-> longer runs on a schedule (the free CI gates all do). The close-out banner at the top of the register
-> says what an open finding means now and which baselines are frozen as dated observations.
+> Everything below is worth reading before touching this code — it is the record of what was measured
+> and why, and it is why the numbers here are trustworthy. It is NOT guaranteed current: this file has
+> shipped false sentences before and the fix has always been the next reading, so treat a claim here
+> the way this file tells you to treat any other — derive it, then cite it. What changed on 2026-09-09
+> is that **nothing more is planned**. The **74** open findings in `docs/open-defects.md` (round 4's 72
+> plus R3.2 and R3.7) are an inventory, not a backlog; the two `held` steps in `docs/plan/state.json`
+> will stay held; and the paid weekly benchmark no longer runs on a schedule. **Every FREE gate still
+> runs** — the full suite on both OSes and `red-proof` on every PR, the mutation sweep on its weekly
+> cron — which is not the same as "they all run weekly", and the distinction is the point. The
+> close-out banner at the top of the register says what an open finding means now.
 >
 > **If you are picking this up to work on it anyway**, the rules below are the ones that earned their
 > place by being learned the hard way, and the most load-bearing of them is unchanged: *green is not
@@ -479,8 +486,13 @@ Violating any of these is a blocking defect, not a trade-off:
   trade: it does NOT weaken deletion detection (`test_the_manifest_covers_everything_this_run_collected`
   checks `known - collected` in seconds, and `tests/test_manifest_cost.py` arms that guard), but it
   DOES lose **de-classification** — a test that stops launching keeps its browser mark forever, still
-  collects, and is silently deselected from the fast tier for good. Measured: of the three manifest
-  deltas so far, ONE de-classified three tests, and they were the tier's own arming cells. So the
+  collects, and is silently deselected from the fast tier for good. Measured: **TWO of the manifest
+  deltas so far have de-classified, three tests each**. The first was the tier's own arming cells. The
+  second is 0.181.0's re-derivation, and it is the better example: `b769a00` ("descope three poll cells
+  from real-page timing", 0.169.0) rewrote three `test_readiness_poll.py` cells to be SCRIPTED, and
+  nothing re-derived the manifest for twelve releases, so all three carried stale browser marks and
+  were deselected from every fast tier in between. Merge-mode would have kept them there permanently.
+  **A slice that descopes a cell from the browser owes a re-derivation**, and nothing enforces that. So the
   verdict today is DO NOT switch — and that verdict is now ENFORCED rather than merely stated: clause
   (b) read a rolling ten-delta window until 0.8's prerequisites, so when the one de-classifying
   revision scrolled out the report began recommending merge-mode, the design this very paragraph

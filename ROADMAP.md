@@ -1,5 +1,19 @@
 # ultracua — Roadmap: from validated prototype to usable
 
+> ## ⚠ THIS ROADMAP IS CLOSED. Active development stopped on 2026-09-09, at 0.181.0.
+>
+> Nothing below is planned. It is kept as the record of what the project intended, because a
+> roadmap deleted at close-out hides what was chosen and what was skipped. The live status is the
+> close-out banner at the top of [docs/open-defects.md](docs/open-defects.md).
+>
+> **And its opening claim was never supported.** The *2–7×* below traces to `PLAN.md`'s 1.8–7.3×,
+> which are learn-vs-replay ratios measured on two WebArena Magento **containers** in June 2026 at
+> v0.22.0 — **no artifact for those runs is committed anywhere in this tree**, and the customer
+> benchmark has no timing field at all. What the tree does support is what replay REMOVES (0 model
+> calls on all 24 write replays, one on 43 of 51 read replays) plus `baselines/demo.json`'s
+> fixture speedup of **62–114×** (mean 86.3 ± 20.9, n=5), which measures removed model latency
+> against a local page and does not transfer to a real site. See `README.md` and `STATUS.md`.
+
 The core thesis — **learn a browser flow once, replay it deterministically at 0 LLM, 2–7× faster**
 — is validated on real authenticated sites across two distinct apps (see
 [PLAN.md](PLAN.md)). What's left to make ultracua *usable by a developer for a real recurring

@@ -382,6 +382,22 @@ def test_the_committed_baseline_publishes_the_holes_the_tree_still_has() -> None
     recorded = {(s, n) for s, n in rec["known_wrong_binds"]}
     live = set(db.KNOWN_WRONG_BINDS)
 
+    # THE MEASURED FIELD, FIRST, because `known_wrong_binds` is only a TRANSCRIPTION of the constant
+    # taken at record time -- so on its own this cell would compare the constant against a copy of
+    # itself, and a record whose ALLOWLIST was hand-edited would pass. `wrong_rows` is what the run
+    # actually observed. They must agree in both directions: a row that went wrong and is not listed
+    # would have failed `no_unexpected_wrong` on the browser run, and a row LISTED that no longer
+    # goes wrong is the silent case -- the hole may have closed and the allowlist still says it is
+    # open, which is the rot the sibling cell's docstring names and cannot itself detect.
+    measured = {tuple(r.split("/", 1)) for r in rec["wrong_rows"]}
+    assert measured == recorded, (
+        f"baselines/drift_v2.json is internally inconsistent: it MEASURED "
+        f"{sorted('/'.join(x) for x in measured)} as wrong and PUBLISHES "
+        f"{sorted('/'.join(x) for x in recorded)} as its allowlist. Either the file was hand-edited "
+        f"or a published hole stopped reproducing. Re-record it from a live run; do not reconcile "
+        f"the two lists by editing the JSON."
+    )
+
     assert recorded == live, (
         f"baselines/drift_v2.json publishes {sorted('/'.join(x) for x in recorded)} and the tree's "
         f"KNOWN_WRONG_BINDS holds {sorted('/'.join(x) for x in live)}. The record is describing a "
@@ -393,4 +409,8 @@ def test_the_committed_baseline_publishes_the_holes_the_tree_still_has() -> None
 
     # ANTI-VACUITY, for the same reason the cell above carries one: two empty sets are equal, and an
     # empty allowlist is exactly the state a mis-edit produces.
-    assert live, "KNOWN_WRONG_BINDS is empty, so the comparison above asserted nothing"
+    assert live and measured, (
+        f"one side of this cell is empty (live={sorted(live)}, measured={sorted(measured)}), so the "
+        f"set comparisons above asserted nothing -- two empty sets are equal, and an empty allowlist "
+        f"is exactly what a mis-edit produces"
+    )

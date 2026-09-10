@@ -1,7 +1,7 @@
 [project]
 name = "ultracua"
 version = "0.181.0"
-description = "A Computer Use Agent that drives a web browser at 5-10x human speed."
+description = "A Computer Use Agent that learns a browser flow once with an LLM, then replays it deterministically with no model in the loop."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

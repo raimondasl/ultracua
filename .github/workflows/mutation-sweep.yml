@@ -213,10 +213,11 @@ jobs:
   # 0, which is TIGHTER than Gitea was when its own baseline was cut, and `over_gated/drift` has been
   # 0 since 0.158.0.
   #
-  # THIS ROUGHLY DOUBLES THE WEEKLY SPEND, because it adds a second substrate at a similar
-  # per-substrate cost: the three Gitea passes averaged $0.603 and the three Odoo passes $0.602, so
-  # ~$0.60 becomes ~$1.20 a week (~$5.20/month). Said out loud because going weekly rather than
-  # nightly was itself a cost decision.
+  # IT USED TO DOUBLE THE WEEKLY SPEND, and since 0.181.0 there IS no weekly spend -- this job is off
+  # the schedule. Kept as the price of a DISPATCH, which is what a reader now needs: a second
+  # substrate at a similar per-substrate cost, the three Gitea passes averaging $0.603 and the three
+  # Odoo passes $0.602, so dispatching both legs costs ~$1.20. It was ~$1.20 a WEEK (~$5.20/month)
+  # from 0.172.0 until 0.181.0.
   #
   # THE BASELINES' `cost_usd` IS NOT THE SPEND and must not be quoted as it — 0.842 for Gitea and
   # 0.664 for Odoo are the MAXIMUM observed pass, recorded as the alarm threshold (R4.106). A first
@@ -244,10 +245,12 @@ jobs:
   # registries red on every PR, `sweep` still runs weekly and free, and `substrates` still runs on
   # every pull request touching the bench. The only thing that stopped is the one that costs money.
   #
-  # WHAT THE BASELINES MEAN NOW. `baselines/customer_v1_gitea.json` (0.762, cut 2026-08-26) and
-  # `_odoo.json` (0.714, cut 2026-09-05) are the last measurements taken, and NOTHING will re-take
-  # them. Read them as dated observations of the versions named in their own `meta`, not as the
-  # current rate -- a later Gitea series measured 0.857 and was never cut as a baseline.
+  # WHAT THE BASELINES MEAN NOW. `baselines/customer_v1_gitea.json` (0.762) and `_odoo.json` (0.714)
+  # are the last measurements taken, and NOTHING will re-take them. Read them as dated observations,
+  # not as the current rate -- a later Gitea series measured 0.857 and was never cut as a baseline.
+  # NEITHER FILE RECORDS ITS OWN CUT DATE OR VERSION: the 2026-08-26 and 2026-09-05 (at 0.169.0)
+  # dates live only in `baselines/README.md` and `CLAUDE.md`. That is a real gap, recorded in the
+  # close-out banner rather than papered over by adding a field while freezing the artifact.
   customer-bench:
     name: the customer benchmark, gated against its baseline (${{ matrix.substrate }})
     if: github.event.inputs.run_bench == 'true'
@@ -300,9 +303,11 @@ jobs:
       # the substrate is already running. That assumption cost 2.4a's first real weekly run: all
       # seven scenarios raised `no seed at /data/gitea/seed.db` (R4.110).
       #
-      # `needs: substrates` still earns its place — it fails the cheap job first, so a broken
-      # container layer costs nothing rather than a paid pass. What it never did was hand this job a
-      # running substrate.
+      # (That last paragraph is the record of a `needs: substrates` that was REMOVED at 0.172.0 --
+      # see the block above the job key, which measured that the fan-in protected no dollars, since
+      # the provisioning step below already fails before a cent is spent. `substrates` still runs,
+      # still on every bench PR; it simply does not gate this job. The paragraph is kept rather than
+      # deleted because the reason it was once there is the reason somebody would re-add it.)
       - name: Provision ${{ matrix.substrate }} for the scored run
         timeout-minutes: 25
         run: >

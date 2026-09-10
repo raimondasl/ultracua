@@ -1,5 +1,13 @@
 # The correctness plan — no new capability, only truth
 
+> ## ⚠ CLOSED. Active development stopped on 2026-09-09, at 0.181.0.
+>
+> Nothing sequenced below is going to happen. This file is kept because it is the record of what was
+> decided and why — including the decisions closed as NO CHANGE (D3 at 0.176.0, D4 at 0.179.0) and the
+> ones blocked indefinitely (D0, D5) — and those are the most reusable thing in the repository. The
+> live status is the close-out banner at the top of [open-defects.md](open-defects.md).
+>
+
 **Goal.** Bring ultracua to a state with no known testing holes and no known correctness issues, for
 users. Simplify and make more conservative where that closes a hole. Nothing lands without a test that
 failed first; nothing merges that is not green; anything touching write safety gets a pre-merge
