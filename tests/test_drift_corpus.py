@@ -349,3 +349,48 @@ def test_every_published_wrong_bind_names_a_row_that_exists_and_vice_versa() -> 
         f"only {len(listed)} published wrong binds; the corpus should carry at least the token-less "
         f"positional retarget plus D3's residual (R4.150). D2's was closed at 0.178.0 (R4.156)."
     )
+
+
+def test_the_committed_baseline_publishes_the_holes_the_tree_still_has() -> None:
+    """THE THIRD LEG (R4.159). The cell above joins `KNOWN_WRONG_BINDS` to the curated ROWS, both ways.
+    Nothing joined it to the committed RECORD — and that is the end that went stale.
+
+    `baselines/drift_v2.json` was last written at 0.174.0. D2 landed at 0.178.0, deleted
+    `fuzzy-decoy/fuzzy-decoy-wins` from the constant and took `silent_wrong` 6 -> 4; the record kept
+    saying 6, and listed a hole the resolver no longer has, for two releases. **`baselines/README.md`
+    described the world correctly the whole time** — so prose and artifact disagreed with the ARTIFACT
+    wrong, which is the inverse of this register's usual rot (R4.113) and reads far worse: a reader who
+    distrusts the prose and opens the data gets the older answer.
+
+    WHY THE CURRENCY GUARD COULD NOT SEE IT, because it is not a hole in that cell.
+    `test_the_baseline_is_current` compares `corpus_hash`, `corpus_size`, `mutator_version`,
+    `fixtures_version` and `action_timeout_ms` — WHICH POPULATION the record describes. D2 changed the
+    RESOLVER and not the corpus, so all five were byte-identical and the cell was green and right about
+    what it asserts. A baseline has two halves and only one was checked.
+
+    SO THIS CHECKS THE OTHER HALF AT THE ONE PLACE IT IS CHEAP. Not the rates — re-deriving those needs
+    the 187-row browser run, which is where they already live. The allowlist is the field a slice EDITS
+    when it closes a hole, so it is the field that dates the record, and comparing it costs a file read.
+    Asserted as a SET both ways: an entry in the record and not the tree means the record is stale (the
+    measured case), and the reverse means a hole was published without re-recording the evidence for it.
+    """
+    import json
+
+    from benchmarks import drift_bench as db
+
+    rec = json.loads(Path("baselines/drift_v2.json").read_text(encoding="utf-8"))
+    recorded = {(s, n) for s, n in rec["known_wrong_binds"]}
+    live = set(db.KNOWN_WRONG_BINDS)
+
+    assert recorded == live, (
+        f"baselines/drift_v2.json publishes {sorted('/'.join(x) for x in recorded)} and the tree's "
+        f"KNOWN_WRONG_BINDS holds {sorted('/'.join(x) for x in live)}. The record is describing a "
+        f"different resolver from the one in this tree, so every rate in it — `silent_wrong`, the "
+        f"heal denominator, `known_wrong_rate` — is about a world that no longer exists. Re-record it "
+        f"deliberately (`python -m benchmarks.drift_bench --json baselines/drift_v2.json`) and say in "
+        f"`baselines/README.md` what moved; do NOT edit the JSON by hand to make this pass."
+    )
+
+    # ANTI-VACUITY, for the same reason the cell above carries one: two empty sets are equal, and an
+    # empty allowlist is exactly the state a mis-edit produces.
+    assert live, "KNOWN_WRONG_BINDS is empty, so the comparison above asserted nothing"

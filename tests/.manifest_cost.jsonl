@@ -136,3 +136,5 @@
 {"collected": 2485, "commit": "e2258f5", "phase": "fixed_point", "promoted": 0, "rounds": 0, "seconds": 93.3, "when": "2026-09-08T06:48:13+00:00"}
 {"collected": 2489, "commit": "bf4c588", "phase": "fixed_point", "promoted": 0, "rounds": 0, "seconds": 107.9, "when": "2026-09-08T15:51:50+00:00"}
 {"collected": 2493, "commit": "374206f", "phase": "fixed_point", "promoted": 0, "rounds": 0, "seconds": 100.8, "when": "2026-09-09T02:11:39+00:00"}
+{"browser": 581, "collected": 2494, "commit": "88c85da", "fast": 1913, "phase": "marks", "seconds": 2321.3, "when": "2026-09-10T04:34:24+00:00"}
+{"collected": 2494, "commit": "88c85da", "phase": "fixed_point", "promoted": 15, "rounds": 1, "seconds": 201.6, "when": "2026-09-10T04:38:15+00:00"}

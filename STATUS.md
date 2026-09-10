@@ -2,6 +2,13 @@
 
 > ## ⚠ Read this banner, not the narrative below
 >
+> **ACTIVE DEVELOPMENT STOPPED ON 2026-09-09, AT 0.181.0.** Nothing below is planned work any more.
+> The 72 open findings are an inventory rather than a backlog; the paid weekly benchmark no longer
+> runs on a schedule (every free CI gate still does); and the two `availability_rate` baselines below
+> will not be re-cut, which makes them dated observations of the versions named in their own `meta`
+> by construction. The close-out banner at the top of `docs/open-defects.md` says what that means for
+> a finding you are thinking of picking up.
+>
 > **Refreshed 2026-09-09 at 0.180.0. Everything under this banner is a dated snapshot whose header
 > still says 2026-07-01, and it has NOT been brought current** — its `file:line` pointers have all
 > moved, and several of its numbers are superseded by the corrections in this banner. Treat the
@@ -23,8 +30,8 @@
 > are untouched**), and the **customer benchmark**: two live substrates, 14 scenarios, server-side
 > oracles, a weekly gated run.
 >
-> **Findings.** `docs/open-defects.md`: **2 open in round 3** (R3.2, R3.7); round 4 is a 158-finding
-> series at **72 open / 82 fixed / 4 parked**.
+> **Findings.** `docs/open-defects.md`: **2 open in round 3** (R3.2, R3.7); round 4 is a 159-finding
+> series at **72 open / 83 fixed / 4 parked**.
 >
 > **The two numbers a reader most needs.** `availability_rate` **0.762** on Gitea (cut 2026-08-26)
 > and **0.714** on Odoo (cut 2026-09-05 from a series run at 0.169.0), each over n=21

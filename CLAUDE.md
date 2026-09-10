@@ -1,7 +1,23 @@
 # ultracua — working notes
 
-A Computer Use Agent: **learn a browser flow once, replay it deterministically at 0-LLM, 5–10× faster,
-failing LOUD on drift.**
+A Computer Use Agent: **learn a browser flow once, replay it deterministically at 0-LLM, failing LOUD
+on drift.** (This line said *5–10× faster* until 0.181.0. The README's copy of the claim went at 0.180.0 and this one survived a release longer, which is the ordinary way a corrected sentence leaves a sibling standing. Nothing in this tree measures it. The
+nearest committed numbers are what replay REMOVES — 0 model calls on all 24 write replays and one on
+43 of 51 read replays — plus fixture-only speedups of 38–114× and a single dated real-site example at
+30 s learn / 5 s replay. A multiplier on real sites is not among them; see `README.md`.)
+
+> ## ⚠ ACTIVE DEVELOPMENT STOPPED ON 2026-09-09, AT 0.181.0
+>
+> Everything below is still TRUE and still worth reading before touching this code — it is the record
+> of what was measured and why, and it is why the numbers here are trustworthy. What changed is that
+> **nothing more is planned**. The 72 open findings in `docs/open-defects.md` are an inventory, not a
+> backlog; the two `held` steps in `docs/plan/state.json` will stay held; the paid weekly benchmark no
+> longer runs on a schedule (the free CI gates all do). The close-out banner at the top of the register
+> says what an open finding means now and which baselines are frozen as dated observations.
+>
+> **If you are picking this up to work on it anyway**, the rules below are the ones that earned their
+> place by being learned the hard way, and the most load-bearing of them is unchanged: *green is not
+> evidence in this codebase* — run an adversarial pass over your own new code before the PR.
 
 ## Read this first
 
