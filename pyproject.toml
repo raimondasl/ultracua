@@ -1,6 +1,6 @@
 [project]
 name = "ultracua"
-version = "0.183.0"
+version = "0.184.0"
 description = "A Computer Use Agent that learns a browser flow once with an LLM, then replays it deterministically with no planning model in the loop."
 readme = "README.md"
 license = "MIT"

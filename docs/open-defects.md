@@ -12,6 +12,8 @@
 > loud because every count in this file is scoped to one round and the total is the number a reader
 > actually wants. The review itself is NOT in this repository — it was written outside it — so do not
 > go hunting for it; what IS here is every measurement it rests on, which is the whole of this file.
+> **[method.md](method.md) is the write-up of what these four rounds taught** — what found these
+> findings, given that the test suite never did.
 >
 > **WHAT AN OPEN FINDING MEANS NOW.** Exactly what it always meant: a defect that was measured, named
 > and not closed. It does not mean *scheduled*, and it never did. Some are residuals PUBLISHED rather

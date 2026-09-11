@@ -25,8 +25,8 @@ may self-heal or re-author and is *not* 0-LLM.
 > are dated observations that will not be re-cut, and the baseline files themselves record no version
 > or date, so the dates given here and in `baselines/README.md` are all the provenance they have.
 > The method this project was really about — how a solo codebase keeps itself honest when its own
-> test suite is not the instrument that finds its bugs — is written up in `CLAUDE.md` and the
-> register, and both are worth more than the code.
+> test suite is not the instrument that finds its bugs — is written up in
+> [docs/method.md](https://github.com/raimondasl/ultracua/blob/main/docs/method.md), and it is worth more than the code.
 
 It sits between two unsatisfying options:
 
@@ -163,6 +163,7 @@ Hacker News (read-only) and is built to record: `uv run python examples/hn_diges
 
 | Doc | For |
 |---|---|
+| **[docs/method.md](https://github.com/raimondasl/ultracua/blob/main/docs/method.md)** | **the write-up this project exists for** — 203 findings across four audit rounds, none of them found by the test suite, and what did find them. Every number derived from the tree |
 | **[EXAMPLES.md](https://github.com/raimondasl/ultracua/blob/main/EXAMPLES.md)** | a worked, runnable real-site example — **start here** |
 | **[GUIDE.md](https://github.com/raimondasl/ultracua/blob/main/GUIDE.md)** | developer guide: the Flow API + CLI in depth (auth, write flows, record by demonstration, health, providers) |
 | **[HEALING.md](https://github.com/raimondasl/ultracua/blob/main/HEALING.md)** | how it self-heals (and deliberately doesn't) when a page's elements change: resilient locators, LLM heal/re-plan, and the fail-loud boundaries |
