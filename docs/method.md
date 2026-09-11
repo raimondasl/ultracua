@@ -592,7 +592,9 @@ If you take one thing, take the first. If you take two, take the second.
    measurement.** A right number over a wrong reason is the failure that reads as a success.
 7. **Publish the tool alongside the conclusion.** A conclusion is worth what its reproducibility is
    worth, and the next person to doubt it should be able to re-derive it in a minute rather than
-   re-buy the experiment.
+   re-buy the experiment. [`docs/dry-run-arbiter.md`](dry-run-arbiter.md) is this project's one
+   genuinely portable component written up that way — four ways a "nothing will be saved" guarantee
+   breaks silently, each with the measurement that found it.
 
 And the one this document is itself an example of: **when you finish, point the method at the thing it
 is about to describe.** On the last working day that found ten live false statements in the project —

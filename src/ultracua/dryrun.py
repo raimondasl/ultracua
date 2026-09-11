@@ -41,9 +41,15 @@ FOUR MEASURED DECISIONS, each of which deletes a way this could silently write:
    An init-script patch that swallows a call hides it from the route layer entirely — so a `sendBeacon`
    drop-patch would delete the route layer's own proof for that channel, and a `fetch` drop-patch would
    additionally break the engine's existing `page.expect_request` and zero the held count while looking
-   safe. Route holds beacons reliably (measured on `mix()`, `pagehide`, `visibilitychange`, `<a ping>`), so
-   JS observes-and-calls-through for those and only POISONS the channels route cannot see at all
-   (`RTCPeerConnection`, `WebTransport`).
+   safe. Route holds beacons reliably, so JS observes-and-calls-through for those and only POISONS the
+   channels route cannot see at all (`RTCPeerConnection`, `WebTransport`).
+   THE COMMITTED EVIDENCE IS FOUR CHANNELS -- `fetch`, `navigator.sendBeacon`, a form-POST navigation
+   and `XMLHttpRequest`, parameterised in `test_a_held_write_never_arrives`. This line cited `mix()`,
+   `pagehide`, `visibilitychange` and `<a ping>` until 0.186.0: three of those left no test, and
+   `mix()` names a fixture that exists NOWHERE in this tree. Real measurements when they were taken,
+   unreproducible now, so they are not quoted as coverage -- a claim nobody can re-derive is the
+   defect class this register keeps filing, and it was found by extracting this docstring into
+   `docs/dry-run-arbiter.md` and trying to source every sentence in it.
 
 WHAT THIS CANNOT CLAIM. A held write is fulfilled with a synthesized response, so every step after the
 first hold runs against fictional page state: write #2's body may be computed from a response that never
