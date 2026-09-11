@@ -12,7 +12,8 @@ it does not drift, it accretes, and moving 3900 lines of evidence to gain nothin
 this repo's own reshape plan argues against.
 
 Optional fields (severity, class, inviolable, attempts, blocked_by, pins, disposition) are OMITTED
-rather than guessed. Only 5 of 53 rows state a severity in prose, so populating the rest would mean
+rather than guessed. When this was written only 5 of 53 rows stated a severity in prose (94 of 160 do
+today); populating the rest would mean
 hand-typing 50 facts read out of narrative — which is the transcription class this migration exists to
 END, not a good way to start it. Each field gets filled in when a slice touches that finding and knows
 the answer; `tests/test_register_data.py` enforces the D5 rule for any entry that HAS attempts.
