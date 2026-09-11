@@ -163,7 +163,8 @@ Hacker News (read-only) and is built to record: `uv run python examples/hn_diges
 
 | Doc | For |
 |---|---|
-| **[docs/method.md](https://github.com/raimondasl/ultracua/blob/main/docs/method.md)** | **the write-up this project exists for** — 203 findings across four audit rounds, none of them found by the test suite, and what did find them. Every number derived from the tree |
+| **[docs/method.md](https://github.com/raimondasl/ultracua/blob/main/docs/method.md)** | **the write-up this project exists for** — 203 findings across four audit rounds, none of them found by the test suite, and what did find them. Written in plain language for a reader who does not know this codebase. Every number derived from the tree |
+| **[docs/method-technical.md](https://github.com/raimondasl/ultracua/blob/main/docs/method-technical.md)** | the same write-up for someone who already knows this codebase — denser, and it names the specific functions, finding ids, decisions and instruments the plain version describes in words |
 | **[EXAMPLES.md](https://github.com/raimondasl/ultracua/blob/main/EXAMPLES.md)** | a worked, runnable real-site example — **start here** |
 | **[GUIDE.md](https://github.com/raimondasl/ultracua/blob/main/GUIDE.md)** | developer guide: the Flow API + CLI in depth (auth, write flows, record by demonstration, health, providers) |
 | **[HEALING.md](https://github.com/raimondasl/ultracua/blob/main/HEALING.md)** | how it self-heals (and deliberately doesn't) when a page's elements change: resilient locators, LLM heal/re-plan, and the fail-loud boundaries |
