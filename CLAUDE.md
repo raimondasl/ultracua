@@ -66,7 +66,7 @@ the same file.
 **WORK FROM THE PLAN.** `docs/correctness-plan.md` sequences every open finding, test hole and unpinned
 residual into slices, worst user harm first, with the dependencies between them made explicit (the net
 gets strengthened before it is relied on; a hole-widener never lands before its hole-fix). Picking items
-ad hoc re-creates orderings the plan exists to prevent. `docs/correctness-survey.md` is the 58-item
+ad hoc re-creates orderings the plan exists to prevent. `docs/correctness-survey.md` is the 59-item
 inventory it must dispose of.
 
 **And read `docs/reshape-plan.md` before proposing a refactor** — it answers "why does every change
@@ -181,8 +181,8 @@ Violating any of these is a blocking defect, not a trade-off:
   "~21 min" this line used to claim was stale). **CI shards it across two runners per OS** because it had
   reached 21m53s against a 25-minute job timeout, which was a deterministic failure approaching.
 - **Tiers: `--tier fast` before a commit, the whole suite before a MERGE.** `pytest --tier fast` runs the
-  **1450 of 1957** tests that provably never launch Chromium — **89.4 s at 0.125.0**, against the full
-  suite's 32 minutes (the other 507 are browser tests; both numbers are derived by a probe, not
+  **1899 of 2495** tests that provably never launch Chromium — 91 s at 0.183.0 (89.4 s at 0.125.0, when this said 1450 of 1957), against the full
+  suite's 38 minutes (the other 596 are browser tests; both numbers are derived by a probe, not
   estimated). **The tier is getting slower and the trend is worth watching**: 46.8 s -> 58 s -> 71 s
   -> 89 s, so it is now half again over the plan's "<60 s" acceptance. **Read the RATE, not the
   total**: the fast population went 665 -> 1450 over the same span, so per-test cost actually FELL
@@ -213,7 +213,7 @@ Violating any of these is a blocking defect, not a trade-off:
   `tests/_fake_engine.py`, which scripts the engine at the SIX module bindings `flows.py` already holds
   (no `engine=` parameter was added to `src/` — patching the binding reaches every call, and a def-time
   default would make the 27 existing `monkeypatch.setattr(flows_mod, ...)` sites inert). The exit set is
-  DERIVED by AST (16 today) and ratcheted, so an exit added tomorrow fails the ratchet instead of
+  DERIVED by AST (**18** today, `EXIT_COUNT` in the cell) and ratcheted, so an exit added tomorrow fails the ratchet instead of
   slipping in uncovered. Its fidelity is not self-asserted: `tests/test_fake_engine_fidelity.py` derives
   the `out` contract from the engine's own source and runs the REAL `_make_finalize` against a REAL
   session. **What it cannot see is anything page-side** — `drift_bench` and the browser write-safety
@@ -229,7 +229,7 @@ Violating any of these is a blocking defect, not a trade-off:
 - **A refusal names a REMEDY, and the base class is abstract (1.4a, 0.111.0).** Twenty-four refusals
   shared `code="replay_error"`, so "flow not approved", "no login configured" and "batch has more rows
   than max_rows" all reached the MCP wire, `DryRunReport.aborted` and a `--json` batch report as one
-  word. Now 27 distinct codes, and `FlowReplayError("x")` **raises `TypeError`** — which is the only
+  word. Now **28** distinct codes (`len(flows.REGISTRY)`; this said 27 until 0.183.0), and `FlowReplayError("x")` **raises `TypeError`** — which is the only
   sensor that also reaches the INDIRECT raise (`raise _classify_replay_failure(kind)(...)` resolves its
   class at run time, so no AST scan keyed on a class name can see it, and that route produced the
   base-coded refusal for the commonest failure a fresh flow has). The base is still the `except` target
@@ -800,7 +800,7 @@ server-side oracle + the corpus author's ground truth); a scenario record is an 
 * **`CODE_FAMILY` is a TOTAL partition of `flows.REGISTRY` with no default**, which is the whole
   reason 1.4 had to land before B3. `.get(code, PAGE)` here is the defect class the benchmark
   measures: a bucket that absorbs what nobody classified, with a confident rate reported over it.
-  The twelve MCP-minted codes in `flows.RESERVED_CODES` are deliberately **unclassified**, and what
+  The **thirteen** MCP-minted codes in `flows.RESERVED_CODES` (`len(RESERVED_CODES)`; this said twelve until 0.183.0) are deliberately **unclassified**, and what
   makes that safe is derived rather than asserted: `run_scenario` takes the code from
   `flows.outcome_of` and nothing else, so the day a bench arm drives the MCP surface,
   `test_the_reserved_vocabulary_is_unreachable_from_the_bench` fails and somebody classifies them
@@ -3367,7 +3367,7 @@ doesn't; `heading`/`label` anchors were hardened and `row` wasn't. When you fix 
 
 ## Measurement, not assertion
 
-`benchmarks/drift_bench.py` (key-less, **~160s** on this host and 181s measured on CI windows -- the `~60s` this line claimed until 0.148.0 was stale by nearly 3x, and the 180s budget it implied sat inside the host's own variance band; the budget is 220s, re-derived from measurement, CI-gated) is the instrument for any change to `locators.resolve`
+`benchmarks/drift_bench.py` (key-less, **~160s** on this host and 181s measured on CI windows -- the `~60s` this line claimed until 0.148.0 was stale by nearly 3x, and the 180s budget it implied sat inside the host's own variance band; the budget is **260s** (`WALL_BUDGET_MS`, re-derived at 0.165.0 and stated correctly 753 lines above this one, which said 220s until 0.183.0), CI-gated) is the instrument for any change to `locators.resolve`
 or the recovery ladder. It reports a 0-LLM survival curve by mutation intensity, per-tier recovery rates, and
 `silent_wrong` — which must stay within its published allowlist. Use it to *adjudicate* a resolver trade
 rather than argue it; that is what it was built for. `baselines/README.md` states plainly what each number

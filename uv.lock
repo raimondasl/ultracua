@@ -1344,7 +1344,7 @@ wheels = [
 
 [[package]]
 name = "ultracua"
-version = "0.182.0"
+version = "0.183.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -1352,6 +1352,15 @@ dependencies = [
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "xxhash" },
+]
+
+[package.optional-dependencies]
+mcp = [
+    { name = "mcp" },
+]
+providers = [
+    { name = "google-genai" },
+    { name = "openai" },
 ]
 
 [package.dev-dependencies]
@@ -1373,12 +1382,16 @@ providers = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", specifier = ">=0.109.2" },
-    { name = "playwright", specifier = ">=1.60.0" },
-    { name = "pydantic", specifier = ">=2.13.4" },
-    { name = "python-dotenv", specifier = ">=1.2.2" },
-    { name = "xxhash", specifier = ">=3.7.0" },
+    { name = "anthropic", specifier = ">=0.109.2,<1.0" },
+    { name = "google-genai", marker = "extra == 'providers'", specifier = ">=2.8.0,<3.0" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28.0,<2.0" },
+    { name = "openai", marker = "extra == 'providers'", specifier = ">=2.42.0,<3.0" },
+    { name = "playwright", specifier = ">=1.60.0,<2.0" },
+    { name = "pydantic", specifier = ">=2.13.4,<3.0" },
+    { name = "python-dotenv", specifier = ">=1.2.2,<2.0" },
+    { name = "xxhash", specifier = ">=3.7.0,<5.0" },
 ]
+provides-extras = ["providers", "mcp"]
 
 [package.metadata.requires-dev]
 bench = [{ name = "miniwob", specifier = ">=1.0" }]

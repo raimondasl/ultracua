@@ -87,7 +87,7 @@ def test_D5_is_a_schema_rule_for_any_entry_that_records_its_attempts() -> None:
     entry that records `attempts`, it becomes a property instead.
 
     Scoped to entries that HAVE the field on purpose: the migration omitted optional fields rather than
-    guessing them (only 5 of 53 summaries state even a severity), so requiring `attempts` everywhere
+    guessing them (5 of 53 summaries stated a severity when this was written; 94 of 160 do today), so requiring `attempts` everywhere
     would force 50 hand-typed facts — the transcription class this layer exists to end. An entry gains
     the field when a slice touches it and knows the answer, and gains this guard at the same moment.
     """
